@@ -1,0 +1,10 @@
+[Unit]
+Description=Reconcile Almanac PDFs into qmd every 5 minutes
+
+[Timer]
+OnBootSec=4m
+OnUnitActiveSec=5m
+Unit=almanac-pdf-ingest.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+state/
+published/
+*.log
+.DS_Store
+Thumbs.db
+vault/.obsidian/cache/
+vault/.obsidian/workspace.json
+vault/.obsidian/workspaces.json
+vault/.trash/
+vault/.DS_Store

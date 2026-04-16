@@ -1,0 +1,10 @@
+[Unit]
+Description=Deliver queued Almanac notifications every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1m
+Unit=almanac-notification-delivery.service
+
+[Install]
+WantedBy=timers.target

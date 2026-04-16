@@ -1,0 +1,6 @@
+[Unit]
+Description=Almanac vault backup to GitHub
+
+[Service]
+Type=oneshot
+ExecStart=%h/almanac/bin/backup-to-github.sh

@@ -1,0 +1,1712 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DEPLOY_BIN="$ROOT_DIR/bin/deploy.sh"
+ALMANAC_NAME="almanac"
+ALMANAC_USER="almanac"
+ALMANAC_HOME="/home/$ALMANAC_USER"
+ALMANAC_REPO_DIR="$ALMANAC_HOME/almanac"
+ALMANAC_PRIV_DIR="$ALMANAC_REPO_DIR/almanac-priv"
+ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
+CONFIG_TARGET="$ALMANAC_PRIV_CONFIG_DIR/almanac.env"
+STATE_DIR="$ALMANAC_PRIV_DIR/state"
+RUNTIME_DIR="$STATE_DIR/runtime"
+ALMANAC_DB_PATH="$STATE_DIR/almanac-control.sqlite3"
+ALMANAC_AGENTS_STATE_DIR="$STATE_DIR/agents"
+ALMANAC_CURATOR_DIR="$STATE_DIR/curator"
+ALMANAC_CURATOR_MANIFEST="$ALMANAC_CURATOR_DIR/manifest.json"
+ALMANAC_CURATOR_HERMES_HOME="$ALMANAC_CURATOR_DIR/hermes-home"
+ALMANAC_ARCHIVED_AGENTS_DIR="$STATE_DIR/archived-agents"
+QMD_INDEX_NAME="almanac"
+QMD_COLLECTION_NAME="vault"
+NEXTCLOUD_ADMIN_USER="admin"
+NEXTCLOUD_VAULT_MOUNT_POINT="/Vault"
+PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
+PDF_INGEST_COLLECTION_NAME="vault-pdf-ingest"
+ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
+ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
+ENABLE_TAILSCALE_SERVE="${ALMANAC_SMOKE_ENABLE_TAILSCALE_SERVE:-0}"
+TAILSCALE_OPERATOR_USER="${ALMANAC_SMOKE_TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
+ANSWERS_FILE="$(mktemp /tmp/almanac-ci-install.XXXXXX.env)"
+INSTALLED=0
+LAST_QMD_SEARCH_OUTPUT=""
+LAST_QMD_MCP_OUTPUT=""
+
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  echo "Run this as root. In CI, use: sudo ./bin/ci-install-smoke.sh" >&2
+  exit 1
+fi
+
+write_answers() {
+  cat >"$ANSWERS_FILE" <<EOF
+ALMANAC_NAME=almanac
+ALMANAC_USER=$ALMANAC_USER
+ALMANAC_HOME=$ALMANAC_HOME
+ALMANAC_REPO_DIR=$ALMANAC_REPO_DIR
+ALMANAC_PRIV_DIR=$ALMANAC_PRIV_DIR
+ALMANAC_PRIV_CONFIG_DIR=$ALMANAC_PRIV_CONFIG_DIR
+VAULT_DIR=$ALMANAC_PRIV_DIR/vault
+STATE_DIR=$STATE_DIR
+NEXTCLOUD_STATE_DIR=$STATE_DIR/nextcloud
+RUNTIME_DIR=$RUNTIME_DIR
+ALMANAC_DB_PATH=$ALMANAC_DB_PATH
+ALMANAC_AGENTS_STATE_DIR=$ALMANAC_AGENTS_STATE_DIR
+ALMANAC_CURATOR_DIR=$ALMANAC_CURATOR_DIR
+ALMANAC_CURATOR_MANIFEST=$ALMANAC_CURATOR_MANIFEST
+ALMANAC_CURATOR_HERMES_HOME=$ALMANAC_CURATOR_HERMES_HOME
+ALMANAC_ARCHIVED_AGENTS_DIR=$ALMANAC_ARCHIVED_AGENTS_DIR
+PUBLISHED_DIR=$ALMANAC_PRIV_DIR/published
+QMD_INDEX_NAME=almanac
+QMD_COLLECTION_NAME=vault
+VAULT_QMD_COLLECTION_MASK=**/*.{md,markdown,mdx,txt,text}
+PDF_INGEST_COLLECTION_NAME=$PDF_INGEST_COLLECTION_NAME
+QMD_RUN_EMBED=1
+QMD_MCP_PORT=8181
+ALMANAC_MCP_HOST=127.0.0.1
+ALMANAC_MCP_PORT=$ALMANAC_MCP_PORT
+ALMANAC_NOTION_WEBHOOK_HOST=127.0.0.1
+ALMANAC_NOTION_WEBHOOK_PORT=$ALMANAC_NOTION_WEBHOOK_PORT
+ALMANAC_BOOTSTRAP_WINDOW_SECONDS=3600
+ALMANAC_BOOTSTRAP_PER_IP_LIMIT=5
+ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT=20
+ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS=900
+PDF_INGEST_ENABLED=1
+PDF_INGEST_EXTRACTOR=auto
+PDF_VISION_ENDPOINT=
+PDF_VISION_MODEL=
+PDF_VISION_API_KEY=
+PDF_VISION_MAX_PAGES=6
+VAULT_WATCH_DEBOUNCE_SECONDS=1
+VAULT_WATCH_RUN_EMBED=auto
+BACKUP_GIT_BRANCH=main
+BACKUP_GIT_REMOTE=
+BACKUP_GIT_AUTHOR_NAME=Almanac\ Backup
+BACKUP_GIT_AUTHOR_EMAIL=almanac@localhost
+NEXTCLOUD_PORT=18080
+NEXTCLOUD_TRUSTED_DOMAIN=almanac-ci.local
+POSTGRES_DB=nextcloud
+POSTGRES_USER=nextcloud
+POSTGRES_PASSWORD=almanac-ci-postgres
+NEXTCLOUD_ADMIN_USER=admin
+NEXTCLOUD_ADMIN_PASSWORD=almanac-ci-admin
+NEXTCLOUD_VAULT_MOUNT_POINT=$NEXTCLOUD_VAULT_MOUNT_POINT
+ENABLE_NEXTCLOUD=1
+ENABLE_TAILSCALE_SERVE=$ENABLE_TAILSCALE_SERVE
+TAILSCALE_OPERATOR_USER=$TAILSCALE_OPERATOR_USER
+TAILSCALE_QMD_PATH=/mcp
+ENABLE_PRIVATE_GIT=1
+ENABLE_QUARTO=1
+SEED_SAMPLE_VAULT=1
+OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
+OPERATOR_NOTIFY_CHANNEL_ID=
+OPERATOR_GENERAL_CHANNEL_PLATFORM=
+OPERATOR_GENERAL_CHANNEL_ID=
+ALMANAC_MODEL_PRESET_CODEX=openai:codex
+ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus
+ALMANAC_MODEL_PRESET_CHUTES=chutes:auto-failover
+ALMANAC_CURATOR_MODEL_PRESET=codex
+ALMANAC_CURATOR_CHANNELS=tui-only
+CHUTES_MCP_URL=https://chutes.example.test/mcp
+QUARTO_PROJECT_DIR=$ALMANAC_PRIV_DIR/quarto
+QUARTO_OUTPUT_DIR=$ALMANAC_PRIV_DIR/published
+ALMANAC_INSTALL_PUBLIC_GIT=1
+REMOVE_PUBLIC_REPO=1
+REMOVE_USER_TOOLING=1
+REMOVE_SERVICE_USER=1
+EOF
+  chmod 600 "$ANSWERS_FILE"
+}
+
+load_answers_into_env() {
+  set -a
+  # shellcheck disable=SC1090
+  source "$ANSWERS_FILE"
+  set +a
+}
+
+wait_for_port() {
+  local host="$1"
+  local port="$2"
+  local attempts="${3:-60}"
+  local delay="${4:-2}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    if python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(1.0)
+try:
+    sock.connect((host, port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+    then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+wait_for_http_success() {
+  local url="$1"
+  local host_header="${2:-}"
+  local output_file="${3:-/dev/null}"
+  local attempts="${4:-120}"
+  local delay="${5:-2}"
+  local i
+  local error_file
+
+  error_file="$(mktemp /tmp/almanac-http-check.XXXXXX.log)"
+
+  for ((i = 1; i <= attempts; i++)); do
+    if [[ -n "$host_header" ]]; then
+      if curl --max-time 5 -fsS -H "Host: $host_header" "$url" -o "$output_file" 2>"$error_file"; then
+        rm -f "$error_file"
+        return 0
+      fi
+    else
+      if curl --max-time 5 -fsS "$url" -o "$output_file" 2>"$error_file"; then
+        rm -f "$error_file"
+        return 0
+      fi
+    fi
+
+    if (( i == 1 || i % 10 == 0 )); then
+      echo "Waiting for Nextcloud HTTP readiness ($i/$attempts)..."
+    fi
+    sleep "$delay"
+  done
+
+  echo "Nextcloud HTTP readiness probe failed after $attempts attempts." >&2
+  if [[ -s "$error_file" ]]; then
+    sed 's/^/  /' "$error_file" >&2
+  fi
+  rm -f "$error_file"
+  return 1
+}
+
+wait_for_file() {
+  local path="$1"
+  local attempts="${2:-120}"
+  local delay="${3:-1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    if [[ -f "$path" ]]; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+wait_for_path_absent() {
+  local path="$1"
+  local attempts="${2:-120}"
+  local delay="${3:-1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    if [[ ! -e "$path" ]]; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+run_almanac_shell() {
+  local user_cmd="$1"
+  local wrapped
+
+  wrapped="source '$ALMANAC_REPO_DIR/bin/common.sh'; ensure_nvm; ensure_uv; export ALMANAC_CONFIG_FILE='$CONFIG_TARGET'; $user_cmd"
+  su - "$ALMANAC_USER" -c "bash -lc $(printf '%q' "$wrapped")"
+}
+
+wait_for_qmd_search_match() {
+  local query="$1"
+  local expected="$2"
+  local collection="${3:-$QMD_COLLECTION_NAME}"
+  local attempts="${4:-120}"
+  local delay="${5:-1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    LAST_QMD_SEARCH_OUTPUT="$(
+      run_almanac_shell \
+        "qmd --index '$QMD_INDEX_NAME' search '$query' --files -c '$collection'" \
+        2>&1 || true
+    )"
+    if grep -Fq "$expected" <<<"$LAST_QMD_SEARCH_OUTPUT"; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+wait_for_qmd_search_absent() {
+  local query="$1"
+  local unexpected="$2"
+  local collection="${3:-$QMD_COLLECTION_NAME}"
+  local attempts="${4:-120}"
+  local delay="${5:-1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    LAST_QMD_SEARCH_OUTPUT="$(
+      run_almanac_shell \
+        "qmd --index '$QMD_INDEX_NAME' search '$query' --files -c '$collection'" \
+        2>&1 || true
+    )"
+    if ! grep -Fq "$unexpected" <<<"$LAST_QMD_SEARCH_OUTPUT"; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+wait_for_qmd_pending_embeddings_zero() {
+  local attempts="${1:-120}"
+  local delay="${2:-1}"
+  local i
+  local pending
+
+  for ((i = 1; i <= attempts; i++)); do
+    pending="$(
+      run_almanac_shell \
+        "qmd_pending_embeddings_count" \
+        2>/dev/null || printf '0\n'
+    )"
+    pending="${pending##*$'\n'}"
+    pending="${pending//[[:space:]]/}"
+    if [[ "$pending" =~ ^[0-9]+$ ]] && (( pending == 0 )); then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+qmd_mcp_query_files() {
+  local query="$1"
+  local collection="${2:-$QMD_COLLECTION_NAME}"
+
+  python3 - "$QMD_MCP_PORT" "$query" "$collection" <<'PY'
+import json
+import sys
+import urllib.request
+
+port = int(sys.argv[1])
+query = sys.argv[2]
+collection = sys.argv[3]
+url = f"http://127.0.0.1:{port}/mcp"
+headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+
+def rpc(payload, session_id=None):
+    request_headers = dict(headers)
+    if session_id:
+        request_headers["mcp-session-id"] = session_id
+    request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=request_headers)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        parsed = json.loads(body) if body.strip() else {}
+        return response.headers.get("mcp-session-id") or session_id, parsed
+
+
+session_id, _ = rpc(
+    {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "almanac-smoke", "version": "1.0"},
+        },
+    }
+)
+rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
+_, body = rpc(
+    {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query",
+            "arguments": {
+                "searches": [{"type": "lex", "query": query}],
+                "collections": [collection],
+                "intent": "Almanac smoke test verification",
+                "rerank": False,
+                "limit": 10,
+            },
+        },
+    },
+    session_id,
+)
+
+results = (((body or {}).get("result") or {}).get("structuredContent") or {}).get("results") or []
+collection_prefix = collection.lower().strip("/") + "/"
+for result in results:
+    file_path = str(result.get("file") or "").strip()
+    if file_path:
+        normalized = file_path.lower()
+        if normalized.startswith("qmd://"):
+            normalized = normalized[len("qmd://"):]
+        if normalized.startswith(collection_prefix):
+            normalized = normalized[len(collection_prefix):]
+        print(normalized)
+PY
+}
+
+wait_for_mcp_query_match() {
+  local query="$1"
+  local expected="$2"
+  local collection="${3:-$QMD_COLLECTION_NAME}"
+  local attempts="${4:-120}"
+  local delay="${5:-1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    LAST_QMD_MCP_OUTPUT="$(qmd_mcp_query_files "$query" "$collection" 2>&1 || true)"
+    if grep -Fq "$expected" <<<"$LAST_QMD_MCP_OUTPUT"; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+wait_for_mcp_query_absent() {
+  local query="$1"
+  local unexpected="$2"
+  local collection="${3:-$QMD_COLLECTION_NAME}"
+  local attempts="${4:-120}"
+  local delay="${5:-1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    LAST_QMD_MCP_OUTPUT="$(qmd_mcp_query_files "$query" "$collection" 2>&1 || true)"
+    if ! grep -Fq "$unexpected" <<<"$LAST_QMD_MCP_OUTPUT"; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+assert_mcp_status_alignment() {
+  local expected_docs
+
+  expected_docs="$(find "$ALMANAC_PRIV_DIR/vault" -type f \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.mdx' -o -iname '*.txt' -o -iname '*.text' \) | wc -l | tr -d ' ')"
+
+  if [[ "$expected_docs" == "0" ]]; then
+    return 0
+  fi
+
+  if ! python3 - "$QMD_MCP_PORT" "$expected_docs" <<'PY'
+import json
+import sys
+import urllib.request
+
+port = int(sys.argv[1])
+expected_docs = int(sys.argv[2])
+url = f"http://127.0.0.1:{port}/mcp"
+headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+
+def rpc(payload, session_id=None):
+    request_headers = dict(headers)
+    if session_id:
+        request_headers["mcp-session-id"] = session_id
+    request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=request_headers)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        parsed = json.loads(body) if body.strip() else {}
+        return response.headers.get("mcp-session-id") or session_id, parsed
+
+
+session_id, _ = rpc(
+    {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "almanac-smoke", "version": "1.0"},
+        },
+    }
+)
+rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
+_, body = rpc(
+    {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "status", "arguments": {}},
+    },
+    session_id,
+)
+
+structured = ((body or {}).get("result") or {}).get("structuredContent") or {}
+total_documents = int(structured.get("totalDocuments", 0))
+collection_count = len(structured.get("collections") or [])
+
+if total_documents < 1 or collection_count < 1:
+    print(
+        f"Expected qmd MCP to expose the seeded index, but it reported "
+        f"{total_documents} document(s) across {collection_count} collection(s) "
+        f"while the shared vault has at least {expected_docs} direct text file(s)."
+    )
+    raise SystemExit(1)
+PY
+  then
+    echo "Expected qmd MCP status to align with the seeded vault." >&2
+    return 1
+  fi
+}
+
+show_nextcloud_diagnostics() {
+  local containers
+  local prefix
+
+  echo
+  echo "Nextcloud diagnostics..."
+  su - "$ALMANAC_USER" -c "podman pod ps" || true
+  su - "$ALMANAC_USER" -c "podman ps --all --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'" || true
+
+  prefix="${ALMANAC_NAME:-almanac}-nextcloud"
+  containers="$(su - "$ALMANAC_USER" -c "podman ps --all --format '{{.Names}}'" 2>/dev/null | grep -E \"^(compose_|${prefix})\" || true)"
+  if [[ -z "$containers" ]]; then
+    echo "No Nextcloud containers found."
+    return 0
+  fi
+
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    echo
+    echo "Logs: $name"
+    su - "$ALMANAC_USER" -c "podman logs --tail 120 '$name'" || true
+  done <<<"$containers"
+}
+
+show_pdf_ingest_diagnostics() {
+  local uid
+
+  echo
+  echo "PDF ingest diagnostics..."
+  uid="$(id -u "$ALMANAC_USER")"
+
+  if [[ -f "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" ]]; then
+    echo "Status:"
+    sed 's/^/  /' "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" || true
+  fi
+
+  echo "Generated markdown tree:"
+  find "$ALMANAC_PRIV_DIR/state/pdf-ingest/markdown" -maxdepth 5 -type f | sed 's/^/  /' || true
+
+  echo "QMD collection:"
+  run_almanac_shell "qmd --index '$QMD_INDEX_NAME' collection show '$PDF_INGEST_COLLECTION_NAME'" || true
+
+  if [[ -S "/run/user/$uid/bus" ]]; then
+    su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user --no-pager --full status almanac-vault-watch.service almanac-pdf-ingest.service almanac-pdf-ingest.timer" || true
+    su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' journalctl --user -u almanac-vault-watch.service -u almanac-pdf-ingest.service -n 120 --no-pager" || true
+  fi
+}
+
+assert_agent_payload() {
+  local payload
+  local payload_file
+  local required
+  local payload_len
+  local payload_file_len
+
+  payload="$("$DEPLOY_BIN" agent-payload)"
+  payload_file="$ALMANAC_PRIV_DIR/state/agent-install-payload.txt"
+  payload_len="$(printf '%s' "$payload" | wc -c | tr -d ' ')"
+
+  for required in \
+    "almanac_task_v1:" \
+    "goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + chutes MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
+    "almanac_mcp_url:" \
+    "hermes mcp add almanac-qmd" \
+    "hermes mcp add almanac-mcp" \
+    "run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup" \
+    "first contact must resolve YAML .vault defaults" \
+    "maintain only [managed:vault-ref], [managed:qmd-ref], [managed:vault-topology]" \
+    "MEMORY.md is a frozen snapshot at session start" \
+    "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
+    "if cron lacks the native memory tool, patch only those three entries in \$HERMES_HOME/memories/MEMORY.md" \
+    "recurring success output: exactly 1 short line" \
+    "recurring warn/fail output: at most 2 short lines" \
+    "$ALMANAC_REPO_DIR/skills/almanac-qmd-mcp" \
+    "$ALMANAC_REPO_DIR/skills/almanac-vault-reconciler" \
+    "$ALMANAC_REPO_DIR/skills/almanac-first-contact" \
+    "$ALMANAC_REPO_DIR/skills/almanac-vaults" \
+    "$ALMANAC_REPO_DIR/skills/almanac-ssot"
+  do
+    if ! grep -Fq "$required" <<<"$payload"; then
+      echo "Agent payload is missing expected text: $required" >&2
+      printf '%s\n' "$payload" >&2
+      return 1
+    fi
+  done
+
+  if (( payload_len > 5200 )); then
+    echo "Agent payload is too large for a single Telegram message: ${payload_len} bytes" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$payload_file" ]]; then
+    echo "Expected canonical agent payload file at $payload_file" >&2
+    return 1
+  fi
+
+  payload_file_len="$(wc -c <"$payload_file" | tr -d ' ')"
+
+  for required in \
+    "almanac_task_v1:" \
+    "goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + chutes MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
+    "MEMORY.md is a frozen snapshot at session start" \
+    "first contact must resolve YAML .vault defaults" \
+    "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
+    "if cron lacks the native memory tool, patch only those three entries in \$HERMES_HOME/memories/MEMORY.md" \
+    "recurring success output: exactly 1 short line"
+  do
+    if ! grep -Fq "$required" "$payload_file"; then
+      echo "Canonical agent payload file is missing expected text: $required" >&2
+      sed -n '1,220p' "$payload_file" >&2
+      return 1
+    fi
+  done
+
+  if (( payload_file_len > 4800 )); then
+    echo "Canonical agent payload file is too large for a single Telegram message: ${payload_file_len} bytes" >&2
+    sed -n '1,220p' "$payload_file" >&2
+    return 1
+  fi
+}
+
+assert_vault_definition_reload() {
+  local docs_dir="$VAULT_DIR/TeamDocs"
+  local nested_dir="$docs_dir/Compliance"
+  local malformed_dir="$VAULT_DIR/TeamForms"
+  local scan_json
+
+  mkdir -p "$nested_dir" "$malformed_dir"
+  cat >"$docs_dir/.vault" <<'EOF'
+name: Team Docs
+description: Shared rollout documentation
+owner: smoke
+default_subscribed: true
+tags:
+  - docs
+category: docs
+EOF
+  cat >"$nested_dir/.vault" <<'EOF'
+name: Team Compliance
+description: Nested vault should be rejected in v1
+owner: smoke
+default_subscribed: false
+EOF
+  cat >"$malformed_dir/.vault" <<'EOF'
+name: Team Forms
+description: Broken vault file for smoke coverage
+owner: smoke
+default_subscribed: maybe
+EOF
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$docs_dir" "$malformed_dir"
+
+  scan_json="$(
+    run_almanac_shell \
+      "PYTHONPATH='$ALMANAC_REPO_DIR/python' python3 '$ALMANAC_REPO_DIR/python/almanac_ctl.py' --json vault reload-defs"
+  )"
+
+  python3 - "$scan_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+active_names = {row["vault_name"] for row in payload.get("active_vaults", [])}
+warnings = payload.get("warnings", [])
+
+if "Team Docs" not in active_names:
+    raise SystemExit("expected Team Docs to be active after reloading .vault definitions")
+if not any("nested .vault is invalid in v1" in warning for warning in warnings):
+    raise SystemExit("expected nested .vault warning during reload-defs")
+if not any("default_subscribed must be true or false" in warning for warning in warnings):
+    raise SystemExit("expected malformed .vault warning during reload-defs")
+PY
+}
+
+assert_almanac_control_plane_roundtrip() {
+  local status_json
+  local request_json
+  local request_id
+  local approve_json
+  local poll_json
+  local token
+  local register_json
+  local agent_id
+  local refresh_json
+  local token_list_json
+  local revoke_output
+  local refresh_error
+  local smoke_home="/tmp/almanac-smoke-agent-home"
+
+  mkdir -p "$smoke_home/secrets"
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$smoke_home"
+
+  status_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool status"
+  )"
+  python3 - "$status_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if payload.get("service") != "almanac-mcp":
+    raise SystemExit("unexpected almanac-mcp status payload")
+PY
+
+  request_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"Smoke Bot\",\"unix_user\":\"smokebot\",\"source_ip\":\"127.0.0.1\"}'"
+  )"
+  request_id="$(python3 - "$request_json" <<'PY'
+import json
+import sys
+
+print(json.loads(sys.argv[1])["request_id"])
+PY
+)"
+  if [[ -z "$request_id" ]]; then
+    echo "Expected bootstrap.request to return a request_id." >&2
+    exit 1
+  fi
+
+  approve_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$request_id' --surface ctl --actor smoke-test"
+  )"
+  python3 - "$approve_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if payload.get("approved_by_surface") != "ctl":
+    raise SystemExit("expected approval audit surface to be ctl")
+PY
+
+  poll_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'"
+  )"
+  token="$(python3 - "$poll_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+print(payload["raw_token"])
+PY
+)"
+  if [[ -z "$token" ]]; then
+    echo "Expected bootstrap.status to return a raw token after approval." >&2
+    exit 1
+  fi
+  printf '%s\n' "$token" >"$smoke_home/secrets/almanac-bootstrap-token"
+  chmod 600 "$smoke_home/secrets/almanac-bootstrap-token"
+  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_home/secrets/almanac-bootstrap-token"
+
+  register_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'agents.register' --json-args '{\"token\":\"$token\",\"unix_user\":\"smokebot\",\"display_name\":\"Smoke Bot\",\"role\":\"user\",\"hermes_home\":\"$smoke_home\",\"model_preset\":\"codex\",\"model_string\":\"openai:codex\",\"channels\":[\"tui-only\"]}'"
+  )"
+  agent_id="$(python3 - "$register_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+allowed = {item["name"] for item in payload.get("allowed_mcps", [])}
+expected = {"almanac-mcp", "almanac-qmd", "chutes-kb"}
+missing = sorted(expected - allowed)
+if missing:
+    raise SystemExit(f"missing default MCP registrations in register response: {missing}")
+print(payload["agent_id"])
+PY
+)"
+
+  refresh_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'vaults.refresh' --json-args '{\"token\":\"$token\"}'"
+  )"
+  python3 - "$refresh_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if "Team Docs" not in payload.get("active_subscriptions", []):
+    raise SystemExit("expected default_subscribed vault to appear in active_subscriptions after refresh")
+PY
+
+  token_list_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token list"
+  )"
+  python3 - "$token_list_json" "$agent_id" <<'PY'
+import json
+import sys
+
+tokens = json.loads(sys.argv[1])
+agent_id = sys.argv[2]
+matches = [row for row in tokens if row["agent_id"] == agent_id]
+if not matches:
+    raise SystemExit("expected hashed bootstrap token row for smoke agent")
+if any("raw_token" in row for row in matches):
+    raise SystemExit("raw tokens must not be stored in token list output")
+PY
+
+  revoke_output="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token revoke '$agent_id' --surface ctl --actor smoke-test --reason 'smoke revoke'"
+  )"
+  python3 - "$revoke_output" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if int(payload.get("revoked", 0)) < 1:
+    raise SystemExit("expected token revoke to revoke at least one token")
+PY
+
+  refresh_error="$(mktemp)"
+  if run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'vaults.refresh' --json-args '{\"token\":\"$token\"}'" \
+    > /tmp/almanac-refresh-after-revoke.out 2>"$refresh_error"; then
+    echo "Expected vaults.refresh to reject revoked token." >&2
+    cat /tmp/almanac-refresh-after-revoke.out >&2
+    rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
+    exit 1
+  fi
+  if ! grep -Eq "revoked|missing" "$refresh_error"; then
+    echo "Expected revoked-token refresh failure to mention revocation." >&2
+    cat "$refresh_error" >&2
+    rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
+    exit 1
+  fi
+  rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
+}
+
+assert_bootstrap_rate_limit() {
+  # The configured per-IP cap is ALMANAC_BOOTSTRAP_PER_IP_LIMIT; after we exceed it
+  # the server must respond with status 429 (RuntimeError mapping in almanac-mcp) AND
+  # expose Retry-After + retry_after_seconds in the error body.
+  local cap="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
+  local source_ip="10.99.$((RANDOM % 250 + 1)).$((RANDOM % 250 + 1))"
+  local i
+  # Fill the bucket from a synthetic source IP (avoids polluting real one).
+  for ((i = 0; i < cap; i++)); do
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"rate-$i\",\"unix_user\":\"rate-$i\",\"source_ip\":\"100.64.55.1\"}'" \
+      >/dev/null
+  done
+
+  local raw_resp
+  local err_file
+  err_file="$(mktemp)"
+  # Call the MCP HTTP endpoint directly so we can observe the Retry-After header.
+  raw_resp="$(curl --max-time 5 -sS -o "$err_file" -D "$err_file.headers" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    -X POST "http://127.0.0.1:$ALMANAC_MCP_PORT/mcp" \
+    --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"rl-smoke","version":"1"}}}' || true)"
+  local session_id
+  session_id="$(awk 'tolower($0) ~ /^mcp-session-id:/ {gsub(/\r/, ""); print $2; exit}' "$err_file.headers" 2>/dev/null || true)"
+  if [[ -z "$session_id" ]]; then
+    echo "Expected mcp-session-id header from initialize." >&2
+    cat "$err_file.headers" >&2
+    rm -f "$err_file" "$err_file.headers"
+    exit 1
+  fi
+
+  curl --max-time 5 -sS -o /dev/null \
+    -H 'Content-Type: application/json' \
+    -H "mcp-session-id: $session_id" \
+    -X POST "http://127.0.0.1:$ALMANAC_MCP_PORT/mcp" \
+    --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' >/dev/null
+
+  local status_line
+  status_line="$(curl --max-time 5 -sS -o "$err_file" -w '%{http_code}' -D "$err_file.headers" \
+    -H 'Content-Type: application/json' \
+    -H "mcp-session-id: $session_id" \
+    -X POST "http://127.0.0.1:$ALMANAC_MCP_PORT/mcp" \
+    --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bootstrap.request","arguments":{"requester_identity":"over-limit","unix_user":"over-limit","source_ip":"100.64.55.1"}}}')"
+
+  if [[ "$status_line" != "429" ]]; then
+    echo "Expected HTTP 429 on rate-limit overflow, got $status_line" >&2
+    cat "$err_file.headers" >&2
+    cat "$err_file" >&2
+    rm -f "$err_file" "$err_file.headers"
+    exit 1
+  fi
+  if ! awk 'tolower($0) ~ /^retry-after:/' "$err_file.headers" | grep -q '[0-9]'; then
+    echo "Expected Retry-After header on 429 response" >&2
+    cat "$err_file.headers" >&2
+    rm -f "$err_file" "$err_file.headers"
+    exit 1
+  fi
+  python3 - "$err_file" <<'PY'
+import json, sys
+body = json.loads(open(sys.argv[1]).read() or "{}")
+error = body.get("error") or {}
+data = error.get("data") or {}
+if "retry_after_seconds" not in data:
+    raise SystemExit("expected retry_after_seconds in 429 error.data")
+if data.get("scope") not in {"per-ip", "global-pending"}:
+    raise SystemExit(f"unexpected rate-limit scope: {data.get('scope')}")
+PY
+  rm -f "$err_file" "$err_file.headers"
+}
+
+assert_admin_endpoint_auth() {
+  # bootstrap.approve must reject calls without an operator token.
+  local err_file
+  err_file="$(mktemp)"
+  if run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.approve' --json-args '{\"request_id\":\"req_doesnotexist\"}'" \
+    >/dev/null 2>"$err_file"; then
+    echo "Expected bootstrap.approve without operator_token to fail." >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  if ! grep -Eiq 'operator_token' "$err_file"; then
+    echo "Expected operator_token error message." >&2
+    cat "$err_file" >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  rm -f "$err_file"
+
+  # bootstrap.status must reject calls from a different source_ip than the one that
+  # created the request.
+  local request_json request_id
+  request_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"auth-bot\",\"unix_user\":\"auth-bot\",\"source_ip\":\"100.64.200.7\"}'")"
+  request_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$request_json")"
+
+  err_file="$(mktemp)"
+  if run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\",\"source_ip\":\"100.64.200.99\"}'" \
+    >/dev/null 2>"$err_file"; then
+    echo "Expected bootstrap.status to reject mismatched source_ip." >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  if ! grep -Eiq 'source ip' "$err_file"; then
+    echo "Expected source-ip mismatch error message." >&2
+    cat "$err_file" >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  rm -f "$err_file"
+}
+
+assert_token_reinstate() {
+  # create a throwaway agent via CLI approval path, revoke, reinstate, then
+  # verify the token works again for vaults.refresh.
+  local request_json request_id token reinstate_json
+  request_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"reins-bot\",\"unix_user\":\"reinsbot\",\"source_ip\":\"127.0.0.1\"}'")"
+  request_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$request_json")"
+
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$request_id' --surface ctl --actor smoke-reinstate" >/dev/null
+
+  local status_json
+  status_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'")"
+  token="$(python3 -c "import json,sys; p=json.loads(sys.argv[1]); print(p['raw_token'])" "$status_json")"
+  local token_id
+  token_id="$(python3 -c "import json,sys; p=json.loads(sys.argv[1]); print(p['token_id'])" "$status_json")"
+
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token revoke '$token_id' --surface ctl --actor smoke-reinstate" >/dev/null
+
+  reinstate_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token reinstate '$token_id' --surface ctl --actor smoke-reinstate")"
+  python3 - "$reinstate_json" "$token_id" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if payload.get("token_id") != sys.argv[2]:
+    raise SystemExit("reinstate did not return the original token_id")
+if payload.get("reinstated_by_surface") != "ctl":
+    raise SystemExit("reinstate did not record surface audit")
+PY
+}
+
+assert_ssot_rails() {
+  # Use the already-enrolled smoke agent's token (still revoked above — create
+  # a fresh one via the CLI path so we have an active token).
+  local req_json req_id tok_json token
+  req_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"ssot-bot\",\"unix_user\":\"ssotbot\",\"source_ip\":\"127.0.0.1\"}'")"
+  req_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$req_json")"
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$req_id' --surface ctl --actor smoke-ssot" >/dev/null
+  tok_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$req_id\"}'")"
+  token="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['raw_token'])" "$tok_json")"
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'agents.register' --json-args '{\"token\":\"$token\",\"unix_user\":\"ssotbot\",\"display_name\":\"SSOT Bot\",\"role\":\"user\",\"hermes_home\":\"/tmp/almanac-smoke-ssot-home\",\"model_preset\":\"codex\",\"model_string\":\"openai:codex\",\"channels\":[\"tui-only\"]}'" >/dev/null
+
+  local err_file
+  err_file="$(mktemp)"
+  if run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'ssot.write' --json-args '{\"token\":\"$token\",\"operation\":\"delete\",\"target_id\":\"page_1\",\"payload\":{}}'" \
+    >/dev/null 2>"$err_file"; then
+    echo "Expected ssot.write delete to be refused." >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  if ! grep -Eiq 'rail violation|not permitted' "$err_file"; then
+    echo "Expected SSOT rail violation in error message." >&2
+    cat "$err_file" >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  rm -f "$err_file"
+
+  # update with foreign owner should require approval (not hard-fail; returned flag).
+  local write_json
+  write_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'ssot.write' --json-args '{\"token\":\"$token\",\"operation\":\"update\",\"target_id\":\"page_2\",\"payload\":{\"properties\":{\"Owner\":{\"people\":[{\"name\":\"someone-else\"}]}}}}'")"
+  python3 - "$write_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if not payload.get("approval_required"):
+    raise SystemExit("expected approval_required=true when owner is a non-matching user")
+if payload.get("queued"):
+    raise SystemExit("foreign-owner write should not be queued")
+if payload.get("owner_source") not in ("owner-property", "created-by", "needs-approval"):
+    raise SystemExit(f"unexpected owner_source: {payload.get('owner_source')}")
+PY
+
+  # insert should be queued without approval.
+  write_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'ssot.write' --json-args '{\"token\":\"$token\",\"operation\":\"insert\",\"target_id\":\"page_3\",\"payload\":{\"properties\":{}}}'")"
+  python3 - "$write_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if not payload.get("queued"):
+    raise SystemExit("insert should be queued")
+if payload.get("approval_required"):
+    raise SystemExit("insert should not require approval")
+PY
+}
+
+assert_notion_webhook_flow() {
+  local webhook_url="http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/notion/webhook"
+  local verify_token="smoke-verify-$(date +%s)"
+
+  # 1) POST a verification_token (no signature) -> server stores it and returns 202.
+  run_almanac_shell \
+    "curl --max-time 5 -sS -o /tmp/almanac-notion-verify.out -w '%{http_code}\n' -H 'Content-Type: application/json' -X POST '$webhook_url' --data '{\"verification_token\":\"$verify_token\"}'" \
+    | grep -Eq '^(202|200)$' || { echo "verification_token POST should be accepted"; exit 1; }
+
+  # 2) POST a signed event; expect 202 and persisted row.
+  local body signature resp
+  body='{"id":"evt-smoke-001","type":"page.created","created_by":{"name":"smokebot"},"properties":{}}'
+  signature="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$verify_token" -hex | awk '{print $2}')"
+  resp="$(run_almanac_shell \
+    "curl --max-time 5 -sS -o /tmp/almanac-notion-signed.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: $signature' -X POST '$webhook_url' --data '$body'" \
+    | tail -n1)"
+  if [[ "$resp" != "202" ]]; then
+    echo "Expected signed webhook POST to return 202, got $resp" >&2
+    cat /tmp/almanac-notion-signed.out >&2
+    exit 1
+  fi
+
+  # 3) POST with a BAD signature; expect 403.
+  resp="$(run_almanac_shell \
+    "curl --max-time 5 -sS -o /tmp/almanac-notion-bad.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: sha256=00deadbeef' -X POST '$webhook_url' --data '$body'" \
+    | tail -n1)"
+  if [[ "$resp" != "403" ]]; then
+    echo "Expected bad signature to return 403, got $resp" >&2
+    cat /tmp/almanac-notion-bad.out >&2
+    exit 1
+  fi
+
+  # 4) Run batcher and confirm the stored event is now processed. Owner 'smokebot'
+  # should resolve to the smokebot agent from assert_almanac_control_plane_roundtrip.
+  local batcher_json
+  batcher_json="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json notion process-pending")"
+  python3 - "$batcher_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if payload.get("processed", 0) < 1:
+    raise SystemExit("batcher did not process any events")
+nudges = payload.get("nudges") or {}
+# owner is `smokebot` via created_by; smokebot is an enrolled user agent in the
+# earlier roundtrip. nudges should be keyed by that agent_id.
+if not any("smokebot" in k for k in nudges):
+    # This is allowed if the smokebot agent was deenrolled before this step ran.
+    pass
+PY
+}
+
+assert_notification_delivery_backlog() {
+  run_almanac_shell "PYTHONPATH='$ALMANAC_REPO_DIR/python' python3 - <<'PY'
+import datetime as dt
+
+from almanac_control import Config, connect_db, queue_notification
+
+cfg = Config.from_env()
+with connect_db(cfg) as conn:
+    conn.execute('DELETE FROM notification_outbox')
+    conn.commit()
+    for idx in range(60):
+        queue_notification(
+            conn,
+            target_kind='user-agent',
+            target_id='agent-backlog',
+            channel_kind='notion-webhook',
+            message=f'deferred backlog {idx}',
+        )
+    stale_at = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=30)).replace(microsecond=0).isoformat()
+    conn.execute(
+        \"UPDATE notification_outbox SET created_at = ? WHERE target_kind = 'user-agent'\",
+        (stale_at,),
+    )
+    conn.commit()
+    queue_notification(
+        conn,
+        target_kind='operator',
+        target_id='tui-only',
+        channel_kind='tui-only',
+        message='operator backlog probe',
+    )
+    queue_notification(
+        conn,
+        target_kind='curator',
+        target_id='ghost-agent',
+        channel_kind='brief-fanout',
+        message='curator backlog probe',
+    )
+PY"
+
+  local delivery_json
+  delivery_json="$(run_almanac_shell "'$ALMANAC_REPO_DIR/bin/almanac-notification-delivery.sh' --limit 10")"
+
+  python3 - "$delivery_json" "$ALMANAC_DB_PATH" <<'PY'
+import json
+import sqlite3
+import sys
+
+summary = json.loads(sys.argv[1])
+if int(summary.get("delivered", 0)) < 1:
+    raise SystemExit("delivery worker did not deliver the operator backlog row")
+if int(summary.get("curator_fanout_batches", 0)) != 1:
+    raise SystemExit("delivery worker did not actuate curator brief-fanout from backlog")
+
+conn = sqlite3.connect(sys.argv[2])
+conn.row_factory = sqlite3.Row
+operator_delivered = conn.execute(
+    """
+    SELECT COUNT(*) AS c
+    FROM notification_outbox
+    WHERE target_kind = 'operator'
+      AND delivered_at IS NOT NULL
+    """
+).fetchone()["c"]
+curator_delivered = conn.execute(
+    """
+    SELECT COUNT(*) AS c
+    FROM notification_outbox
+    WHERE target_kind = 'curator'
+      AND channel_kind = 'brief-fanout'
+      AND delivered_at IS NOT NULL
+    """
+).fetchone()["c"]
+user_agent_pending = conn.execute(
+    """
+    SELECT COUNT(*) AS c
+    FROM notification_outbox
+    WHERE target_kind = 'user-agent'
+      AND delivered_at IS NULL
+    """
+).fetchone()["c"]
+
+if operator_delivered != 1:
+    raise SystemExit(f"expected 1 delivered operator row, found {operator_delivered}")
+if curator_delivered != 1:
+    raise SystemExit(f"expected 1 delivered curator fanout row, found {curator_delivered}")
+if user_agent_pending != 60:
+    raise SystemExit(f"expected 60 deferred user-agent rows, found {user_agent_pending}")
+PY
+}
+
+assert_nextcloud_admin_home_empty() {
+  local app_container
+
+  app_container="${ALMANAC_NAME:-almanac}-nextcloud-app"
+  if ! su - "$ALMANAC_USER" -c "podman container inspect '$app_container' >/dev/null 2>&1"; then
+    echo "Expected Nextcloud app container '$app_container' to exist." >&2
+    show_nextcloud_diagnostics
+    return 1
+  fi
+
+  if ! su - "$ALMANAC_USER" -c "podman exec '$app_container' sh -lc 'test -d /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files && [ -z \"\$(find /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files -mindepth 1 -maxdepth 1 -print -quit)\" ]'"; then
+    echo "Expected initial Nextcloud admin home to be empty." >&2
+    su - "$ALMANAC_USER" -c "podman exec '$app_container' sh -lc 'ls -la /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files || true'" || true
+    show_nextcloud_diagnostics
+    return 1
+  fi
+}
+
+assert_nextcloud_vault_mount_configured() {
+  local app_container mounts_json
+
+  app_container="${ALMANAC_NAME:-almanac}-nextcloud-app"
+  if ! su - "$ALMANAC_USER" -c "podman container inspect '$app_container' >/dev/null 2>&1"; then
+    echo "Expected Nextcloud app container '$app_container' to exist." >&2
+    show_nextcloud_diagnostics
+    return 1
+  fi
+
+  if ! mounts_json="$(su - "$ALMANAC_USER" -c "podman exec -u 33:33 '$app_container' php /var/www/html/occ files_external:list --output=json")"; then
+    echo "Could not inspect Nextcloud external storage mounts." >&2
+    show_nextcloud_diagnostics
+    return 1
+  fi
+
+  if ! NEXTCLOUD_MOUNTS_JSON="$mounts_json" python3 - "$NEXTCLOUD_VAULT_MOUNT_POINT" "/srv/vault" <<'PY'
+import json
+import os
+import sys
+
+mount_point = sys.argv[1]
+datadir = sys.argv[2]
+mounts = json.loads(os.environ["NEXTCLOUD_MOUNTS_JSON"])
+
+for mount in mounts:
+    if mount.get("mount_point") == mount_point:
+        config = mount.get("configuration") or {}
+        if config.get("datadir") == datadir and not (mount.get("applicable_users") or []) and not (mount.get("applicable_groups") or []):
+            raise SystemExit(0)
+        raise SystemExit(2)
+
+raise SystemExit(1)
+PY
+  then
+    echo "Expected Nextcloud to expose the shared vault as /Vault." >&2
+    printf '%s\n' "$mounts_json" >&2
+    show_nextcloud_diagnostics
+    return 1
+  fi
+
+  if ! su - "$ALMANAC_USER" -c "podman exec -u 33:33 '$app_container' sh -lc 'test -w /srv/vault'"; then
+    echo "Expected Nextcloud www-data to have write access to /srv/vault." >&2
+    show_nextcloud_diagnostics
+    return 1
+  fi
+}
+
+write_smoke_pdf() {
+  local target="$1"
+
+  python3 - "$target" <<'PY'
+import sys
+from pathlib import Path
+
+target = Path(sys.argv[1])
+text = "Chutes MESH smoke test PDF"
+stream = f"BT\n/F1 24 Tf\n72 720 Td\n({text}) Tj\nET\n".encode("ascii")
+objects = [
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"endstream",
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+]
+
+pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+offsets = []
+for index, obj in enumerate(objects, start=1):
+    offsets.append(len(pdf))
+    pdf.extend(f"{index} 0 obj\n".encode("ascii"))
+    pdf.extend(obj)
+    pdf.extend(b"\nendobj\n")
+
+xref_offset = len(pdf)
+pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+pdf.extend(b"0000000000 65535 f \n")
+for offset in offsets:
+    pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii"))
+
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_bytes(pdf)
+PY
+}
+
+vault_watch_ready() {
+  local uid
+
+  uid="$(id -u "$ALMANAC_USER")"
+  [[ -S "/run/user/$uid/bus" ]] || return 1
+
+  su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet almanac-vault-watch.service" &&
+    (
+      [[ "${PDF_INGEST_ENABLED:-1}" != "1" ]] ||
+      su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet almanac-pdf-ingest.timer"
+    )
+}
+
+assert_markdown_watch_pipeline() {
+  local watcher_mode=0
+  local smoke_note
+  local query
+
+  smoke_note="$ALMANAC_PRIV_DIR/vault/Inbox/chutes-mesh-note.md"
+  query="Chutes MESH filesystem watcher note"
+
+  if vault_watch_ready; then
+    watcher_mode=1
+  fi
+
+  mkdir -p "$(dirname "$smoke_note")"
+  cat >"$smoke_note" <<EOF
+# Chutes MESH Watch Test
+
+$query
+EOF
+  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_note"
+
+  if (( ! watcher_mode )); then
+    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' embed"
+  fi
+
+  if ! wait_for_qmd_search_match "$query" "chutes-mesh-note.md" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd search to surface direct markdown changes from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_SEARCH_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_mcp_query_match "$query" "inbox/chutes-mesh-note.md" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd MCP search to surface direct markdown changes from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_MCP_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_qmd_pending_embeddings_zero 120 1; then
+    echo "Expected watcher-driven qmd embedding backlog to clear after direct markdown changes." >&2
+    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  rm -f "$smoke_note"
+
+  if (( ! watcher_mode )); then
+    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+  fi
+
+  if ! wait_for_qmd_search_absent "$query" "chutes-mesh-note.md" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd search to stop surfacing removed markdown files from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_SEARCH_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_mcp_query_absent "$query" "inbox/chutes-mesh-note.md" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd MCP search to stop surfacing removed markdown files from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_MCP_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+}
+
+assert_text_watch_pipeline() {
+  local watcher_mode=0
+  local smoke_note
+  local query
+
+  smoke_note="$ALMANAC_PRIV_DIR/vault/Inbox/chutes-mesh-note.txt"
+  query="Chutes MESH filesystem watcher text note"
+
+  if vault_watch_ready; then
+    watcher_mode=1
+  fi
+
+  mkdir -p "$(dirname "$smoke_note")"
+  cat >"$smoke_note" <<EOF
+Chutes MESH text watch test
+
+$query
+EOF
+  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_note"
+
+  if (( ! watcher_mode )); then
+    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' embed"
+  fi
+
+  if ! wait_for_qmd_search_match "$query" "chutes-mesh-note.txt" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd search to surface direct text changes from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_SEARCH_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_mcp_query_match "$query" "inbox/chutes-mesh-note.txt" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd MCP search to surface direct text changes from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_MCP_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_qmd_pending_embeddings_zero 120 1; then
+    echo "Expected watcher-driven qmd embedding backlog to clear after direct text changes." >&2
+    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  rm -f "$smoke_note"
+
+  if (( ! watcher_mode )); then
+    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+  fi
+
+  if ! wait_for_qmd_search_absent "$query" "chutes-mesh-note.txt" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd search to stop surfacing removed text files from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_SEARCH_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_mcp_query_absent "$query" "inbox/chutes-mesh-note.txt" "$QMD_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd MCP search to stop surfacing removed text files from the shared vault." >&2
+    printf '%s\n' "$LAST_QMD_MCP_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+}
+
+pdf_ingest_units_ready() {
+  local uid
+
+  if ! vault_watch_ready; then
+    return 1
+  fi
+
+  uid="$(id -u "$ALMANAC_USER")"
+  su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet almanac-pdf-ingest.timer" &&
+    true
+}
+
+assert_pdf_ingest_pipeline() {
+  local uid
+  local watcher_mode
+  local smoke_pdf
+  local generated_md
+  local search_term
+  local pdf_qmd_uri_prefix
+
+  uid="$(id -u "$ALMANAC_USER")"
+  watcher_mode=0
+  smoke_pdf="$ALMANAC_PRIV_DIR/vault/Inbox/chutes-mesh-smoke.pdf"
+  generated_md="$ALMANAC_PRIV_DIR/state/pdf-ingest/markdown/Inbox/chutes-mesh-smoke-pdf.md"
+  search_term="Chutes MESH smoke test PDF"
+  pdf_qmd_uri_prefix="qmd://$PDF_INGEST_COLLECTION_NAME/"
+
+  if pdf_ingest_units_ready; then
+    watcher_mode=1
+  elif [[ -S "/run/user/$uid/bus" ]]; then
+    echo "Expected the vault watcher and PDF ingest timer to be active." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  else
+    echo "No user systemd bus detected for $ALMANAC_USER; using direct PDF ingest fallback." >&2
+  fi
+
+  write_smoke_pdf "$smoke_pdf"
+  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_pdf"
+
+  if (( watcher_mode )); then
+    if ! wait_for_file "$generated_md" 120 1; then
+      echo "Expected PDF ingest watch path to generate $generated_md." >&2
+      show_pdf_ingest_diagnostics
+      return 1
+    fi
+  else
+    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/pdf-ingest.sh'"
+  fi
+
+  if [[ ! -f "$generated_md" ]]; then
+    echo "Expected PDF ingest to generate $generated_md." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! grep -q "$search_term" "$generated_md"; then
+    echo "Expected generated markdown to contain extracted PDF text." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! run_almanac_shell "qmd --index '$QMD_INDEX_NAME' collection show '$PDF_INGEST_COLLECTION_NAME' >/dev/null"; then
+    echo "Expected qmd collection '$PDF_INGEST_COLLECTION_NAME' to exist after PDF ingest bootstrap." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_qmd_search_match "$search_term" "$pdf_qmd_uri_prefix" "$PDF_INGEST_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd search to surface the generated PDF markdown." >&2
+    printf '%s\n' "$LAST_QMD_SEARCH_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_mcp_query_match "$search_term" "inbox/chutes-mesh-smoke-pdf.md" "$PDF_INGEST_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd MCP search to surface the generated PDF markdown." >&2
+    printf '%s\n' "$LAST_QMD_MCP_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_qmd_pending_embeddings_zero 180 1; then
+    echo "Expected watcher-driven qmd embedding backlog to clear after PDF-derived markdown changes." >&2
+    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! python3 - "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+status_path = Path(sys.argv[1])
+status = json.loads(status_path.read_text())
+if int(status.get("failed", 0)) != 0:
+    raise SystemExit(1)
+if int(status.get("created", 0)) + int(status.get("updated", 0)) < 1:
+    raise SystemExit(2)
+PY
+  then
+    echo "Expected PDF ingest status to show a successful conversion run." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  rm -f "$smoke_pdf"
+
+  if (( watcher_mode )); then
+    if ! wait_for_path_absent "$generated_md" 120 1; then
+      echo "Expected PDF ingest watch path to remove generated markdown for deleted PDFs." >&2
+      show_pdf_ingest_diagnostics
+      return 1
+    fi
+  else
+    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/pdf-ingest.sh' --quiet"
+  fi
+
+  if [[ -e "$generated_md" ]]; then
+    echo "Expected generated PDF markdown to be removed after deleting the source PDF." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_qmd_search_absent "$search_term" "$pdf_qmd_uri_prefix" "$PDF_INGEST_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd search to stop surfacing deleted generated PDF markdown." >&2
+    printf '%s\n' "$LAST_QMD_SEARCH_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_mcp_query_absent "$search_term" "inbox/chutes-mesh-smoke-pdf.md" "$PDF_INGEST_COLLECTION_NAME" 120 1; then
+    echo "Expected qmd MCP search to stop surfacing deleted generated PDF markdown." >&2
+    printf '%s\n' "$LAST_QMD_MCP_OUTPUT" >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+
+  if ! python3 - "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+status = json.loads(Path(sys.argv[1]).read_text())
+if int(status.get("failed", 0)) != 0:
+    raise SystemExit(1)
+if int(status.get("removed", 0)) < 1:
+    raise SystemExit(2)
+PY
+  then
+    echo "Expected PDF ingest status to record PDF removal cleanup." >&2
+    show_pdf_ingest_diagnostics
+    return 1
+  fi
+}
+
+teardown() {
+  if [[ "$INSTALLED" == "1" ]]; then
+    ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
+    INSTALLED=0
+  fi
+}
+
+preclean() {
+  if id -u "$ALMANAC_USER" >/dev/null 2>&1 || [[ -e "$ALMANAC_HOME" ]]; then
+    echo "Removing existing default Almanac install before smoke test..."
+    ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
+  fi
+}
+
+on_exit() {
+  local status="$1"
+  if [[ "$status" -ne 0 ]]; then
+    echo
+    echo "Smoke test failed; attempting teardown..."
+  fi
+  teardown
+  rm -f "$ANSWERS_FILE"
+  exit "$status"
+}
+
+trap 'on_exit $?' EXIT
+
+write_answers
+load_answers_into_env
+preclean
+
+echo "Installing Almanac with default smoke-test answers..."
+ALMANAC_ALLOW_NO_USER_BUS=1 \
+ALMANAC_CURATOR_SKIP_HERMES_SETUP=1 \
+ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=1 \
+ALMANAC_CURATOR_NOTIFY_PLATFORM=tui-only \
+ALMANAC_CURATOR_NOTIFY_CHANNEL_ID= \
+ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" \
+  "$DEPLOY_BIN" --apply-install
+INSTALLED=1
+
+wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 120 1
+wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 120 1
+
+echo
+echo "Checking agent payload..."
+assert_agent_payload
+
+echo "Checking .vault discovery and reload-defs..."
+assert_vault_definition_reload
+
+echo "Checking almanac control-plane bootstrap/token roundtrip..."
+assert_almanac_control_plane_roundtrip
+
+echo "Checking rate-limit enforcement with structured 429..."
+assert_bootstrap_rate_limit
+
+echo "Checking operator-gated admin MCP endpoints..."
+assert_admin_endpoint_auth
+
+echo "Checking token reinstate flow..."
+assert_token_reinstate
+
+echo "Checking SSOT rails (archive/delete refusal + owner mismatch)..."
+assert_ssot_rails
+
+echo "Checking Notion webhook signature verification and owner mapping..."
+assert_notion_webhook_flow
+
+echo "Checking notification delivery backlog routing..."
+assert_notification_delivery_backlog
+
+echo
+echo "Starting runtime checks..."
+
+if ! wait_for_port 127.0.0.1 8181 10 1; then
+  su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' nohup '$ALMANAC_REPO_DIR/bin/qmd-daemon.sh' > '$RUNTIME_DIR/qmd-daemon.log' 2>&1 &"
+fi
+
+if ! wait_for_port 127.0.0.1 18080 10 1; then
+  su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/nextcloud-up.sh'"
+fi
+
+wait_for_port 127.0.0.1 8181 120 1
+wait_for_port 127.0.0.1 18080 300 2
+assert_mcp_status_alignment
+
+if ! wait_for_http_success \
+  "http://127.0.0.1:18080/status.php" \
+  "almanac-ci.local" \
+  "/tmp/almanac-nextcloud-status.json" \
+  180 \
+  2; then
+  show_nextcloud_diagnostics
+  exit 1
+fi
+
+assert_nextcloud_admin_home_empty
+assert_nextcloud_vault_mount_configured
+assert_text_watch_pipeline
+assert_markdown_watch_pipeline
+assert_pdf_ingest_pipeline
+
+uid="$(id -u "$ALMANAC_USER")"
+if [[ -S "/run/user/$uid/bus" ]]; then
+  su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+else
+  su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+fi
+
+echo
+echo "Tearing Almanac back down..."
+teardown
+
+if id -u "$ALMANAC_USER" >/dev/null 2>&1; then
+  echo "Expected service user '$ALMANAC_USER' to be removed." >&2
+  exit 1
+fi
+
+if [[ -e "$ALMANAC_HOME" ]]; then
+  echo "Expected $ALMANAC_HOME to be removed." >&2
+  exit 1
+fi
+
+rm -f "$ANSWERS_FILE"
+trap - EXIT
+echo "Install smoke test completed successfully."

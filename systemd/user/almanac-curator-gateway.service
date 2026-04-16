@@ -1,0 +1,10 @@
+[Unit]
+Description=Almanac Curator messaging gateway
+
+[Service]
+ExecStart=%h/almanac/bin/curator-gateway.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

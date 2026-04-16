@@ -1,0 +1,6 @@
+[Unit]
+Description=Almanac Curator refresh job
+
+[Service]
+Type=oneshot
+ExecStart=%h/almanac/bin/curator-refresh.sh

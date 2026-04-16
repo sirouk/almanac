@@ -1,0 +1,8 @@
+name: Teams
+description: Team charters, norms, and rituals. Not auto-subscribed by default.
+owner: operator
+default_subscribed: false
+category: directory
+tags:
+  - teams
+  - charters

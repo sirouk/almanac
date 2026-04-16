@@ -1,0 +1,6 @@
+[Unit]
+Description=Almanac SSOT / Notion batch processor
+
+[Service]
+Type=oneshot
+ExecStart=%h/almanac/bin/almanac-ssot-batcher.sh

@@ -1,0 +1,12 @@
+mcp_servers:
+  qmd:
+    url: "http://127.0.0.1:8181/mcp"
+    timeout: 30
+
+# If Hermes is running on another machine in your tailnet, use the Tailscale URL
+# printed by `deploy.sh install`, for example:
+#
+# mcp_servers:
+#   qmd:
+#     url: "https://<your-host>.<your-tailnet>.ts.net/mcp"
+#     timeout: 30

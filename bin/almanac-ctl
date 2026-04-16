@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
+
+needs_root=0
+if [[ $# -ge 2 && "$1" == "user" && "$2" == "prepare" ]]; then
+  needs_root=1
+elif [[ $# -ge 2 && "$1" == "agent" && "$2" == "deenroll" ]]; then
+  needs_root=1
+fi
+
+if [[ "$needs_root" == "1" && ${EUID:-$(id -u)} -ne 0 ]]; then
+  exec sudo env \
+    ALMANAC_CONFIG_FILE="${ALMANAC_CONFIG_FILE:-}" \
+    PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    "$0" "$@"
+fi
+
+export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" "$@"

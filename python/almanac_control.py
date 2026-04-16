@@ -1,0 +1,2381 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import hmac
+import ipaddress
+import json
+import os
+import secrets
+import shlex
+import sqlite3
+import string
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def utc_now_iso() -> str:
+    return utc_now().replace(microsecond=0).isoformat()
+
+
+def bool_env(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True)
+
+
+def json_loads(value: str | None, default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
+def safe_slug(value: str, fallback: str = "agent") -> str:
+    allowed = string.ascii_lowercase + string.digits + "-_"
+    lowered = value.strip().lower().replace(" ", "-")
+    cleaned = "".join(ch for ch in lowered if ch in allowed).strip("-_")
+    return cleaned or fallback
+
+
+def shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _python_repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _discover_config_file() -> Path | None:
+    explicit = os.environ.get("ALMANAC_CONFIG_FILE")
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_file() else path
+
+    repo_root = Path(os.environ.get("ALMANAC_REPO_DIR", _python_repo_root())).expanduser().resolve()
+    nested_priv = repo_root / "almanac-priv" / "config" / "almanac.env"
+    sibling_priv = repo_root.parent / "almanac-priv" / "config" / "almanac.env"
+    candidates = (
+        repo_root / "config" / "almanac.env",
+        nested_priv,
+        sibling_priv,
+        Path.home() / "almanac" / "almanac-priv" / "config" / "almanac.env",
+        Path.home() / "almanac-priv" / "config" / "almanac.env",
+    )
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _load_config_env() -> dict[str, str]:
+    merged = dict(os.environ)
+    config_path = _discover_config_file()
+    if config_path is None or not config_path.is_file():
+        return merged
+
+    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if not key:
+            continue
+        try:
+            parsed = shlex.split(raw_value, posix=True)
+            value = "" if not parsed else parsed[0]
+        except ValueError:
+            value = raw_value
+        merged.setdefault(key, value)
+
+    merged.setdefault("ALMANAC_CONFIG_FILE", str(config_path))
+    return merged
+
+
+def config_env_value(name: str, default: str = "") -> str:
+    return _load_config_env().get(name, default)
+
+
+@dataclass(frozen=True)
+class Config:
+    almanac_user: str
+    almanac_home: Path
+    repo_dir: Path
+    private_dir: Path
+    state_dir: Path
+    runtime_dir: Path
+    vault_dir: Path
+    db_path: Path
+    agents_state_dir: Path
+    curator_dir: Path
+    curator_manifest_path: Path
+    curator_hermes_home: Path
+    archived_agents_dir: Path
+    public_mcp_host: str
+    public_mcp_port: int
+    notion_webhook_host: str
+    notion_webhook_port: int
+    bootstrap_window_seconds: int
+    bootstrap_per_ip_limit: int
+    bootstrap_global_pending_limit: int
+    bootstrap_pending_ttl_seconds: int
+    operator_notify_platform: str
+    operator_notify_channel_id: str
+    operator_general_platform: str
+    operator_general_channel_id: str
+    qmd_url: str
+    chutes_mcp_url: str
+    model_presets: dict[str, str]
+
+    @classmethod
+    def from_env(cls) -> "Config":
+        env = _load_config_env()
+        almanac_user = env.get("ALMANAC_USER", "almanac")
+        repo_dir = Path(env.get("ALMANAC_REPO_DIR", os.getcwd())).resolve()
+        private_dir = Path(env.get("ALMANAC_PRIV_DIR", repo_dir / "almanac-priv")).resolve()
+        state_dir = Path(env.get("STATE_DIR", private_dir / "state")).resolve()
+        runtime_dir = Path(env.get("RUNTIME_DIR", state_dir / "runtime")).resolve()
+        vault_dir = Path(env.get("VAULT_DIR", private_dir / "vault")).resolve()
+        public_mcp_port = int(env.get("ALMANAC_MCP_PORT", "8282"))
+        public_mcp_host = env.get("ALMANAC_MCP_HOST", "127.0.0.1")
+        notion_webhook_port = int(env.get("ALMANAC_NOTION_WEBHOOK_PORT", "8283"))
+        notion_webhook_host = env.get("ALMANAC_NOTION_WEBHOOK_HOST", "127.0.0.1")
+        qmd_url = env.get("ALMANAC_QMD_URL", f"http://127.0.0.1:{env.get('QMD_MCP_PORT', '8181')}/mcp")
+        chutes_mcp_url = env.get("CHUTES_MCP_URL", "")
+
+        model_presets = {
+            "codex": env.get("ALMANAC_MODEL_PRESET_CODEX", "openai:codex"),
+            "opus": env.get("ALMANAC_MODEL_PRESET_OPUS", "anthropic:claude-opus"),
+            "chutes": env.get("ALMANAC_MODEL_PRESET_CHUTES", "chutes:auto-failover"),
+        }
+
+        return cls(
+            almanac_user=almanac_user,
+            almanac_home=Path(env.get("ALMANAC_HOME", f"/home/{almanac_user}")).resolve(),
+            repo_dir=repo_dir,
+            private_dir=private_dir,
+            state_dir=state_dir,
+            runtime_dir=runtime_dir,
+            vault_dir=vault_dir,
+            db_path=Path(env.get("ALMANAC_DB_PATH", state_dir / "almanac-control.sqlite3")).resolve(),
+            agents_state_dir=Path(env.get("ALMANAC_AGENTS_STATE_DIR", state_dir / "agents")).resolve(),
+            curator_dir=Path(env.get("ALMANAC_CURATOR_DIR", state_dir / "curator")).resolve(),
+            curator_manifest_path=Path(env.get("ALMANAC_CURATOR_MANIFEST", state_dir / "curator" / "manifest.json")).resolve(),
+            curator_hermes_home=Path(env.get("ALMANAC_CURATOR_HERMES_HOME", state_dir / "curator" / "hermes-home")).resolve(),
+            archived_agents_dir=Path(env.get("ALMANAC_ARCHIVED_AGENTS_DIR", state_dir / "archived-agents")).resolve(),
+            public_mcp_host=public_mcp_host,
+            public_mcp_port=public_mcp_port,
+            notion_webhook_host=notion_webhook_host,
+            notion_webhook_port=notion_webhook_port,
+            bootstrap_window_seconds=int(env.get("ALMANAC_BOOTSTRAP_WINDOW_SECONDS", "3600")),
+            bootstrap_per_ip_limit=int(env.get("ALMANAC_BOOTSTRAP_PER_IP_LIMIT", "5")),
+            bootstrap_global_pending_limit=int(env.get("ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT", "20")),
+            bootstrap_pending_ttl_seconds=int(env.get("ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS", "900")),
+            operator_notify_platform=env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM", "tui-only"),
+            operator_notify_channel_id=env.get("OPERATOR_NOTIFY_CHANNEL_ID", ""),
+            operator_general_platform=env.get("OPERATOR_GENERAL_CHANNEL_PLATFORM", ""),
+            operator_general_channel_id=env.get("OPERATOR_GENERAL_CHANNEL_ID", ""),
+            qmd_url=qmd_url,
+            chutes_mcp_url=chutes_mcp_url,
+            model_presets=model_presets,
+        )
+
+
+def ensure_runtime_paths(cfg: Config) -> None:
+    for path in (
+        cfg.state_dir,
+        cfg.runtime_dir,
+        cfg.agents_state_dir,
+        cfg.curator_dir,
+        cfg.archived_agents_dir,
+        cfg.db_path.parent,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def connect_db(cfg: Config) -> sqlite3.Connection:
+    ensure_runtime_paths(cfg)
+    conn = sqlite3.connect(cfg.db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    ensure_schema(conn)
+    return conn
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS bootstrap_requests (
+          request_id TEXT PRIMARY KEY,
+          requester_identity TEXT NOT NULL,
+          unix_user TEXT NOT NULL,
+          source_ip TEXT NOT NULL,
+          requested_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          prior_agent_id TEXT,
+          prior_defaults_json TEXT,
+          approval_surface TEXT,
+          approval_actor TEXT,
+          approved_at TEXT,
+          denied_at TEXT,
+          denied_by_surface TEXT,
+          denied_by_actor TEXT,
+          token_id TEXT,
+          token_delivered_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS bootstrap_tokens (
+          token_id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          requester_identity TEXT NOT NULL,
+          source_ip TEXT NOT NULL,
+          issued_at TEXT NOT NULL,
+          issued_by TEXT NOT NULL,
+          revoked_at TEXT,
+          revoked_by_surface TEXT,
+          revoked_by_actor TEXT,
+          revocation_reason TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS rate_limits (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          scope TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          observed_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agents (
+          agent_id TEXT PRIMARY KEY,
+          role TEXT NOT NULL,
+          unix_user TEXT NOT NULL UNIQUE,
+          display_name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          hermes_home TEXT NOT NULL,
+          manifest_path TEXT,
+          archived_state_path TEXT,
+          model_preset TEXT,
+          model_string TEXT,
+          channels_json TEXT NOT NULL DEFAULT '[]',
+          allowed_mcps_json TEXT NOT NULL DEFAULT '[]',
+          home_channel_json TEXT,
+          operator_notify_channel_json TEXT,
+          notes TEXT,
+          created_at TEXT NOT NULL,
+          last_enrolled_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS vaults (
+          vault_name TEXT PRIMARY KEY,
+          vault_path TEXT NOT NULL UNIQUE,
+          state TEXT NOT NULL,
+          warning TEXT,
+          owner TEXT,
+          default_subscribed INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS vault_definitions (
+          definition_path TEXT PRIMARY KEY,
+          vault_name TEXT,
+          vault_path TEXT NOT NULL,
+          owner TEXT,
+          description TEXT,
+          default_subscribed INTEGER NOT NULL DEFAULT 0,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          category TEXT,
+          brief_template TEXT,
+          is_valid INTEGER NOT NULL,
+          warning TEXT,
+          discovered_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_vault_subscriptions (
+          agent_id TEXT NOT NULL,
+          vault_name TEXT NOT NULL,
+          subscribed INTEGER NOT NULL,
+          source TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (agent_id, vault_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          target_kind TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          channel_kind TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          delivered_at TEXT,
+          delivery_error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS notion_webhook_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          received_at TEXT NOT NULL,
+          batch_status TEXT NOT NULL DEFAULT 'pending',
+          processed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS refresh_jobs (
+          job_name TEXT PRIMARY KEY,
+          job_kind TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          schedule TEXT,
+          last_run_at TEXT,
+          last_status TEXT,
+          last_note TEXT
+        );
+        """
+    )
+    conn.commit()
+
+
+def upsert_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (key, value, utc_now_iso()),
+    )
+    conn.commit()
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def generate_token_id() -> str:
+    return f"tok_{secrets.token_hex(8)}"
+
+
+def generate_raw_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def generate_request_id() -> str:
+    return f"req_{secrets.token_hex(16)}"
+
+
+class RateLimitError(RuntimeError):
+    def __init__(self, message: str, *, retry_after_seconds: int, scope: str) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = int(retry_after_seconds)
+        self.scope = scope
+
+
+def ensure_request_expiry(conn: sqlite3.Connection) -> None:
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET status = 'expired'
+        WHERE status = 'pending' AND expires_at < ?
+        """,
+        (now_iso,),
+    )
+    conn.commit()
+
+
+def record_rate_limit_event(conn: sqlite3.Connection, scope: str, subject: str) -> None:
+    conn.execute(
+        "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+        (scope, subject, utc_now_iso()),
+    )
+    conn.commit()
+
+
+def rate_limit_count(conn: sqlite3.Connection, scope: str, subject: str, since_iso: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM rate_limits
+        WHERE scope = ? AND subject = ? AND observed_at >= ?
+        """,
+        (scope, subject, since_iso),
+    ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def make_agent_id(unix_user: str, role: str) -> str:
+    prefix = "curator" if role == "curator" else "agent"
+    return f"{prefix}-{safe_slug(unix_user)}"
+
+
+def is_loopback_ip(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def is_tailnet_ip(value: str) -> bool:
+    try:
+        parsed = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if parsed.version == 4:
+        return parsed in ipaddress.ip_network("100.64.0.0/10")
+    return parsed in ipaddress.ip_network("fd7a:115c:a1e0::/48")
+
+
+def parse_scalar(raw: str) -> Any:
+    value = raw.strip()
+    if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
+        return value[1:-1]
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    return value
+
+
+def parse_vault_definition(definition_path: Path) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    current_list_key: str | None = None
+    # block scalar state: when a value was introduced with `|` or `>`, subsequent
+    # lines indented past the current threshold are consumed as part of the scalar.
+    block_key: str | None = None
+    block_style: str = ""  # "|" literal or ">" folded
+    block_indent: int | None = None
+    block_lines: list[str] = []
+
+    def _flush_block() -> None:
+        nonlocal block_key, block_style, block_indent, block_lines
+        if block_key is None:
+            return
+        if block_style == "|":
+            data[block_key] = "\n".join(block_lines).rstrip("\n")
+        else:  # ">" folded
+            folded: list[str] = []
+            buffer: list[str] = []
+            for line in block_lines:
+                if line.strip() == "":
+                    if buffer:
+                        folded.append(" ".join(buffer))
+                        buffer = []
+                    folded.append("")
+                else:
+                    buffer.append(line.strip())
+            if buffer:
+                folded.append(" ".join(buffer))
+            data[block_key] = "\n".join(folded).strip("\n")
+        block_key = None
+        block_style = ""
+        block_indent = None
+        block_lines = []
+
+    lines = definition_path.read_text(encoding="utf-8").splitlines()
+    for lineno, raw_line in enumerate(lines, start=1):
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+
+        if block_key is not None:
+            if raw_line.strip() == "":
+                block_lines.append("")
+                continue
+            if block_indent is None:
+                block_indent = max(indent, 1)
+            if indent >= block_indent:
+                block_lines.append(raw_line[block_indent:] if indent >= block_indent else raw_line.lstrip())
+                continue
+            _flush_block()
+
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+
+        stripped = raw_line.strip()
+        if stripped.startswith("- "):
+            if current_list_key is None or indent == 0:
+                raise ValueError(f"{definition_path}:{lineno}: list item without a parent key")
+            data.setdefault(current_list_key, []).append(str(parse_scalar(stripped[2:])))
+            continue
+
+        current_list_key = None
+        if ":" not in stripped:
+            raise ValueError(f"{definition_path}:{lineno}: expected 'key: value'")
+
+        key, raw_value = stripped.split(":", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+
+        if raw_value in ("|", ">"):
+            block_key = key
+            block_style = raw_value
+            block_indent = None
+            block_lines = []
+            continue
+
+        if not raw_value:
+            current_list_key = key
+            data[key] = []
+            continue
+
+        data[key] = parse_scalar(raw_value)
+
+    _flush_block()
+
+    required = {"name", "description", "owner", "default_subscribed"}
+    missing = sorted(required - set(data))
+    if missing:
+        raise ValueError(f"{definition_path}: missing required key(s): {', '.join(missing)}")
+    if not isinstance(data["default_subscribed"], bool):
+        raise ValueError(f"{definition_path}: default_subscribed must be true or false")
+    if "tags" in data and not isinstance(data["tags"], list):
+        raise ValueError(f"{definition_path}: tags must be a YAML list")
+    data.setdefault("tags", [])
+    return data
+
+
+def _top_level_missing_vault_warnings(vault_root: Path) -> list[str]:
+    warnings: list[str] = []
+    if not vault_root.exists():
+        return warnings
+    for child in sorted(vault_root.iterdir()):
+        if child.name.startswith(".") or child.is_symlink() or not child.is_dir():
+            continue
+        if (child / ".vault").exists():
+            continue
+        if any(grand.name.startswith(".") for grand in child.iterdir() if grand.exists()):
+            pass
+        warnings.append(f"top-level vault directory is missing .vault: {child}")
+    return warnings
+
+
+def scan_vault_definitions(cfg: Config) -> dict[str, Any]:
+    definitions: list[dict[str, Any]] = []
+    active_roots: list[Path] = []
+    active_vaults: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen_names: set[str] = set()
+    vault_root = cfg.vault_dir
+
+    if not vault_root.exists():
+        return {
+            "definitions": [],
+            "active_vaults": [],
+            "warnings": [f"vault root does not exist: {vault_root}"],
+        }
+
+    warnings.extend(_top_level_missing_vault_warnings(vault_root))
+
+    for root, dirs, files in os.walk(vault_root, topdown=True, followlinks=False):
+        root_path = Path(root)
+        dirs[:] = [
+            name
+            for name in dirs
+            if not name.startswith(".") and not (root_path / name).is_symlink()
+        ]
+        if ".vault" not in files:
+            continue
+
+        definition_path = root_path / ".vault"
+        discovered_at = utc_now_iso()
+
+        nested_parent = next((parent for parent in active_roots if parent in root_path.parents), None)
+        if nested_parent is not None:
+            warning = f"nested .vault is invalid in v1: {definition_path} sits under {nested_parent}"
+            warnings.append(warning)
+            definitions.append(
+                {
+                    "definition_path": str(definition_path),
+                    "vault_name": root_path.name,
+                    "vault_path": str(root_path),
+                    "owner": "",
+                    "description": "",
+                    "default_subscribed": 0,
+                    "tags_json": "[]",
+                    "category": None,
+                    "brief_template": None,
+                    "is_valid": 0,
+                    "warning": warning,
+                    "discovered_at": discovered_at,
+                }
+            )
+            continue
+
+        try:
+            parsed = parse_vault_definition(definition_path)
+            name = str(parsed["name"]).strip()
+            if name in seen_names:
+                raise ValueError(f"{definition_path}: duplicate vault name '{name}'")
+            seen_names.add(name)
+            active_roots.append(root_path)
+            row = {
+                "definition_path": str(definition_path),
+                "vault_name": name,
+                "vault_path": str(root_path),
+                "owner": str(parsed["owner"]).strip(),
+                "description": str(parsed["description"]).strip(),
+                "default_subscribed": 1 if parsed["default_subscribed"] else 0,
+                "tags_json": json_dumps(parsed.get("tags", [])),
+                "category": str(parsed["category"]).strip() if parsed.get("category") else None,
+                "brief_template": str(parsed["brief_template"]).strip() if parsed.get("brief_template") else None,
+                "is_valid": 1,
+                "warning": None,
+                "discovered_at": discovered_at,
+            }
+            definitions.append(row)
+            active_vaults.append(row)
+        except Exception as exc:  # noqa: BLE001
+            warning = str(exc)
+            warnings.append(warning)
+            definitions.append(
+                {
+                    "definition_path": str(definition_path),
+                    "vault_name": root_path.name,
+                    "vault_path": str(root_path),
+                    "owner": "",
+                    "description": "",
+                    "default_subscribed": 0,
+                    "tags_json": "[]",
+                    "category": None,
+                    "brief_template": None,
+                    "is_valid": 0,
+                    "warning": warning,
+                    "discovered_at": discovered_at,
+                }
+            )
+
+    return {
+        "definitions": definitions,
+        "active_vaults": active_vaults,
+        "warnings": warnings,
+    }
+
+
+def reload_vault_definitions(conn: sqlite3.Connection, cfg: Config) -> dict[str, Any]:
+    """Rescan `.vault` files. On catalog changes (new/removed vaults, new warnings),
+    fan out default subscriptions to active user agents and queue an operator
+    alert + curator brief-fanout signal."""
+    prior_active = {
+        row["vault_name"]: dict(row)
+        for row in conn.execute(
+            "SELECT vault_name, vault_path, owner, default_subscribed FROM vaults"
+        ).fetchall()
+    }
+    prior_warnings = set(list_vault_warnings(conn))
+
+    scan = scan_vault_definitions(cfg)
+    now_iso = utc_now_iso()
+
+    conn.execute("DELETE FROM vault_definitions")
+    conn.execute("DELETE FROM vaults")
+    for definition in scan["definitions"]:
+        conn.execute(
+            """
+            INSERT INTO vault_definitions (
+              definition_path, vault_name, vault_path, owner, description,
+              default_subscribed, tags_json, category, brief_template,
+              is_valid, warning, discovered_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                definition["definition_path"],
+                definition["vault_name"],
+                definition["vault_path"],
+                definition["owner"],
+                definition["description"],
+                definition["default_subscribed"],
+                definition["tags_json"],
+                definition["category"],
+                definition["brief_template"],
+                definition["is_valid"],
+                definition["warning"],
+                definition["discovered_at"],
+            ),
+        )
+    for vault in scan["active_vaults"]:
+        conn.execute(
+            """
+            INSERT INTO vaults (vault_name, vault_path, state, warning, owner, default_subscribed, updated_at)
+            VALUES (?, ?, 'active', NULL, ?, ?, ?)
+            """,
+            (
+                vault["vault_name"],
+                vault["vault_path"],
+                vault["owner"],
+                vault["default_subscribed"],
+                now_iso,
+            ),
+        )
+    conn.commit()
+
+    active_names = {v["vault_name"] for v in scan["active_vaults"]}
+    prior_names = set(prior_active)
+    added = sorted(active_names - prior_names)
+    removed = sorted(prior_names - active_names)
+    default_changed = sorted(
+        v["vault_name"]
+        for v in scan["active_vaults"]
+        if v["vault_name"] in prior_names
+        and int(prior_active[v["vault_name"]]["default_subscribed"]) != int(v["default_subscribed"])
+    )
+    new_warnings = sorted(set(scan["warnings"]) - prior_warnings)
+
+    fanout_summary: dict[str, int] = {"default_subscribed_added": 0, "agents_notified": 0}
+    if added or default_changed:
+        fanout_summary = _fanout_default_subscriptions(conn, cfg, vault_names=set(added) | set(default_changed))
+
+    if added or removed or new_warnings:
+        bits: list[str] = []
+        if added:
+            bits.append(f"added={','.join(added)}")
+        if removed:
+            bits.append(f"removed={','.join(removed)}")
+        if new_warnings:
+            bits.append(f"warnings={len(new_warnings)}")
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message="Vault catalog changed: " + "; ".join(bits),
+        )
+        queue_notification(
+            conn,
+            target_kind="curator",
+            target_id="curator",
+            channel_kind="brief-fanout",
+            message=f"catalog-reload: added={len(added)} removed={len(removed)} warnings={len(new_warnings)}",
+        )
+
+    scan["diff"] = {
+        "added": added,
+        "removed": removed,
+        "default_subscribed_changed": default_changed,
+        "new_warnings": new_warnings,
+    }
+    scan["fanout"] = fanout_summary
+    return scan
+
+
+def _fanout_default_subscriptions(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    vault_names: set[str],
+) -> dict[str, int]:
+    """For each active user agent, ensure it has a subscription row for every
+    vault in `vault_names` where default_subscribed=1. Never overrides an
+    existing opt-out — only adds missing rows."""
+    rows = conn.execute(
+        "SELECT vault_name, default_subscribed FROM vaults WHERE vault_name IN ({})".format(
+            ",".join(["?"] * len(vault_names)) or "NULL"
+        ),
+        tuple(vault_names),
+    ).fetchall() if vault_names else []
+    applicable = {r["vault_name"]: int(r["default_subscribed"]) for r in rows}
+    if not applicable:
+        return {"default_subscribed_added": 0, "agents_notified": 0}
+
+    agents = conn.execute(
+        "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active'"
+    ).fetchall()
+    now_iso = utc_now_iso()
+    added_count = 0
+    notified: set[str] = set()
+
+    for agent in agents:
+        agent_id = str(agent["agent_id"])
+        for vault_name, default_subscribed in applicable.items():
+            existing = conn.execute(
+                "SELECT subscribed FROM agent_vault_subscriptions WHERE agent_id = ? AND vault_name = ?",
+                (agent_id, vault_name),
+            ).fetchone()
+            if existing is not None:
+                # respect prior opt-in/opt-out
+                continue
+            if default_subscribed != 1:
+                continue
+            conn.execute(
+                """
+                INSERT INTO agent_vault_subscriptions (agent_id, vault_name, subscribed, source, updated_at)
+                VALUES (?, ?, 1, 'default-fanout', ?)
+                """,
+                (agent_id, vault_name, now_iso),
+            )
+            added_count += 1
+            notified.add(agent_id)
+
+    for agent_id in notified:
+        queue_notification(
+            conn,
+            target_kind="curator",
+            target_id=agent_id,
+            channel_kind="brief-fanout",
+            message=f"default-fanout: new vault(s) applied to {agent_id}",
+        )
+
+    conn.commit()
+    return {
+        "default_subscribed_added": added_count,
+        "agents_notified": len(notified),
+    }
+
+
+def list_vaults(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT v.vault_name, v.vault_path, v.state, v.warning, v.owner,
+               v.default_subscribed, d.description, d.tags_json, d.category, d.brief_template
+        FROM vaults v
+        LEFT JOIN vault_definitions d ON d.vault_name = v.vault_name AND d.is_valid = 1
+        ORDER BY v.vault_name
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_vault_warnings(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT warning
+        FROM vault_definitions
+        WHERE is_valid = 0 AND warning IS NOT NULL
+        ORDER BY definition_path
+        """
+    ).fetchall()
+    return [str(row["warning"]) for row in rows]
+
+
+def queue_notification(
+    conn: sqlite3.Connection,
+    *,
+    target_kind: str,
+    target_id: str,
+    channel_kind: str,
+    message: str,
+) -> int:
+    cursor = conn.execute(
+        """
+        INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (target_kind, target_id, channel_kind, message, utc_now_iso()),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) -> None:
+    conn.execute(
+        "UPDATE notification_outbox SET delivered_at = ?, delivery_error = NULL WHERE id = ?",
+        (utc_now_iso(), notification_id),
+    )
+    conn.commit()
+
+
+def mark_notification_error(conn: sqlite3.Connection, notification_id: int, error: str) -> None:
+    conn.execute(
+        "UPDATE notification_outbox SET delivery_error = ? WHERE id = ?",
+        (error[:500], notification_id),
+    )
+    conn.commit()
+
+
+def fetch_undelivered_notifications(
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    *,
+    include_user_agent: bool = True,
+) -> list[dict[str, Any]]:
+    where = ["delivered_at IS NULL"]
+    if not include_user_agent:
+        where.append("target_kind != 'user-agent'")
+    rows = conn.execute(
+        f"""
+        SELECT id, target_kind, target_id, channel_kind, message, created_at, delivery_error
+        FROM notification_outbox
+        WHERE {' AND '.join(where)}
+        ORDER BY
+          CASE target_kind
+            WHEN 'operator' THEN 0
+            WHEN 'curator' THEN 1
+            ELSE 2
+          END,
+          id ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def has_pending_curator_brief_fanout(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'curator'
+          AND channel_kind = 'brief-fanout'
+        LIMIT 1
+        """
+    ).fetchone()
+    return row is not None
+
+
+def consume_agent_notifications(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Atomically return + ack undelivered notifications for a specific agent.
+
+    This is the authenticated read path for user agents: they poll during the
+    periodic refresh, act on the signals (SSOT nudges, subscription change
+    markers), and never see the same row twice. Rows are marked delivered with
+    an `agent-ack` channel_kind suffix so the audit trail shows who consumed it.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, target_kind, target_id, channel_kind, message, created_at
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'user-agent'
+          AND target_id = ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (agent_id, limit),
+    ).fetchall()
+    if rows:
+        now = utc_now_iso()
+        conn.executemany(
+            "UPDATE notification_outbox SET delivered_at = ? WHERE id = ?",
+            [(now, int(r["id"])) for r in rows],
+        )
+        conn.commit()
+    return [dict(r) for r in rows]
+
+
+def list_notifications(
+    conn: sqlite3.Connection,
+    *,
+    target_kind: str | None = None,
+    target_id: str | None = None,
+    undelivered_only: bool = False,
+) -> list[dict[str, Any]]:
+    where = []
+    params: list[Any] = []
+    if target_kind:
+        where.append("target_kind = ?")
+        params.append(target_kind)
+    if target_id:
+        where.append("target_id = ?")
+        params.append(target_id)
+    if undelivered_only:
+        where.append("delivered_at IS NULL")
+    query = "SELECT * FROM notification_outbox"
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY id DESC"
+    return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def fetch_active_token_rows(conn: sqlite3.Connection, target: str) -> list[sqlite3.Row]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM bootstrap_tokens
+        WHERE revoked_at IS NULL AND (token_id = ? OR agent_id = ?)
+        ORDER BY issued_at DESC
+        """,
+        (target, target),
+    ).fetchall()
+    return rows
+
+
+def revoke_token(
+    conn: sqlite3.Connection,
+    *,
+    target: str,
+    surface: str,
+    actor: str,
+    reason: str,
+    cfg: Config | None = None,
+) -> int:
+    rows = fetch_active_token_rows(conn, target)
+    if not rows:
+        return 0
+    surface = normalize_surface(surface, default="ctl")
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_tokens
+        SET revoked_at = ?, revoked_by_surface = ?, revoked_by_actor = ?, revocation_reason = ?
+        WHERE revoked_at IS NULL AND (token_id = ? OR agent_id = ?)
+        """,
+        (now_iso, surface, actor, reason, target, target),
+    )
+    conn.commit()
+
+    if cfg is not None:
+        agent_ids = sorted({str(r["agent_id"]) for r in rows})
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                f"Token revoked via {surface} by {actor}: target={target} "
+                f"agents={','.join(agent_ids)} reason={reason}"
+            ),
+        )
+    return len(rows)
+
+
+def reinstate_token(
+    conn: sqlite3.Connection,
+    *,
+    token_id: str,
+    actor: str,
+    surface: str = "ctl",
+    cfg: Config | None = None,
+) -> dict[str, Any]:
+    """Reinstate a revoked token. This only un-revokes the token for an agent
+    whose runtime still exists; it WILL NOT resurrect a de-enrolled agent
+    because `agent_deenroll` already tore down the systemd units, the
+    HERMES_HOME, and the manifest. The DB row alone cannot rebuild those, and
+    silently flipping status back to 'active' would produce a zombie agent."""
+    row = conn.execute(
+        "SELECT * FROM bootstrap_tokens WHERE token_id = ?",
+        (token_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown token: {token_id}")
+    if row["revoked_at"] is None:
+        return {"token_id": token_id, "already_active": True}
+
+    agent_row = conn.execute(
+        "SELECT status FROM agents WHERE agent_id = ?",
+        (row["agent_id"],),
+    ).fetchone()
+    if agent_row is not None and str(agent_row["status"]) == "deenrolled":
+        raise PermissionError(
+            f"agent {row['agent_id']} has been de-enrolled; its runtime "
+            "(HERMES_HOME + systemd units) was removed. Reinstating the DB "
+            "row alone would create a zombie agent. Re-enroll via `init.sh "
+            "agent` instead."
+        )
+
+    surface = normalize_surface(surface, default="ctl")
+    conn.execute(
+        """
+        UPDATE bootstrap_tokens
+        SET revoked_at = NULL, revoked_by_surface = NULL, revoked_by_actor = NULL,
+            revocation_reason = NULL
+        WHERE token_id = ?
+        """,
+        (token_id,),
+    )
+    conn.execute(
+        "UPDATE agents SET status = 'active' WHERE agent_id = ?",
+        (row["agent_id"],),
+    )
+    conn.commit()
+    if cfg is not None:
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                f"Token reinstated via {surface} by {actor}: token_id={token_id} "
+                f"agent_id={row['agent_id']}"
+            ),
+        )
+    return {
+        "token_id": token_id,
+        "agent_id": row["agent_id"],
+        "reinstated_by_surface": surface,
+        "reinstated_by_actor": actor,
+    }
+
+
+def validate_token(conn: sqlite3.Connection, raw_token: str) -> sqlite3.Row:
+    token_hash = hash_token(raw_token)
+    row = conn.execute(
+        """
+        SELECT *
+        FROM bootstrap_tokens
+        WHERE token_hash = ? AND revoked_at IS NULL
+        ORDER BY issued_at DESC
+        LIMIT 1
+        """,
+        (token_hash,),
+    ).fetchone()
+    if row is None:
+        raise PermissionError("token is missing or revoked")
+    return row
+
+
+OPERATOR_ROLES = ("curator", "operator")
+VALID_APPROVAL_SURFACES = ("curator-channel", "curator-tui", "ctl")
+
+
+def validate_operator_token(conn: sqlite3.Connection, raw_token: str) -> sqlite3.Row:
+    token_row = validate_token(conn, raw_token)
+    agent_row = conn.execute(
+        "SELECT role FROM agents WHERE agent_id = ? AND status = 'active'",
+        (token_row["agent_id"],),
+    ).fetchone()
+    if agent_row is None or str(agent_row["role"]) not in OPERATOR_ROLES:
+        raise PermissionError("operator-class token required")
+    return token_row
+
+
+def normalize_surface(raw: str, default: str = "curator-tui") -> str:
+    value = (raw or "").strip().lower()
+    if value not in VALID_APPROVAL_SURFACES:
+        return default
+    return value
+
+
+def subscriptions_for_agent(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT s.vault_name, s.subscribed, s.source, s.updated_at, v.vault_path, v.owner,
+               v.default_subscribed, d.description
+        FROM agent_vault_subscriptions s
+        LEFT JOIN vaults v ON v.vault_name = s.vault_name
+        LEFT JOIN vault_definitions d ON d.vault_name = s.vault_name AND d.is_valid = 1
+        WHERE s.agent_id = ?
+        ORDER BY s.vault_name
+        """,
+        (agent_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def ensure_default_subscriptions(conn: sqlite3.Connection, agent_id: str) -> None:
+    existing = conn.execute(
+        "SELECT COUNT(*) AS count FROM agent_vault_subscriptions WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if existing and int(existing["count"]) > 0:
+        return
+    now_iso = utc_now_iso()
+    for row in conn.execute("SELECT vault_name, default_subscribed FROM vaults ORDER BY vault_name"):
+        conn.execute(
+            """
+            INSERT INTO agent_vault_subscriptions (agent_id, vault_name, subscribed, source, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (agent_id, row["vault_name"], int(row["default_subscribed"]), "default", now_iso),
+        )
+    conn.commit()
+
+
+def set_vault_subscription(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    vault_name: str,
+    subscribed: bool,
+    source: str,
+) -> dict[str, Any]:
+    vault = conn.execute("SELECT vault_name FROM vaults WHERE vault_name = ?", (vault_name,)).fetchone()
+    if vault is None:
+        raise ValueError(f"unknown vault: {vault_name}")
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO agent_vault_subscriptions (agent_id, vault_name, subscribed, source, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(agent_id, vault_name)
+        DO UPDATE SET subscribed = excluded.subscribed, source = excluded.source, updated_at = excluded.updated_at
+        """,
+        (agent_id, vault_name, int(subscribed), source, now_iso),
+    )
+    conn.commit()
+    return {
+        "agent_id": agent_id,
+        "vault_name": vault_name,
+        "subscribed": bool(subscribed),
+        "source": source,
+        "updated_at": now_iso,
+    }
+
+
+def _prior_defaults(conn: sqlite3.Connection, prior_agent_id: str | None) -> dict[str, Any]:
+    if not prior_agent_id:
+        return {}
+    agent = conn.execute(
+        "SELECT model_preset, model_string, channels_json, archived_state_path FROM agents WHERE agent_id = ?",
+        (prior_agent_id,),
+    ).fetchone()
+    if agent is None:
+        return {}
+    subscriptions = [
+        row["vault_name"]
+        for row in conn.execute(
+            """
+            SELECT vault_name
+            FROM agent_vault_subscriptions
+            WHERE agent_id = ? AND subscribed = 1
+            ORDER BY vault_name
+            """,
+            (prior_agent_id,),
+        )
+    ]
+    return {
+        "prior_agent_id": prior_agent_id,
+        "model_preset": agent["model_preset"],
+        "model_string": agent["model_string"],
+        "channels": json_loads(agent["channels_json"], []),
+        "subscriptions": subscriptions,
+        "archived_state_path": agent["archived_state_path"],
+    }
+
+
+def find_prior_agent(conn: sqlite3.Connection, requester_identity: str, unix_user: str) -> str | None:
+    row = conn.execute(
+        """
+        SELECT agent_id
+        FROM agents
+        WHERE role = 'user' AND (unix_user = ? OR display_name = ?)
+        ORDER BY last_enrolled_at DESC
+        LIMIT 1
+        """,
+        (unix_user, requester_identity),
+    ).fetchone()
+    return str(row["agent_id"]) if row else None
+
+
+def request_bootstrap(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    requester_identity: str,
+    unix_user: str,
+    source_ip: str,
+) -> dict[str, Any]:
+    ensure_request_expiry(conn)
+    now = utc_now()
+    window_start = (now - dt.timedelta(seconds=cfg.bootstrap_window_seconds)).replace(microsecond=0).isoformat()
+    if rate_limit_count(conn, "ip", source_ip, window_start) >= cfg.bootstrap_per_ip_limit:
+        raise RateLimitError(
+            f"rate-limited: per-source limit ({cfg.bootstrap_per_ip_limit}) exceeded for {source_ip}",
+            retry_after_seconds=cfg.bootstrap_window_seconds,
+            scope="per-ip",
+        )
+
+    pending_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM bootstrap_requests WHERE status = 'pending'"
+    ).fetchone()
+    if pending_count and int(pending_count["count"]) >= cfg.bootstrap_global_pending_limit:
+        raise RateLimitError(
+            f"rate-limited: global pending limit ({cfg.bootstrap_global_pending_limit}) exceeded",
+            retry_after_seconds=cfg.bootstrap_pending_ttl_seconds,
+            scope="global-pending",
+        )
+
+    record_rate_limit_event(conn, "ip", source_ip)
+    record_rate_limit_event(conn, "global", "pending")
+
+    request_id = generate_request_id()
+    expires_at = (now + dt.timedelta(seconds=cfg.bootstrap_pending_ttl_seconds)).replace(microsecond=0).isoformat()
+    prior_agent_id = find_prior_agent(conn, requester_identity, unix_user)
+    defaults = _prior_defaults(conn, prior_agent_id)
+    conn.execute(
+        """
+        INSERT INTO bootstrap_requests (
+          request_id, requester_identity, unix_user, source_ip, requested_at, expires_at,
+          status, prior_agent_id, prior_defaults_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (
+            request_id,
+            requester_identity,
+            unix_user,
+            source_ip,
+            now.replace(microsecond=0).isoformat(),
+            expires_at,
+            prior_agent_id,
+            json_dumps(defaults),
+        ),
+    )
+    conn.commit()
+
+    prior_note = ""
+    if prior_agent_id:
+        prior_note = f" previously enrolled as {prior_agent_id}; archived defaults detected."
+    message = (
+        f"{requester_identity} ({unix_user}) is requesting enrollment from {source_ip}."
+        f"{prior_note} Approve via almanac-ctl request approve {request_id}"
+    )
+    queue_notification(
+        conn,
+        target_kind="operator",
+        target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+        channel_kind=cfg.operator_notify_platform or "tui-only",
+        message=message,
+    )
+
+    return {
+        "request_id": request_id,
+        "status": "pending",
+        "expires_at": expires_at,
+        "prior_defaults": defaults,
+    }
+
+
+def list_requests(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    ensure_request_expiry(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM bootstrap_requests
+        ORDER BY requested_at DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def approve_request(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    surface: str,
+    actor: str,
+    cfg: Config | None = None,
+) -> dict[str, Any]:
+    ensure_request_expiry(conn)
+    row = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown bootstrap request: {request_id}")
+    if row["status"] != "pending":
+        raise ValueError(f"bootstrap request is not pending: {row['status']}")
+    surface = normalize_surface(surface, default="curator-tui")
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET status = 'approved', approval_surface = ?, approval_actor = ?, approved_at = ?
+        WHERE request_id = ?
+        """,
+        (surface, actor, now_iso, request_id),
+    )
+    conn.commit()
+    if cfg is not None:
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                f"Approved enrollment request {request_id} for "
+                f"{row['requester_identity']} ({row['unix_user']}) via {surface} by {actor}."
+            ),
+        )
+    return {
+        "request_id": request_id,
+        "status": "approved",
+        "approved_at": now_iso,
+        "approved_by_surface": surface,
+        "approved_by_actor": actor,
+    }
+
+
+def deny_request(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    surface: str,
+    actor: str,
+    cfg: Config | None = None,
+) -> dict[str, Any]:
+    ensure_request_expiry(conn)
+    row = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown bootstrap request: {request_id}")
+    if row["status"] != "pending":
+        raise ValueError(f"bootstrap request is not pending: {row['status']}")
+    surface = normalize_surface(surface, default="curator-tui")
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET status = 'denied', denied_by_surface = ?, denied_by_actor = ?, denied_at = ?
+        WHERE request_id = ?
+        """,
+        (surface, actor, now_iso, request_id),
+    )
+    conn.commit()
+    if cfg is not None:
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                f"Denied enrollment request {request_id} for "
+                f"{row['requester_identity']} ({row['unix_user']}) via {surface} by {actor}."
+            ),
+        )
+    return {
+        "request_id": request_id,
+        "status": "denied",
+        "denied_at": now_iso,
+        "denied_by_surface": surface,
+        "denied_by_actor": actor,
+    }
+
+
+def bootstrap_status(conn: sqlite3.Connection, cfg: Config, request_id: str) -> dict[str, Any]:
+    ensure_request_expiry(conn)
+    row = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown bootstrap request: {request_id}")
+
+    response = {
+        "request_id": request_id,
+        "status": row["status"],
+        "expires_at": row["expires_at"],
+        "prior_defaults": json_loads(row["prior_defaults_json"], {}),
+        "prior_agent_id": row["prior_agent_id"],
+    }
+
+    if row["status"] != "approved":
+        return response
+
+    if row["token_id"]:
+        response["token_id"] = row["token_id"]
+        return response
+
+    role = "user"
+    agent_id = row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), role)
+    raw_token = generate_raw_token()
+    token_id = generate_token_id()
+    conn.execute(
+        """
+        INSERT INTO bootstrap_tokens (
+          token_id, agent_id, token_hash, requester_identity, source_ip, issued_at, issued_by
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            token_id,
+            agent_id,
+            hash_token(raw_token),
+            row["requester_identity"],
+            row["source_ip"],
+            utc_now_iso(),
+            row["approval_surface"] or "unknown",
+        ),
+    )
+    delivered_at = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET token_id = ?, token_delivered_at = ?
+        WHERE request_id = ?
+        """,
+        (token_id, delivered_at, request_id),
+    )
+    conn.commit()
+    response.update(
+        {
+            "token_id": token_id,
+            "raw_token": raw_token,
+            "token_delivered_at": delivered_at,
+            "agent_id": agent_id,
+        }
+    )
+    return response
+
+
+def _channels_payload(channels: list[str]) -> list[str]:
+    normalized = []
+    for channel in channels:
+        value = str(channel).strip().lower()
+        if not value:
+            continue
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _manifest_path_for(cfg: Config, agent_id: str, role: str) -> Path:
+    if role == "curator":
+        return cfg.curator_manifest_path
+    return cfg.agents_state_dir / agent_id / "manifest.json"
+
+
+def write_shared_manifest(
+    cfg: Config,
+    *,
+    agent_id: str,
+    role: str,
+    unix_user: str,
+    display_name: str,
+    hermes_home: str,
+    model_preset: str,
+    model_string: str,
+    channels: list[str],
+    allowed_mcps: list[dict[str, Any]],
+    subscriptions: list[dict[str, Any]],
+    home_channel: dict[str, Any] | None = None,
+    operator_notify_channel: dict[str, Any] | None = None,
+) -> Path:
+    manifest_path = _manifest_path_for(cfg, agent_id, role)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    # tui_enabled is a structural invariant — every agent has TUI access, the flag exists
+    # so downstream tooling can assert it and refuse to disable it.
+    payload = {
+        "agent_id": agent_id,
+        "role": role,
+        "unix_user": unix_user,
+        "display_name": display_name,
+        "hermes_home": hermes_home,
+        "model_preset": model_preset,
+        "model_string": model_string,
+        "channels": channels,
+        "tui_enabled": True,
+        "allowed_mcps": allowed_mcps,
+        "subscriptions": subscriptions,
+        "home_channel": home_channel or {},
+        "operator_notify_channel": operator_notify_channel,
+        "updated_at": utc_now_iso(),
+    }
+    if role == "curator":
+        payload["operator_general_channel"] = {
+            "platform": cfg.operator_general_platform or "",
+            "channel_id": cfg.operator_general_channel_id or "",
+        }
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def register_agent(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    raw_token: str,
+    unix_user: str,
+    display_name: str,
+    role: str,
+    hermes_home: str,
+    model_preset: str,
+    model_string: str,
+    channels: list[str],
+    home_channel: dict[str, Any] | None = None,
+    operator_notify_channel: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    token_row = validate_token(conn, raw_token)
+    agent_id = str(token_row["agent_id"])
+    now_iso = utc_now_iso()
+    channels_value = _channels_payload(channels)
+    allowed_mcps = [
+        {"name": "almanac-mcp", "url": f"http://127.0.0.1:{cfg.public_mcp_port}/mcp"},
+        {"name": "almanac-qmd", "url": cfg.qmd_url},
+    ]
+    if cfg.chutes_mcp_url:
+        allowed_mcps.append({"name": "chutes-kb", "url": cfg.chutes_mcp_url})
+
+    conn.execute(
+        """
+        INSERT INTO agents (
+          agent_id, role, unix_user, display_name, status, hermes_home, manifest_path,
+          archived_state_path, model_preset, model_string, channels_json,
+          allowed_mcps_json, home_channel_json, operator_notify_channel_json,
+          created_at, last_enrolled_at
+        )
+        VALUES (?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(agent_id) DO UPDATE SET
+          unix_user = excluded.unix_user,
+          display_name = excluded.display_name,
+          status = 'active',
+          hermes_home = excluded.hermes_home,
+          model_preset = excluded.model_preset,
+          model_string = excluded.model_string,
+          channels_json = excluded.channels_json,
+          allowed_mcps_json = excluded.allowed_mcps_json,
+          home_channel_json = excluded.home_channel_json,
+          operator_notify_channel_json = excluded.operator_notify_channel_json,
+          last_enrolled_at = excluded.last_enrolled_at
+        """,
+        (
+            agent_id,
+            role,
+            unix_user,
+            display_name,
+            hermes_home,
+            str(_manifest_path_for(cfg, agent_id, role)),
+            model_preset,
+            model_string,
+            json_dumps(channels_value),
+            json_dumps(allowed_mcps),
+            json_dumps(home_channel or {}),
+            json_dumps(operator_notify_channel or {}),
+            now_iso,
+            now_iso,
+        ),
+    )
+    conn.commit()
+
+    if role == "user":
+        ensure_default_subscriptions(conn, agent_id)
+    subscriptions = subscriptions_for_agent(conn, agent_id)
+
+    # home_channel resolution: explicit arg wins. Otherwise infer from the first
+    # non-tui channel; if only tui-only is enabled, treat TUI as the home channel.
+    resolved_home_channel: dict[str, Any] = dict(home_channel or {}) if home_channel else {}
+    if not resolved_home_channel:
+        non_tui = [c for c in channels_value if c and c != "tui-only"]
+        if non_tui:
+            resolved_home_channel = {"platform": non_tui[0], "channel_id": ""}
+        else:
+            resolved_home_channel = {"platform": "tui", "channel_id": ""}
+
+    conn.execute(
+        "UPDATE agents SET home_channel_json = ? WHERE agent_id = ?",
+        (json_dumps(resolved_home_channel), agent_id),
+    )
+    conn.commit()
+
+    manifest_path = write_shared_manifest(
+        cfg,
+        agent_id=agent_id,
+        role=role,
+        unix_user=unix_user,
+        display_name=display_name,
+        hermes_home=hermes_home,
+        model_preset=model_preset,
+        model_string=model_string,
+        channels=channels_value,
+        allowed_mcps=allowed_mcps,
+        subscriptions=subscriptions,
+        home_channel=resolved_home_channel,
+        operator_notify_channel=operator_notify_channel,
+    )
+    conn.execute("UPDATE agents SET manifest_path = ? WHERE agent_id = ?", (str(manifest_path), agent_id))
+    conn.commit()
+
+    # Trigger initial Curator brief fanout so the Curator knows a new agent wants briefs.
+    if role == "user":
+        queue_notification(
+            conn,
+            target_kind="curator",
+            target_id=agent_id,
+            channel_kind="brief-fanout",
+            message=(
+                f"new user agent enrolled: {agent_id} ({display_name}). "
+                f"Subscriptions: {','.join(s['vault_name'] for s in subscriptions if int(s.get('subscribed') or 0))}"
+            ),
+        )
+
+    return {
+        "agent_id": agent_id,
+        "manifest_path": str(manifest_path),
+        "allowed_mcps": allowed_mcps,
+        "subscriptions": subscriptions,
+        "home_channel": resolved_home_channel,
+    }
+
+
+def get_agent(conn: sqlite3.Connection, target: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM agents
+        WHERE agent_id = ? OR unix_user = ?
+        ORDER BY last_enrolled_at DESC
+        LIMIT 1
+        """,
+        (target, target),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_agents(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM agents ORDER BY role, unix_user").fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_tokens(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT token_id, agent_id, requester_identity, source_ip, issued_at, issued_by,
+               revoked_at, revoked_by_surface, revoked_by_actor, revocation_reason
+        FROM bootstrap_tokens
+        ORDER BY issued_at DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def note_refresh_job(
+    conn: sqlite3.Connection,
+    *,
+    job_name: str,
+    job_kind: str,
+    target_id: str,
+    schedule: str,
+    status: str,
+    note: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_name) DO UPDATE SET
+          target_id = excluded.target_id,
+          schedule = excluded.schedule,
+          last_run_at = excluded.last_run_at,
+          last_status = excluded.last_status,
+          last_note = excluded.last_note
+        """,
+        (job_name, job_kind, target_id, schedule, utc_now_iso(), status, note),
+    )
+    conn.commit()
+
+
+def refresh_agent_context(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    raw_token: str,
+) -> dict[str, Any]:
+    token_row = validate_token(conn, raw_token)
+    agent_id = str(token_row["agent_id"])
+    ensure_default_subscriptions(conn, agent_id)
+    subscriptions = subscriptions_for_agent(conn, agent_id)
+    active = [row["vault_name"] for row in subscriptions if int(row["subscribed"]) == 1]
+    note_refresh_job(
+        conn,
+        job_name=f"{agent_id}-refresh",
+        job_kind="agent-refresh",
+        target_id=agent_id,
+        schedule="every 4h",
+        status="ok",
+        note=f"active subscriptions: {', '.join(active) if active else 'none'}",
+    )
+    return {
+        "agent_id": agent_id,
+        "active_subscriptions": active,
+        "subscriptions": subscriptions,
+        "qmd_url": cfg.qmd_url,
+    }
+
+
+def subscription_catalog(conn: sqlite3.Connection, raw_token: str) -> list[dict[str, Any]]:
+    token_row = validate_token(conn, raw_token)
+    agent_id = str(token_row["agent_id"])
+    subscriptions = {
+        row["vault_name"]: bool(row["subscribed"])
+        for row in conn.execute(
+            "SELECT vault_name, subscribed FROM agent_vault_subscriptions WHERE agent_id = ?",
+            (agent_id,),
+        )
+    }
+    result = []
+    for row in list_vaults(conn):
+        result.append(
+            {
+                "vault_name": row["vault_name"],
+                "vault_path": row["vault_path"],
+                "description": row.get("description"),
+                "owner": row.get("owner"),
+                "default_subscribed": bool(row.get("default_subscribed", 0)),
+                "subscribed": subscriptions.get(row["vault_name"], False),
+            }
+        )
+    return result
+
+
+def set_subscription_from_token(
+    conn: sqlite3.Connection,
+    *,
+    raw_token: str,
+    vault_name: str,
+    subscribed: bool,
+) -> dict[str, Any]:
+    token_row = validate_token(conn, raw_token)
+    return set_vault_subscription(
+        conn,
+        agent_id=str(token_row["agent_id"]),
+        vault_name=vault_name,
+        subscribed=subscribed,
+        source="user",
+    )
+
+
+def archive_agent_files(
+    cfg: Config,
+    *,
+    agent_id: str,
+    unix_user: str,
+    hermes_home: str,
+) -> Path:
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    archive_dir = cfg.archived_agents_dir / agent_id / timestamp
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = _manifest_path_for(cfg, agent_id, "user")
+    if manifest_path.exists():
+        subprocess.run(["cp", "-a", str(manifest_path), str(archive_dir / "manifest.json")], check=True)
+
+    user_unit_dir = Path(f"/home/{unix_user}/.config/systemd/user")
+    if user_unit_dir.exists():
+        archive_unit_dir = archive_dir / "systemd-user"
+        archive_unit_dir.mkdir(parents=True, exist_ok=True)
+        for path in user_unit_dir.glob("almanac-user-agent*"):
+            subprocess.run(["cp", "-a", str(path), str(archive_unit_dir / path.name)], check=True)
+
+    hermes_home_path = Path(hermes_home)
+    if hermes_home_path.exists():
+        subprocess.run(["cp", "-a", str(hermes_home_path), str(archive_dir / "hermes-home")], check=True)
+
+    return archive_dir
+
+
+def mark_agent_deenrolled(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    archive_path: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE agents
+        SET status = 'deenrolled', archived_state_path = ?
+        WHERE agent_id = ?
+        """,
+        (archive_path, agent_id),
+    )
+    conn.commit()
+
+
+def notion_verify_signature(raw_body: bytes, header_value: str, verification_token: str) -> bool:
+    expected = "sha256=" + hmac.new(
+        verification_token.encode("utf-8"),
+        raw_body,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, header_value or "")
+
+
+def store_notion_event(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO notion_webhook_events (event_id, event_type, payload_json, received_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (event_id, event_type, json_dumps(payload), utc_now_iso()),
+    )
+    conn.commit()
+
+
+SSOT_ALLOWED_OPERATIONS = ("read", "insert", "update")
+SSOT_FORBIDDEN_OPERATIONS = ("archive", "delete", "trash", "destroy")
+
+
+def _notion_owner_identity(payload: dict[str, Any]) -> tuple[str, str]:
+    """Return (owner_identity, resolution_source) following the spec precedence:
+    explicit Owner property -> created_by -> ('', 'needs-approval').
+    """
+    properties = payload.get("properties") or {}
+    owner_prop = properties.get("Owner") if isinstance(properties, dict) else None
+    if isinstance(owner_prop, dict):
+        people = owner_prop.get("people") or []
+        for person in people:
+            if isinstance(person, dict):
+                for key in ("name", "email", "id"):
+                    value = person.get(key)
+                    if value:
+                        return str(value), "owner-property"
+        raw_value = owner_prop.get("value") or owner_prop.get("text")
+        if isinstance(raw_value, str) and raw_value.strip():
+            return raw_value.strip(), "owner-property"
+
+    created_by = payload.get("created_by") or {}
+    if isinstance(created_by, dict):
+        for key in ("name", "email", "id"):
+            value = created_by.get(key)
+            if value:
+                return str(value), "created-by"
+    if isinstance(created_by, str) and created_by.strip():
+        return created_by.strip(), "created-by"
+
+    return "", "needs-approval"
+
+
+def _find_agent_for_owner(conn: sqlite3.Connection, owner_identity: str) -> dict[str, Any] | None:
+    if not owner_identity:
+        return None
+    row = conn.execute(
+        """
+        SELECT agent_id, unix_user, display_name
+        FROM agents
+        WHERE status = 'active'
+          AND role = 'user'
+          AND (unix_user = ? OR display_name = ?)
+        ORDER BY last_enrolled_at DESC
+        LIMIT 1
+        """,
+        (owner_identity, owner_identity),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def enqueue_ssot_write(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    operation: str,
+    target_id: str,
+    payload: dict[str, Any],
+    requested_by_actor: str,
+) -> dict[str, Any]:
+    """Accept insert/update only. Reject archive/delete. Ensure acting agent owns the target.
+
+    Writes are intentionally not performed here — they are queued to refresh_jobs for
+    the Curator/SSOT worker to execute with the operator's Notion credentials.
+    """
+    op = (operation or "").strip().lower()
+    if op in SSOT_FORBIDDEN_OPERATIONS:
+        raise PermissionError(
+            f"SSOT rail violation: operation '{op}' is not permitted; archive/delete require operator."
+        )
+    if op not in SSOT_ALLOWED_OPERATIONS:
+        raise ValueError(
+            f"unsupported SSOT operation '{op}'; allowed: {', '.join(SSOT_ALLOWED_OPERATIONS)}"
+        )
+
+    owner_identity, owner_source = _notion_owner_identity(payload) if op != "insert" else ("", "insert")
+    agent_row = conn.execute(
+        "SELECT unix_user, display_name FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if agent_row is None:
+        raise PermissionError("agent is not active")
+
+    if op == "insert":
+        approved = True
+    else:
+        owner_agent = _find_agent_for_owner(conn, owner_identity)
+        approved = owner_agent is not None and owner_agent["agent_id"] == agent_id
+        if not approved:
+            owner_label = owner_identity or "unknown"
+            queue_notification(
+                conn,
+                target_kind="operator",
+                target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+                channel_kind=cfg.operator_notify_platform or "tui-only",
+                message=(
+                    f"SSOT write approval requested: agent={agent_id} op={op} target={target_id} "
+                    f"owner={owner_label} source={owner_source}"
+                ),
+            )
+
+    job_name = f"ssot-{op}-{target_id or secrets.token_hex(4)}"
+    note_refresh_job(
+        conn,
+        job_name=job_name,
+        job_kind="ssot-write",
+        target_id=target_id or agent_id,
+        schedule="manual",
+        status="queued" if approved else "awaiting-approval",
+        note=json_dumps(
+            {
+                "agent_id": agent_id,
+                "operation": op,
+                "target_id": target_id,
+                "owner_identity": owner_identity,
+                "owner_source": owner_source,
+                "actor": requested_by_actor,
+            }
+        ),
+    )
+    return {
+        "queued": approved,
+        "agent_id": agent_id,
+        "operation": op,
+        "target_id": target_id,
+        "owner_identity": owner_identity,
+        "owner_source": owner_source,
+        "approval_required": not approved,
+    }
+
+
+def build_managed_memory_payload(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+) -> dict[str, Any]:
+    """Compose the three canonical managed-memory stubs for an agent.
+
+    The skill contract is:
+      [managed:vault-ref]      active vault path and role
+      [managed:qmd-ref]        how to query qmd for retrieval
+      [managed:vault-topology] compact summary of subscribed vaults + briefs
+    """
+    agent = conn.execute(
+        "SELECT role, unix_user, display_name, hermes_home FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if agent is None:
+        raise ValueError(f"unknown agent: {agent_id}")
+
+    catalog = list_vaults(conn)
+    subs = {row["vault_name"]: dict(row) for row in subscriptions_for_agent(conn, agent_id)}
+    vault_root = str(cfg.vault_dir)
+
+    topology_lines: list[str] = []
+    for vault in catalog:
+        sub = subs.get(vault["vault_name"])
+        subscribed = bool(sub and int(sub.get("subscribed") or 0) == 1)
+        mark = "+" if subscribed else ("·" if int(vault.get("default_subscribed") or 0) else "-")
+        brief = (vault.get("brief_template") or vault.get("description") or "").strip()
+        if brief:
+            brief = brief.splitlines()[0][:140]
+        topology_lines.append(f"  {mark} {vault['vault_name']}: {brief}")
+
+    vault_ref = (
+        f"Vault root: {vault_root}\n"
+        f"Agent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
+    )
+    qmd_ref = (
+        f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
+        "Always query qmd before web for vault-relevant work, including the\n"
+        "'vault-pdf-ingest' collection when present for PDF-derived markdown."
+    )
+    topology = "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n" + "\n".join(
+        topology_lines
+    )
+
+    return {
+        "agent_id": agent_id,
+        "vault-ref": vault_ref,
+        "qmd-ref": qmd_ref,
+        "vault-topology": topology,
+        "catalog": catalog,
+        "subscriptions": [dict(s) for s in subs.values()],
+    }
+
+
+def write_managed_memory_stubs(
+    *,
+    hermes_home: Path,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """Idempotently write the three managed-memory stubs into an agent's
+    HERMES_HOME. Two artefacts are produced:
+
+    1. `$HERMES_HOME/state/almanac-vault-reconciler.json` — structured state
+       the vault-reconciler skill can read for drift detection.
+    2. `$HERMES_HOME/memories/almanac-managed-stubs.md` — a markdown overlay the
+       agent can include / reference from `MEMORY.md`.
+
+    Returns the two paths written. Called from the user-agent-refresh context
+    running as the enrollment user — never from the central curator (which runs
+    as a different uid and would violate the HOME boundary).
+    """
+    state_dir = hermes_home / "state"
+    memories_dir = hermes_home / "memories"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    memories_dir.mkdir(parents=True, exist_ok=True)
+
+    now = utc_now_iso()
+    state_path = state_dir / "almanac-vault-reconciler.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "agent_id": payload["agent_id"],
+                "vault-ref": payload["vault-ref"],
+                "qmd-ref": payload["qmd-ref"],
+                "vault-topology": payload["vault-topology"],
+                "catalog": payload["catalog"],
+                "subscriptions": payload["subscriptions"],
+                "updated_at": now,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stub_path = memories_dir / "almanac-managed-stubs.md"
+    body = (
+        "# Almanac managed memory stubs\n\n"
+        "Maintained by the user-agent-refresh worker every 4 hours. Do not\n"
+        "hand-edit; changes are overwritten on next refresh.\n\n"
+        f"## [managed:vault-ref]\n\n{payload['vault-ref']}\n\n"
+        f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
+        f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
+        f"_updated_at: {now}_\n"
+    )
+    stub_path.write_text(body, encoding="utf-8")
+
+    return {"state_path": str(state_path), "stub_path": str(stub_path)}
+
+
+def _central_managed_payload_path(cfg: Config, agent_id: str) -> Path:
+    return cfg.agents_state_dir / agent_id / "managed-memory.json"
+
+
+def publish_central_managed_memory(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+) -> Path:
+    """Write the agent's managed-memory payload into the shared state dir so
+    the user-agent-refresh worker (running as the enrollment user) can read
+    the curator's latest view without crossing uid boundaries."""
+    payload = build_managed_memory_payload(conn, cfg, agent_id=agent_id)
+    out_path = _central_managed_payload_path(cfg, agent_id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps({**payload, "updated_at": utc_now_iso()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    # world-readable so the enrollment user can read it without ACL fuss.
+    try:
+        out_path.chmod(0o644)
+    except PermissionError:
+        pass
+    return out_path
+
+
+def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[str, Any]:
+    """Pull pending curator:brief-fanout notifications, publish fresh central
+    managed-memory payloads for each impacted agent (shared state, no HERMES
+    writes), and mark the notifications delivered.
+
+    Each enrollment user's `user-agent-refresh.sh` then picks up the central
+    payload on its next run (every 4h or on agent boot) and writes it into the
+    user's own HERMES_HOME. This respects the uid boundary between curator and
+    user agents."""
+    rows = conn.execute(
+        """
+        SELECT id, target_id, message
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'curator'
+          AND channel_kind = 'brief-fanout'
+        ORDER BY id ASC
+        """
+    ).fetchall()
+
+    regen_targets: set[str] = set()
+    catalog_events: list[str] = []
+    for row in rows:
+        target = str(row["target_id"])
+        if target in ("", "curator"):
+            for agent in conn.execute(
+                "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active'"
+            ):
+                regen_targets.add(str(agent["agent_id"]))
+            catalog_events.append(row["message"] or "")
+        else:
+            regen_targets.add(target)
+
+    published: list[dict[str, str]] = []
+    failures: list[str] = []
+    for agent_id in sorted(regen_targets):
+        try:
+            path = publish_central_managed_memory(conn, cfg, agent_id=agent_id)
+            published.append({"agent_id": agent_id, "path": str(path)})
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{agent_id}:{exc}")
+
+    if rows:
+        conn.executemany(
+            "UPDATE notification_outbox SET delivered_at = ? WHERE id = ?",
+            [(utc_now_iso(), int(r["id"])) for r in rows],
+        )
+        conn.commit()
+
+    note_refresh_job(
+        conn,
+        job_name="curator-brief-fanout",
+        job_kind="curator-fanout",
+        target_id="curator",
+        schedule="on-demand",
+        status="ok" if not failures else "warn",
+        note=f"published {len(published)} central payload(s); failures={len(failures)}",
+    )
+    return {
+        "processed_notifications": len(rows),
+        "published_agents": published,
+        "failures": failures,
+        "catalog_events": catalog_events,
+    }
+
+
+def _map_event_to_affected_users(conn: sqlite3.Connection, payload: dict[str, Any]) -> list[str]:
+    owner_identity, _ = _notion_owner_identity(payload)
+    if not owner_identity:
+        return []
+    agent = _find_agent_for_owner(conn, owner_identity)
+    return [agent["agent_id"]] if agent else []
+
+
+def _signal_kind(event_type: str, payload: dict[str, Any]) -> str:
+    kind = (event_type or "").lower()
+    if "comment" in kind or "mention" in kind:
+        return "focus-nudge"
+    if "page" in kind and ("properties_updated" in kind or "content_updated" in kind):
+        return "task-reminder"
+    if "created" in kind:
+        return "org-activity"
+    return "org-activity"
+
+
+def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Dedupe + batch pending webhook events. Resolve owners. Emit per-user nudges."""
+    rows = conn.execute(
+        """
+        SELECT id, event_id, event_type, payload_json
+        FROM notion_webhook_events
+        WHERE batch_status = 'pending'
+        ORDER BY received_at
+        """
+    ).fetchall()
+
+    processed = 0
+    event_types: dict[str, int] = {}
+    nudges_by_agent: dict[str, list[str]] = {}
+    unresolved_events: list[str] = []
+
+    # batch-level dedupe on (event_id, event_type). events get stored IGNORE on insert,
+    # but an upstream replay can reintroduce identical event_ids; guard in case.
+    seen_event_ids: set[str] = set()
+
+    for row in rows:
+        if row["event_id"] in seen_event_ids:
+            conn.execute(
+                "UPDATE notion_webhook_events SET batch_status = 'duplicate', processed_at = ? WHERE id = ?",
+                (utc_now_iso(), row["id"]),
+            )
+            continue
+        seen_event_ids.add(row["event_id"])
+
+        payload = json_loads(row["payload_json"], {}) or {}
+        affected = _map_event_to_affected_users(conn, payload)
+        signal = _signal_kind(row["event_type"], payload)
+
+        if not affected:
+            unresolved_events.append(row["event_id"])
+
+        for agent_id in affected:
+            nudges_by_agent.setdefault(agent_id, []).append(
+                f"{signal}:{row['event_type']}:{row['event_id']}"
+            )
+
+        processed += 1
+        event_types[row["event_type"]] = event_types.get(row["event_type"], 0) + 1
+        conn.execute(
+            """
+            UPDATE notion_webhook_events
+            SET batch_status = 'processed', processed_at = ?
+            WHERE id = ?
+            """,
+            (utc_now_iso(), row["id"]),
+        )
+
+    # emit batched per-user nudges
+    for agent_id, tokens in nudges_by_agent.items():
+        queue_notification(
+            conn,
+            target_kind="user-agent",
+            target_id=agent_id,
+            channel_kind="notion-webhook",
+            message=f"SSOT signals ({len(tokens)}): " + ", ".join(tokens[:10])
+            + ("" if len(tokens) <= 10 else f" ... (+{len(tokens) - 10} more)"),
+        )
+
+    conn.commit()
+    note_refresh_job(
+        conn,
+        job_name="notion-ssot-batcher",
+        job_kind="ssot-batcher",
+        target_id="notion",
+        schedule="every 5m",
+        status="ok",
+        note=f"processed {processed} event(s); unresolved {len(unresolved_events)}",
+    )
+    return {
+        "processed": processed,
+        "event_types": event_types,
+        "nudges": {agent: len(v) for agent, v in nudges_by_agent.items()},
+        "unresolved_event_ids": unresolved_events,
+    }
+
+
+def ensure_config_file_update(path: Path, updates: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    existing: dict[str, bool] = {key: False for key in updates}
+    if path.exists():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    new_lines = []
+    for line in lines:
+        replaced = False
+        for key, value in updates.items():
+            if line.startswith(f"{key}="):
+                new_lines.append(f"{key}={shell_quote(value)}")
+                existing[key] = True
+                replaced = True
+                break
+        if not replaced:
+            new_lines.append(line)
+    for key, seen in existing.items():
+        if not seen:
+            new_lines.append(f"{key}={shell_quote(updates[key])}")
+    path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")

@@ -1,0 +1,8 @@
+name: Projects
+description: Active project workspaces, briefs, and decision logs.
+owner: operator
+default_subscribed: true
+category: workspace
+tags:
+  - projects
+  - active

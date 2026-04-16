@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 3 ]]; then
+  echo "Usage: $0 <agent-id> <shared-repo-dir> <hermes-home> [channels-json]" >&2
+  exit 2
+fi
+
+AGENT_ID="$1"
+SHARED_REPO_DIR="$2"
+HERMES_HOME="$3"
+CHANNELS_JSON="${4:-[\"tui-only\"]}"
+TARGET_DIR="$HOME/.config/systemd/user"
+mkdir -p "$TARGET_DIR"
+
+cat >"$TARGET_DIR/almanac-user-agent-refresh.service" <<EOF
+[Unit]
+Description=Almanac user-agent refresh for $AGENT_ID
+
+[Service]
+Type=oneshot
+Environment=ALMANAC_AGENT_ID=$AGENT_ID
+Environment=HERMES_HOME=$HERMES_HOME
+Environment=ALMANAC_SHARED_REPO_DIR=$SHARED_REPO_DIR
+ExecStart=$SHARED_REPO_DIR/bin/user-agent-refresh.sh
+EOF
+
+cat >"$TARGET_DIR/almanac-user-agent-refresh.timer" <<EOF
+[Unit]
+Description=Run Almanac user-agent refresh for $AGENT_ID every 4 hours
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=4h
+Unit=almanac-user-agent-refresh.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+enable_gateway="$(
+  python3 - "$CHANNELS_JSON" <<'PY'
+import json
+import sys
+
+channels = json.loads(sys.argv[1])
+print("1" if any(channel in {"discord", "telegram"} for channel in channels) else "0")
+PY
+)"
+
+if [[ "$enable_gateway" == "1" ]]; then
+  cat >"$TARGET_DIR/almanac-user-agent-gateway.service" <<EOF
+[Unit]
+Description=Almanac user-agent messaging gateway for $AGENT_ID
+
+[Service]
+Environment=HERMES_HOME=$HERMES_HOME
+ExecStart=/bin/bash -lc 'exec hermes gateway'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+else
+  rm -f "$TARGET_DIR/almanac-user-agent-gateway.service"
+fi
+
+uid="$(id -u)"
+runtime_dir="/run/user/$uid"
+bus_path="$runtime_dir/bus"
+env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user daemon-reload
+env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-refresh.timer >/dev/null
+env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-refresh.timer >/dev/null
+
+if [[ -f "$TARGET_DIR/almanac-user-agent-gateway.service" ]]; then
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-gateway.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-gateway.service >/dev/null
+else
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-gateway.service >/dev/null 2>&1 || true
+fi

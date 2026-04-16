@@ -1,0 +1,10 @@
+[Unit]
+Description=Render Almanac Quarto project every 30 minutes
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=30m
+Unit=almanac-quarto-render.service
+
+[Install]
+WantedBy=timers.target

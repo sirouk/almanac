@@ -409,9 +409,9 @@ detect_github_repo() {
 
   if ! command -v git >/dev/null 2>&1; then
     GITHUB_REPO_URL="https://github.com/sirouk/almanac"
-    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/master/skills/almanac-qmd-mcp/SKILL.md"
+    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-qmd-mcp/SKILL.md"
     GITHUB_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-qmd-mcp"
-    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/master/skills/almanac-vault-reconciler/SKILL.md"
+    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-vault-reconciler/SKILL.md"
     GITHUB_RECONCILER_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-vault-reconciler"
     return 0
   fi
@@ -419,7 +419,7 @@ detect_github_repo() {
   local remote_url branch owner_repo
   remote_url="$(git -C "$ALMANAC_REPO_DIR" remote get-url origin 2>/dev/null || true)"
   branch="$(git -C "$ALMANAC_REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-  branch="${branch:-master}"
+  branch="${branch:-main}"
 
   case "$remote_url" in
     https://github.com/*)
@@ -442,9 +442,9 @@ detect_github_repo() {
     GITHUB_RECONCILER_SKILL_IDENTIFIER="$owner_repo/skills/almanac-vault-reconciler"
   else
     GITHUB_REPO_URL="https://github.com/sirouk/almanac"
-    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/master/skills/almanac-qmd-mcp/SKILL.md"
+    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-qmd-mcp/SKILL.md"
     GITHUB_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-qmd-mcp"
-    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/master/skills/almanac-vault-reconciler/SKILL.md"
+    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-vault-reconciler/SKILL.md"
     GITHUB_RECONCILER_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-vault-reconciler"
   fi
 }

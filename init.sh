@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_PATH="${BASH_SOURCE[0]-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 if [[ -x "$SCRIPT_DIR/bin/init.sh" ]]; then
   exec "$SCRIPT_DIR/bin/init.sh" "$@"
 fi

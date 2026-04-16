@@ -244,7 +244,7 @@ In v1, that is what local TUI access means.
 If the repo is public, the user can enroll with the curl-friendly bootstrap:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/master/init.sh | bash -s -- agent
+curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh | bash -s -- agent
 ```
 
 That top-level `init.sh` clones or updates the repo into

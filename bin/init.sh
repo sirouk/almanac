@@ -38,6 +38,40 @@ print("" if value is None else json.dumps(value) if isinstance(value, (dict, lis
 PY
 }
 
+lower_ascii() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
+is_yes() {
+  case "$(lower_ascii "${1:-}")" in
+    y|yes|1|true)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+require_linux_host() {
+  local action="$1"
+  local os_name
+
+  os_name="$(uname -s 2>/dev/null || printf 'unknown')"
+  if [[ "$os_name" == "Linux" ]]; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+Almanac v1 $action must run on the Almanac host after SSHing in as your assigned Unix user.
+Current OS: $os_name
+
+SSH to the Almanac host, then rerun:
+  init.sh $MODE
+EOF
+  return 1
+}
+
 # almanac-rpc does not surface 429 Retry-After; handle it here by retrying with
 # a backoff that honors Retry-After when the server provides it.
 rpc_call_with_retry() {
@@ -101,10 +135,10 @@ choose_channels_csv() {
   fi
   read -r -p "Enable Discord? [y/N]: " discord
   read -r -p "Enable Telegram? [y/N]: " telegram
-  if [[ "${discord,,}" =~ ^(y|yes|1)$ ]]; then
+  if is_yes "$discord"; then
     channels="$channels,discord"
   fi
-  if [[ "${telegram,,}" =~ ^(y|yes|1)$ ]]; then
+  if is_yes "$telegram"; then
     channels="$channels,telegram"
   fi
   printf '%s\n' "${channels:-$default}"
@@ -229,6 +263,7 @@ run_agent_flow() {
   local register_file refresh_file agent_id token_file hermes_state_file
 
   export PATH="$HOME/.local/bin:$PATH"
+  require_linux_host "enrollment"
   requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un)}"
   unix_user="$(id -un)"
   source_ip="$(awk '{print $1}' <<<"${SSH_CONNECTION:-${SSH_CLIENT:-127.0.0.1}}")"
@@ -239,12 +274,13 @@ run_agent_flow() {
   rpc_call_with_retry "$request_file" \
     --url "$ALMANAC_MCP_URL" \
     --tool "bootstrap.request" \
-    --json-args "$(python3 - <<PY
+    --json-args "$(REQUESTER_IDENTITY="$requester_identity" UNIX_USER="$unix_user" SOURCE_IP="$source_ip" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-  "requester_identity": ${requester_identity@Q},
-  "unix_user": ${unix_user@Q},
-  "source_ip": ${source_ip@Q},
+  "requester_identity": os.environ["REQUESTER_IDENTITY"],
+  "unix_user": os.environ["UNIX_USER"],
+  "source_ip": os.environ["SOURCE_IP"],
 }))
 PY
     )"
@@ -264,9 +300,13 @@ PY
     "$SHARED_REPO_DIR/bin/almanac-rpc" \
       --url "$ALMANAC_MCP_URL" \
       --tool "bootstrap.status" \
-      --json-args "$(python3 - <<PY
+      --json-args "$(REQUEST_ID="$request_id" SOURCE_IP="$source_ip" python3 - <<'PY'
 import json
-print(json.dumps({"request_id": ${request_id@Q}, "source_ip": ${source_ip@Q}}))
+import os
+print(json.dumps({
+  "request_id": os.environ["REQUEST_ID"],
+  "source_ip": os.environ["SOURCE_IP"],
+}))
 PY
       )" >"$status_file"
     case "$(json_get "$status_file" "status")" in
@@ -297,9 +337,10 @@ PY
     prior_default_channels="tui-only"
   else
     prior_default_channels="$(
-      python3 - <<PY
+      python3 - "$prior_default_channels" <<'PY'
 import json
-channels = json.loads(${prior_default_channels@Q})
+import sys
+channels = json.loads(sys.argv[1])
 print(",".join(channels))
 PY
     )"
@@ -323,7 +364,7 @@ PY
   want_gateway="no"
   if [[ "${ALMANAC_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
     read -r -p "Configure Hermes gateway for Discord/Telegram? [y/N]: " want_gateway_answer
-    if [[ "${want_gateway_answer,,}" =~ ^(y|yes|1)$ ]]; then
+    if is_yes "$want_gateway_answer"; then
       want_gateway="yes"
       HERMES_HOME="$hermes_home" hermes gateway setup
     fi
@@ -381,17 +422,18 @@ PY
   "$SHARED_REPO_DIR/bin/almanac-rpc" \
     --url "$ALMANAC_MCP_URL" \
     --tool "agents.register" \
-    --json-args "$(python3 - <<PY
+    --json-args "$(TOKEN="$token" UNIX_USER="$unix_user" DISPLAY_NAME="$requester_identity" HERMES_HOME_ARG="$hermes_home" MODEL_PRESET="$model_preset" MODEL_STRING="$model_string" CHANNELS_JSON="$channels_json" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-  "token": ${token@Q},
-  "unix_user": ${unix_user@Q},
-  "display_name": ${requester_identity@Q},
+  "token": os.environ["TOKEN"],
+  "unix_user": os.environ["UNIX_USER"],
+  "display_name": os.environ["DISPLAY_NAME"],
   "role": "user",
-  "hermes_home": ${hermes_home@Q},
-  "model_preset": ${model_preset@Q},
-  "model_string": ${model_string@Q},
-  "channels": json.loads(${channels_json@Q}),
+  "hermes_home": os.environ["HERMES_HOME_ARG"],
+  "model_preset": os.environ["MODEL_PRESET"],
+  "model_string": os.environ["MODEL_STRING"],
+  "channels": json.loads(os.environ["CHANNELS_JSON"]),
 }))
 PY
     )" >"$register_file"
@@ -404,9 +446,10 @@ PY
   "$SHARED_REPO_DIR/bin/almanac-rpc" \
     --url "$ALMANAC_MCP_URL" \
     --tool "vaults.refresh" \
-    --json-args "$(python3 - <<PY
+    --json-args "$(TOKEN="$token" python3 - <<'PY'
 import json
-print(json.dumps({"token": ${token@Q}}))
+import os
+print(json.dumps({"token": os.environ["TOKEN"]}))
 PY
     )" >"$refresh_file"
 
@@ -461,6 +504,7 @@ EOF
 
 run_update_flow() {
   export PATH="$HOME/.local/bin:$PATH"
+  require_linux_host "update"
   command -v hermes >/dev/null 2>&1 || {
     echo "Hermes is not installed for $(id -un)." >&2
     exit 1

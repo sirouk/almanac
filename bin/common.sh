@@ -20,6 +20,22 @@ read_operator_artifact_config_file() {
   return 1
 }
 
+resolve_home_dir() {
+  local home_dir="${HOME:-}"
+  if [[ -n "$home_dir" ]]; then
+    printf '%s\n' "$home_dir"
+    return 0
+  fi
+
+  home_dir="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+  if [[ -n "$home_dir" ]]; then
+    printf '%s\n' "$home_dir"
+    return 0
+  fi
+
+  return 1
+}
+
 normalize_vault_qmd_collection_mask() {
   local mask="${1:-}"
 
@@ -41,8 +57,10 @@ find_config_file() {
   local sibling_priv
   local explicit_config
   local artifact_config
+  local home_dir=""
   nested_priv="$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
   sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/almanac-priv/config/almanac.env"
+  home_dir="$(resolve_home_dir || true)"
 
   explicit_config="${ALMANAC_CONFIG_FILE:-}"
   if [[ -n "$explicit_config" ]]; then
@@ -60,9 +78,13 @@ find_config_file() {
     "$BOOTSTRAP_DIR/config/almanac.env"
     "$nested_priv"
     "$sibling_priv"
-    "$HOME/almanac/almanac-priv/config/almanac.env"
-    "$HOME/almanac-priv/config/almanac.env"
   )
+  if [[ -n "$home_dir" ]]; then
+    candidates+=(
+      "$home_dir/almanac/almanac-priv/config/almanac.env"
+      "$home_dir/almanac-priv/config/almanac.env"
+    )
+  fi
   local candidate
   for candidate in "${candidates[@]}"; do
     if [[ -n "$candidate" && -f "$candidate" ]]; then
@@ -243,10 +265,16 @@ PY
 }
 
 qmd_cache_dir() {
+  local home_dir=""
   if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
     printf '%s/qmd\n' "$XDG_CACHE_HOME"
   else
-    printf '%s/.cache/qmd\n' "$HOME"
+    home_dir="$(resolve_home_dir || true)"
+    if [[ -n "$home_dir" ]]; then
+      printf '%s/.cache/qmd\n' "$home_dir"
+    else
+      printf '%s\n' "/tmp/qmd-cache"
+    fi
   fi
 }
 
@@ -551,7 +579,14 @@ nextcloud_app_container_name() {
 }
 
 ensure_nvm() {
-  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  local home_dir=""
+  home_dir="$(resolve_home_dir || true)"
+  if [[ -z "${NVM_DIR:-}" && -n "$home_dir" ]]; then
+    export NVM_DIR="$home_dir/.nvm"
+  fi
+  if [[ -z "${NVM_DIR:-}" ]]; then
+    return 0
+  fi
   if [[ -s "$NVM_DIR/nvm.sh" ]]; then
     # shellcheck disable=SC1090
     source "$NVM_DIR/nvm.sh"
@@ -559,7 +594,11 @@ ensure_nvm() {
 }
 
 ensure_uv() {
-  export PATH="$HOME/.local/bin:$PATH"
+  local home_dir=""
+  home_dir="$(resolve_home_dir || true)"
+  if [[ -n "$home_dir" ]]; then
+    export PATH="$home_dir/.local/bin:$PATH"
+  fi
 }
 
 set_user_systemd_bus_env() {

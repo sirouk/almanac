@@ -2327,7 +2327,7 @@ resolve_enrollment_trace_selector() {
 
 run_enrollment_trace() {
   local selector_spec="" selector_kind="" selector_value="" trace_file=""
-  local timer_enabled="" timer_active="" service_active="" resolved_unix_user=""
+  local timer_enabled="" timer_active="" service_active="" resolved_unix_user="" resolved_hermes_home=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-trace; then
@@ -2645,6 +2645,15 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
 print(data.get("unix_user", ""))
 PY
 )"
+  resolved_hermes_home="$(python3 - "$trace_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+agent = data.get("agent") or {}
+print(agent.get("hermes_home", ""))
+PY
+)"
 
   echo "Enrollment trace"
   echo
@@ -2790,6 +2799,45 @@ PY
     fi
     echo "  enabled:        ${gateway_enabled:-unknown}"
     echo "  active:         ${gateway_active:-unknown}"
+    if [[ -n "$resolved_hermes_home" ]]; then
+      echo "  runtime state:"
+      run_root_env_cmd runuser -u "$resolved_unix_user" -- env HERMES_HOME="$resolved_hermes_home" "$RUNTIME_DIR/hermes-venv/bin/python3" - <<'PY' || true
+import json
+import os
+from pathlib import Path
+
+state_path = Path(os.environ["HERMES_HOME"]) / "gateway_state.json"
+if not state_path.is_file():
+    print(f"    missing ({state_path})")
+    raise SystemExit(0)
+
+try:
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"    unreadable ({state_path}): {exc}")
+    raise SystemExit(0)
+
+print(f"    file:          {state_path}")
+print(f"    gateway_state: {payload.get('gateway_state') or '-'}")
+print(f"    updated_at:    {payload.get('updated_at') or '-'}")
+if payload.get("exit_reason"):
+    print(f"    exit_reason:   {payload.get('exit_reason')}")
+
+platforms = payload.get("platforms") or {}
+if not isinstance(platforms, dict) or not platforms:
+    print("    platforms:     none")
+    raise SystemExit(0)
+
+for name in sorted(platforms):
+    platform_payload = platforms.get(name) or {}
+    state = platform_payload.get("state") or "-"
+    error = platform_payload.get("error_message") or ""
+    if error:
+        print(f"    platform[{name}]: {state} ({error})")
+    else:
+        print(f"    platform[{name}]: {state}")
+PY
+    fi
     echo
     echo "Recent user gateway status:"
     run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user status almanac-user-agent-gateway.service -n "$TRACE_LOG_LINES" --no-pager || true
@@ -2866,7 +2914,7 @@ run_enrollment_align() {
       "$hermes_home" \
       "$channels_json" \
       "$activation_path" \
-      "$ALMANAC_REPO_DIR/bin/hermes-shell.sh" || true
+      "$RUNTIME_DIR/hermes-venv/bin/hermes" || true
   done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
 import json
 import sqlite3

@@ -154,10 +154,13 @@ def _run_as_user(
 
 
 def _resolve_user_gateway_bin(cfg: Config) -> Path:
+    runtime_hermes = cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"
+    if runtime_hermes.exists():
+        return runtime_hermes
     wrapper = cfg.repo_dir / "bin" / "hermes-shell.sh"
     if wrapper.exists():
         return wrapper
-    return cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"
+    return runtime_hermes
 
 
 def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) -> None:

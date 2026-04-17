@@ -362,11 +362,13 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 "3. Open the Bot page for that application.\n"
                 "4. Turn Public Bot on.\n"
                 "5. Leave Requires OAuth2 Code Grant off.\n"
-                "6. Leave the Permissions Integer at 0.\n"
-                "7. Leave all privileged intents off.\n"
-                "8. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
-                "9. If you want to use it in one of your own servers later, invite it there. For DM-only use, you can skip that for now.\n"
-                "10. Paste the bot token back to me here.\n"
+                "6. For DM-only use, you can leave the Permissions Integer at 0.\n"
+                "7. Turn Message Content Intent on.\n"
+                "8. Turn Server Members Intent on.\n"
+                "9. Leave Presence Intent off unless you specifically want it.\n"
+                "10. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
+                "11. If you want to use it in one of your own servers later, invite it there with the `bot` and `applications.commands` scopes. For DM-only use, you can skip that for now.\n"
+                "12. Paste the bot token back to me here.\n"
                 "Once I have the token, I’ll ask for the model provider credential, wire it to your agent, and then step out."
             )
         return (

@@ -356,9 +356,9 @@ PY
 }
 
 run_agent_flow() {
-  local requester_identity unix_user source_ip request_file request_id prior_default_model
-  local prior_default_channels model_preset channels_csv channels_json model_string token hermes_home
-  local agent_id token_file hermes_state_file state_file activation_status activation_trigger_path
+  local requester_identity="" unix_user="" source_ip="" request_file="" request_id="" prior_default_model=""
+  local prior_default_channels="" model_preset="" channels_csv="" channels_json="" model_string="" token="" hermes_home=""
+  local agent_id="" token_file="" hermes_state_file="" state_file="" activation_status="" activation_trigger_path=""
   local resuming_pending="0"
   local hermes_bin=""
   local preseeded_request_id="${ALMANAC_BOOTSTRAP_REQUEST_ID:-}"
@@ -499,10 +499,10 @@ PY
 
   # Hermes is the source of truth after setup. Fall back to the seeded presets
   # only when Hermes has not produced a readable config yet.
-  if [[ -z "$model_preset" ]]; then
+  if [[ -z "${model_preset:-}" ]]; then
     model_preset="$(choose_model_preset "${prior_default_model:-codex}")"
   fi
-  if [[ -z "$channels_csv" ]]; then
+  if [[ -z "${channels_csv:-}" ]]; then
     if [[ "$want_gateway" == "yes" ]]; then
       channels_csv="$(choose_channels_csv "${prior_default_channels:-tui-only}")"
     else
@@ -525,8 +525,8 @@ PY
     channels_csv="tui-only"
     channels_json='["tui-only"]'
   fi
-  if [[ -z "$model_string" ]]; then
-    case "$model_preset" in
+  if [[ -z "${model_string:-}" ]]; then
+    case "${model_preset:-}" in
       codex) model_string="${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}" ;;
       opus) model_string="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}" ;;
       chutes) model_string="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover}" ;;

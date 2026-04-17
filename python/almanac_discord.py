@@ -8,6 +8,7 @@ from typing import Any
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
+DISCORD_USER_AGENT = "AlmanacDiscord/1.0 (+https://github.com/sirouk/almanac)"
 
 
 def _request_json(
@@ -21,6 +22,8 @@ def _request_json(
     data = None
     headers = {
         "Authorization": f"Bot {bot_token}",
+        "Accept": "application/json",
+        "User-Agent": DISCORD_USER_AGENT,
     }
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")

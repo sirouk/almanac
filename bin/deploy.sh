@@ -94,6 +94,9 @@ Usage:
   deploy.sh                # interactive menu
   deploy.sh install
   deploy.sh upgrade
+  deploy.sh enrollment-status
+  deploy.sh enrollment-align
+  deploy.sh enrollment-reset
   deploy.sh curator-setup
   deploy.sh agent-payload
   deploy.sh write-config
@@ -107,7 +110,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|upgrade|curator-setup|agent-payload|agent|write-config|remove|health|menu)
+    install|upgrade|enrollment-status|enrollment-align|enrollment-reset|curator-setup|agent-payload|agent|write-config|remove|health|menu)
       MODE="$1"
       shift
       ;;
@@ -259,11 +262,14 @@ Almanac deploy menu
   1) Install / repair from current checkout
   2) Upgrade deployed host from configured upstream
   3) Write config only
-  4) Curator setup / repair
-  5) Print agent payload
-  6) Health check
-  7) Remove / teardown
-  8) Exit
+  4) Enrollment status
+  5) Enrollment align / repair
+  6) Enrollment reset / cleanup
+  7) Curator setup / repair
+  8) Print agent payload
+  9) Health check
+ 10) Remove / teardown
+ 11) Exit
 EOF
 
   while true; do
@@ -272,12 +278,15 @@ EOF
       1) MODE="install"; return 0 ;;
       2) MODE="upgrade"; return 0 ;;
       3) MODE="write-config"; return 0 ;;
-      4) MODE="curator-setup"; return 0 ;;
-      5) MODE="agent-payload"; return 0 ;;
-      6) MODE="health"; return 0 ;;
-      7) MODE="remove"; return 0 ;;
-      8) exit 0 ;;
-      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, or 8." ;;
+      4) MODE="enrollment-status"; return 0 ;;
+      5) MODE="enrollment-align"; return 0 ;;
+      6) MODE="enrollment-reset"; return 0 ;;
+      7) MODE="curator-setup"; return 0 ;;
+      8) MODE="agent-payload"; return 0 ;;
+      9) MODE="health"; return 0 ;;
+      10) MODE="remove"; return 0 ;;
+      11) exit 0 ;;
+      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, or 11." ;;
     esac
   done
 }
@@ -1080,6 +1089,10 @@ print_post_install_guide() {
   echo "    ${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only} ${OPERATOR_NOTIFY_CHANNEL_ID:-"(tui-only)"}"
   echo "  Recovery CLI:"
   echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl"
+  echo "  Enrollment maintenance:"
+  echo "    $ALMANAC_REPO_DIR/deploy.sh enrollment-status"
+  echo "    $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
+  echo "    $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
   echo
 
   echo "Almanac software updates"
@@ -1617,10 +1630,119 @@ prepare_deployed_context() {
   NEXTCLOUD_STATE_DIR="${NEXTCLOUD_STATE_DIR:-$STATE_DIR/nextcloud}"
   RUNTIME_DIR="${RUNTIME_DIR:-$STATE_DIR/runtime}"
   PUBLISHED_DIR="${PUBLISHED_DIR:-$ALMANAC_PRIV_DIR/published}"
+  ALMANAC_DB_PATH="${ALMANAC_DB_PATH:-$STATE_DIR/almanac-control.sqlite3}"
+  ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
+  ALMANAC_ARCHIVED_AGENTS_DIR="${ALMANAC_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
   CONFIG_TARGET="${DISCOVERED_CONFIG:-${ALMANAC_CONFIG_FILE:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}}"
   ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+}
+
+ensure_deployed_config_exists() {
+  if [[ ! -f "$CONFIG_TARGET" ]]; then
+    echo "Deployed config not found at $CONFIG_TARGET" >&2
+    echo "Run ./deploy.sh install first, or point ALMANAC_CONFIG_FILE at the deployed almanac.env." >&2
+    exit 1
+  fi
+}
+
+run_root_env_cmd() {
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+    return 0
+  fi
+  sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+}
+
+run_service_user_cmd() {
+  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+    return 0
+  fi
+  sudo -iu "$ALMANAC_USER" env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+}
+
+enrollment_snapshot_json() {
+  local target_unix_user="$1"
+
+  run_root_env_cmd python3 - "$ALMANAC_DB_PATH" "$target_unix_user" <<'PY'
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+target_unix_user = sys.argv[2]
+agent_id = f"agent-{target_unix_user}"
+payload = {
+    "unix_user": target_unix_user,
+    "agent_id": agent_id,
+    "agent": None,
+    "onboarding": [],
+    "requests": [],
+    "rate_limit_subjects": [],
+}
+
+if not db_path.exists():
+    print(json.dumps(payload, sort_keys=True))
+    raise SystemExit(0)
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+
+agent_row = conn.execute(
+    "SELECT agent_id, status, display_name, hermes_home, archived_state_path, manifest_path FROM agents WHERE unix_user = ? ORDER BY last_enrolled_at DESC LIMIT 1",
+    (target_unix_user,),
+).fetchone()
+if agent_row is not None:
+    payload["agent"] = dict(agent_row)
+    agent_id = str(agent_row["agent_id"])
+    payload["agent_id"] = agent_id
+
+subjects = set()
+
+for row in conn.execute("SELECT * FROM onboarding_sessions ORDER BY updated_at DESC").fetchall():
+    try:
+        answers = json.loads(row["answers_json"] or "{}")
+    except Exception:
+        answers = {}
+    linked_agent_id = str(row["linked_agent_id"] or "")
+    if str(answers.get("unix_user") or "") != target_unix_user and linked_agent_id != agent_id:
+        continue
+    payload["onboarding"].append(
+        {
+            "session_id": row["session_id"],
+            "state": row["state"],
+            "platform": row["platform"],
+            "sender_id": row["sender_id"],
+            "sender_username": row["sender_username"],
+            "linked_request_id": row["linked_request_id"],
+            "linked_agent_id": linked_agent_id,
+            "updated_at": row["updated_at"],
+            "provision_error": row["provision_error"],
+        }
+    )
+    subjects.add(f"{row['platform']}:{row['sender_id']}")
+
+for row in conn.execute(
+    """
+    SELECT request_id, status, source_ip, requested_at, approved_at,
+           provisioned_at, provision_error, provision_attempts, provision_next_attempt_at
+    FROM bootstrap_requests
+    WHERE unix_user = ? AND auto_provision = 1
+    ORDER BY requested_at DESC
+    """,
+    (target_unix_user,),
+).fetchall():
+    payload["requests"].append(dict(row))
+    source_ip = str(row["source_ip"] or "")
+    if ":" in source_ip:
+        subjects.add(source_ip)
+
+payload["rate_limit_subjects"] = sorted(subjects)
+print(json.dumps(payload, sort_keys=True))
+PY
 }
 
 restart_shared_user_services_root() {
@@ -1936,6 +2058,317 @@ run_root_remove() {
   echo "Removed tooling:      $REMOVE_USER_TOOLING"
 }
 
+run_enrollment_status() {
+  local onboarding_file provision_file timer_enabled timer_active service_active
+
+  prepare_deployed_context
+  ensure_deployed_config_exists
+
+  onboarding_file="$(mktemp)"
+  provision_file="$(mktemp)"
+
+  run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json onboarding list >"$onboarding_file"
+  run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json provision list >"$provision_file"
+
+  timer_enabled="$(systemctl is-enabled almanac-enrollment-provision.timer 2>/dev/null || true)"
+  timer_active="$(systemctl is-active almanac-enrollment-provision.timer 2>/dev/null || true)"
+  service_active="$(systemctl is-active almanac-enrollment-provision.service 2>/dev/null || true)"
+
+  echo "Enrollment status"
+  echo
+  echo "Config:        $CONFIG_TARGET"
+  echo "Service user:  $ALMANAC_USER"
+  echo "Repo:          $ALMANAC_REPO_DIR"
+  echo "DB:            $ALMANAC_DB_PATH"
+  echo "Provisioner:"
+  echo "  timer enabled: $timer_enabled"
+  echo "  timer active:  $timer_active"
+  echo "  service:       $service_active"
+  echo
+
+  python3 - "$onboarding_file" "$provision_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    onboarding = json.load(handle)
+with open(sys.argv[2], "r", encoding="utf-8") as handle:
+    provisions = json.load(handle)
+
+active_onboarding = [
+    {
+        "session_id": row.get("session_id", ""),
+        "state": row.get("state", ""),
+        "unix_user": (row.get("answers") or {}).get("unix_user", ""),
+        "platform": row.get("platform", ""),
+        "updated_at": row.get("updated_at", ""),
+        "error": row.get("provision_error", "") or "",
+    }
+    for row in onboarding
+    if row.get("state") not in {"denied", "completed", "cancelled"}
+]
+
+active_provisions = [
+    {
+        "request_id": row.get("request_id", ""),
+        "provision_state": row.get("provision_state", ""),
+        "status": row.get("status", ""),
+        "unix_user": row.get("unix_user", ""),
+        "attempts": row.get("provision_attempts", 0),
+        "next_attempt_at": row.get("provision_next_attempt_at", "") or "",
+        "error": row.get("provision_error", "") or "",
+    }
+    for row in provisions
+    if row.get("provision_state") not in {"completed", "cancelled", "denied"}
+]
+
+print("Active onboarding sessions:")
+if not active_onboarding:
+    print("  none")
+else:
+    for row in active_onboarding:
+        detail = f"  {row['session_id']} state={row['state']} unix_user={row['unix_user'] or '-'} platform={row['platform'] or '-'} updated={row['updated_at'] or '-'}"
+        if row["error"]:
+            detail += f" error={row['error']}"
+        print(detail)
+
+print()
+print("Active auto-provision requests:")
+if not active_provisions:
+    print("  none")
+else:
+    for row in active_provisions:
+        detail = (
+            f"  {row['request_id']} provision_state={row['provision_state']} status={row['status']} "
+            f"unix_user={row['unix_user'] or '-'} attempts={row['attempts']}"
+        )
+        if row["next_attempt_at"]:
+            detail += f" next={row['next_attempt_at']}"
+        if row["error"]:
+            detail += f" error={row['error']}"
+        print(detail)
+PY
+
+  rm -f "$onboarding_file" "$provision_file"
+  echo
+  echo "Repair commands:"
+  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
+  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+}
+
+run_enrollment_align() {
+  prepare_deployed_context
+  ensure_deployed_config_exists
+
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" enrollment-align
+    write_operator_checkout_artifact
+    return 0
+  fi
+
+  echo "Realigning enrollment services..."
+  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
+  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-1}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  restart_shared_user_services_root || true
+  systemctl reset-failed almanac-enrollment-provision.service almanac-enrollment-provision.timer >/dev/null 2>&1 || true
+  systemctl enable almanac-enrollment-provision.timer >/dev/null
+  systemctl restart almanac-enrollment-provision.timer
+  systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
+  echo "Enrollment provisioner and shared services realigned."
+  echo
+  run_enrollment_status
+}
+
+run_enrollment_reset() {
+  local target_unix_user remove_unix_user purge_rate_limits remove_archives confirm_text extra_subject uid
+  local snapshot_file agent_id agent_status
+  local -a session_ids request_specs rate_subjects
+
+  prepare_deployed_context
+  ensure_deployed_config_exists
+
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" enrollment-reset
+    write_operator_checkout_artifact
+    return 0
+  fi
+
+  target_unix_user="$(ask "Unix user to reset" "${ENROLLMENT_RESET_UNIX_USER:-}")"
+  if [[ -z "$target_unix_user" ]]; then
+    echo "Unix user is required." >&2
+    exit 1
+  fi
+  if [[ "$target_unix_user" == "$ALMANAC_USER" ]]; then
+    echo "Refusing to reset the Almanac service user '$ALMANAC_USER'." >&2
+    exit 1
+  fi
+
+  snapshot_file="$(mktemp)"
+  enrollment_snapshot_json "$target_unix_user" >"$snapshot_file"
+
+  echo "Matched enrollment state:"
+  python3 - "$snapshot_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+agent = data.get("agent") or {}
+print(f"  unix_user: {data.get('unix_user') or '-'}")
+print(f"  agent_id:  {data.get('agent_id') or '-'}")
+print(f"  agent:     {(agent.get('status') or 'missing') if agent else 'missing'}")
+print(f"  onboarding sessions: {len(data.get('onboarding') or [])}")
+for row in data.get("onboarding") or []:
+    print(f"    - {row.get('session_id')} state={row.get('state')} platform={row.get('platform')} linked_request={row.get('linked_request_id') or '-'}")
+print(f"  auto-provision requests: {len(data.get('requests') or [])}")
+for row in data.get("requests") or []:
+    print(f"    - {row.get('request_id')} status={row.get('status')} attempts={row.get('provision_attempts')} provisioned_at={row.get('provisioned_at') or '-'}")
+subjects = data.get("rate_limit_subjects") or []
+print(f"  related rate-limit subjects: {', '.join(subjects) if subjects else '(none)'}")
+PY
+
+  remove_unix_user="$(ask_yes_no "Remove the Unix user and its home if present" "${ENROLLMENT_RESET_REMOVE_USER:-1}")"
+  purge_rate_limits="$(ask_yes_no "Clear related onboarding/bootstrap rate-limit buckets" "${ENROLLMENT_RESET_PURGE_RATE_LIMITS:-1}")"
+  remove_archives="$(ask_yes_no "Remove archived agent state for this user" "${ENROLLMENT_RESET_REMOVE_ARCHIVES:-0}")"
+  extra_subject="$(ask "Extra rate-limit subject to clear (optional, e.g. discord:123456789)" "${ENROLLMENT_RESET_EXTRA_SUBJECT:-}")"
+  confirm_text="$(ask "Type RESET to confirm enrollment cleanup" "")"
+  if [[ "$confirm_text" != "RESET" ]]; then
+    rm -f "$snapshot_file"
+    echo "Enrollment reset cancelled."
+    exit 1
+  fi
+
+  mapfile -t session_ids < <(python3 - "$snapshot_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+for row in data.get("onboarding") or []:
+    if row.get("state") not in {"denied", "completed", "cancelled"}:
+        print(row.get("session_id", ""))
+PY
+)
+  mapfile -t request_specs < <(python3 - "$snapshot_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+for row in data.get("requests") or []:
+    print("\t".join([
+        str(row.get("request_id", "")),
+        str(row.get("status", "")),
+        str(row.get("provisioned_at", "") or ""),
+    ]))
+PY
+)
+  mapfile -t rate_subjects < <(python3 - "$snapshot_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+for value in data.get("rate_limit_subjects") or []:
+    print(value)
+PY
+)
+  agent_id="$(python3 - "$snapshot_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data.get("agent_id", ""))
+PY
+)"
+  agent_status="$(python3 - "$snapshot_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+agent = data.get("agent") or {}
+print(agent.get("status", ""))
+PY
+)"
+
+  for request_spec in "${request_specs[@]}"; do
+    [[ -n "$request_spec" ]] || continue
+    IFS=$'\t' read -r request_id request_status request_provisioned_at <<<"$request_spec"
+    if [[ -z "$request_id" ]]; then
+      continue
+    fi
+    if [[ "$request_status" == "approved" && -z "$request_provisioned_at" ]]; then
+      env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+        "$ALMANAC_REPO_DIR/bin/almanac-ctl" provision cancel "$request_id" \
+        --reason "reset via deploy.sh enrollment-reset" >/dev/null 2>&1 || true
+    elif [[ "$request_status" == "pending" ]]; then
+      run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" request deny "$request_id" \
+        --surface ctl --actor deploy-enrollment-reset >/dev/null 2>&1 || true
+    fi
+  done
+
+  for session_id in "${session_ids[@]}"; do
+    [[ -n "$session_id" ]] || continue
+    run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" onboarding deny "$session_id" \
+      --actor deploy-enrollment-reset --reason "reset via deploy.sh enrollment-reset" >/dev/null 2>&1 || true
+  done
+
+  if [[ "$agent_status" == "active" || "$agent_status" == "pending" ]]; then
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ALMANAC_REPO_DIR/bin/almanac-ctl" agent deenroll "$target_unix_user" \
+      --actor deploy-enrollment-reset >/dev/null 2>&1 || true
+  fi
+
+  rm -rf "$ALMANAC_AGENTS_STATE_DIR/$agent_id"
+  if [[ "$remove_archives" == "1" ]]; then
+    rm -rf "$ALMANAC_ARCHIVED_AGENTS_DIR/$agent_id"
+  fi
+  rm -f "$STATE_DIR/activation-triggers/$agent_id.json"
+
+  for request_spec in "${request_specs[@]}"; do
+    [[ -n "$request_spec" ]] || continue
+    IFS=$'\t' read -r request_id _ <<<"$request_spec"
+    [[ -n "$request_id" ]] || continue
+    rm -f "$STATE_DIR/auto-provision/$request_id.log"
+  done
+
+  for session_id in "${session_ids[@]}"; do
+    [[ -n "$session_id" ]] || continue
+    rm -rf "$STATE_DIR/onboarding-secrets/$session_id"
+  done
+
+  if [[ -n "$extra_subject" ]]; then
+    rate_subjects+=("$extra_subject")
+  fi
+  if [[ "$purge_rate_limits" == "1" && ${#rate_subjects[@]} -gt 0 ]]; then
+    run_root_env_cmd python3 - "$ALMANAC_DB_PATH" "${rate_subjects[@]}" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+subjects = sorted({item for item in sys.argv[2:] if item})
+if not subjects:
+    raise SystemExit(0)
+
+conn = sqlite3.connect(db_path)
+conn.executemany("DELETE FROM rate_limits WHERE subject = ?", [(item,) for item in subjects])
+conn.commit()
+PY
+  fi
+
+  if id -u "$target_unix_user" >/dev/null 2>&1 && [[ "$remove_unix_user" == "1" ]]; then
+    uid="$(id -u "$target_unix_user")"
+    loginctl disable-linger "$target_unix_user" >/dev/null 2>&1 || true
+    systemctl stop "user@$uid.service" >/dev/null 2>&1 || true
+    pkill -u "$target_unix_user" >/dev/null 2>&1 || true
+    userdel -r "$target_unix_user" >/dev/null 2>&1 || userdel "$target_unix_user" >/dev/null 2>&1 || true
+  fi
+
+  systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
+  rm -f "$snapshot_file"
+  echo "Enrollment reset complete for $target_unix_user."
+  echo
+  run_enrollment_status
+}
+
 run_health_check() {
   local uid
 
@@ -2213,6 +2646,15 @@ case "$MODE" in
     ;;
   upgrade)
     run_upgrade_flow
+    ;;
+  enrollment-status)
+    run_enrollment_status
+    ;;
+  enrollment-align)
+    run_enrollment_align
+    ;;
+  enrollment-reset)
+    run_enrollment_reset
     ;;
   curator-setup)
     run_curator_setup_flow

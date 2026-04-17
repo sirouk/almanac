@@ -61,17 +61,24 @@ def _python_repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _safe_path_is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def _discover_config_file() -> Path | None:
     explicit = os.environ.get("ALMANAC_CONFIG_FILE")
     if explicit:
         path = Path(explicit).expanduser()
-        return path if path.is_file() else path
+        return path if _safe_path_is_file(path) else path
 
     repo_root = Path(os.environ.get("ALMANAC_REPO_DIR", _python_repo_root())).expanduser().resolve()
     operator_artifact = Path(
         os.environ.get("ALMANAC_OPERATOR_ARTIFACT_FILE", str(repo_root / ".almanac-operator.env"))
     ).expanduser()
-    if operator_artifact.is_file():
+    if _safe_path_is_file(operator_artifact):
         try:
             for raw_line in operator_artifact.read_text(encoding="utf-8").splitlines():
                 line = raw_line.strip()
@@ -100,13 +107,17 @@ def _discover_config_file() -> Path | None:
         Path.home() / "almanac" / "almanac-priv" / "config" / "almanac.env",
         Path.home() / "almanac-priv" / "config" / "almanac.env",
     )
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
+    return next((candidate for candidate in candidates if _safe_path_is_file(candidate)), None)
 
 
 def _load_config_env() -> dict[str, str]:
     merged = dict(os.environ)
     config_path = _discover_config_file()
-    if config_path is None or not config_path.is_file():
+    if config_path is None:
+        return merged
+
+    if not _safe_path_is_file(config_path):
+        merged.setdefault("ALMANAC_CONFIG_FILE", str(config_path))
         return merged
 
     try:

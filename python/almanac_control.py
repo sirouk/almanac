@@ -7,6 +7,7 @@ import hmac
 import ipaddress
 import json
 import os
+import pwd
 import secrets
 import shlex
 import sqlite3
@@ -132,6 +133,9 @@ class Config:
     bootstrap_per_ip_limit: int
     bootstrap_global_pending_limit: int
     bootstrap_pending_ttl_seconds: int
+    auto_provision_max_attempts: int
+    auto_provision_retry_base_seconds: int
+    auto_provision_retry_max_seconds: int
     operator_notify_platform: str
     operator_notify_channel_id: str
     operator_general_platform: str
@@ -184,6 +188,9 @@ class Config:
             bootstrap_per_ip_limit=int(env.get("ALMANAC_BOOTSTRAP_PER_IP_LIMIT", "5")),
             bootstrap_global_pending_limit=int(env.get("ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT", "20")),
             bootstrap_pending_ttl_seconds=int(env.get("ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS", "900")),
+            auto_provision_max_attempts=int(env.get("ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS", "5")),
+            auto_provision_retry_base_seconds=int(env.get("ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS", "60")),
+            auto_provision_retry_max_seconds=int(env.get("ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS", "900")),
             operator_notify_platform=env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM", "tui-only"),
             operator_notify_channel_id=env.get("OPERATOR_NOTIFY_CHANNEL_ID", ""),
             operator_general_platform=env.get("OPERATOR_GENERAL_CHANNEL_PLATFORM", ""),
@@ -241,7 +248,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           denied_by_surface TEXT,
           denied_by_actor TEXT,
           token_id TEXT,
-          token_delivered_at TEXT
+          token_delivered_at TEXT,
+          auto_provision INTEGER NOT NULL DEFAULT 0,
+          requested_model_preset TEXT,
+          requested_channels_json TEXT NOT NULL DEFAULT '[]',
+          provision_started_at TEXT,
+          provision_attempts INTEGER NOT NULL DEFAULT 0,
+          provision_next_attempt_at TEXT,
+          provisioned_at TEXT,
+          provision_error TEXT,
+          cancelled_at TEXT,
+          cancelled_by_surface TEXT,
+          cancelled_by_actor TEXT,
+          cancelled_reason TEXT
         );
 
         CREATE TABLE IF NOT EXISTS bootstrap_tokens (
@@ -355,6 +374,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activated_at", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "auto_provision", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "bootstrap_requests", "requested_model_preset", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "requested_channels_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(conn, "bootstrap_requests", "provision_started_at", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "provision_attempts", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "bootstrap_requests", "provision_next_attempt_at", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "provisioned_at", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "provision_error", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "cancelled_at", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "cancelled_by_surface", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "cancelled_by_actor", "TEXT")
+    _ensure_column(conn, "bootstrap_requests", "cancelled_reason", "TEXT")
     conn.commit()
 
 
@@ -1171,6 +1202,8 @@ def validate_token(conn: sqlite3.Connection, raw_token: str) -> sqlite3.Row:
                 raise PermissionError("token is pending operator approval")
             if status == "denied":
                 raise PermissionError("token enrollment request was denied")
+            if status == "cancelled":
+                raise PermissionError("token enrollment request was cancelled")
             if status == "expired":
                 raise PermissionError("token enrollment request expired")
             raise PermissionError(f"token is not active (request status: {status or 'unknown'})")
@@ -1385,6 +1418,72 @@ def _issue_bootstrap_token(
     }
 
 
+def auto_provision_retry_delay_seconds(cfg: Config, attempts: int) -> int:
+    step = max(1, int(attempts))
+    delay = cfg.auto_provision_retry_base_seconds * (2 ** max(0, step - 1))
+    return max(
+        cfg.auto_provision_retry_base_seconds,
+        min(cfg.auto_provision_retry_max_seconds, delay),
+    )
+
+
+def _revoke_request_tokens(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    surface: str,
+    actor: str,
+    reason: str,
+    except_token_id: str = "",
+) -> int:
+    rows = conn.execute(
+        """
+        SELECT token_id
+        FROM bootstrap_tokens
+        WHERE activation_request_id = ? AND revoked_at IS NULL
+        """,
+        (request_id,),
+    ).fetchall()
+    token_ids = [
+        str(row["token_id"])
+        for row in rows
+        if str(row["token_id"]) and str(row["token_id"]) != except_token_id
+    ]
+    if not token_ids:
+        return 0
+    now_iso = utc_now_iso()
+    conn.executemany(
+        """
+        UPDATE bootstrap_tokens
+        SET revoked_at = ?, revoked_by_surface = ?, revoked_by_actor = ?, revocation_reason = ?
+        WHERE token_id = ?
+        """,
+        [(now_iso, surface, actor, reason, token_id) for token_id in token_ids],
+    )
+    return len(token_ids)
+
+
+def ensure_unix_user_ready(unix_user: str) -> dict[str, str]:
+    if subprocess.run(["id", "-u", unix_user], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        subprocess.run(["useradd", "-m", "-s", "/bin/bash", unix_user], check=True)
+    home = Path(pwd.getpwnam(unix_user).pw_dir)
+    uid = pwd.getpwnam(unix_user).pw_uid
+    subprocess.run(["loginctl", "enable-linger", unix_user], check=True)
+    subprocess.run(["systemctl", "start", f"user@{uid}.service"], check=False)
+    for path in (
+        home / ".config" / "systemd" / "user",
+        home / ".local" / "share" / "almanac-agent",
+        home / ".local" / "state" / "almanac-agent",
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", f"{unix_user}:{unix_user}", str(home / ".config"), str(home / ".local")], check=False)
+    return {
+        "unix_user": unix_user,
+        "home": str(home),
+        "uid": str(uid),
+    }
+
+
 def activation_trigger_dir(cfg: Config) -> Path:
     path = cfg.state_dir / "activation-triggers"
     path.mkdir(parents=True, exist_ok=True)
@@ -1439,12 +1538,67 @@ def request_bootstrap(
     unix_user: str,
     source_ip: str,
     issue_pending_token: bool = False,
+    auto_provision: bool = False,
+    requested_model_preset: str = "",
+    requested_channels: list[str] | None = None,
 ) -> dict[str, Any]:
     ensure_request_expiry(conn)
     if issue_pending_token:
         existing = find_pending_bootstrap_request(conn, unix_user=unix_user, source_ip=source_ip)
-        if existing is not None and existing["token_id"]:
+        if existing is not None:
             agent_id = str(existing["agent_id"] or existing["prior_agent_id"] or make_agent_id(str(existing["unix_user"]), "user"))
+            existing_auto_provision = bool(int(existing["auto_provision"] or 0))
+            if auto_provision or existing_auto_provision:
+                write_activation_trigger(
+                    cfg,
+                    agent_id=agent_id,
+                    request_id=str(existing["request_id"]),
+                    status="pending",
+                    requester_identity=str(existing["requester_identity"]),
+                    unix_user=str(existing["unix_user"]),
+                    source_ip=str(existing["source_ip"]),
+                    token_id=str(existing["token_id"] or ""),
+                    note="Resumed existing pending auto-provision handshake.",
+                )
+                return {
+                    "request_id": str(existing["request_id"]),
+                    "status": "pending",
+                    "expires_at": str(existing["expires_at"]),
+                    "prior_defaults": json_loads(existing["prior_defaults_json"], {}),
+                    "prior_agent_id": existing["prior_agent_id"],
+                    "agent_id": agent_id,
+                    "activation_state": "pending-operator-approval",
+                    "resume_existing": True,
+                    "auto_provision": True,
+                    "message": "A pending remote auto-provision enrollment already exists for this user and source. Wait for operator approval instead of submitting another request.",
+                }
+
+            pending_token = _issue_bootstrap_token(
+                conn,
+                request_id=str(existing["request_id"]),
+                agent_id=agent_id,
+                requester_identity=str(existing["requester_identity"]),
+                source_ip=str(existing["source_ip"]),
+                issued_by="bootstrap.handshake.resume",
+                activate_now=False,
+            )
+            _revoke_request_tokens(
+                conn,
+                request_id=str(existing["request_id"]),
+                surface="bootstrap.handshake",
+                actor="almanac-mcp",
+                reason="superseded by resumed pending handshake",
+                except_token_id=pending_token["token_id"],
+            )
+            conn.execute(
+                """
+                UPDATE bootstrap_requests
+                SET token_id = ?, token_delivered_at = ?
+                WHERE request_id = ?
+                """,
+                (pending_token["token_id"], pending_token["issued_at"], str(existing["request_id"])),
+            )
+            conn.commit()
             write_activation_trigger(
                 cfg,
                 agent_id=agent_id,
@@ -1453,8 +1607,8 @@ def request_bootstrap(
                 requester_identity=str(existing["requester_identity"]),
                 unix_user=str(existing["unix_user"]),
                 source_ip=str(existing["source_ip"]),
-                token_id=str(existing["token_id"] or ""),
-                note="Resumed existing pending handshake.",
+                token_id=pending_token["token_id"],
+                note="Resumed existing pending handshake with a freshly minted local token.",
             )
             return {
                 "request_id": str(existing["request_id"]),
@@ -1463,11 +1617,13 @@ def request_bootstrap(
                 "prior_defaults": json_loads(existing["prior_defaults_json"], {}),
                 "prior_agent_id": existing["prior_agent_id"],
                 "agent_id": agent_id,
-                "token_id": str(existing["token_id"]),
-                "token_delivered_at": str(existing["token_issued_at"] or existing["token_delivered_at"] or ""),
+                "token_id": pending_token["token_id"],
+                "raw_token": pending_token["raw_token"],
+                "token_delivered_at": pending_token["issued_at"],
                 "activation_state": "pending-operator-approval",
                 "resume_existing": True,
-                "message": "A pending bootstrap handshake already exists for this user and source. Reuse the previously issued local token until the operator approves it.",
+                "auto_provision": False,
+                "message": "A pending bootstrap handshake already exists for this user and source. A fresh local token was minted for this client; it will activate automatically once the operator approves the request.",
             }
 
     now = utc_now()
@@ -1497,13 +1653,15 @@ def request_bootstrap(
     prior_agent_id = find_prior_agent(conn, requester_identity, unix_user)
     defaults = _prior_defaults(conn, prior_agent_id)
     agent_id = prior_agent_id or make_agent_id(str(unix_user), "user")
+    requested_channels_json = json_dumps(_channels_payload(requested_channels or []))
     conn.execute(
         """
         INSERT INTO bootstrap_requests (
           request_id, requester_identity, unix_user, source_ip, requested_at, expires_at,
-          status, prior_agent_id, prior_defaults_json
+          status, prior_agent_id, prior_defaults_json, auto_provision,
+          requested_model_preset, requested_channels_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
         """,
         (
             request_id,
@@ -1514,11 +1672,14 @@ def request_bootstrap(
             expires_at,
             prior_agent_id,
             json_dumps(defaults),
+            int(bool(auto_provision)),
+            requested_model_preset or None,
+            requested_channels_json,
         ),
     )
 
     pending_token: dict[str, str] | None = None
-    if issue_pending_token:
+    if issue_pending_token and not auto_provision:
         pending_token = _issue_bootstrap_token(
             conn,
             request_id=request_id,
@@ -1552,9 +1713,10 @@ def request_bootstrap(
     prior_note = ""
     if prior_agent_id:
         prior_note = f" previously enrolled as {prior_agent_id}; archived defaults detected."
+    provisioning_note = " On approval, Almanac will create the Unix user and provision the host-side agent automatically." if auto_provision else ""
     message = (
         f"{requester_identity} ({unix_user}) is requesting enrollment from {source_ip}."
-        f"{prior_note} Approve via almanac-ctl request approve {request_id}"
+        f"{prior_note}{provisioning_note} Approve via almanac-ctl request approve {request_id}"
     )
     queue_notification(
         conn,
@@ -1570,6 +1732,7 @@ def request_bootstrap(
         "expires_at": expires_at,
         "prior_defaults": defaults,
         "agent_id": agent_id,
+        "auto_provision": bool(auto_provision),
     }
     if pending_token is not None:
         response.update(
@@ -1579,6 +1742,13 @@ def request_bootstrap(
                 "token_delivered_at": pending_token["issued_at"],
                 "activation_state": "pending-operator-approval",
                 "message": "Bootstrap token issued; it will activate automatically once the operator approves the request.",
+            }
+        )
+    elif auto_provision:
+        response.update(
+            {
+                "activation_state": "pending-operator-approval",
+                "message": "Enrollment request submitted. Once approved, Almanac will create the Unix user and provision the host-side agent automatically.",
             }
         )
     return response
@@ -1633,6 +1803,7 @@ def approve_request(
     )
     conn.commit()
     agent_id = str(row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), "user"))
+    auto_provision = bool(int(row["auto_provision"] or 0))
     token_row = conn.execute(
         "SELECT token_id FROM bootstrap_tokens WHERE activation_request_id = ? ORDER BY issued_at DESC LIMIT 1",
         (request_id,),
@@ -1650,16 +1821,22 @@ def approve_request(
             token_id=token_id,
             note=f"Approved via {surface} by {actor}.",
         )
-        queue_notification(
-            conn,
-            target_kind="user-agent",
-            target_id=agent_id,
-            channel_kind="activate",
-            message=(
-                f"Enrollment approved for {agent_id}. Almanac activation is ready to run."
-            ),
-        )
+        if not auto_provision:
+            queue_notification(
+                conn,
+                target_kind="user-agent",
+                target_id=agent_id,
+                channel_kind="activate",
+                message=(
+                    f"Enrollment approved for {agent_id}. Almanac activation is ready to run."
+                ),
+            )
     if cfg is not None:
+        suffix = (
+            " Root auto-provisioning is queued and will run on the next system timer pass."
+            if auto_provision
+            else ""
+        )
         queue_notification(
             conn,
             target_kind="operator",
@@ -1667,7 +1844,7 @@ def approve_request(
             channel_kind=cfg.operator_notify_platform or "tui-only",
             message=(
                 f"Approved enrollment request {request_id} for "
-                f"{row['requester_identity']} ({row['unix_user']}) via {surface} by {actor}."
+                f"{row['requester_identity']} ({row['unix_user']}) via {surface} by {actor}.{suffix}"
             ),
         )
     return {
@@ -1755,9 +1932,18 @@ def bootstrap_status(conn: sqlite3.Connection, cfg: Config, request_id: str) -> 
         "expires_at": row["expires_at"],
         "prior_defaults": json_loads(row["prior_defaults_json"], {}),
         "prior_agent_id": row["prior_agent_id"],
+        "auto_provision": bool(int(row["auto_provision"] or 0)),
+        "provision_attempts": int(row["provision_attempts"] or 0),
+        "provision_next_attempt_at": row["provision_next_attempt_at"],
+        "provision_started_at": row["provision_started_at"],
+        "provisioned_at": row["provisioned_at"],
+        "provision_error": row["provision_error"],
     }
 
     if row["status"] != "approved":
+        return response
+
+    if bool(int(row["auto_provision"] or 0)):
         return response
 
     if row["token_id"]:
@@ -1806,6 +1992,285 @@ def bootstrap_status(conn: sqlite3.Connection, cfg: Config, request_id: str) -> 
         }
     )
     return response
+
+
+def issue_auto_provision_token(conn: sqlite3.Connection, request_id: str) -> dict[str, str]:
+    row = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown bootstrap request: {request_id}")
+    if str(row["status"]) != "approved":
+        raise PermissionError(f"bootstrap request is not approved: {row['status']}")
+    agent_id = str(row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), "user"))
+    _revoke_request_tokens(
+        conn,
+        request_id=request_id,
+        surface="bootstrap.auto-provision",
+        actor="almanac-provisioner",
+        reason="superseded by auto-provision runtime token",
+    )
+    payload = _issue_bootstrap_token(
+        conn,
+        request_id=request_id,
+        agent_id=agent_id,
+        requester_identity=str(row["requester_identity"]),
+        source_ip=str(row["source_ip"]),
+        issued_by="bootstrap.auto-provision",
+        activate_now=True,
+    )
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET token_id = ?, token_delivered_at = ?
+        WHERE request_id = ?
+        """,
+        (payload["token_id"], payload["issued_at"], request_id),
+    )
+    conn.commit()
+    return payload
+
+
+def list_pending_auto_provision_requests(conn: sqlite3.Connection, cfg: Config) -> list[dict[str, Any]]:
+    now_iso = utc_now_iso()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM bootstrap_requests
+        WHERE status = 'approved'
+          AND auto_provision = 1
+          AND provisioned_at IS NULL
+          AND COALESCE(provision_attempts, 0) < ?
+          AND (provision_next_attempt_at IS NULL OR provision_next_attempt_at <= ?)
+        ORDER BY COALESCE(provision_next_attempt_at, approved_at, requested_at) ASC
+        """
+        ,
+        (cfg.auto_provision_max_attempts, now_iso),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def mark_auto_provision_started(conn: sqlite3.Connection, request_id: str) -> int:
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET provision_started_at = ?,
+            provision_attempts = COALESCE(provision_attempts, 0) + 1,
+            provision_error = NULL,
+            provision_next_attempt_at = NULL
+        WHERE request_id = ?
+        """,
+        (utc_now_iso(), request_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT provision_attempts FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    return int(row["provision_attempts"] if row else 0)
+
+
+def mark_auto_provision_finished(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    error: str = "",
+    next_attempt_at: str = "",
+) -> None:
+    if error:
+        conn.execute(
+            """
+            UPDATE bootstrap_requests
+            SET provision_error = ?, provision_next_attempt_at = ?
+            WHERE request_id = ?
+            """,
+            (error, next_attempt_at or None, request_id),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE bootstrap_requests
+            SET provisioned_at = ?, provision_error = NULL, provision_next_attempt_at = NULL
+            WHERE request_id = ?
+            """,
+            (utc_now_iso(), request_id),
+        )
+    conn.commit()
+
+
+def list_auto_provision_requests(conn: sqlite3.Connection, cfg: Config) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM bootstrap_requests
+        WHERE auto_provision = 1
+        ORDER BY requested_at DESC
+        """
+    ).fetchall()
+    payload: list[dict[str, Any]] = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        attempts = int(row.get("provision_attempts") or 0)
+        status = str(row.get("status") or "")
+        if row.get("provisioned_at"):
+            provision_state = "completed"
+        elif status == "cancelled":
+            provision_state = "cancelled"
+        elif status != "approved":
+            provision_state = status or "pending"
+        elif row.get("provision_error") and attempts >= cfg.auto_provision_max_attempts and not row.get("provision_next_attempt_at"):
+            provision_state = "failed"
+        elif row.get("provision_error"):
+            provision_state = "retry-scheduled"
+        elif row.get("provision_started_at"):
+            provision_state = "running"
+        else:
+            provision_state = "queued"
+        row["provision_state"] = provision_state
+        payload.append(row)
+    return payload
+
+
+def cancel_auto_provision_request(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    surface: str,
+    actor: str,
+    reason: str = "",
+    cfg: Config | None = None,
+) -> dict[str, Any]:
+    ensure_request_expiry(conn)
+    row = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown bootstrap request: {request_id}")
+    if not bool(int(row["auto_provision"] or 0)):
+        raise ValueError("request is not an auto-provision enrollment")
+    if str(row["status"]) != "approved":
+        raise ValueError(f"auto-provision request is not approved: {row['status']}")
+    if row["provisioned_at"]:
+        raise ValueError("auto-provision request is already complete")
+
+    surface = normalize_surface(surface, default="ctl")
+    now_iso = utc_now_iso()
+    cancel_reason = reason or "cancelled via operator"
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET status = 'cancelled',
+            cancelled_at = ?,
+            cancelled_by_surface = ?,
+            cancelled_by_actor = ?,
+            cancelled_reason = ?,
+            provision_next_attempt_at = NULL
+        WHERE request_id = ?
+        """,
+        (now_iso, surface, actor, cancel_reason, request_id),
+    )
+    _revoke_request_tokens(
+        conn,
+        request_id=request_id,
+        surface=surface,
+        actor=actor,
+        reason=cancel_reason,
+    )
+    conn.commit()
+
+    agent_id = str(row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), "user"))
+    if cfg is not None:
+        write_activation_trigger(
+            cfg,
+            agent_id=agent_id,
+            request_id=request_id,
+            status="cancelled",
+            requester_identity=str(row["requester_identity"]),
+            unix_user=str(row["unix_user"]),
+            source_ip=str(row["source_ip"]),
+            token_id="",
+            note=f"Auto-provision cancelled via {surface} by {actor}.",
+        )
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                f"Cancelled auto-provision request {request_id} for "
+                f"{row['requester_identity']} ({row['unix_user']}) via {surface} by {actor}."
+            ),
+        )
+    return {
+        "request_id": request_id,
+        "status": "cancelled",
+        "cancelled_at": now_iso,
+        "cancelled_by_surface": surface,
+        "cancelled_by_actor": actor,
+        "reason": cancel_reason,
+    }
+
+
+def retry_auto_provision_request(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    surface: str,
+    actor: str,
+    cfg: Config | None = None,
+) -> dict[str, Any]:
+    ensure_request_expiry(conn)
+    row = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown bootstrap request: {request_id}")
+    if not bool(int(row["auto_provision"] or 0)):
+        raise ValueError("request is not an auto-provision enrollment")
+    if str(row["status"]) != "approved":
+        raise ValueError(f"auto-provision request is not approved: {row['status']}")
+    if row["provisioned_at"]:
+        raise ValueError("auto-provision request is already complete")
+
+    surface = normalize_surface(surface, default="ctl")
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_requests
+        SET provision_attempts = 0,
+            provision_started_at = NULL,
+            provision_error = NULL,
+            provision_next_attempt_at = ?
+        WHERE request_id = ?
+        """,
+        (now_iso, request_id),
+    )
+    conn.commit()
+    if cfg is not None:
+        row = conn.execute(
+            "SELECT requester_identity, unix_user FROM bootstrap_requests WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                f"Reset auto-provision retries for {request_id} "
+                f"({row['requester_identity']} / {row['unix_user']}) via {surface} by {actor}."
+            ),
+        )
+    return {
+        "request_id": request_id,
+        "status": "approved",
+        "retry_reset_at": now_iso,
+        "retry_reset_by_surface": surface,
+        "retry_reset_by_actor": actor,
+    }
 
 
 def _channels_payload(channels: list[str]) -> list[str]:

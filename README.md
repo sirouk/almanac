@@ -44,7 +44,8 @@ Almanac is shared-host in v1.
 - Curator: Almanac's own Hermes agent; gates onboarding, refreshes vault
   definitions, manages notifications, and fans out managed-memory updates
 - User agent: one per enrolled user on the same host
-- Enrolled user: SSHes to the host as their own Unix user and runs `init.sh agent`
+- Enrolled user: starts with the public bootstrap handshake; Almanac provisions
+  the host-side Unix user and agent after approval
 
 ## Component Roles
 
@@ -137,7 +138,8 @@ Useful direct modes:
 ./deploy.sh remove
 ./init.sh agent
 ./init.sh update
-./bin/almanac-ctl user prepare <unix-user>
+sudo ./bin/almanac-ctl user prepare <unix-user>   # optional manual repair path
+./bin/almanac-ctl provision list
 ```
 
 ## Operator Runbook
@@ -180,7 +182,8 @@ After install or repair:
 ```
 
 This checks the shared services, Curator registration and refresh state, qmd,
-vault warnings, notification delivery, and enrolled-agent service health.
+vault warnings, notification delivery, the root auto-provision timer, and
+enrolled-agent service health.
 
 ### 3. Use the recovery surfaces
 
@@ -196,6 +199,9 @@ Typical operator commands:
 ./bin/almanac-ctl request list
 ./bin/almanac-ctl request approve <request-id>
 ./bin/almanac-ctl request deny <request-id>
+./bin/almanac-ctl provision list
+./bin/almanac-ctl provision cancel <request-id>
+./bin/almanac-ctl provision retry <request-id>
 ./bin/almanac-ctl token list
 ./bin/almanac-ctl token revoke <agent-id-or-token-id>
 ./bin/almanac-ctl token reinstate <token-id>
@@ -210,36 +216,10 @@ sudo ./bin/almanac-ctl agent deenroll <agent-id>
 
 ## Enrolling a User
 
-User onboarding is a two-part flow: operator prep first, then user enrollment.
+User onboarding now starts with the public handshake, not with precreating a
+Unix account.
 
-### 1. Prepare the Unix account
-
-Run this as root on the host:
-
-```bash
-sudo ./bin/almanac-ctl user prepare <unix-user>
-```
-
-That helper:
-
-- creates the Unix account when needed
-- enables linger
-- prepares per-user Almanac directories
-- starts the user's systemd context when possible
-
-It also prints the remaining operator-managed steps outside Almanac:
-
-- authorize the user's SSH key
-- ensure Tailscale SSH or ACL policy permits host login
-- confirm any tailnet identity mapping or host-access policy needed for that
-  user
-
-### 2. Give the user host access
-
-The user must be able to SSH into the Almanac host as their own Unix account.
-In v1, that is what local TUI access means.
-
-### 3. Give the user the enrollment command
+### 1. Give the user the enrollment command
 
 If the repo is public, the user can enroll with the curl-friendly bootstrap:
 
@@ -259,18 +239,20 @@ When run from a non-Linux client such as a Mac, that bootstrap now:
 
 - requires the target Almanac hostname, either through `ALMANAC_TARGET_HOST`
   on the `bash` side of the pipe or via `--target-host`
-- asks for the SSH user, defaulting to the current local username
-- points the host-side bootstrap at the tailnet HTTPS control-plane endpoint by default (`https://<host>/almanac-mcp`)
-- SSHes to the Almanac host
-- runs the real host-side enrollment flow there
+- asks for the Unix username Almanac should provision on the host, defaulting
+  to the current local username
+- calls the public tailnet-scoped control-plane endpoint directly
+  (`https://<host>/almanac-mcp`)
+- submits `bootstrap.handshake` immediately without SSHing to the host first
+- exits after printing the request id the operator should approve
 
-That keeps the shared-host model intact: the actual Hermes install still happens
-on the Almanac machine under the user's Unix account, while the approval
-handshake goes through the public tailnet-scoped control-plane endpoint.
+That keeps the shared-host model intact: the actual Hermes install still
+happens on the Almanac machine under the user's Unix account, but the approval
+handshake no longer requires that account to exist ahead of time.
 
-It does not create SSH access by itself. The operator still has to prepare the
-Unix account and Tailscale SSH or host-key access first; the remote bootstrap
-only works after the user can already log into the Almanac host.
+Approval creates the Unix account, enables linger, and kicks off host-side
+agent provisioning automatically. SSH or Tailscale SSH is only needed later if
+the user wants local TUI access on the host.
 
 Do not write the command as `ALMANAC_TARGET_HOST=... curl ... | bash ...`.
 That sets the variable for `curl`, not for `bash`, so the bootstrap process
@@ -283,9 +265,46 @@ command is:
 ./init.sh agent
 ```
 
-### 4. What the user flow does
+### 2. Approve the request
 
-`init.sh agent`:
+The operator can approve from:
+
+- the dedicated operator notification channel
+- Curator TUI
+- `./bin/almanac-ctl request approve <request-id>`
+
+After approval, Almanac automatically:
+
+1. creates the requested Unix user when needed
+2. enables linger and starts the user's systemd context
+3. runs the host-side `bin/init.sh agent` flow noninteractively as that user
+4. registers the user agent, installs the refresh timer, and runs first
+   contact on the host
+5. provisions a safe default `tui-only` channel set; Discord or Telegram can
+   still be configured later from Hermes once the user has host access
+
+`sudo ./bin/almanac-ctl user prepare <unix-user>` still exists as a manual
+repair path, but it is no longer the normal onboarding prerequisite.
+
+### 3. What the user flow does
+
+Remote public bootstrap:
+
+1. calls the unauthenticated, tailnet-scoped `bootstrap.handshake`
+2. receives a pending enrollment request id immediately
+3. if the same user reruns enrollment from the same source while approval is
+   still pending, reuses the existing pending request instead of minting a
+   second token
+4. stops there and waits for Curator/operator approval to provision the host
+   user and agent automatically
+
+Operator tools for that queue:
+
+- `./bin/almanac-ctl provision list`
+- `./bin/almanac-ctl provision cancel <request-id>`
+- `./bin/almanac-ctl provision retry <request-id>`
+
+Host-side `init.sh agent` when already running on the Almanac machine:
 
 1. calls the unauthenticated, tailnet-scoped `bootstrap.handshake`
 2. receives a pending bootstrap key immediately
@@ -304,22 +323,17 @@ command is:
     default `.vault` subscriptions, and keeps bidirectional Almanac
     notifications flowing without waiting for the next 4-hour timer tick
 
-The operator can approve from:
-
-- the dedicated operator notification channel
-- Curator TUI
-- `./bin/almanac-ctl request approve <request-id>`
-
 ## Public Repo Bootstrap
 
 The curl entrypoint is the repo-root [init.sh](./init.sh). It is designed to be
 safe to publish because it only bootstraps the checked-out repo and then
+either submits the remote public handshake or, when already on the host,
 delegates to [bin/init.sh](./bin/init.sh).
 
 On non-Linux clients it uses the supplied target host, or prompts for one when
-a TTY is available; otherwise it exits with a copy-paste usage hint. Once the
-host is known it SSHes there and continues. On the host itself it just runs the
-local enrollment flow.
+a TTY is available; otherwise it exits with a copy-paste usage hint. For remote
+client enrollment it does not SSH to the host first. On the host itself it just
+runs the local enrollment flow.
 
 Useful overrides for remote bootstrap:
 
@@ -337,8 +351,9 @@ CHUTES_MCP_URL=https://example.invalid/mcp
 ```
 
 For a typical shared-host enrollment from a user laptop, the important inputs
-are the target hostname, SSH access, and the published tailnet control-plane
-URL when you want to override the default `/almanac-mcp` path.
+are the target hostname, the requested Unix username, and the published
+tailnet control-plane URL when you want to override the default
+`/almanac-mcp` path.
 
 The remote bootstrap entrypoint also accepts:
 
@@ -372,9 +387,10 @@ the system yet:
 - [bootstrap-system.sh](./bin/bootstrap-system.sh): root/system setup
 - [bootstrap-userland.sh](./bin/bootstrap-userland.sh): install Hermes, qmd, and private repo scaffolding
 - [bootstrap-curator.sh](./bin/bootstrap-curator.sh): Curator bootstrap and repair flow
+- [install-system-services.sh](./bin/install-system-services.sh): install root-owned systemd units such as the enrollment provisioner timer
 - [install-user-services.sh](./bin/install-user-services.sh): install systemd user units
 - [install-agent-user-services.sh](./bin/install-agent-user-services.sh): install per-user agent refresh/gateway units
-- [almanac-ctl](./bin/almanac-ctl): operator CLI for users, tokens, vaults, requests, and channel repair
+- [almanac-ctl](./bin/almanac-ctl): operator CLI for users, tokens, auto-provision requests, vaults, and channel repair
 - [init.sh](./init.sh): curl-friendly user enrollment/update entrypoint
 - [user-agent-refresh.sh](./bin/user-agent-refresh.sh): 4-hour user-agent subscription, managed-memory, and notification refresh
 - [curator-tui.sh](./bin/curator-tui.sh): Curator TUI recovery surface
@@ -405,7 +421,7 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 4. Drop markdown or PDFs into the shared vault and let the host watcher reconcile and refresh qmd automatically.
 5. Point Hermes at `http://127.0.0.1:8181/mcp` using [hermes-qmd-config.yaml](./docs/hermes-qmd-config.yaml).
 6. Set `BACKUP_GIT_REMOTE` in `almanac-priv/config/almanac.env` if you want backup pushes to GitHub.
-7. Enroll users with `sudo ./bin/almanac-ctl user prepare <unix-user>` and then hand them the `curl ... init.sh | bash -s -- agent` command once the repo is public.
+7. Enroll users by handing them the public `curl ... init.sh | bash -s -- agent` bootstrap once the repo is public; Almanac creates the host-side Unix user after approval.
 8. Use Quarto only if you want a published human-facing site.
 
 ## Client Setup

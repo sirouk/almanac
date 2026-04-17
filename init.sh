@@ -151,72 +151,190 @@ exec_real_init() {
   exec "$init_path" "$@"
 }
 
-build_remote_command() {
-  local cmd=""
-  local arg
-  local bootstrap_url="$PUBLIC_MCP_URL"
-
-  if [[ -z "$bootstrap_url" && -n "$TARGET_HOST" ]]; then
-    bootstrap_url="https://${TARGET_HOST}${PUBLIC_MCP_PATH}"
+remote_bootstrap_url() {
+  if [[ -n "$PUBLIC_MCP_URL" ]]; then
+    printf '%s\n' "$PUBLIC_MCP_URL"
+    return 0
   fi
-
-  cmd+="export ALMANAC_INIT_REPO_URL=$(printf '%q' "$REPO_URL"); "
-  cmd+="export ALMANAC_INIT_RAW_URL=$(printf '%q' "$RAW_INIT_URL"); "
-  if [[ -n "$bootstrap_url" ]]; then
-    cmd+="export ALMANAC_BOOTSTRAP_URL=$(printf '%q' "$bootstrap_url"); "
-  fi
-  cmd+="curl -fsSL \"\$ALMANAC_INIT_RAW_URL\" | bash -s -- $(printf '%q' "$MODE")"
-  for arg in "$@"; do
-    cmd+=" $(printf '%q' "$arg")"
-  done
-
-  printf '%s\n' "$cmd"
+  printf 'https://%s%s\n' "$TARGET_HOST" "$PUBLIC_MCP_PATH"
 }
 
-delegate_to_remote_host() {
-  local ssh_target remote_cmd os_name
+should_remote_public_bootstrap() {
+  [[ "$MODE" == "agent" ]] || return 1
+  if [[ -n "$TARGET_HOST" ]]; then
+    return 0
+  fi
+  [[ "$(current_os)" != "Linux" ]]
+}
 
-  os_name="$(current_os)"
+request_remote_enrollment() {
+  local bootstrap_url requester_identity request_json
+
   if [[ -z "$TARGET_HOST" ]]; then
     TARGET_HOST="$(prompt_tty "Target Almanac hostname")"
   fi
-  if [[ -n "${ALMANAC_TARGET_USER:-}" ]]; then
-    :
-  elif [[ -z "$TARGET_USER" ]]; then
-    TARGET_USER="$(prompt_tty "SSH user for $TARGET_HOST" "$(id -un 2>/dev/null || printf '')")"
-  elif have_tty; then
-    TARGET_USER="$(prompt_tty "SSH user for $TARGET_HOST" "$TARGET_USER")"
-  fi
-
   if [[ -z "$TARGET_HOST" ]]; then
     echo "Target Almanac hostname is required." >&2
     exit 1
   fi
 
-  if ! command -v ssh >/dev/null 2>&1; then
-    echo "ssh is required to continue enrollment from $os_name." >&2
+  if [[ -z "$TARGET_USER" && -n "${ALMANAC_TARGET_USER:-}" ]]; then
+    TARGET_USER="$ALMANAC_TARGET_USER"
+  fi
+  if [[ -z "$TARGET_USER" ]] && have_tty; then
+    TARGET_USER="$(prompt_tty "Unix username to provision on $TARGET_HOST" "$(id -un 2>/dev/null || printf '')")"
+  fi
+  TARGET_USER="${TARGET_USER:-$(id -un 2>/dev/null || printf '')}"
+  if [[ -z "$TARGET_USER" ]]; then
+    echo "A Unix username is required for remote enrollment." >&2
     exit 1
   fi
 
-  ssh_target="$TARGET_HOST"
-  if [[ -n "$TARGET_USER" ]]; then
-    ssh_target="$TARGET_USER@$TARGET_HOST"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required for remote enrollment." >&2
+    exit 1
   fi
-  remote_cmd="$(build_remote_command "$@")"
 
-  cat >&2 <<EOF
-Delegating Almanac $MODE to $ssh_target ...
-The host-side enrollment flow will install the shared-host Hermes agent there.
-Bootstrap approval will be requested against the Almanac control plane over:
-  ${PUBLIC_MCP_URL:-https://${TARGET_HOST}${PUBLIC_MCP_PATH}}
-EOF
+  bootstrap_url="$(remote_bootstrap_url)"
+  requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un 2>/dev/null || printf "$TARGET_USER")}"
 
-  exec ssh -tt "$ssh_target" "$remote_cmd"
+  request_json="$(
+    ALMANAC_REMOTE_BOOTSTRAP_URL="$bootstrap_url" \
+    ALMANAC_REMOTE_REQUESTER_IDENTITY="$requester_identity" \
+    ALMANAC_REMOTE_UNIX_USER="$TARGET_USER" \
+    ALMANAC_REMOTE_MODEL_PRESET="${ALMANAC_INIT_MODEL_PRESET:-}" \
+    ALMANAC_REMOTE_CHANNELS="${ALMANAC_INIT_CHANNELS:-}" \
+    python3 - <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+
+def rpc(url: str, payload: dict, session_id: str | None = None) -> tuple[str | None, dict]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if session_id:
+        headers["mcp-session-id"] = session_id
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            parsed = json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body) if body.strip() else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        message = (((parsed or {}).get("error") or {}).get("message")) or str(exc)
+        raise SystemExit(message) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(str(exc)) from exc
+
+    if "error" in parsed:
+        raise SystemExit(parsed["error"].get("message", "remote enrollment failed"))
+    return response.headers.get("mcp-session-id") or session_id, parsed
+
+
+url = os.environ["ALMANAC_REMOTE_BOOTSTRAP_URL"]
+channels = [item.strip() for item in os.environ.get("ALMANAC_REMOTE_CHANNELS", "").split(",") if item.strip()]
+arguments = {
+    "requester_identity": os.environ["ALMANAC_REMOTE_REQUESTER_IDENTITY"],
+    "unix_user": os.environ["ALMANAC_REMOTE_UNIX_USER"],
+    "auto_provision": True,
+}
+if os.environ.get("ALMANAC_REMOTE_MODEL_PRESET"):
+    arguments["model_preset"] = os.environ["ALMANAC_REMOTE_MODEL_PRESET"]
+if channels:
+    arguments["channels"] = channels
+
+session_id, _ = rpc(
+    url,
+    {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "almanac-init", "version": "1.0"},
+        },
+    },
+)
+rpc(url, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
+_, response = rpc(
+    url,
+    {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "bootstrap.handshake", "arguments": arguments},
+    },
+    session_id,
+)
+result = ((response or {}).get("result") or {}).get("structuredContent") or {}
+print(json.dumps(result))
+PY
+  )"
+
+  python3 - "$request_json" "$TARGET_HOST" "$bootstrap_url" "$TARGET_USER" "$requester_identity" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+host = sys.argv[2]
+bootstrap_url = sys.argv[3]
+unix_user = sys.argv[4]
+requester = sys.argv[5]
+
+request_id = payload.get("request_id", "")
+status = payload.get("status", "unknown")
+agent_id = payload.get("agent_id", "")
+resume_existing = bool(payload.get("resume_existing"))
+
+headline = (
+    "Enrollment request already pending."
+    if resume_existing
+    else "Enrollment request submitted."
+)
+print()
+print(headline)
+print()
+print("Host:")
+print(f"  {host}")
+print("Requested Unix user:")
+print(f"  {unix_user}")
+print("Requester identity:")
+print(f"  {requester}")
+print("Request ID:")
+print(f"  {request_id}")
+if agent_id:
+    print("Planned agent ID:")
+    print(f"  {agent_id}")
+print("Bootstrap handshake:")
+print(f"  {bootstrap_url}")
+print("Status:")
+print(f"  {status}")
+print()
+print("Curator/operator approval will create the Unix user and provision the host-side agent.")
+print("No host SSH login is required before approval.")
+print()
+print("Useful follow-up:")
+print(f"  Ask the operator to approve request {request_id}")
+PY
 }
 
 main() {
-  if should_delegate_remote; then
-    delegate_to_remote_host "${FORWARD_ARGS[@]}"
+  if should_remote_public_bootstrap; then
+    request_remote_enrollment
+    return 0
   fi
 
   ensure_repo_cache

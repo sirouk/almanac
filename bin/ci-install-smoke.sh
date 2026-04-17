@@ -861,11 +861,21 @@ import sys
 payload = json.loads(sys.argv[1])
 if payload.get("request_id") != sys.argv[2]:
     raise SystemExit("duplicate handshake should return the existing pending request")
-if payload.get("token_id") != sys.argv[3]:
-    raise SystemExit("duplicate handshake should return the existing pending token_id")
-if "raw_token" in payload:
-    raise SystemExit("duplicate handshake should not mint a second raw token")
+if payload.get("token_id") == sys.argv[3]:
+    raise SystemExit("duplicate handshake should rotate the pending token_id")
+if not payload.get("raw_token"):
+    raise SystemExit("duplicate handshake should mint a fresh raw token for the retrying client")
 PY
+  read -r token token_id <<EOF
+$(python3 - "$duplicate_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+print(payload["raw_token"], payload["token_id"])
+PY
+)
+EOF
 
   if pending_err="$(
     run_almanac_shell \
@@ -923,6 +933,94 @@ import sys
 payload = json.loads(sys.argv[1])
 if not payload.get("agent_id"):
     raise SystemExit("approved handshake token should succeed against authenticated tools")
+PY
+}
+
+assert_remote_auto_provision_enrollment() {
+  local handshake_json duplicate_json request_id unix_user="autoprovbot"
+
+  handshake_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Remote Auto\",\"unix_user\":\"$unix_user\",\"source_ip\":\"127.0.0.1\",\"auto_provision\":true}'"
+  )"
+
+  request_id="$(
+    python3 - "$handshake_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if not payload.get("auto_provision"):
+    raise SystemExit("expected auto_provision handshake response")
+if payload.get("raw_token"):
+    raise SystemExit("auto-provision handshake should not expose a pending raw token")
+print(payload["request_id"])
+PY
+  )"
+
+  duplicate_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Remote Auto\",\"unix_user\":\"$unix_user\",\"source_ip\":\"127.0.0.1\",\"auto_provision\":true}'"
+  )"
+  python3 - "$duplicate_json" "$request_id" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if payload.get("request_id") != sys.argv[2]:
+    raise SystemExit("duplicate auto-provision handshake should reuse the pending request")
+if not payload.get("resume_existing"):
+    raise SystemExit("duplicate auto-provision handshake should mark resume_existing")
+if payload.get("raw_token"):
+    raise SystemExit("duplicate auto-provision handshake should not mint a raw token")
+PY
+
+  "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json request approve "$request_id" --surface ctl --actor auto-provision-smoke >/dev/null
+  ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-enrollment-provision.sh" >/dev/null
+
+  python3 - "$ALMANAC_DB_PATH" "$request_id" "$unix_user" "$ALMANAC_PRIV_DIR" <<'PY'
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path, request_id, unix_user, priv_dir = sys.argv[1:5]
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+
+row = conn.execute(
+    """
+    SELECT provisioned_at, provision_error
+    FROM bootstrap_requests
+    WHERE request_id = ?
+    """,
+    (request_id,),
+).fetchone()
+if row is None:
+    raise SystemExit("auto-provision request missing from DB")
+if not row["provisioned_at"]:
+    raise SystemExit(f"expected provisioned_at for {request_id}, saw none (error={row['provision_error']!r})")
+if row["provision_error"]:
+    raise SystemExit(f"unexpected auto-provision error for {request_id}: {row['provision_error']}")
+
+agent_id = f"agent-{unix_user}"
+agent = conn.execute(
+    "SELECT status, manifest_path, hermes_home FROM agents WHERE agent_id = ?",
+    (agent_id,),
+).fetchone()
+if agent is None or agent["status"] != "active":
+    raise SystemExit(f"expected active agent row for {agent_id}")
+for field in ("manifest_path", "hermes_home"):
+    path = Path(agent[field])
+    if not path.exists():
+        raise SystemExit(f"expected {field} to exist for {agent_id}: {path}")
+
+state_path = Path(agent["hermes_home"]) / "state" / "almanac-enrollment.json"
+if not state_path.is_file():
+    raise SystemExit(f"missing enrollment state file for {agent_id}: {state_path}")
+state = json.loads(state_path.read_text(encoding="utf-8"))
+if state.get("status") != "active":
+    raise SystemExit(f"expected host-side enrollment state active for {agent_id}, saw {state.get('status')!r}")
 PY
 }
 
@@ -1739,6 +1837,9 @@ assert_almanac_control_plane_roundtrip
 
 echo "Checking async bootstrap handshake activation..."
 assert_async_bootstrap_handshake
+
+echo "Checking remote auto-provision enrollment..."
+assert_remote_auto_provision_enrollment
 
 echo "Checking rate-limit enforcement with structured 429..."
 assert_bootstrap_rate_limit

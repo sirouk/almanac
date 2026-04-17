@@ -42,7 +42,7 @@ from almanac_control import (
 TOOLS = {
     "status": "Return control-plane status and vault warnings.",
     "bootstrap.request": "Request agent enrollment approval.",
-    "bootstrap.handshake": "Issue a pending bootstrap token immediately; it activates after operator approval.",
+    "bootstrap.handshake": "Start enrollment immediately; manual flows receive a pending token, while auto-provisioned flows queue operator approval without SSH.",
     "bootstrap.status": "Poll bootstrap request status and receive the issued token once.",
     "bootstrap.approve": "Approve a bootstrap request. Requires operator-class token.",
     "bootstrap.deny": "Deny a bootstrap request. Requires operator-class token.",
@@ -280,6 +280,9 @@ class Handler(BaseHTTPRequestHandler):
                     unix_user=str(arguments.get("unix_user") or "unknown"),
                     source_ip=source_ip,
                     issue_pending_token=(tool_name == "bootstrap.handshake"),
+                    auto_provision=bool(arguments.get("auto_provision")),
+                    requested_model_preset=str(arguments.get("model_preset") or ""),
+                    requested_channels=list(arguments.get("channels") or []),
                 )
 
             if tool_name == "bootstrap.status":

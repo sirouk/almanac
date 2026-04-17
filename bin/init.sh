@@ -312,12 +312,17 @@ run_agent_flow() {
   local prior_default_channels model_preset channels_csv channels_json model_string token hermes_home
   local agent_id token_file hermes_state_file state_file activation_status activation_trigger_path
   local resuming_pending="0"
+  local preseeded_request_id="${ALMANAC_BOOTSTRAP_REQUEST_ID:-}"
+  local preseeded_raw_token="${ALMANAC_BOOTSTRAP_RAW_TOKEN:-}"
+  local preseeded_agent_id="${ALMANAC_BOOTSTRAP_AGENT_ID:-}"
+  local preseeded_requester_identity="${ALMANAC_REQUESTER_IDENTITY:-}"
+  local preseeded_source_ip="${ALMANAC_BOOTSTRAP_SOURCE_IP:-}"
 
   export PATH="$HOME/.local/bin:$PATH"
   require_linux_host "enrollment"
   requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un)}"
   unix_user="$(id -un)"
-  source_ip="$(awk '{print $1}' <<<"${SSH_CONNECTION:-${SSH_CLIENT:-127.0.0.1}}")"
+  source_ip="${preseeded_source_ip:-$(awk '{print $1}' <<<"${SSH_CONNECTION:-${SSH_CLIENT:-127.0.0.1}}")}"
   hermes_home="$HERMES_HOME_DEFAULT"
   token_file="$hermes_home/secrets/almanac-bootstrap-token"
   state_file="$hermes_home/state/almanac-enrollment.json"
@@ -325,7 +330,14 @@ run_agent_flow() {
   request_file="$(mktemp)"
   trap 'rm -f "$request_file" "${hermes_state_file:-}"' EXIT
 
-  if [[ -f "$state_file" && -f "$token_file" && "$(json_get "$state_file" "status")" == "pending" ]]; then
+  if [[ -n "$preseeded_request_id" && -n "$preseeded_raw_token" ]]; then
+    request_id="$preseeded_request_id"
+    token="$preseeded_raw_token"
+    agent_id="${preseeded_agent_id:-}"
+    requester_identity="${preseeded_requester_identity:-$requester_identity}"
+    resuming_pending="1"
+    echo "Using approved Almanac enrollment bootstrap: $request_id"
+  elif [[ -f "$state_file" && -f "$token_file" && "$(json_get "$state_file" "status")" == "pending" ]]; then
     request_id="$(json_get "$state_file" "request_id")"
     agent_id="$(json_get "$state_file" "agent_id")"
     token="$(tr -d '[:space:]' <"$token_file")"
@@ -409,7 +421,7 @@ PY
   # running (e.g. the user picks a different model or gateway in the wizard).
   ensure_hermes_installed
 
-  if [[ "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
     echo "Launching 'hermes setup' — Almanac will read back your model choice from Hermes when it finishes."
     HERMES_HOME="$hermes_home" hermes setup
@@ -418,7 +430,7 @@ PY
   # Gateway setup only makes sense if we actually want Discord/Telegram. Ask
   # up front in a narrow prompt so we know whether to run the wizard.
   want_gateway="no"
-  if [[ "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
     read -r -p "Configure Hermes gateway for Discord/Telegram? [y/N]: " want_gateway_answer
     if is_yes "$want_gateway_answer"; then
       want_gateway="yes"

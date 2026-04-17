@@ -16,15 +16,18 @@ from almanac_control import (
     Config,
     approve_request,
     archive_agent_files,
+    cancel_auto_provision_request,
     config_env_value,
     connect_db,
     deny_request,
+    ensure_unix_user_ready,
     ensure_config_file_update,
     generate_raw_token,
     get_agent,
     hash_token,
     list_agents,
     list_notifications,
+    list_auto_provision_requests,
     list_requests,
     list_tokens,
     list_vault_warnings,
@@ -37,6 +40,7 @@ from almanac_control import (
     queue_notification,
     reinstate_token,
     reload_vault_definitions,
+    retry_auto_provision_request,
     revoke_token,
     subscriptions_for_agent,
     utc_now_iso,
@@ -128,6 +132,20 @@ def parse_args() -> argparse.Namespace:
     list_cmd.add_argument("--target-id")
     list_cmd.add_argument("--undelivered-only", action="store_true")
 
+    for provision_name in ("provision", "provisions"):
+        provision = subparsers.add_parser(provision_name)
+        provision_sub = provision.add_subparsers(dest="action", required=True)
+        provision_sub.add_parser("list")
+        cancel = provision_sub.add_parser("cancel")
+        cancel.add_argument("request_id")
+        cancel.add_argument("--surface", default="ctl")
+        cancel.add_argument("--actor", default=os.environ.get("USER", "operator"))
+        cancel.add_argument("--reason", default="cancelled via almanac-ctl")
+        retry = provision_sub.add_parser("retry")
+        retry.add_argument("request_id")
+        retry.add_argument("--surface", default="ctl")
+        retry.add_argument("--actor", default=os.environ.get("USER", "operator"))
+
     return parser.parse_args()
 
 
@@ -175,18 +193,8 @@ def _user_home(unix_user: str) -> Path:
 
 def user_prepare(cfg: Config, unix_user: str) -> dict:
     require_root("almanac-ctl user prepare must run as root.")
-    if subprocess.run(["id", "-u", unix_user], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-        subprocess.run(["useradd", "-m", "-s", "/bin/bash", unix_user], check=True)
-    home = _user_home(unix_user)
-    subprocess.run(["loginctl", "enable-linger", unix_user], check=True)
-    subprocess.run(["systemctl", "start", f"user@{pwd.getpwnam(unix_user).pw_uid}.service"], check=False)
-    for path in (
-        home / ".config" / "systemd" / "user",
-        home / ".local" / "share" / "almanac-agent",
-        home / ".local" / "state" / "almanac-agent",
-    ):
-        path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chown", "-R", f"{unix_user}:{unix_user}", str(home / ".config"), str(home / ".local")], check=False)
+    info = ensure_unix_user_ready(unix_user)
+    home = Path(info["home"])
     return {
         "unix_user": unix_user,
         "home": str(home),
@@ -480,6 +488,35 @@ def main() -> None:
                     target_kind=args.target_kind,
                     target_id=args.target_id,
                     undelivered_only=args.undelivered_only,
+                ),
+            )
+            return
+
+        if args.domain in {"provision", "provisions"} and args.action == "list":
+            dump_output(args, list_auto_provision_requests(conn, cfg))
+            return
+        if args.domain in {"provision", "provisions"} and args.action == "cancel":
+            dump_output(
+                args,
+                cancel_auto_provision_request(
+                    conn,
+                    request_id=args.request_id,
+                    surface=args.surface,
+                    actor=args.actor,
+                    reason=args.reason,
+                    cfg=cfg,
+                ),
+            )
+            return
+        if args.domain in {"provision", "provisions"} and args.action == "retry":
+            dump_output(
+                args,
+                retry_auto_provision_request(
+                    conn,
+                    request_id=args.request_id,
+                    surface=args.surface,
+                    actor=args.actor,
+                    cfg=cfg,
                 ),
             )
             return

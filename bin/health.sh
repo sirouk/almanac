@@ -115,6 +115,30 @@ check_unit_state() {
   esac
 }
 
+check_system_unit_state() {
+  local unit="$1"
+  local expect="$2"
+  local state
+
+  state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+
+  case "$state" in
+    active)
+      pass "$unit is active"
+      ;;
+    activating|reloading)
+      warn "$unit is $state"
+      ;;
+    *)
+      if [[ "$expect" == "required" ]]; then
+        fail "$unit is ${state:-unknown}"
+      else
+        warn "$unit is ${state:-unknown}"
+      fi
+      ;;
+  esac
+}
+
 check_port_listening() {
   local port="$1"
 
@@ -395,6 +419,116 @@ PY
       [[ -z "$line" ]] && continue
       case "$line" in
         FAIL\ *) fail "${line#FAIL }" ;;
+        OK\ *) pass "${line#OK }" ;;
+        *) warn_or_fail "$line" ;;
+      esac
+    done <<<"$output"
+  fi
+}
+
+check_auto_provision_state() {
+  local output=""
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 is unavailable; skipping auto-provision probe"
+    return 0
+  fi
+
+if output="$(python3 - "$ALMANAC_DB_PATH" "${ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS:-5}" <<'PY'
+import datetime as dt
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+conn.row_factory = sqlite3.Row
+max_attempts = int(sys.argv[2])
+
+rows = conn.execute(
+    """
+    SELECT request_id, unix_user, status, approved_at, provisioned_at,
+           provision_error, provision_attempts, provision_next_attempt_at
+    FROM bootstrap_requests
+    WHERE auto_provision = 1
+    ORDER BY requested_at DESC
+    """
+).fetchall()
+
+if not rows:
+    print("OK no auto-provision enrollments recorded")
+    raise SystemExit(0)
+
+now = dt.datetime.now(dt.timezone.utc)
+failed = 0
+warned = 0
+ok = 0
+for row in rows:
+    status = str(row["status"] or "")
+    if status == "cancelled":
+        ok += 1
+        continue
+    if row["provisioned_at"]:
+        ok += 1
+        continue
+    if status != "approved":
+        continue
+
+    attempts = int(row["provision_attempts"] or 0)
+    approved_at = row["approved_at"]
+    approved_dt = dt.datetime.fromisoformat(approved_at) if approved_at else now
+    if approved_dt.tzinfo is None:
+        approved_dt = approved_dt.replace(tzinfo=dt.timezone.utc)
+    age_seconds = (now - approved_dt).total_seconds()
+    next_attempt_at = row["provision_next_attempt_at"]
+    next_attempt_dt = None
+    if next_attempt_at:
+        next_attempt_dt = dt.datetime.fromisoformat(next_attempt_at)
+        if next_attempt_dt.tzinfo is None:
+            next_attempt_dt = next_attempt_dt.replace(tzinfo=dt.timezone.utc)
+
+    if row["provision_error"] and attempts >= max_attempts and not next_attempt_at:
+        print(
+            f"FAIL auto-provision exhausted retries for {row['request_id']} "
+            f"({row['unix_user']}): {row['provision_error']}"
+        )
+        failed += 1
+    elif row["provision_error"] and next_attempt_dt is not None and next_attempt_dt > now:
+        print(
+            f"WARN auto-provision retry scheduled for {row['request_id']} "
+            f"({row['unix_user']}) at {next_attempt_at} after error: {row['provision_error']}"
+        )
+        warned += 1
+    elif row["provision_error"]:
+        print(
+            f"WARN auto-provision retry due now for {row['request_id']} "
+            f"({row['unix_user']}): {row['provision_error']}"
+        )
+        warned += 1
+    elif age_seconds > 300:
+        print(f"FAIL auto-provision stalled for {row['request_id']} ({row['unix_user']}) since {approved_at}")
+        failed += 1
+    else:
+        print(f"WARN auto-provision pending for {row['request_id']} ({row['unix_user']}) since {approved_at}")
+        warned += 1
+
+if ok:
+    print(f"OK {ok} approved auto-provision enrollment(s) already completed")
+
+raise SystemExit(1 if failed else 2 if warned else 0)
+PY
+  )"; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        OK\ *) pass "${line#OK }" ;;
+        *) warn_or_fail "$line" ;;
+      esac
+    done <<<"$output"
+  else
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        FAIL\ *) fail "${line#FAIL }" ;;
+        WARN\ *) warn "${line#WARN }" ;;
         OK\ *) pass "${line#OK }" ;;
         *) warn_or_fail "$line" ;;
       esac
@@ -911,6 +1045,7 @@ check_vault_definition_health
 check_curator_state
 check_curator_gateway_runtime
 check_active_agent_state
+check_auto_provision_state
 check_notification_delivery_state
 
 check_port_listening "$QMD_MCP_PORT"
@@ -961,6 +1096,8 @@ if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     fi
   fi
 fi
+
+check_system_unit_state almanac-enrollment-provision.timer required
 
 printf '\nSummary: %s ok, %s warn, %s fail\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 

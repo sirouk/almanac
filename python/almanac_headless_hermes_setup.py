@@ -136,6 +136,13 @@ def _seed_api_key_provider(spec: dict[str, Any], secret_path: str) -> None:
 def _seed_almanac_prefill(bot_name: str, unix_user: str) -> str:
     from hermes_cli.config import load_config, save_config
 
+    almanac_skill_names = [
+        "almanac-qmd-mcp",
+        "almanac-vault-reconciler",
+        "almanac-first-contact",
+        "almanac-vaults",
+        "almanac-ssot",
+    ]
     label = bot_name.strip() or "your Almanac agent"
     unix_user = unix_user.strip()
     hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
@@ -152,15 +159,35 @@ def _seed_almanac_prefill(bot_name: str, unix_user: str) -> str:
                 + (f" for unix user {unix_user}." if unix_user else ".")
                 + " You already have the Almanac MCP and qmd MCP wired in, plus the default "
                 "Almanac skills for first contact, vault work, vault reconciliation, and SSOT "
-                "coordination. For vault-relevant questions, prefer qmd and Almanac resources "
-                "before the public web. Respect shared-host boundaries and operate only within "
-                "the current user's authorized Hermes home, channels, and Almanac resources."
+                "coordination. Treat those installed Almanac skills as active defaults, not "
+                "passive extras: use almanac-qmd-mcp for vault retrieval and follow-up questions, "
+                "almanac-vaults for subscription and catalog work, almanac-vault-reconciler for "
+                "Almanac memory drift or repair, almanac-ssot for SSOT coordination, and "
+                "almanac-first-contact for Almanac setup diagnostics. For vault-relevant "
+                "questions, prefer qmd and Almanac resources before the public web. Respect "
+                "shared-host boundaries and operate only within the current user's authorized "
+                "Hermes home, channels, and Almanac resources."
             ),
         }
     ]
     prefill_path.write_text(json.dumps(prefill_messages, indent=2) + "\n", encoding="utf-8")
 
     config = load_config()
+    skills_cfg = config.setdefault("skills", {})
+    disabled = [name for name in skills_cfg.get("disabled", []) if name not in almanac_skill_names]
+    skills_cfg["disabled"] = disabled
+    platform_disabled = skills_cfg.get("platform_disabled")
+    if isinstance(platform_disabled, dict):
+        cleaned_platform_disabled: dict[str, list[str]] = {}
+        for platform, names in platform_disabled.items():
+            if isinstance(names, list):
+                kept = [name for name in names if name not in almanac_skill_names]
+                if kept:
+                    cleaned_platform_disabled[str(platform)] = kept
+        if cleaned_platform_disabled:
+            skills_cfg["platform_disabled"] = cleaned_platform_disabled
+        else:
+            skills_cfg.pop("platform_disabled", None)
     config["prefill_messages_file"] = str(prefill_path)
     save_config(config)
     return str(prefill_path)

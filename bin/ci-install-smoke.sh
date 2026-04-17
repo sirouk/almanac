@@ -561,10 +561,11 @@ assert_agent_payload() {
     "hermes mcp add almanac-mcp" \
     "run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup" \
     "first contact must resolve YAML .vault defaults" \
-    "maintain only [managed:vault-ref], [managed:qmd-ref], [managed:vault-topology]" \
+    "maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:qmd-ref], [managed:vault-topology]" \
     "MEMORY.md is a frozen snapshot at session start" \
+    "Almanac skills are active defaults, not passive extras" \
     "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
-    "if cron lacks the native memory tool, patch only those three entries in \$HERMES_HOME/memories/MEMORY.md" \
+    "if cron lacks the native memory tool, patch only those four entries in \$HERMES_HOME/memories/MEMORY.md" \
     "recurring success output: exactly 1 short line" \
     "recurring warn/fail output: at most 2 short lines" \
     "$ALMANAC_REPO_DIR/skills/almanac-qmd-mcp" \
@@ -597,8 +598,9 @@ assert_agent_payload() {
     "goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + chutes MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
     "MEMORY.md is a frozen snapshot at session start" \
     "first contact must resolve YAML .vault defaults" \
+    "Almanac skills are active defaults, not passive extras" \
     "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
-    "if cron lacks the native memory tool, patch only those three entries in \$HERMES_HOME/memories/MEMORY.md" \
+    "if cron lacks the native memory tool, patch only those four entries in \$HERMES_HOME/memories/MEMORY.md" \
     "recurring success output: exactly 1 short line"
   do
     if ! grep -Fq "$required" "$payload_file"; then

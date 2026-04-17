@@ -1282,15 +1282,16 @@ render_agent_install_payload_body() {
   echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, and trigger the initial Curator refresh"
   echo "    - install exactly one 4h refresh timer/service for the user agent"
   echo "  memory_contract:"
-  echo "    - maintain only [managed:vault-ref], [managed:qmd-ref], [managed:vault-topology]"
+  echo "    - maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:qmd-ref], [managed:vault-topology]"
   echo "    - write or refresh those stubs now; MEMORY.md is a frozen snapshot at session start"
+  echo "    - make [managed:almanac-skill-ref] explicit: Almanac skills are active defaults, not passive extras"
   echo "    - make [managed:qmd-ref] explicit: qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval"
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     echo "    - include \"$PDF_INGEST_COLLECTION_NAME\" when present, especially for newly uploaded PDFs"
   fi
   echo "    - do not store note bodies, PDF bodies, or large dumps in built-in memory"
   echo "    - do not rely on background memory review or session-end flush"
-  echo "    - if cron lacks the native memory tool, patch only those three entries in \$HERMES_HOME/memories/MEMORY.md and preserve unrelated entries plus Hermes § delimiters"
+  echo "    - if cron lacks the native memory tool, patch only those four entries in \$HERMES_HOME/memories/MEMORY.md and preserve unrelated entries plus Hermes § delimiters"
   echo "  report_contract:"
   echo "    - recurring success output: exactly 1 short line"
   echo "    - recurring warn/fail output: at most 2 short lines"
@@ -2953,6 +2954,10 @@ PY
       "$channels_json" \
       "$activation_path" \
       "$RUNTIME_DIR/hermes-venv/bin/hermes" || true
+    run_root_env_cmd runuser -u "$unix_user" -- env \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      systemctl --user start almanac-user-agent-refresh.service >/dev/null 2>&1 || true
   done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
 import json
 import sqlite3

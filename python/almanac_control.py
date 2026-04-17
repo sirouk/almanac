@@ -14,6 +14,7 @@ import shlex
 import sqlite3
 import string
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -3616,9 +3617,10 @@ def build_managed_memory_payload(
     *,
     agent_id: str,
 ) -> dict[str, Any]:
-    """Compose the three canonical managed-memory stubs for an agent.
+    """Compose the canonical managed-memory stubs for an agent.
 
     The skill contract is:
+      [managed:almanac-skill-ref] default Almanac skill routing hints
       [managed:vault-ref]      active vault path and role
       [managed:qmd-ref]        how to query qmd for retrieval
       [managed:vault-topology] compact summary of subscribed vaults + briefs
@@ -3648,6 +3650,13 @@ def build_managed_memory_payload(
     vault_ref = f"Vault root: {vault_root}\nAgent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
     if display_name:
         vault_ref += f"\nAgent label: {display_name}"
+    skill_ref = (
+        "Installed Almanac skills are live defaults. Use almanac-qmd-mcp for vault"
+        " retrieval and follow-ups, almanac-vaults for subscription and catalog work,"
+        " almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot"
+        " for SSOT coordination, and almanac-first-contact for Almanac setup or"
+        " diagnostic checks."
+    )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
         "Always query qmd before web for vault-relevant work, including the\n"
@@ -3659,6 +3668,7 @@ def build_managed_memory_payload(
 
     return {
         "agent_id": agent_id,
+        "almanac-skill-ref": skill_ref,
         "vault-ref": vault_ref,
         "qmd-ref": qmd_ref,
         "vault-topology": topology,
@@ -3667,23 +3677,82 @@ def build_managed_memory_payload(
     }
 
 
+_MEMORY_ENTRY_DELIMITER = "\n§\n"
+_MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "qmd-ref", "vault-topology")
+_MANAGED_MEMORY_PREFIXES = tuple(f"[managed:{key}]" for key in _MANAGED_MEMORY_KEYS)
+
+
+def _read_memory_entries(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    if not raw.strip():
+        return []
+    return [entry.strip() for entry in raw.split(_MEMORY_ENTRY_DELIMITER) if entry.strip()]
+
+
+def _write_memory_entries(path: Path, entries: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = _MEMORY_ENTRY_DELIMITER.join(entries) if entries else ""
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix=".almanac-memory-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _managed_memory_entries(payload: dict[str, Any]) -> list[str]:
+    entries: list[str] = []
+    for key in _MANAGED_MEMORY_KEYS:
+        prefix = f"[managed:{key}]"
+        value = str(payload.get(key) or "").strip()
+        if value:
+            entries.append(f"{prefix}\n{value}")
+    return entries
+
+
 def write_managed_memory_stubs(
     *,
     hermes_home: Path,
     payload: dict[str, Any],
 ) -> dict[str, str]:
-    """Idempotently write the three managed-memory stubs into an agent's
-    HERMES_HOME. Two artefacts are produced:
+    """Idempotently write the managed-memory stubs into an agent's
+    HERMES_HOME. Three artefacts are produced:
 
     1. `$HERMES_HOME/state/almanac-vault-reconciler.json` — structured state
        the vault-reconciler skill can read for drift detection.
-    2. `$HERMES_HOME/memories/almanac-managed-stubs.md` — a markdown overlay the
-       agent can include / reference from `MEMORY.md`.
+    2. `$HERMES_HOME/memories/almanac-managed-stubs.md` — a human-readable
+       markdown mirror of the managed entries.
+    3. `$HERMES_HOME/memories/MEMORY.md` — the actual Hermes built-in memory
+       store, patched in-place using Hermes's `§`-delimited entry format so the
+       next session start sees the Almanac routing hints immediately.
 
-    Returns the two paths written. Called from the user-agent-refresh context
+    Returns the paths written. Called from the user-agent-refresh context
     running as the enrollment user — never from the central curator (which runs
     as a different uid and would violate the HOME boundary).
     """
+    payload = dict(payload)
+    if "almanac-skill-ref" not in payload and "skill-ref" in payload:
+        payload["almanac-skill-ref"] = payload["skill-ref"]
+    payload.setdefault(
+        "almanac-skill-ref",
+        "Installed Almanac skills are live defaults. Use almanac-qmd-mcp for vault"
+        " retrieval and follow-ups, almanac-vaults for subscription and catalog work,"
+        " almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot"
+        " for SSOT coordination, and almanac-first-contact for Almanac setup or"
+        " diagnostic checks.",
+    )
     state_dir = hermes_home / "state"
     memories_dir = hermes_home / "memories"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -3695,6 +3764,7 @@ def write_managed_memory_stubs(
         json.dumps(
             {
                 "agent_id": payload["agent_id"],
+                "almanac-skill-ref": payload["almanac-skill-ref"],
                 "vault-ref": payload["vault-ref"],
                 "qmd-ref": payload["qmd-ref"],
                 "vault-topology": payload["vault-topology"],
@@ -3714,6 +3784,7 @@ def write_managed_memory_stubs(
         "# Almanac managed memory stubs\n\n"
         "Maintained by the user-agent-refresh worker every 4 hours. Do not\n"
         "hand-edit; changes are overwritten on next refresh.\n\n"
+        f"## [managed:almanac-skill-ref]\n\n{payload['almanac-skill-ref']}\n\n"
         f"## [managed:vault-ref]\n\n{payload['vault-ref']}\n\n"
         f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
         f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
@@ -3721,7 +3792,20 @@ def write_managed_memory_stubs(
     )
     stub_path.write_text(body, encoding="utf-8")
 
-    return {"state_path": str(state_path), "stub_path": str(stub_path)}
+    memory_path = memories_dir / "MEMORY.md"
+    existing_entries = _read_memory_entries(memory_path)
+    filtered_entries = [
+        entry
+        for entry in existing_entries
+        if not any(entry.lstrip().startswith(prefix) for prefix in _MANAGED_MEMORY_PREFIXES)
+    ]
+    _write_memory_entries(memory_path, filtered_entries + _managed_memory_entries(payload))
+
+    return {
+        "state_path": str(state_path),
+        "stub_path": str(stub_path),
+        "memory_path": str(memory_path),
+    }
 
 
 def _central_managed_payload_path(cfg: Config, agent_id: str) -> Path:

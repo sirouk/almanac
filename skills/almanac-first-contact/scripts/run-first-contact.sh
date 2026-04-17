@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # first-contact verification: check MCPs are reachable, pull vault catalog,
-# run a subscription refresh, materialize the three managed-memory stubs, and
+# run a subscription refresh, materialize the managed-memory stubs, and
 # emit a JSON summary. Called by init.sh right after agent registration and
 # also available as an operator diagnostic.
 
@@ -57,7 +57,7 @@ PY
 
 "$RPC" --url "$ALMANAC_MCP_URL" --tool "status" --json-args "{}" >"$status_file"
 
-# Materialize the three managed-memory stubs in this user's HERMES_HOME.
+# Materialize the managed-memory stubs in this user's HERMES_HOME.
 ALMANAC_MANAGED_PAYLOAD="$managed_file" ALMANAC_HERMES_HOME="$HERMES_HOME" \
 PYTHONPATH="$ALMANAC_SHARED_REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
 python3 - <<'PY' >/dev/null

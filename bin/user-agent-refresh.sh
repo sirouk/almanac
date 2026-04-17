@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Periodic per-user-agent refresh:
 #   1. hits vaults.refresh to keep the subscription side up-to-date
-#   2. fetches agents.managed-memory and materializes the three managed-memory
+#   2. fetches agents.managed-memory and materializes the managed-memory
 #      stubs in this user's HERMES_HOME (never crosses uid boundaries)
 #
 # Runs as a systemd user oneshot, every 4h per install-agent-user-services.sh.

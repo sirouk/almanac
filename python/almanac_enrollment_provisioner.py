@@ -576,7 +576,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         session=session,
         message=(
             f"Everything is ready. Your own bot is @{bot_username or 'your bot'} now. "
-            "It already has the Almanac skills and shared vault/qmd wiring in place. "
+            "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
             "Talk to it directly from here on out."
         ),
     )
@@ -687,7 +687,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         session=session,
         message=(
             f"Everything is ready. Your own bot is `{bot_username or 'your bot'}` now. "
-            "It already has the Almanac skills and shared vault/qmd wiring in place. "
+            "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
             "If you want it in one of your own servers too, invite it there, then use Add App so it stays easy to reach in DMs."
         ),
     )

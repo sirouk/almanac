@@ -400,16 +400,16 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         if bot_platform == "discord" and bot_username:
             return (
                 f"Your agent is live through the Discord bot `{bot_username}`. "
-                "It already has the Almanac skills and shared vault/qmd wiring in place. "
+                "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
                 "DM it directly from now on."
             )
         if bot_platform == "telegram" and bot_username:
             return (
                 f"Your agent is live at @{bot_username}. "
-                "It already has the Almanac skills and shared vault/qmd wiring in place. "
+                "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
                 "Talk to it there from now on."
             )
-        return "Your agent is live. It already has the Almanac skills and shared vault/qmd wiring in place."
+        return "Your agent is live. It already has the Almanac skills active by default, plus the shared vault/qmd wiring."
     return "Send /start when you want to begin onboarding."
 
 

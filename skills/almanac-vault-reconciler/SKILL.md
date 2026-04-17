@@ -25,6 +25,7 @@ copy of document bodies.
 
 Managed memory entries must use these prefixes exactly:
 
+- `[managed:almanac-skill-ref]`
 - `[managed:vault-ref]`
 - `[managed:qmd-ref]`
 - `[managed:vault-topology]`
@@ -221,6 +222,7 @@ The managed memories should stay short and durable.
 
 Recommended shape:
 
+- `[managed:almanac-skill-ref]` Almanac skills are active defaults and when to reach for each
 - `[managed:vault-ref]` active vault path and role
 - `[managed:qmd-ref]` qmd is the deeper retrieval layer for vault-relevant work; for private or shared-vault questions or follow-ups grounded in the current discussion, query qmd before web search, including PDF-derived collections such as `vault-pdf-ingest` when present; those PDF-derived notes may be generated Markdown reconciled from PDFs and can include visual captions for diagrams, charts, and figures from PDF pages
 - `[managed:vault-topology]` compact summary of the populated high-level topology
@@ -233,6 +235,7 @@ meant to trigger qmd retrieval reflexively.
 
 Good example shapes:
 
+- `[managed:almanac-skill-ref]` Installed Almanac skills are active defaults. Use almanac-qmd-mcp for vault retrieval and follow-ups, almanac-vaults for subscription and catalog work, almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot for SSOT coordination, and almanac-first-contact for Almanac setup or diagnostic checks.
 - `[managed:vault-ref] Shared Almanac vault lives behind qmd; treat the vault as the source of truth for private knowledge.`
 - `[managed:qmd-ref] For private/shared-vault questions or follow-ups grounded in the current discussion, use qmd first via MCP. Run mixed lex plus vec queries against vault and vault-pdf-ingest when present. Fall back to direct local qmd service or CLI only if MCP is unavailable.`
 - `[managed:vault-topology] High-level populated areas only, such as major folders or landing notes; no note bodies or long file lists.`
@@ -249,7 +252,7 @@ sessions.
 If you are running inside a Hermes cron job and the native memory tool is
 unavailable:
 
-- directly patch only the three `[managed:*]` entries in `$HERMES_HOME/memories/MEMORY.md`
+- directly patch only the four `[managed:*]` entries in `$HERMES_HOME/memories/MEMORY.md`
 - preserve every unrelated entry exactly as-is
 - preserve Hermes's `§`-delimited entry format
 - keep the resulting `MEMORY.md` content within Hermes's built-in memory char budget
@@ -308,7 +311,7 @@ Almanac Vault Sync + Health
 Recommended recurring prompt:
 
 ```text
-Run almanac-vault-reconciler. Discover the active shared vault behind qmd. Refresh and prune only the compact managed memory stubs [managed:vault-ref], [managed:qmd-ref], and [managed:vault-topology] so future sessions know to use qmd first for private/shared-vault questions and follow-ups from the current discussion, including PDF-derived collections when present. Keep built-in memory compact, use the native memory tool when available, and in Hermes cron patch only those three managed entries directly in $HERMES_HOME/memories/MEMORY.md if the memory tool is unavailable. Verify vault sync, qmd indexing, and memory-state alignment, refresh the state file, and emit a terse Almanac health notice: one line on success, at most two lines on warn/fail. Keep the vault read-oriented unless the user explicitly asked for writes.
+Run almanac-vault-reconciler. Discover the active shared vault behind qmd. Refresh and prune only the compact managed memory stubs [managed:almanac-skill-ref], [managed:vault-ref], [managed:qmd-ref], and [managed:vault-topology] so future sessions know Almanac skills are active defaults and use qmd first for private/shared-vault questions and follow-ups from the current discussion, including PDF-derived collections when present. Keep built-in memory compact, use the native memory tool when available, and in Hermes cron patch only those four managed entries directly in $HERMES_HOME/memories/MEMORY.md if the memory tool is unavailable. Verify vault sync, qmd indexing, and memory-state alignment, refresh the state file, and emit a terse Almanac health notice: one line on success, at most two lines on warn/fail. Keep the vault read-oriented unless the user explicitly asked for writes.
 ```
 
 Recommended schedule:

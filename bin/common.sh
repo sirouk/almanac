@@ -197,6 +197,7 @@ shared_runtime_python_is_share_safe() {
   local venv_dir="${1:-${RUNTIME_DIR:-}/hermes-venv}"
   local python_bin="$venv_dir/bin/python3"
   local resolved=""
+  local home_dir=""
 
   if [[ ! -x "$python_bin" ]]; then
     return 1
@@ -206,9 +207,13 @@ shared_runtime_python_is_share_safe() {
   if [[ -z "$resolved" ]]; then
     return 1
   fi
+  home_dir="$(resolve_home_dir || true)"
 
   case "$resolved" in
     "$venv_dir"/*|/usr/*|/bin/*|/usr/local/*|/opt/*)
+      return 0
+      ;;
+    "$home_dir"/.local/share/uv/python/*)
       return 0
       ;;
     *)
@@ -217,22 +222,42 @@ shared_runtime_python_is_share_safe() {
   esac
 }
 
+python_supports_hermes_runtime() {
+  local python_bin="${1:-}"
+  if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
+    return 1
+  fi
+  "$python_bin" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+}
+
 resolve_shared_runtime_seed_python() {
   local candidate=""
-  for candidate in /usr/bin/python3.11 /usr/bin/python3; do
-    if [[ -x "$candidate" ]]; then
+
+  if command -v uv >/dev/null 2>&1; then
+    candidate="$(uv python find 3.11 2>/dev/null || true)"
+    if python_supports_hermes_runtime "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  for candidate in /usr/bin/python3.12 /usr/bin/python3.11; do
+    if python_supports_hermes_runtime "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
   done
-  if command -v python3.11 >/dev/null 2>&1; then
-    command -v python3.11
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
-    return 0
-  fi
+
+  for candidate in "$(command -v python3.12 2>/dev/null || true)" "$(command -v python3.11 2>/dev/null || true)" "$(command -v python3 2>/dev/null || true)"; do
+    if python_supports_hermes_runtime "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
   return 1
 }
 

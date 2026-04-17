@@ -160,12 +160,28 @@ def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) 
 
     activation_dir = activation_trigger_path(cfg, agent_id).parent
     activation_dir.mkdir(parents=True, exist_ok=True)
+    runtime_python = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
+    runtime_python_root: Path | None = None
+    extra_traverse: list[Path] = []
+    try:
+        resolved_runtime_python = runtime_python.resolve(strict=True)
+    except FileNotFoundError:
+        resolved_runtime_python = None
+    if resolved_runtime_python is not None:
+        candidate_root = resolved_runtime_python.parent.parent if resolved_runtime_python.parent.name == "bin" else resolved_runtime_python.parent
+        if str(candidate_root).startswith(str(cfg.almanac_home)):
+            runtime_python_root = candidate_root
+            for parent in candidate_root.parents:
+                if not str(parent).startswith(str(cfg.almanac_home)):
+                    break
+                extra_traverse.append(parent)
 
     traverse_only = [
         cfg.almanac_home,
         cfg.private_dir,
         cfg.state_dir,
         cfg.runtime_dir,
+        *extra_traverse,
     ]
     readable_trees = [
         cfg.repo_dir,
@@ -173,6 +189,8 @@ def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) 
         cfg.runtime_dir / "hermes-agent-src",
         activation_dir,
     ]
+    if runtime_python_root is not None:
+        readable_trees.append(runtime_python_root)
 
     for target in traverse_only:
         if target.exists():

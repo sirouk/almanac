@@ -214,6 +214,16 @@ resolve_notify_channel() {
   local platform="${ALMANAC_CURATOR_NOTIFY_PLATFORM:-}"
   local channel_id="${ALMANAC_CURATOR_NOTIFY_CHANNEL_ID:-}"
   local reuse_existing="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
+  local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
+  local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
+
+  # Upgrades and headless repair flows already know the operator channel from
+  # the deployed config. Reuse it silently instead of prompting just because
+  # the caller happens to have a controlling TTY.
+  if [[ "$skip_setup" == "1" && "$skip_gateway_setup" == "1" && -n "$existing_platform" && -z "$platform" && -z "$channel_id" ]]; then
+    printf '%s\n%s\n' "$existing_platform" "$existing_channel_id"
+    return 0
+  fi
 
   if [[ "$reuse_existing" != "1" && -n "$existing_platform" && -z "$platform" && -z "$channel_id" ]]; then
     if [[ ! -t 0 ]] || confirm_default "Reuse existing operator notification channel ($existing_platform ${existing_channel_id:-"(tui-only)"})?" "yes"; then

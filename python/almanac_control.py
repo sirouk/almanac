@@ -1572,11 +1572,18 @@ def request_bootstrap(
     requester_identity: str,
     unix_user: str,
     source_ip: str,
+    tailnet_identity: dict[str, str] | None = None,
     issue_pending_token: bool = False,
     auto_provision: bool = False,
     requested_model_preset: str = "",
     requested_channels: list[str] | None = None,
 ) -> dict[str, Any]:
+    tailnet_identity = tailnet_identity or {}
+    # When Tailscale Serve forwards the request, the raw source_ip is always
+    # loopback (the local proxy), so an IP-keyed rate limit pools every tailnet
+    # caller into the same bucket. Use the verified tailnet login as the
+    # subject when present so the bucket is per-user, not per-proxy.
+    rate_limit_subject = tailnet_identity.get("login") or source_ip
     ensure_request_expiry(conn)
     if issue_pending_token:
         existing = find_pending_bootstrap_request(conn, unix_user=unix_user, source_ip=source_ip)
@@ -1663,9 +1670,9 @@ def request_bootstrap(
 
     now = utc_now()
     window_start = (now - dt.timedelta(seconds=cfg.bootstrap_window_seconds)).replace(microsecond=0).isoformat()
-    if rate_limit_count(conn, "ip", source_ip, window_start) >= cfg.bootstrap_per_ip_limit:
+    if rate_limit_count(conn, "ip", rate_limit_subject, window_start) >= cfg.bootstrap_per_ip_limit:
         raise RateLimitError(
-            f"rate-limited: per-source limit ({cfg.bootstrap_per_ip_limit}) exceeded for {source_ip}",
+            f"rate-limited: per-source limit ({cfg.bootstrap_per_ip_limit}) exceeded for {rate_limit_subject}",
             retry_after_seconds=cfg.bootstrap_window_seconds,
             scope="per-ip",
         )
@@ -1680,7 +1687,7 @@ def request_bootstrap(
             scope="global-pending",
         )
 
-    record_rate_limit_event(conn, "ip", source_ip)
+    record_rate_limit_event(conn, "ip", rate_limit_subject)
     record_rate_limit_event(conn, "global", "pending")
 
     request_id = generate_request_id()
@@ -1749,8 +1756,20 @@ def request_bootstrap(
     if prior_agent_id:
         prior_note = f" previously enrolled as {prior_agent_id}; archived defaults detected."
     provisioning_note = " On approval, Almanac will create the Unix user and provision the host-side agent automatically." if auto_provision else ""
+    # Build an origin string that's actually useful. Behind Tailscale Serve the
+    # raw source_ip is 127.0.0.1 (the proxy), so prefer the verified tailnet
+    # login when present. Fall back to the IP for direct (non-proxied) calls.
+    tailnet_login = str(tailnet_identity.get("login") or "").strip()
+    tailnet_name = str(tailnet_identity.get("name") or "").strip()
+    if tailnet_login:
+        if tailnet_name and tailnet_name != tailnet_login:
+            origin_note = f"tailnet identity {tailnet_name} <{tailnet_login}>"
+        else:
+            origin_note = f"tailnet identity {tailnet_login}"
+    else:
+        origin_note = f"source {source_ip}"
     message = (
-        f"{requester_identity} ({unix_user}) is requesting enrollment from {source_ip}."
+        f"{requester_identity} ({unix_user}) is requesting enrollment from {origin_note}."
         f"{prior_note}{provisioning_note} Approve via almanac-ctl request approve {request_id}"
     )
     queue_notification(

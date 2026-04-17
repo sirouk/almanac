@@ -235,6 +235,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         raise PermissionError(f"bootstrap tool rejected for non-tailnet source: {source_ip}")
 
+    def _tailscale_identity(self) -> dict[str, str]:
+        """Extract the Tailscale Serve proxy identity headers.
+
+        Tailscale Serve strips client-supplied copies and injects these
+        cryptographically-verified values on every proxied request. When
+        present, they are the authoritative caller identity — much stronger
+        than the raw source_ip (which behind the proxy is always 127.0.0.1).
+        Returns an empty dict when the request did not come through Tailscale
+        Serve (direct loopback, local testing, etc.).
+        """
+        login = (self.headers.get("Tailscale-User-Login") or "").strip()
+        name = (self.headers.get("Tailscale-User-Name") or "").strip()
+        profile_pic = (self.headers.get("Tailscale-User-Profile-Pic") or "").strip()
+        if not login and not name:
+            return {}
+        return {"login": login, "name": name, "profile_pic": profile_pic}
+
     def _require_operator(self, conn, arguments: dict) -> str:
         raw_token = str(arguments.get("operator_token") or arguments.get("token") or "")
         if not raw_token:
@@ -273,12 +290,23 @@ class Handler(BaseHTTPRequestHandler):
             if tool_name in {"bootstrap.request", "bootstrap.handshake"}:
                 source_ip = self._request_source_ip(arguments)
                 self._ensure_bootstrap_source_allowed(source_ip)
+                ts_identity = self._tailscale_identity()
+                # When Tailscale Serve forwards the request, prefer the verified
+                # identity over whatever the client put in `requester_identity`.
+                # The raw source_ip is always loopback behind the proxy, so use
+                # the tailnet login as the rate-limit subject too — otherwise one
+                # noisy caller exhausts the per-IP bucket for the whole tailnet.
+                if ts_identity.get("login"):
+                    requester_identity = ts_identity["login"]
+                else:
+                    requester_identity = str(arguments.get("requester_identity") or arguments.get("unix_user") or "unknown")
                 return request_bootstrap(
                     conn,
                     cfg,
-                    requester_identity=str(arguments.get("requester_identity") or arguments.get("unix_user") or "unknown"),
+                    requester_identity=requester_identity,
                     unix_user=str(arguments.get("unix_user") or "unknown"),
                     source_ip=source_ip,
+                    tailnet_identity=ts_identity,
                     issue_pending_token=(tool_name == "bootstrap.handshake"),
                     auto_provision=bool(arguments.get("auto_provision")),
                     requested_model_preset=str(arguments.get("model_preset") or ""),

@@ -3162,6 +3162,7 @@ def update_agent_channels(
     agent_id: str,
     channels: list[str],
     home_channel: dict[str, Any] | None = None,
+    display_name: str | None = None,
 ) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM agents WHERE agent_id = ?",
@@ -3178,14 +3179,15 @@ def update_agent_channels(
             resolved_home_channel = {"platform": non_tui[0], "channel_id": ""}
         else:
             resolved_home_channel = {"platform": "tui", "channel_id": ""}
+    resolved_display_name = str(display_name or row["display_name"]).strip() or str(row["display_name"])
 
     conn.execute(
         """
         UPDATE agents
-        SET channels_json = ?, home_channel_json = ?
+        SET channels_json = ?, home_channel_json = ?, display_name = ?
         WHERE agent_id = ?
         """,
-        (json_dumps(channels_value), json_dumps(resolved_home_channel), agent_id),
+        (json_dumps(channels_value), json_dumps(resolved_home_channel), resolved_display_name, agent_id),
     )
     conn.commit()
 
@@ -3195,7 +3197,7 @@ def update_agent_channels(
         agent_id=agent_id,
         role=str(row["role"]),
         unix_user=str(row["unix_user"]),
-        display_name=str(row["display_name"]),
+        display_name=resolved_display_name,
         hermes_home=str(row["hermes_home"]),
         model_preset=str(row["model_preset"] or ""),
         model_string=str(row["model_string"] or ""),
@@ -3203,6 +3205,51 @@ def update_agent_channels(
         allowed_mcps=json_loads(str(row["allowed_mcps_json"] or ""), []),
         subscriptions=subscriptions,
         home_channel=resolved_home_channel,
+        operator_notify_channel=json_loads(str(row["operator_notify_channel_json"] or ""), {}),
+    )
+    conn.execute(
+        "UPDATE agents SET manifest_path = ? WHERE agent_id = ?",
+        (str(manifest_path), agent_id),
+    )
+    conn.commit()
+    return get_agent(conn, agent_id) or {}
+
+
+def update_agent_display_name(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    display_name: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown agent: {agent_id}")
+
+    resolved_display_name = str(display_name or "").strip() or str(row["display_name"])
+    conn.execute(
+        "UPDATE agents SET display_name = ? WHERE agent_id = ?",
+        (resolved_display_name, agent_id),
+    )
+    conn.commit()
+
+    subscriptions = subscriptions_for_agent(conn, agent_id)
+    manifest_path = write_shared_manifest(
+        cfg,
+        agent_id=agent_id,
+        role=str(row["role"]),
+        unix_user=str(row["unix_user"]),
+        display_name=resolved_display_name,
+        hermes_home=str(row["hermes_home"]),
+        model_preset=str(row["model_preset"] or ""),
+        model_string=str(row["model_string"] or ""),
+        channels=json_loads(str(row["channels_json"] or ""), []),
+        allowed_mcps=json_loads(str(row["allowed_mcps_json"] or ""), []),
+        subscriptions=subscriptions,
+        home_channel=json_loads(str(row["home_channel_json"] or ""), {}),
         operator_notify_channel=json_loads(str(row["operator_notify_channel_json"] or ""), {}),
     )
     conn.execute(
@@ -3566,10 +3613,10 @@ def build_managed_memory_payload(
             brief = brief.splitlines()[0][:140]
         topology_lines.append(f"  {mark} {vault['vault_name']}: {brief}")
 
-    vault_ref = (
-        f"Vault root: {vault_root}\n"
-        f"Agent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
-    )
+    display_name = str(agent["display_name"] or "").strip()
+    vault_ref = f"Vault root: {vault_root}\nAgent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
+    if display_name:
+        vault_ref += f"\nAgent label: {display_name}"
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
         "Always query qmd before web for vault-relevant work, including the\n"

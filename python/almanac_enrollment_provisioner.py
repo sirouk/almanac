@@ -129,6 +129,16 @@ def _notify_user_via_curator(cfg: Config, *, session: dict, message: str) -> Non
         return
 
 
+def _session_bot_label(session: dict[str, Any]) -> str:
+    answers = session.get("answers", {})
+    return (
+        str(answers.get("bot_display_name") or "")
+        or str(answers.get("bot_username") or "")
+        or str(answers.get("preferred_bot_name") or "")
+        or "your bot"
+    ).strip() or "your bot"
+
+
 def _run_as_user(
     *,
     unix_user: str,
@@ -274,6 +284,10 @@ def _seed_user_provider(cfg: Config, *, session: dict, unix_user: str, home: Pat
                 json.dumps(provider_setup.as_dict(), sort_keys=True),
                 "--secret-path",
                 str(staged_secret_path),
+                "--bot-name",
+                _session_bot_label(session),
+                "--unix-user",
+                unix_user,
             ],
         )
     finally:
@@ -507,6 +521,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         agent_id=agent_id,
         channels=["tui-only", "telegram"],
         home_channel={"platform": "telegram", "channel_id": chat_id},
+        display_name=_session_bot_label(session),
     )
 
     result = _run_as_user(
@@ -561,7 +576,8 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         session=session,
         message=(
             f"Everything is ready. Your own bot is @{bot_username or 'your bot'} now. "
-            f"Talk to it directly from here on out."
+            "It already has the Almanac skills and shared vault/qmd wiring in place. "
+            "Talk to it directly from here on out."
         ),
     )
 
@@ -616,6 +632,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         cfg,
         agent_id=agent_id,
         channels=["tui-only", "discord"],
+        display_name=_session_bot_label(session),
     )
 
     result = _run_as_user(
@@ -670,7 +687,8 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         session=session,
         message=(
             f"Everything is ready. Your own bot is `{bot_username or 'your bot'}` now. "
-            "Talk to it directly from here on out."
+            "It already has the Almanac skills and shared vault/qmd wiring in place. "
+            "If you want it in one of your own servers too, invite it there, then use Add App so it stays easy to reach in DMs."
         ),
     )
 

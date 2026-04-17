@@ -2878,7 +2878,7 @@ PY
 }
 
 run_enrollment_align() {
-  local agent_id="" unix_user="" hermes_home="" channels_json="" uid="" activation_path=""
+  local agent_id="" unix_user="" hermes_home="" channels_json="" bot_label="" uid="" activation_path="" user_home=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-align; then
@@ -2895,14 +2895,39 @@ run_enrollment_align() {
   echo "Realigning enrollment services..."
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-1}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  while IFS=$'\t' read -r agent_id unix_user hermes_home channels_json; do
+  while IFS=$'\t' read -r agent_id unix_user hermes_home channels_json bot_label; do
     [[ -n "$agent_id" && -n "$unix_user" && -n "$hermes_home" && -n "$channels_json" ]] || continue
     if ! getent passwd "$unix_user" >/dev/null 2>&1; then
       echo "Skipping $agent_id: unix user '$unix_user' is missing."
       continue
     fi
     uid="$(id -u "$unix_user")"
+    user_home="$(getent passwd "$unix_user" | cut -d: -f6)"
     activation_path="$STATE_DIR/activation-triggers/$agent_id.json"
+    if [[ -n "$bot_label" ]]; then
+      run_root_env_cmd env \
+        ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+        PYTHONPATH="$ALMANAC_REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 - "$agent_id" "$bot_label" <<'PY' >/dev/null 2>&1 || true
+import sys
+
+from almanac_control import Config, connect_db, update_agent_display_name
+
+cfg = Config.from_env()
+with connect_db(cfg) as conn:
+    update_agent_display_name(conn, cfg, agent_id=sys.argv[1], display_name=sys.argv[2])
+PY
+      run_root_env_cmd runuser -u "$unix_user" -- env \
+        HOME="$user_home" \
+        USER="$unix_user" \
+        LOGNAME="$unix_user" \
+        HERMES_HOME="$hermes_home" \
+        "$RUNTIME_DIR/hermes-venv/bin/python3" \
+        "$ALMANAC_REPO_DIR/python/almanac_headless_hermes_setup.py" \
+        --prefill-only \
+        --bot-name "$bot_label" \
+        --unix-user "$unix_user" >/dev/null 2>&1 || true
+    fi
     echo "Reinstalling user-agent services for $agent_id ($unix_user)..."
     run_root_env_cmd runuser -u "$unix_user" -- env \
       XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -2932,6 +2957,33 @@ rows = conn.execute(
     """
 ).fetchall()
 
+session_rows = conn.execute(
+    """
+    SELECT linked_agent_id, answers_json
+    FROM onboarding_sessions
+    WHERE state = 'completed'
+    ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
+    """
+).fetchall()
+
+bot_labels = {}
+for row in session_rows:
+    agent_id = str(row["linked_agent_id"] or "").strip()
+    if not agent_id or agent_id in bot_labels:
+        continue
+    try:
+        answers = json.loads(row["answers_json"] or "{}")
+    except Exception:
+        continue
+    label = str(
+        answers.get("bot_display_name")
+        or answers.get("bot_username")
+        or answers.get("preferred_bot_name")
+        or ""
+    ).strip()
+    if label:
+        bot_labels[agent_id] = label
+
 for row in rows:
     channels = []
     try:
@@ -2945,6 +2997,7 @@ for row in rows:
             str(row["unix_user"] or ""),
             str(row["hermes_home"] or ""),
             json.dumps(channels),
+            bot_labels.get(str(row["agent_id"] or ""), ""),
         ]))
 PY
 )

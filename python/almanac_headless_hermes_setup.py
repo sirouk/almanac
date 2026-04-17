@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
 from typing import Any
 
 
@@ -131,6 +133,39 @@ def _seed_api_key_provider(spec: dict[str, Any], secret_path: str) -> None:
     )
 
 
+def _seed_almanac_prefill(bot_name: str, unix_user: str) -> str:
+    from hermes_cli.config import load_config, save_config
+
+    label = bot_name.strip() or "your Almanac agent"
+    unix_user = unix_user.strip()
+    hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    state_dir = hermes_home / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    prefill_path = state_dir / "almanac-prefill-messages.json"
+    prefill_messages = [
+        {
+            "role": "system",
+            "content": (
+                f"Your public-facing bot name is {label}. Introduce yourself as {label}, "
+                "not Hermes, unless you are explicitly explaining that Hermes is the runtime "
+                "you run on. You are an Almanac user agent on a shared host"
+                + (f" for unix user {unix_user}." if unix_user else ".")
+                + " You already have the Almanac MCP and qmd MCP wired in, plus the default "
+                "Almanac skills for first contact, vault work, vault reconciliation, and SSOT "
+                "coordination. For vault-relevant questions, prefer qmd and Almanac resources "
+                "before the public web. Respect shared-host boundaries and operate only within "
+                "the current user's authorized Hermes home, channels, and Almanac resources."
+            ),
+        }
+    ]
+    prefill_path.write_text(json.dumps(prefill_messages, indent=2) + "\n", encoding="utf-8")
+
+    config = load_config()
+    config["prefill_messages_file"] = str(prefill_path)
+    save_config(config)
+    return str(prefill_path)
+
+
 def _validate_runtime(spec: dict[str, Any]) -> dict[str, Any]:
     from hermes_cli.config import load_config
     from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -155,9 +190,20 @@ def _validate_runtime(spec: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed a Hermes home for headless Almanac onboarding.")
-    parser.add_argument("--provider-spec-json", required=True, help="Provider setup spec as json.")
-    parser.add_argument("--secret-path", required=True, help="Path to the staged provider secret.")
+    parser.add_argument("--provider-spec-json", help="Provider setup spec as json.")
+    parser.add_argument("--secret-path", help="Path to the staged provider secret.")
+    parser.add_argument("--bot-name", default="", help="Public-facing bot name for Almanac prefill priming.")
+    parser.add_argument("--unix-user", default="", help="Unix username being provisioned.")
+    parser.add_argument("--prefill-only", action="store_true", help="Only refresh the Almanac prefill config.")
     args = parser.parse_args()
+
+    prefill_path = _seed_almanac_prefill(args.bot_name, args.unix_user)
+    if args.prefill_only:
+        print(json.dumps({"prefill_messages_file": prefill_path, "prefill_only": True}, sort_keys=True))
+        return
+
+    if not args.provider_spec_json or not args.secret_path:
+        raise SystemExit("--provider-spec-json and --secret-path are required unless --prefill-only is set")
 
     spec = _load_provider_spec(args.provider_spec_json)
     provider_id = str(spec.get("provider_id") or "").strip()

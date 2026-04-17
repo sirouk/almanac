@@ -391,10 +391,18 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "completed":
         bot_username = str(answers.get("bot_username") or session.get("telegram_bot_username") or "").strip()
         if bot_platform == "discord" and bot_username:
-            return f"Your agent is live through the Discord bot `{bot_username}`. DM it directly from now on."
+            return (
+                f"Your agent is live through the Discord bot `{bot_username}`. "
+                "It already has the Almanac skills and shared vault/qmd wiring in place. "
+                "DM it directly from now on."
+            )
         if bot_platform == "telegram" and bot_username:
-            return f"Your agent is live at @{bot_username}. Talk to it there from now on."
-        return "Your agent is live. Talk to your own bot from now on."
+            return (
+                f"Your agent is live at @{bot_username}. "
+                "It already has the Almanac skills and shared vault/qmd wiring in place. "
+                "Talk to it there from now on."
+            )
+        return "Your agent is live. It already has the Almanac skills and shared vault/qmd wiring in place."
     return "Send /start when you want to begin onboarding."
 
 

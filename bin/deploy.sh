@@ -8,6 +8,10 @@ MODE=""
 PRIVILEGED_MODE=""
 DISCOVERED_CONFIG=""
 ALMANAC_NAME="${ALMANAC_NAME:-almanac}"
+TRACE_UNIX_USER="${TRACE_UNIX_USER:-}"
+TRACE_SESSION_ID="${TRACE_SESSION_ID:-}"
+TRACE_REQUEST_ID="${TRACE_REQUEST_ID:-}"
+TRACE_LOG_LINES="${TRACE_LOG_LINES:-12}"
 QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
 PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
 PDF_INGEST_EXTRACTOR="${PDF_INGEST_EXTRACTOR:-auto}"
@@ -124,6 +128,7 @@ Usage:
   deploy.sh install
   deploy.sh upgrade
   deploy.sh enrollment-status
+  deploy.sh enrollment-trace [--unix-user USER | --session-id onb_xxx | --request-id req_xxx]
   deploy.sh enrollment-align
   deploy.sh enrollment-reset
   deploy.sh curator-setup
@@ -139,9 +144,41 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|upgrade|enrollment-status|enrollment-align|enrollment-reset|curator-setup|agent-payload|agent|write-config|remove|health|menu)
+    install|upgrade|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|agent-payload|agent|write-config|remove|health|menu)
       MODE="$1"
       shift
+      ;;
+    --unix-user)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --unix-user" >&2
+        exit 1
+      fi
+      TRACE_UNIX_USER="$2"
+      shift 2
+      ;;
+    --session-id)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --session-id" >&2
+        exit 1
+      fi
+      TRACE_SESSION_ID="$2"
+      shift 2
+      ;;
+    --request-id)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --request-id" >&2
+        exit 1
+      fi
+      TRACE_REQUEST_ID="$2"
+      shift 2
+      ;;
+    --log-lines)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --log-lines" >&2
+        exit 1
+      fi
+      TRACE_LOG_LINES="$2"
+      shift 2
       ;;
     --write-config-only)
       MODE="write-config"
@@ -292,13 +329,14 @@ Almanac deploy menu
   2) Upgrade deployed host from configured upstream
   3) Write config only
   4) Enrollment status
-  5) Enrollment align / repair
-  6) Enrollment reset / cleanup
-  7) Curator setup / repair
-  8) Print agent payload
-  9) Health check
- 10) Remove / teardown
- 11) Exit
+  5) Enrollment trace
+  6) Enrollment align / repair
+  7) Enrollment reset / cleanup
+  8) Curator setup / repair
+  9) Print agent payload
+ 10) Health check
+ 11) Remove / teardown
+ 12) Exit
 EOF
 
   while true; do
@@ -308,14 +346,15 @@ EOF
       2) MODE="upgrade"; return 0 ;;
       3) MODE="write-config"; return 0 ;;
       4) MODE="enrollment-status"; return 0 ;;
-      5) MODE="enrollment-align"; return 0 ;;
-      6) MODE="enrollment-reset"; return 0 ;;
-      7) MODE="curator-setup"; return 0 ;;
-      8) MODE="agent-payload"; return 0 ;;
-      9) MODE="health"; return 0 ;;
-      10) MODE="remove"; return 0 ;;
-      11) exit 0 ;;
-      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, or 11." ;;
+      5) MODE="enrollment-trace"; return 0 ;;
+      6) MODE="enrollment-align"; return 0 ;;
+      7) MODE="enrollment-reset"; return 0 ;;
+      8) MODE="curator-setup"; return 0 ;;
+      9) MODE="agent-payload"; return 0 ;;
+      10) MODE="health"; return 0 ;;
+      11) MODE="remove"; return 0 ;;
+      12) exit 0 ;;
+      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, or 12." ;;
     esac
   done
 }
@@ -1695,6 +1734,7 @@ ensure_deployed_config_exists() {
 maybe_reexec_with_sudo_for_config() {
   local mode="$1"
   local status=""
+  local -a cmd=()
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 1
@@ -1712,7 +1752,22 @@ maybe_reexec_with_sudo_for_config() {
   fi
 
   echo "Switching to sudo to inspect the deployed config..."
-  sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" "$mode"
+  cmd=(sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" "$mode")
+  if [[ "$mode" == "enrollment-trace" ]]; then
+    if [[ -n "${TRACE_UNIX_USER:-}" ]]; then
+      cmd+=(--unix-user "$TRACE_UNIX_USER")
+    fi
+    if [[ -n "${TRACE_SESSION_ID:-}" ]]; then
+      cmd+=(--session-id "$TRACE_SESSION_ID")
+    fi
+    if [[ -n "${TRACE_REQUEST_ID:-}" ]]; then
+      cmd+=(--request-id "$TRACE_REQUEST_ID")
+    fi
+    if [[ -n "${TRACE_LOG_LINES:-}" ]]; then
+      cmd+=(--log-lines "$TRACE_LOG_LINES")
+    fi
+  fi
+  "${cmd[@]}"
   write_operator_checkout_artifact
   return 0
 }
@@ -2225,8 +2280,512 @@ PY
   rm -f "$onboarding_file" "$provision_file"
   echo
   echo "Repair commands:"
+  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-trace --unix-user <unix-user>"
   echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
   echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+}
+
+resolve_enrollment_trace_selector() {
+  local provided_count=0
+  local selector=""
+  local kind=""
+
+  [[ -n "${TRACE_UNIX_USER:-}" ]] && provided_count=$((provided_count + 1))
+  [[ -n "${TRACE_SESSION_ID:-}" ]] && provided_count=$((provided_count + 1))
+  [[ -n "${TRACE_REQUEST_ID:-}" ]] && provided_count=$((provided_count + 1))
+
+  if (( provided_count > 1 )); then
+    echo "Provide only one of --unix-user, --session-id, or --request-id." >&2
+    exit 1
+  fi
+
+  if [[ -n "${TRACE_UNIX_USER:-}" ]]; then
+    kind="unix-user"
+    selector="$TRACE_UNIX_USER"
+  elif [[ -n "${TRACE_SESSION_ID:-}" ]]; then
+    kind="session-id"
+    selector="$TRACE_SESSION_ID"
+  elif [[ -n "${TRACE_REQUEST_ID:-}" ]]; then
+    kind="request-id"
+    selector="$TRACE_REQUEST_ID"
+  else
+    selector="$(ask "Trace unix user, onboarding session id, or bootstrap request id" "${ENROLLMENT_TRACE_TARGET:-}")"
+    if [[ -z "$selector" ]]; then
+      echo "A trace target is required." >&2
+      exit 1
+    fi
+    case "$selector" in
+      onb_*) kind="session-id" ;;
+      req_*) kind="request-id" ;;
+      *) kind="unix-user" ;;
+    esac
+  fi
+
+  printf '%s\t%s\n' "$kind" "$selector"
+}
+
+run_enrollment_trace() {
+  local selector_spec selector_kind selector_value trace_file
+  local timer_enabled timer_active service_active resolved_unix_user
+
+  prepare_deployed_context
+  if maybe_reexec_with_sudo_for_config enrollment-trace; then
+    return 0
+  fi
+  ensure_deployed_config_exists
+
+  selector_spec="$(resolve_enrollment_trace_selector)"
+  IFS=$'\t' read -r selector_kind selector_value <<<"$selector_spec"
+  trace_file="$(mktemp)"
+
+  run_root_env_cmd python3 - "$ALMANAC_DB_PATH" "$STATE_DIR" "$selector_kind" "$selector_value" <<'PY' >"$trace_file"
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+state_dir = Path(sys.argv[2])
+selector_kind = sys.argv[3]
+selector_value = sys.argv[4]
+
+
+def json_loads(raw, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def request_provision_state(row):
+    attempts = int(row.get("provision_attempts") or 0)
+    status = str(row.get("status") or "")
+    if row.get("provisioned_at"):
+        return "completed"
+    if status == "cancelled":
+        return "cancelled"
+    if status != "approved":
+        return status or "pending"
+    if row.get("provision_error") and not row.get("provision_next_attempt_at"):
+        return "failed"
+    if row.get("provision_error"):
+        return "retry-scheduled"
+    if row.get("provision_started_at"):
+        return "running"
+    if attempts > 0:
+        return "running"
+    return "queued"
+
+
+def summarize_session(row):
+    answers = json_loads(row["answers_json"], {})
+    return {
+        "session_id": row["session_id"],
+        "platform": row["platform"],
+        "chat_id": row["chat_id"],
+        "sender_id": row["sender_id"],
+        "sender_username": row["sender_username"],
+        "sender_display_name": row["sender_display_name"],
+        "state": row["state"],
+        "answers": {
+            "name": answers.get("name", ""),
+            "unix_user": answers.get("unix_user", ""),
+            "purpose": answers.get("purpose", ""),
+            "bot_platform": answers.get("bot_platform", ""),
+            "bot_name": answers.get("bot_name", ""),
+            "model_preset": answers.get("model_preset", ""),
+            "pending_provider_setup": bool(answers.get("pending_provider_setup")),
+            "pending_provider_secret_path": str(answers.get("pending_provider_secret_path") or ""),
+        },
+        "operator_notified_at": row["operator_notified_at"],
+        "approved_at": row["approved_at"],
+        "approved_by_actor": row["approved_by_actor"],
+        "denied_at": row["denied_at"],
+        "denied_by_actor": row["denied_by_actor"],
+        "denial_reason": row["denial_reason"],
+        "linked_request_id": row["linked_request_id"],
+        "linked_agent_id": row["linked_agent_id"],
+        "pending_bot_token_path": row["pending_bot_token_path"],
+        "provision_error": row["provision_error"],
+        "completed_at": row["completed_at"],
+        "last_prompt_at": row["last_prompt_at"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def summarize_request(row):
+    payload = dict(row)
+    payload["requested_channels"] = json_loads(row["requested_channels_json"], [])
+    payload["prior_defaults"] = json_loads(row["prior_defaults_json"], {})
+    payload["provision_state"] = request_provision_state(payload)
+    payload["log_path"] = str(state_dir / "auto-provision" / f"{row['request_id']}.log")
+    return payload
+
+
+payload = {
+    "selector_kind": selector_kind,
+    "selector_value": selector_value,
+    "unix_user": "",
+    "agent_id": "",
+    "agent": None,
+    "onboarding": [],
+    "requests": [],
+    "rate_limit_subjects": [],
+    "inferred_stage": "not-found",
+    "next_action": "No matching onboarding session, request, or agent was found.",
+}
+
+if not db_path.exists():
+    print(json.dumps(payload, sort_keys=True))
+    raise SystemExit(0)
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+
+selected_session = None
+selected_request = None
+target_unix_user = ""
+agent_id = ""
+
+if selector_kind == "session-id":
+    selected_session = conn.execute(
+        "SELECT * FROM onboarding_sessions WHERE session_id = ?",
+        (selector_value,),
+    ).fetchone()
+    if selected_session is not None:
+        answers = json_loads(selected_session["answers_json"], {})
+        target_unix_user = str(answers.get("unix_user") or "")
+        agent_id = str(selected_session["linked_agent_id"] or "")
+        linked_request_id = str(selected_session["linked_request_id"] or "")
+        if linked_request_id:
+            selected_request = conn.execute(
+                "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+                (linked_request_id,),
+            ).fetchone()
+            if selected_request is not None and not target_unix_user:
+                target_unix_user = str(selected_request["unix_user"] or "")
+elif selector_kind == "request-id":
+    selected_request = conn.execute(
+        "SELECT * FROM bootstrap_requests WHERE request_id = ?",
+        (selector_value,),
+    ).fetchone()
+    if selected_request is not None:
+        target_unix_user = str(selected_request["unix_user"] or "")
+        agent_id = str(selected_request["prior_agent_id"] or "")
+else:
+    target_unix_user = selector_value
+
+if target_unix_user and not agent_id:
+    agent_id = f"agent-{target_unix_user}"
+
+agent_row = None
+if target_unix_user:
+    agent_row = conn.execute(
+        """
+        SELECT *
+        FROM agents
+        WHERE unix_user = ?
+        ORDER BY last_enrolled_at DESC
+        LIMIT 1
+        """,
+        (target_unix_user,),
+    ).fetchone()
+elif agent_id:
+    agent_row = conn.execute(
+        "SELECT * FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+
+if agent_row is not None:
+    agent_payload = dict(agent_row)
+    agent_payload["channels"] = json_loads(agent_row["channels_json"], [])
+    agent_payload["allowed_mcps"] = json_loads(agent_row["allowed_mcps_json"], [])
+    agent_payload["home_channel"] = json_loads(agent_row["home_channel_json"], {})
+    payload["agent"] = agent_payload
+    payload["agent_id"] = str(agent_row["agent_id"])
+    if not target_unix_user:
+        target_unix_user = str(agent_row["unix_user"])
+else:
+    payload["agent_id"] = agent_id
+
+payload["unix_user"] = target_unix_user
+
+subjects = set()
+session_rows = conn.execute(
+    """
+    SELECT *
+    FROM onboarding_sessions
+    ORDER BY updated_at DESC
+    """
+).fetchall()
+for row in session_rows:
+    answers = json_loads(row["answers_json"], {})
+    linked_agent_id = str(row["linked_agent_id"] or "")
+    session_unix_user = str(answers.get("unix_user") or "")
+    if selector_kind == "session-id":
+        matches = (
+            str(row["session_id"]) == selector_value
+            or (target_unix_user and session_unix_user == target_unix_user)
+            or (payload["agent_id"] and linked_agent_id == payload["agent_id"])
+        )
+    else:
+        matches = (
+            (target_unix_user and session_unix_user == target_unix_user)
+            or (payload["agent_id"] and linked_agent_id == payload["agent_id"])
+        )
+    if not matches:
+        continue
+    payload["onboarding"].append(summarize_session(row))
+    subjects.add(f"{row['platform']}:{row['sender_id']}")
+
+request_rows = []
+if target_unix_user:
+    request_rows = conn.execute(
+        """
+        SELECT *
+        FROM bootstrap_requests
+        WHERE unix_user = ? AND auto_provision = 1
+        ORDER BY requested_at DESC
+        """,
+        (target_unix_user,),
+    ).fetchall()
+elif selected_request is not None:
+    request_rows = [selected_request]
+for row in request_rows:
+    request_payload = summarize_request(row)
+    payload["requests"].append(request_payload)
+    source_ip = str(row["source_ip"] or "")
+    if ":" in source_ip:
+        subjects.add(source_ip)
+
+latest_session = payload["onboarding"][0] if payload["onboarding"] else None
+latest_request = payload["requests"][0] if payload["requests"] else None
+agent = payload["agent"] or {}
+
+if latest_session is not None:
+    state = str(latest_session.get("state") or "")
+    if state in {"awaiting-name", "awaiting-unix-user", "awaiting-purpose", "awaiting-bot-platform", "awaiting-bot-name", "awaiting-model-preset"}:
+        payload["inferred_stage"] = "intake-in-progress"
+        payload["next_action"] = "Continue the Curator interview in DM until it reaches operator approval."
+    elif state == "awaiting-operator-approval":
+        payload["inferred_stage"] = "waiting-on-operator-approval"
+        payload["next_action"] = f"Approve onboarding session {latest_session['session_id']} or deny it."
+    elif state == "awaiting-bot-token":
+        payload["inferred_stage"] = "waiting-on-user-bot-token"
+        payload["next_action"] = "The user must send their private bot token to Curator."
+    elif state == "awaiting-provider-browser-auth":
+        payload["inferred_stage"] = "waiting-on-provider-browser-auth"
+        payload["next_action"] = "The user must finish provider authorization in the browser; the root provisioner will poll and continue."
+    elif state == "provision-pending":
+        if latest_request is None:
+            payload["inferred_stage"] = "provision-pending-without-request"
+            payload["next_action"] = "Inspect the linked onboarding session; it reached provisioning without a bootstrap request."
+        else:
+            provision_state = str(latest_request.get("provision_state") or "")
+            if provision_state == "queued":
+                payload["inferred_stage"] = "queued-for-root-provisioner"
+                payload["next_action"] = "Wait for the root provisioner timer or start almanac-enrollment-provision.service once."
+            elif provision_state == "running":
+                payload["inferred_stage"] = "root-provisioner-running"
+                payload["next_action"] = "Inspect the root provisioner journal and the per-request auto-provision log."
+            elif provision_state == "retry-scheduled":
+                payload["inferred_stage"] = "root-provisioner-retry-scheduled"
+                payload["next_action"] = "Inspect the provision error, repair the host-side issue, then let the timer retry or force a retry."
+            elif provision_state == "failed":
+                payload["inferred_stage"] = "root-provisioner-failed"
+                payload["next_action"] = "Repair the failure, then cancel/reset or retry the failed provisioning request."
+            elif provision_state == "completed":
+                payload["inferred_stage"] = "post-provision-gateway-config"
+                payload["next_action"] = "Base provisioning completed. If onboarding is not completed yet, inspect post-provision gateway configuration."
+            else:
+                payload["inferred_stage"] = provision_state or "provision-pending"
+                payload["next_action"] = "Inspect the linked request and provisioner logs."
+    elif state == "completed":
+        if str(agent.get("status") or "") == "active":
+            payload["inferred_stage"] = "completed"
+            payload["next_action"] = "Onboarding is completed and the user agent is active."
+        else:
+            payload["inferred_stage"] = "completed-with-agent-drift"
+            payload["next_action"] = "Onboarding is marked completed, but the agent is not active; inspect the user agent services."
+    elif state == "denied":
+        payload["inferred_stage"] = "denied"
+        payload["next_action"] = "No action is pending. Start a new onboarding session if needed."
+    elif state == "cancelled":
+        payload["inferred_stage"] = "cancelled"
+        payload["next_action"] = "No action is pending. Start a new onboarding session if needed."
+elif latest_request is not None:
+    provision_state = str(latest_request.get("provision_state") or "")
+    payload["inferred_stage"] = provision_state or str(latest_request.get("status") or "request-only")
+    if provision_state == "completed":
+        payload["next_action"] = "Provisioning completed. Inspect the user agent or gateway if the user still cannot talk to their bot."
+    elif provision_state in {"running", "retry-scheduled", "failed", "queued"}:
+        payload["next_action"] = "Inspect the root provisioner journal and the per-request auto-provision log."
+    else:
+        payload["next_action"] = "Inspect the bootstrap request lifecycle."
+elif agent:
+    payload["inferred_stage"] = f"agent-{agent.get('status') or 'unknown'}"
+    payload["next_action"] = "Inspect the user agent services and refresh path."
+
+payload["rate_limit_subjects"] = sorted(subjects)
+print(json.dumps(payload, sort_keys=True))
+PY
+
+  timer_enabled="$(systemctl is-enabled almanac-enrollment-provision.timer 2>/dev/null || true)"
+  timer_active="$(systemctl is-active almanac-enrollment-provision.timer 2>/dev/null || true)"
+  service_active="$(systemctl is-active almanac-enrollment-provision.service 2>/dev/null || true)"
+  resolved_unix_user="$(python3 - "$trace_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data.get("unix_user", ""))
+PY
+)"
+
+  echo "Enrollment trace"
+  echo
+  echo "Config:        $CONFIG_TARGET"
+  echo "Service user:  $ALMANAC_USER"
+  echo "Repo:          $ALMANAC_REPO_DIR"
+  echo "DB:            $ALMANAC_DB_PATH"
+  echo "Selector:      $selector_kind=$selector_value"
+  echo "Provisioner:"
+  echo "  timer enabled: $timer_enabled"
+  echo "  timer active:  $timer_active"
+  echo "  service:       $service_active"
+  echo
+
+  python3 - "$trace_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+print("Resolved state:")
+print(f"  unix_user:      {data.get('unix_user') or '-'}")
+print(f"  agent_id:       {data.get('agent_id') or '-'}")
+print(f"  inferred stage: {data.get('inferred_stage') or '-'}")
+print(f"  next action:    {data.get('next_action') or '-'}")
+
+agent = data.get("agent") or {}
+print()
+print("Agent:")
+if not agent:
+    print("  missing")
+else:
+    channels = ", ".join(agent.get("channels") or []) or "-"
+    print(f"  status:         {agent.get('status') or '-'}")
+    print(f"  unix_user:      {agent.get('unix_user') or '-'}")
+    print(f"  model preset:   {agent.get('model_preset') or '-'}")
+    print(f"  channels:       {channels}")
+    print(f"  hermes home:    {agent.get('hermes_home') or '-'}")
+    print(f"  last enrolled:  {agent.get('last_enrolled_at') or '-'}")
+
+print()
+print("Onboarding sessions:")
+if not data.get("onboarding"):
+    print("  none")
+else:
+    for row in data["onboarding"]:
+        answers = row.get("answers") or {}
+        print(
+            f"  {row.get('session_id') or '-'} state={row.get('state') or '-'} "
+            f"platform={row.get('platform') or '-'} updated={row.get('updated_at') or '-'}"
+        )
+        print(
+            f"    unix_user={answers.get('unix_user') or '-'} "
+            f"bot_platform={answers.get('bot_platform') or '-'} "
+            f"bot_name={answers.get('bot_name') or '-'} "
+            f"model={answers.get('model_preset') or '-'}"
+        )
+        if row.get("linked_request_id"):
+            print(f"    linked_request={row['linked_request_id']}")
+        if row.get("provision_error"):
+            print(f"    error={row['provision_error']}")
+
+print()
+print("Auto-provision requests:")
+if not data.get("requests"):
+    print("  none")
+else:
+    for row in data["requests"]:
+        print(
+            f"  {row.get('request_id') or '-'} provision_state={row.get('provision_state') or '-'} "
+            f"status={row.get('status') or '-'} attempts={row.get('provision_attempts') or 0} "
+            f"requested={row.get('requested_at') or '-'}"
+        )
+        print(
+            f"    source={row.get('source_ip') or '-'} "
+            f"channels={','.join(row.get('requested_channels') or []) or '-'} "
+            f"model={row.get('requested_model_preset') or '-'}"
+        )
+        if row.get("approved_at") or row.get("provisioned_at") or row.get("provision_next_attempt_at"):
+            print(
+                f"    approved={row.get('approved_at') or '-'} "
+                f"provisioned={row.get('provisioned_at') or '-'} "
+                f"next_attempt={row.get('provision_next_attempt_at') or '-'}"
+            )
+        if row.get("provision_error"):
+            print(f"    error={row['provision_error']}")
+        if row.get("log_path"):
+            print(f"    log={row['log_path']}")
+
+subjects = data.get("rate_limit_subjects") or []
+print()
+print(f"Related rate-limit subjects: {', '.join(subjects) if subjects else '(none)'}")
+PY
+
+  if [[ -n "$resolved_unix_user" ]]; then
+    echo
+    echo "Unix account:"
+    if getent passwd "$resolved_unix_user" >/dev/null 2>&1; then
+      getent passwd "$resolved_unix_user" | awk -F: '{printf "  passwd: %s uid=%s gid=%s home=%s shell=%s\n", $1, $3, $4, $6, $7}'
+      if [[ -d "/home/$resolved_unix_user" ]]; then
+        echo "  home:   present"
+      else
+        echo "  home:   missing"
+      fi
+    else
+      echo "  missing"
+    fi
+  fi
+
+  echo
+  echo "Recent root provisioner journal:"
+  run_root_env_cmd journalctl -u almanac-enrollment-provision.service -n "$TRACE_LOG_LINES" --no-pager || true
+
+  while IFS= read -r log_path; do
+    [[ -n "$log_path" ]] || continue
+    if [[ -f "$log_path" ]]; then
+      echo
+      echo "Recent auto-provision log: $log_path"
+      run_root_env_cmd tail -n "$TRACE_LOG_LINES" "$log_path" || true
+    fi
+  done < <(python3 - "$trace_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+for row in data.get("requests") or []:
+    path = str(row.get("log_path") or "")
+    if path:
+        print(path)
+PY
+)
+
+  rm -f "$trace_file"
+  echo
+  echo "Repair commands:"
+  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
+  if [[ -n "$resolved_unix_user" ]]; then
+    echo "  ENROLLMENT_RESET_UNIX_USER=$resolved_unix_user $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+  else
+    echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+  fi
 }
 
 run_enrollment_align() {
@@ -2732,6 +3291,9 @@ case "$MODE" in
     ;;
   enrollment-status)
     run_enrollment_status
+    ;;
+  enrollment-trace)
+    run_enrollment_trace
     ;;
   enrollment-align)
     run_enrollment_align

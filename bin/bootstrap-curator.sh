@@ -209,10 +209,10 @@ PY
 }
 
 ensure_curator_hermes() {
-  if [[ -x "$RUNTIME_DIR/hermes-venv/bin/hermes" ]]; then
+  if ensure_shared_hermes_runtime; then
     return 0
   fi
-  echo "Curator Hermes runtime is missing; run bootstrap-userland first." >&2
+  echo "Curator Hermes runtime is unavailable; run bootstrap-userland first." >&2
   exit 1
 }
 
@@ -277,7 +277,9 @@ PY
 
   if [[ "$skip_gateway_setup" != "1" && -t 0 ]] && [[ "$channels_csv" == *discord* || "$channels_csv" == *telegram* ]] && should_rerun_setup "Hermes gateway setup" "$force_gateway_setup"; then
     echo "Running curator Hermes gateway setup ..."
-    HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" gateway setup
+    if ! HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" gateway setup; then
+      echo "Hermes gateway setup returned non-zero; Almanac will continue and restart the configured gateway itself." >&2
+    fi
   fi
 
   hermes_state_file="$(mktemp)"
@@ -314,12 +316,13 @@ print(json.dumps(channels))
 PY
   )"
 
-  set_config_value "OPERATOR_NOTIFY_CHANNEL_PLATFORM" "$notify_platform"
-  set_config_value "OPERATOR_NOTIFY_CHANNEL_ID" "$notify_channel_id"
+  ALMANAC_CURATOR_MODEL_PRESET="$model_preset"
+  ALMANAC_CURATOR_CHANNELS="$channels_csv"
+  set_config_value "ALMANAC_CURATOR_MODEL_PRESET" "$model_preset"
+  set_config_value "ALMANAC_CURATOR_CHANNELS" "$channels_csv"
+  "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$notify_platform" --channel-id "$notify_channel_id" >/dev/null
   set_config_value "OPERATOR_GENERAL_CHANNEL_PLATFORM" "$general_platform"
   set_config_value "OPERATOR_GENERAL_CHANNEL_ID" "$general_channel_id"
-
-  "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$notify_platform" --channel-id "$notify_channel_id" >/dev/null
 
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
     python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" internal register-curator \
@@ -344,7 +347,7 @@ PY
     systemctl --user daemon-reload
     systemctl --user enable almanac-curator-refresh.timer >/dev/null
     systemctl --user restart almanac-curator-refresh.timer >/dev/null || true
-    if [[ "$notify_platform" == "tui-only" && "$channels_csv" != *discord* && "$channels_csv" != *telegram* ]]; then
+    if ! has_curator_gateway_channels; then
       systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
     else
       systemctl --user enable almanac-curator-gateway.service >/dev/null

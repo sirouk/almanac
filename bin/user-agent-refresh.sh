@@ -12,6 +12,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MCP_URL="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
 TOKEN_FILE="${ALMANAC_BOOTSTRAP_TOKEN_FILE:-$HERMES_HOME/secrets/almanac-bootstrap-token}"
+ENROLLMENT_STATE_FILE="${ALMANAC_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/almanac-enrollment.json}"
 
 if [[ ! -f "$TOKEN_FILE" ]]; then
   echo "Missing bootstrap token file at $TOKEN_FILE" >&2
@@ -19,6 +20,30 @@ if [[ ! -f "$TOKEN_FILE" ]]; then
 fi
 
 token="$(tr -d '[:space:]' <"$TOKEN_FILE")"
+
+if [[ -x "$REPO_DIR/bin/activate-agent.sh" ]]; then
+  "$REPO_DIR/bin/activate-agent.sh"
+fi
+
+if [[ -f "$ENROLLMENT_STATE_FILE" ]]; then
+  enrollment_status="$(
+    python3 - "$ENROLLMENT_STATE_FILE" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+print(str(data.get("status", "")))
+PY
+  )"
+  if [[ "$enrollment_status" != "active" ]]; then
+    exit 0
+  fi
+fi
 
 # 1. subscription refresh (also backstops default fanout on the server side)
 python3 "$REPO_DIR/python/almanac_rpc_client.py" \

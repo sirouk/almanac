@@ -252,6 +252,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           source_ip TEXT NOT NULL,
           issued_at TEXT NOT NULL,
           issued_by TEXT NOT NULL,
+          activation_request_id TEXT,
+          activated_at TEXT,
           revoked_at TEXT,
           revoked_by_surface TEXT,
           revoked_by_actor TEXT,
@@ -351,6 +353,17 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
+    _ensure_column(conn, "bootstrap_tokens", "activated_at", "TEXT")
+    conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    names = {str(row["name"]) for row in rows}
+    if column in names:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.commit()
 
 
@@ -1140,6 +1153,38 @@ def validate_token(conn: sqlite3.Connection, raw_token: str) -> sqlite3.Row:
     ).fetchone()
     if row is None:
         raise PermissionError("token is missing or revoked")
+    activation_request_id = str(row["activation_request_id"] or "")
+    if activation_request_id:
+        request_row = conn.execute(
+            """
+            SELECT status, expires_at
+            FROM bootstrap_requests
+            WHERE request_id = ?
+            """,
+            (activation_request_id,),
+        ).fetchone()
+        if request_row is None:
+            raise PermissionError("token handshake is missing its bootstrap request")
+        status = str(request_row["status"] or "")
+        if status != "approved":
+            if status == "pending":
+                raise PermissionError("token is pending operator approval")
+            if status == "denied":
+                raise PermissionError("token enrollment request was denied")
+            if status == "expired":
+                raise PermissionError("token enrollment request expired")
+            raise PermissionError(f"token is not active (request status: {status or 'unknown'})")
+        if not row["activated_at"]:
+            activated_at = utc_now_iso()
+            conn.execute(
+                "UPDATE bootstrap_tokens SET activated_at = ? WHERE token_id = ?",
+                (activated_at, row["token_id"]),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM bootstrap_tokens WHERE token_id = ?",
+                (row["token_id"],),
+            ).fetchone()
     return row
 
 
@@ -1276,6 +1321,116 @@ def find_prior_agent(conn: sqlite3.Connection, requester_identity: str, unix_use
     return str(row["agent_id"]) if row else None
 
 
+def find_pending_bootstrap_request(
+    conn: sqlite3.Connection,
+    *,
+    unix_user: str,
+    source_ip: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT r.*, t.agent_id, t.issued_at AS token_issued_at, t.activated_at
+        FROM bootstrap_requests r
+        LEFT JOIN bootstrap_tokens t ON t.token_id = r.token_id
+        WHERE r.status = 'pending'
+          AND r.unix_user = ?
+          AND r.source_ip = ?
+        ORDER BY r.requested_at DESC
+        LIMIT 1
+        """,
+        (unix_user, source_ip),
+    ).fetchone()
+
+
+def _issue_bootstrap_token(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str | None,
+    agent_id: str,
+    requester_identity: str,
+    source_ip: str,
+    issued_by: str,
+    activate_now: bool,
+) -> dict[str, str]:
+    issued_at = utc_now_iso()
+    token_id = generate_token_id()
+    raw_token = generate_raw_token()
+    activated_at = issued_at if activate_now else ""
+    conn.execute(
+        """
+        INSERT INTO bootstrap_tokens (
+          token_id, agent_id, token_hash, requester_identity, source_ip, issued_at, issued_by,
+          activation_request_id, activated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            token_id,
+            agent_id,
+            hash_token(raw_token),
+            requester_identity,
+            source_ip,
+            issued_at,
+            issued_by,
+            request_id,
+            activated_at or None,
+        ),
+    )
+    return {
+        "token_id": token_id,
+        "raw_token": raw_token,
+        "issued_at": issued_at,
+        "activated_at": activated_at,
+        "agent_id": agent_id,
+    }
+
+
+def activation_trigger_dir(cfg: Config) -> Path:
+    path = cfg.state_dir / "activation-triggers"
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o755)
+    except OSError:
+        pass
+    return path
+
+
+def activation_trigger_path(cfg: Config, agent_id: str) -> Path:
+    return activation_trigger_dir(cfg) / f"{agent_id}.json"
+
+
+def write_activation_trigger(
+    cfg: Config,
+    *,
+    agent_id: str,
+    request_id: str,
+    status: str,
+    requester_identity: str,
+    unix_user: str,
+    source_ip: str,
+    token_id: str | None = None,
+    note: str = "",
+) -> Path:
+    path = activation_trigger_path(cfg, agent_id)
+    payload = {
+        "agent_id": agent_id,
+        "request_id": request_id,
+        "status": status,
+        "requester_identity": requester_identity,
+        "unix_user": unix_user,
+        "source_ip": source_ip,
+        "token_id": token_id or "",
+        "note": note,
+        "updated_at": utc_now_iso(),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o644)
+    except OSError:
+        pass
+    return path
+
+
 def request_bootstrap(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -1283,8 +1438,38 @@ def request_bootstrap(
     requester_identity: str,
     unix_user: str,
     source_ip: str,
+    issue_pending_token: bool = False,
 ) -> dict[str, Any]:
     ensure_request_expiry(conn)
+    if issue_pending_token:
+        existing = find_pending_bootstrap_request(conn, unix_user=unix_user, source_ip=source_ip)
+        if existing is not None and existing["token_id"]:
+            agent_id = str(existing["agent_id"] or existing["prior_agent_id"] or make_agent_id(str(existing["unix_user"]), "user"))
+            write_activation_trigger(
+                cfg,
+                agent_id=agent_id,
+                request_id=str(existing["request_id"]),
+                status="pending",
+                requester_identity=str(existing["requester_identity"]),
+                unix_user=str(existing["unix_user"]),
+                source_ip=str(existing["source_ip"]),
+                token_id=str(existing["token_id"] or ""),
+                note="Resumed existing pending handshake.",
+            )
+            return {
+                "request_id": str(existing["request_id"]),
+                "status": "pending",
+                "expires_at": str(existing["expires_at"]),
+                "prior_defaults": json_loads(existing["prior_defaults_json"], {}),
+                "prior_agent_id": existing["prior_agent_id"],
+                "agent_id": agent_id,
+                "token_id": str(existing["token_id"]),
+                "token_delivered_at": str(existing["token_issued_at"] or existing["token_delivered_at"] or ""),
+                "activation_state": "pending-operator-approval",
+                "resume_existing": True,
+                "message": "A pending bootstrap handshake already exists for this user and source. Reuse the previously issued local token until the operator approves it.",
+            }
+
     now = utc_now()
     window_start = (now - dt.timedelta(seconds=cfg.bootstrap_window_seconds)).replace(microsecond=0).isoformat()
     if rate_limit_count(conn, "ip", source_ip, window_start) >= cfg.bootstrap_per_ip_limit:
@@ -1311,6 +1496,7 @@ def request_bootstrap(
     expires_at = (now + dt.timedelta(seconds=cfg.bootstrap_pending_ttl_seconds)).replace(microsecond=0).isoformat()
     prior_agent_id = find_prior_agent(conn, requester_identity, unix_user)
     defaults = _prior_defaults(conn, prior_agent_id)
+    agent_id = prior_agent_id or make_agent_id(str(unix_user), "user")
     conn.execute(
         """
         INSERT INTO bootstrap_requests (
@@ -1330,7 +1516,38 @@ def request_bootstrap(
             json_dumps(defaults),
         ),
     )
+
+    pending_token: dict[str, str] | None = None
+    if issue_pending_token:
+        pending_token = _issue_bootstrap_token(
+            conn,
+            request_id=request_id,
+            agent_id=agent_id,
+            requester_identity=requester_identity,
+            source_ip=source_ip,
+            issued_by="bootstrap.handshake",
+            activate_now=False,
+        )
+        conn.execute(
+            """
+            UPDATE bootstrap_requests
+            SET token_id = ?, token_delivered_at = ?
+            WHERE request_id = ?
+            """,
+            (pending_token["token_id"], pending_token["issued_at"], request_id),
+        )
     conn.commit()
+    write_activation_trigger(
+        cfg,
+        agent_id=agent_id,
+        request_id=request_id,
+        status="pending",
+        requester_identity=requester_identity,
+        unix_user=unix_user,
+        source_ip=source_ip,
+        token_id=(pending_token or {}).get("token_id"),
+        note="Pending operator approval.",
+    )
 
     prior_note = ""
     if prior_agent_id:
@@ -1347,12 +1564,24 @@ def request_bootstrap(
         message=message,
     )
 
-    return {
+    response = {
         "request_id": request_id,
         "status": "pending",
         "expires_at": expires_at,
         "prior_defaults": defaults,
+        "agent_id": agent_id,
     }
+    if pending_token is not None:
+        response.update(
+            {
+                "token_id": pending_token["token_id"],
+                "raw_token": pending_token["raw_token"],
+                "token_delivered_at": pending_token["issued_at"],
+                "activation_state": "pending-operator-approval",
+                "message": "Bootstrap token issued; it will activate automatically once the operator approves the request.",
+            }
+        )
+    return response
 
 
 def list_requests(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -1394,7 +1623,42 @@ def approve_request(
         """,
         (surface, actor, now_iso, request_id),
     )
+    conn.execute(
+        """
+        UPDATE bootstrap_tokens
+        SET activated_at = COALESCE(activated_at, ?)
+        WHERE activation_request_id = ?
+        """,
+        (now_iso, request_id),
+    )
     conn.commit()
+    agent_id = str(row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), "user"))
+    token_row = conn.execute(
+        "SELECT token_id FROM bootstrap_tokens WHERE activation_request_id = ? ORDER BY issued_at DESC LIMIT 1",
+        (request_id,),
+    ).fetchone()
+    token_id = str(token_row["token_id"]) if token_row is not None else ""
+    if cfg is not None:
+        write_activation_trigger(
+            cfg,
+            agent_id=agent_id,
+            request_id=request_id,
+            status="approved",
+            requester_identity=str(row["requester_identity"]),
+            unix_user=str(row["unix_user"]),
+            source_ip=str(row["source_ip"]),
+            token_id=token_id,
+            note=f"Approved via {surface} by {actor}.",
+        )
+        queue_notification(
+            conn,
+            target_kind="user-agent",
+            target_id=agent_id,
+            channel_kind="activate",
+            message=(
+                f"Enrollment approved for {agent_id}. Almanac activation is ready to run."
+            ),
+        )
     if cfg is not None:
         queue_notification(
             conn,
@@ -1408,6 +1672,7 @@ def approve_request(
         )
     return {
         "request_id": request_id,
+        "agent_id": agent_id,
         "status": "approved",
         "approved_at": now_iso,
         "approved_by_surface": surface,
@@ -1444,6 +1709,18 @@ def deny_request(
     )
     conn.commit()
     if cfg is not None:
+        agent_id = str(row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), "user"))
+        write_activation_trigger(
+            cfg,
+            agent_id=agent_id,
+            request_id=request_id,
+            status="denied",
+            requester_identity=str(row["requester_identity"]),
+            unix_user=str(row["unix_user"]),
+            source_ip=str(row["source_ip"]),
+            token_id=str(row["token_id"] or ""),
+            note=f"Denied via {surface} by {actor}.",
+        )
         queue_notification(
             conn,
             target_kind="operator",
@@ -1485,45 +1762,47 @@ def bootstrap_status(conn: sqlite3.Connection, cfg: Config, request_id: str) -> 
 
     if row["token_id"]:
         response["token_id"] = row["token_id"]
+        token_row = conn.execute(
+            """
+            SELECT agent_id, activated_at
+            FROM bootstrap_tokens
+            WHERE token_id = ?
+            """,
+            (row["token_id"],),
+        ).fetchone()
+        if token_row is not None:
+            response["agent_id"] = token_row["agent_id"]
+            if token_row["activated_at"]:
+                response["activated_at"] = token_row["activated_at"]
         return response
 
-    role = "user"
-    agent_id = row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), role)
-    raw_token = generate_raw_token()
-    token_id = generate_token_id()
-    conn.execute(
-        """
-        INSERT INTO bootstrap_tokens (
-          token_id, agent_id, token_hash, requester_identity, source_ip, issued_at, issued_by
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            token_id,
-            agent_id,
-            hash_token(raw_token),
-            row["requester_identity"],
-            row["source_ip"],
-            utc_now_iso(),
-            row["approval_surface"] or "unknown",
-        ),
+    agent_id = row["prior_agent_id"] or make_agent_id(str(row["unix_user"]), "user")
+    token_payload = _issue_bootstrap_token(
+        conn,
+        request_id=request_id,
+        agent_id=agent_id,
+        requester_identity=str(row["requester_identity"]),
+        source_ip=str(row["source_ip"]),
+        issued_by=str(row["approval_surface"] or "unknown"),
+        activate_now=True,
     )
-    delivered_at = utc_now_iso()
+    delivered_at = token_payload["issued_at"]
     conn.execute(
         """
         UPDATE bootstrap_requests
         SET token_id = ?, token_delivered_at = ?
         WHERE request_id = ?
         """,
-        (token_id, delivered_at, request_id),
+        (token_payload["token_id"], delivered_at, request_id),
     )
     conn.commit()
     response.update(
         {
-            "token_id": token_id,
-            "raw_token": raw_token,
+            "token_id": token_payload["token_id"],
+            "raw_token": token_payload["raw_token"],
             "token_delivered_at": delivered_at,
             "agent_id": agent_id,
+            "activated_at": token_payload["activated_at"],
         }
     )
     return response
@@ -1741,6 +2020,7 @@ def list_tokens(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT token_id, agent_id, requester_identity, source_ip, issued_at, issued_by,
+               activation_request_id, activated_at,
                revoked_at, revoked_by_surface, revoked_by_actor, revocation_reason
         FROM bootstrap_tokens
         ORDER BY issued_at DESC

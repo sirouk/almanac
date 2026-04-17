@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
-  echo "Usage: $0 <agent-id> <shared-repo-dir> <hermes-home> [channels-json]" >&2
+  echo "Usage: $0 <agent-id> <shared-repo-dir> <hermes-home> [channels-json] [activation-trigger-path]" >&2
   exit 2
 fi
 
@@ -10,6 +10,7 @@ AGENT_ID="$1"
 SHARED_REPO_DIR="$2"
 HERMES_HOME="$3"
 CHANNELS_JSON="${4:-[\"tui-only\"]}"
+ACTIVATION_TRIGGER_PATH="${5:-}"
 TARGET_DIR="$HOME/.config/systemd/user"
 mkdir -p "$TARGET_DIR"
 
@@ -37,6 +38,22 @@ Unit=almanac-user-agent-refresh.service
 [Install]
 WantedBy=timers.target
 EOF
+
+if [[ -n "$ACTIVATION_TRIGGER_PATH" ]]; then
+  cat >"$TARGET_DIR/almanac-user-agent-activate.path" <<EOF
+[Unit]
+Description=Watch for Almanac activation events for $AGENT_ID
+
+[Path]
+PathChanged=$ACTIVATION_TRIGGER_PATH
+Unit=almanac-user-agent-refresh.service
+
+[Install]
+WantedBy=default.target
+EOF
+else
+  rm -f "$TARGET_DIR/almanac-user-agent-activate.path"
+fi
 
 enable_gateway="$(
   python3 - "$CHANNELS_JSON" <<'PY'
@@ -72,6 +89,13 @@ bus_path="$runtime_dir/bus"
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user daemon-reload
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-refresh.timer >/dev/null
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-refresh.timer >/dev/null
+
+if [[ -f "$TARGET_DIR/almanac-user-agent-activate.path" ]]; then
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-activate.path >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-activate.path >/dev/null
+else
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-activate.path >/dev/null 2>&1 || true
+fi
 
 if [[ -f "$TARGET_DIR/almanac-user-agent-gateway.service" ]]; then
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-gateway.service >/dev/null

@@ -42,6 +42,7 @@ from almanac_control import (
 TOOLS = {
     "status": "Return control-plane status and vault warnings.",
     "bootstrap.request": "Request agent enrollment approval.",
+    "bootstrap.handshake": "Issue a pending bootstrap token immediately; it activates after operator approval.",
     "bootstrap.status": "Poll bootstrap request status and receive the issued token once.",
     "bootstrap.approve": "Approve a bootstrap request. Requires operator-class token.",
     "bootstrap.deny": "Deny a bootstrap request. Requires operator-class token.",
@@ -232,7 +233,7 @@ class Handler(BaseHTTPRequestHandler):
     def _ensure_bootstrap_source_allowed(self, source_ip: str) -> None:
         if is_tailnet_ip(source_ip) or is_loopback_ip(source_ip):
             return
-        raise PermissionError(f"bootstrap.request rejected for non-tailnet source: {source_ip}")
+        raise PermissionError(f"bootstrap tool rejected for non-tailnet source: {source_ip}")
 
     def _require_operator(self, conn, arguments: dict) -> str:
         raw_token = str(arguments.get("operator_token") or arguments.get("token") or "")
@@ -269,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
                     "vault_warnings": warnings,
                 }
 
-            if tool_name == "bootstrap.request":
+            if tool_name in {"bootstrap.request", "bootstrap.handshake"}:
                 source_ip = self._request_source_ip(arguments)
                 self._ensure_bootstrap_source_allowed(source_ip)
                 return request_bootstrap(
@@ -278,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
                     requester_identity=str(arguments.get("requester_identity") or arguments.get("unix_user") or "unknown"),
                     unix_user=str(arguments.get("unix_user") or "unknown"),
                     source_ip=source_ip,
+                    issue_pending_token=(tool_name == "bootstrap.handshake"),
                 )
 
             if tool_name == "bootstrap.status":

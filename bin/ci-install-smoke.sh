@@ -826,6 +826,106 @@ PY
   rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
 }
 
+assert_async_bootstrap_handshake() {
+  local handshake_json duplicate_json request_id token token_id pending_err status_json refresh_json
+  local activation_trigger_path
+
+  handshake_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Async Bot\",\"unix_user\":\"asyncbot\",\"source_ip\":\"127.0.0.1\"}'"
+  )"
+  read -r request_id token token_id <<EOF
+$(python3 - "$handshake_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+print(payload["request_id"], payload["raw_token"], payload["token_id"])
+PY
+)
+EOF
+
+  if [[ -z "$request_id" || -z "$token" || -z "$token_id" ]]; then
+    echo "Expected bootstrap.handshake to return request_id, raw_token, and token_id." >&2
+    exit 1
+  fi
+
+  duplicate_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Async Bot\",\"unix_user\":\"asyncbot\",\"source_ip\":\"127.0.0.1\"}'"
+  )"
+  python3 - "$duplicate_json" "$request_id" "$token_id" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if payload.get("request_id") != sys.argv[2]:
+    raise SystemExit("duplicate handshake should return the existing pending request")
+if payload.get("token_id") != sys.argv[3]:
+    raise SystemExit("duplicate handshake should return the existing pending token_id")
+if "raw_token" in payload:
+    raise SystemExit("duplicate handshake should not mint a second raw token")
+PY
+
+  if pending_err="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'vaults.refresh' --json-args '{\"token\":\"$token\"}'" \
+      2>&1
+  )"; then
+    echo "Expected pending handshake token to remain unusable before approval." >&2
+    exit 1
+  fi
+  if [[ "$pending_err" != *"pending operator approval"* ]]; then
+    echo "Expected pending token failure to mention operator approval." >&2
+    printf '%s\n' "$pending_err" >&2
+    exit 1
+  fi
+
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$request_id' --surface ctl --actor async-smoke" >/dev/null
+
+  status_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'"
+  )"
+  python3 - "$status_json" "$token_id" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if payload.get("token_id") != sys.argv[2]:
+    raise SystemExit("approved handshake should retain the original token_id")
+if "raw_token" in payload:
+    raise SystemExit("approved handshake status should not mint a second raw token")
+PY
+  activation_trigger_path="$ALMANAC_PRIV_DIR/state/activation-triggers/agent-asyncbot.json"
+  python3 - "$activation_trigger_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(f"activation trigger missing: {path}")
+payload = json.loads(path.read_text(encoding="utf-8"))
+if payload.get("status") != "approved":
+    raise SystemExit(f"expected activation trigger status=approved, saw {payload.get('status')!r}")
+PY
+
+  refresh_json="$(
+    run_almanac_shell \
+      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'vaults.refresh' --json-args '{\"token\":\"$token\"}'"
+  )"
+  python3 - "$refresh_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+if not payload.get("agent_id"):
+    raise SystemExit("approved handshake token should succeed against authenticated tools")
+PY
+}
+
 assert_bootstrap_rate_limit() {
   # The configured per-IP cap is ALMANAC_BOOTSTRAP_PER_IP_LIMIT; after we exceed it
   # the server must respond with status 429 (RuntimeError mapping in almanac-mcp) AND
@@ -1636,6 +1736,9 @@ assert_vault_definition_reload
 
 echo "Checking almanac control-plane bootstrap/token roundtrip..."
 assert_almanac_control_plane_roundtrip
+
+echo "Checking async bootstrap handshake activation..."
+assert_async_bootstrap_handshake
 
 echo "Checking rate-limit enforcement with structured 429..."
 assert_bootstrap_rate_limit

@@ -247,8 +247,21 @@ If the repo is public, the user can enroll with the curl-friendly bootstrap:
 curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh | bash -s -- agent
 ```
 
-That top-level `init.sh` clones or updates the repo into
-`~/.cache/almanac-init/repo` and then runs the real enrollment flow.
+When run from a non-Linux client such as a Mac, that bootstrap now:
+
+- asks for the target Almanac hostname
+- asks for the SSH user, defaulting to the current local username
+- points the host-side bootstrap at the tailnet HTTPS control-plane endpoint by default (`https://<host>/almanac-mcp`)
+- SSHes to the Almanac host
+- runs the real host-side enrollment flow there
+
+That keeps the shared-host model intact: the actual Hermes install still happens
+on the Almanac machine under the user's Unix account, while the approval
+handshake goes through the public tailnet-scoped control-plane endpoint.
+
+It does not create SSH access by itself. The operator still has to prepare the
+Unix account and Tailscale SSH or host-key access first; the remote bootstrap
+only works after the user can already log into the Almanac host.
 
 If the repo is private or already cloned on the host, the equivalent local
 command is:
@@ -261,16 +274,22 @@ command is:
 
 `init.sh agent`:
 
-1. submits an unauthenticated but tailnet-scoped `bootstrap.request`
-2. waits for operator approval
-3. installs Hermes if needed
-4. runs explicit `hermes setup`
-5. optionally runs `hermes gateway setup` for Discord or Telegram
-6. registers the user agent with `almanac-mcp`
-7. installs the default Almanac skills
-8. registers `almanac-mcp`, qmd MCP, and Chutes KB MCP when configured
-9. runs first contact, resolves default `.vault` subscriptions, and installs
-   exactly one 4-hour user refresh timer
+1. calls the unauthenticated, tailnet-scoped `bootstrap.handshake`
+2. receives a pending bootstrap key immediately
+3. if the same user reruns enrollment from the same source while approval is
+   still pending, reuses the existing pending handshake instead of minting a
+   second token
+4. installs Hermes if needed
+5. runs explicit `hermes setup`
+6. optionally runs `hermes gateway setup` for Discord or Telegram
+7. installs the default Almanac skills plus `almanac-mcp`, qmd MCP, and Chutes KB MCP when configured
+8. installs exactly one 4-hour user refresh timer and the optional user gateway service
+9. persists the pending key locally and tries activation once right away
+10. waits asynchronously for operator approval; after approval, Almanac writes a
+    per-agent activation trigger that wakes the user's local systemd path unit
+    immediately, auto-registers the user agent, runs first contact, resolves
+    default `.vault` subscriptions, and keeps bidirectional Almanac
+    notifications flowing without waiting for the next 4-hour timer tick
 
 The operator can approve from:
 
@@ -284,17 +303,27 @@ The curl entrypoint is the repo-root [init.sh](./init.sh). It is designed to be
 safe to publish because it only bootstraps the checked-out repo and then
 delegates to [bin/init.sh](./bin/init.sh).
 
+On non-Linux clients it prompts for a target Almanac host and SSHes there
+before continuing. On the host itself it just runs the local enrollment flow.
+
 Useful overrides for remote bootstrap:
 
 ```bash
 ALMANAC_INIT_REPO_URL=https://github.com/sirouk/almanac.git
+ALMANAC_INIT_RAW_URL=https://raw.githubusercontent.com/sirouk/almanac/main/init.sh
+ALMANAC_TARGET_HOST=kor.tail77f45e.ts.net
+ALMANAC_TARGET_USER=ian
+ALMANAC_PUBLIC_MCP_URL=https://kor.tail77f45e.ts.net/almanac-mcp
+ALMANAC_PUBLIC_MCP_PATH=/almanac-mcp
+ALMANAC_BOOTSTRAP_URL=https://kor.tail77f45e.ts.net/almanac-mcp
 ALMANAC_MCP_URL=http://127.0.0.1:8282/mcp
 ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
 CHUTES_MCP_URL=https://example.invalid/mcp
 ```
 
-For a typical shared-host enrollment, the defaults are correct because the user
-is already logged into the Almanac host and talks to the local control plane.
+For a typical shared-host enrollment from a user laptop, the important inputs
+are the target hostname, SSH access, and the published tailnet control-plane
+URL when you want to override the default `/almanac-mcp` path.
 
 After `install`, the script prints a short operator guide that tells you:
 
@@ -375,6 +404,8 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 - qmd keeps the authored vault collection and a second generated-PDF collection in the same index
 - `almanac-vault-watch.service` watches the shared vault on disk and runs PDF reconciliation before qmd update
 - `almanac-qmd-update.timer` remains enabled as a periodic backstop and embedding pass
+- `almanac-mcp` serves the shared control plane locally on `http://127.0.0.1:8282/mcp`
+- when Tailscale Serve is enabled, Almanac also publishes the control plane on `https://<tailnet-host>/almanac-mcp` for bootstrap handshakes
 - Hermes should point at `http://127.0.0.1:8181/mcp`
 - the included snippet in [hermes-qmd-config.yaml](./docs/hermes-qmd-config.yaml) is the starting point
 - when Tailscale Serve is enabled, deploy also prints the tailnet MCP URL for remote agents

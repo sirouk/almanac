@@ -66,7 +66,7 @@ System bootstrap complete.
 
 Next steps:
   Write private config to: $ALMANAC_PRIV_CONFIG_DIR/almanac.env
-  sudo -iu $ALMANAC_USER bash -lc 'ALMANAC_CONFIG_FILE="$ALMANAC_PRIV_CONFIG_DIR/almanac.env" "$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh"'
-  sudo -iu $ALMANAC_USER bash -lc 'ALMANAC_CONFIG_FILE="$ALMANAC_PRIV_CONFIG_DIR/almanac.env" "$ALMANAC_REPO_DIR/bin/install-user-services.sh"'
+  sudo -iu $ALMANAC_USER env ALMANAC_CONFIG_FILE="$ALMANAC_PRIV_CONFIG_DIR/almanac.env" "$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh"
+  sudo -iu $ALMANAC_USER env ALMANAC_CONFIG_FILE="$ALMANAC_PRIV_CONFIG_DIR/almanac.env" "$ALMANAC_REPO_DIR/bin/install-user-services.sh"
 
 EOF

@@ -35,6 +35,62 @@ warn_or_fail() {
   fi
 }
 
+check_curator_gateway_runtime() {
+  local output=""
+  local status=0
+
+  if ! has_curator_gateway_channels; then
+    return 0
+  fi
+
+  if [[ ! -x "$RUNTIME_DIR/hermes-venv/bin/python3" ]]; then
+    warn_or_fail "shared Hermes runtime python is missing at $RUNTIME_DIR/hermes-venv/bin/python3"
+    return 0
+  fi
+
+  if output="$("$RUNTIME_DIR/hermes-venv/bin/python3" - "$ALMANAC_CURATOR_CHANNELS" <<'PY'
+import sys
+
+channels = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
+missing = []
+
+if "telegram" in channels:
+    try:
+        import telegram  # noqa: F401
+    except Exception:
+        missing.append("telegram -> python-telegram-bot[webhooks]")
+
+if "discord" in channels:
+    try:
+        import discord  # noqa: F401
+    except Exception:
+        missing.append("discord -> discord.py[voice]")
+
+if missing:
+    print("Curator gateway runtime is missing adapter dependencies: " + ", ".join(missing))
+    raise SystemExit(2)
+
+print("Curator gateway runtime dependencies are installed for configured channels")
+PY
+  )"; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && pass "$line"
+    done <<<"$output"
+  else
+    status=$?
+    case "$status" in
+      2)
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && warn_or_fail "$line"
+        done <<<"$output"
+        ;;
+      *)
+        warn_or_fail "could not verify Curator gateway runtime dependencies"
+        ;;
+    esac
+  fi
+}
+
 check_unit_state() {
   local unit="$1"
   local expect="$2"
@@ -87,8 +143,11 @@ import urllib.request
 url = sys.argv[1]
 label = sys.argv[2]
 
-with urllib.request.urlopen(url, timeout=10) as response:
-    payload = json.loads(response.read().decode("utf-8"))
+try:
+    with urllib.request.urlopen(url, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+except Exception:
+    raise SystemExit(1)
 
 if not payload.get("ok", True):
     raise SystemExit(2)
@@ -475,28 +534,31 @@ def rpc(payload, session_id=None):
         return resp.headers.get("mcp-session-id") or session_id, parsed
 
 
-session_id, _ = rpc(
-    {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {"name": "almanac-health", "version": "1.0"},
+try:
+    session_id, _ = rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "almanac-health", "version": "1.0"},
+            },
+        }
+    )
+    rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
+    _, status_body = rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "status", "arguments": {}},
         },
-    }
-)
-rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
-_, status_body = rpc(
-    {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {"name": "status", "arguments": {}},
-    },
-    session_id,
-)
+        session_id,
+    )
+except Exception:
+    raise SystemExit(1)
 
 structured = ((status_body or {}).get("result") or {}).get("structuredContent") or {}
 total_documents = int(structured.get("totalDocuments", 0))
@@ -831,7 +893,7 @@ if set_user_systemd_bus_env; then
     pass "Quarto timer disabled in config"
   fi
 
-  if [[ "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" != "tui-only" || -n "${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}" ]]; then
+  if has_curator_gateway_channels; then
     check_unit_state almanac-curator-gateway.service required
   else
     check_unit_state almanac-curator-gateway.service optional
@@ -847,6 +909,7 @@ check_port_listening "$ALMANAC_NOTION_WEBHOOK_PORT"
 check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "almanac-notion-webhook health"
 check_vault_definition_health
 check_curator_state
+check_curator_gateway_runtime
 check_active_agent_state
 check_notification_delivery_state
 
@@ -886,6 +949,12 @@ if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
         pass "Tailscale qmd MCP proxy is configured"
       else
         warn_or_fail "Tailscale qmd MCP proxy is not configured"
+      fi
+
+      if printf '%s\n' "$ts_status" | grep -q "proxy http://127.0.0.1:$ALMANAC_MCP_PORT/mcp"; then
+        pass "Tailscale Almanac MCP proxy is configured"
+      else
+        warn_or_fail "Tailscale Almanac MCP proxy is not configured"
       fi
     else
       warn_or_fail "tailscale CLI is not installed"

@@ -63,8 +63,8 @@ else
   systemctl --user disable --now almanac-nextcloud.service >/dev/null 2>&1 || true
 fi
 
-if [[ "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" == "tui-only" ]]; then
-  systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
-else
+if has_curator_gateway_channels; then
   systemctl --user enable almanac-curator-gateway.service
+else
+  systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
 fi

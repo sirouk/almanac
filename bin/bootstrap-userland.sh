@@ -44,24 +44,8 @@ install_qmd() {
 }
 
 install_hermes() {
-  ensure_uv
-  local repo_dir="$RUNTIME_DIR/hermes-agent-src"
-  local venv_dir="$RUNTIME_DIR/hermes-venv"
-
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$repo_dir"
-  else
-    git -C "$repo_dir" pull --ff-only
-  fi
-
-  if [[ ! -x "$venv_dir/bin/hermes" ]]; then
-    uv venv "$venv_dir" --python 3.11
-  fi
-
-  # shellcheck disable=SC1090
-  source "$venv_dir/bin/activate"
-  uv pip install -e "$repo_dir[cli,mcp]"
-  hermes skills install official/research/qmd --yes || true
+  ensure_shared_hermes_runtime
+  "$RUNTIME_DIR/hermes-venv/bin/hermes" skills install official/research/qmd --yes || true
 }
 
 install_podman_compose_if_available() {

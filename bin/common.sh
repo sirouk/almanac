@@ -136,6 +136,7 @@ NEXTCLOUD_BEFORE_STARTING_HOOK_FILE="${NEXTCLOUD_BEFORE_STARTING_HOOK_FILE:-$NEX
 NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
 NEXTCLOUD_VAULT_CONTAINER_PATH="${NEXTCLOUD_VAULT_CONTAINER_PATH:-/srv/vault}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
+TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
 ALMANAC_PRIV_TEMPLATE_DIR="${ALMANAC_PRIV_TEMPLATE_DIR:-$BOOTSTRAP_DIR/templates/almanac-priv}"
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
@@ -260,6 +261,72 @@ have_pdf_vision_backend() {
 
 have_pdf_vision_partial_config() {
   [[ -n "${PDF_VISION_ENDPOINT:-}" || -n "${PDF_VISION_MODEL:-}" || -n "${PDF_VISION_API_KEY:-}" ]]
+}
+
+env_file_value() {
+  local path="$1"
+  local key="$2"
+
+  python3 - "$path" "$key" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+key = sys.argv[2]
+
+try:
+    text = path.read_text(encoding="utf-8")
+except OSError:
+    raise SystemExit(0)
+
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    name, raw_value = line.split("=", 1)
+    if name.strip() != key:
+        continue
+    raw_value = raw_value.strip()
+    try:
+        parsed = shlex.split(raw_value, posix=True)
+    except ValueError:
+        parsed = []
+    if parsed:
+        print(parsed[0])
+    else:
+        print(raw_value.strip("'\""))
+    raise SystemExit(0)
+PY
+}
+
+has_curator_gateway_channels() {
+  [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",discord,"* || ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",telegram,"* ]]
+}
+
+ensure_shared_hermes_runtime() {
+  ensure_uv
+  local repo_dir="$RUNTIME_DIR/hermes-agent-src"
+  local venv_dir="$RUNTIME_DIR/hermes-venv"
+
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "uv is required to manage the shared Hermes runtime." >&2
+    return 1
+  fi
+
+  if [[ ! -d "$repo_dir/.git" ]]; then
+    git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$repo_dir"
+  else
+    git -C "$repo_dir" pull --ff-only
+  fi
+
+  if [[ ! -x "$venv_dir/bin/hermes" ]]; then
+    uv venv "$venv_dir" --python 3.11
+  fi
+
+  # shellcheck disable=SC1090
+  source "$venv_dir/bin/activate"
+  uv pip install -e "$repo_dir[cli,mcp,messaging,cron]"
 }
 
 ensure_qmd_collection() {

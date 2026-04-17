@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import pwd
+import shlex
 import shutil
 import subprocess
 import sys
@@ -145,6 +147,28 @@ def dump_output(args: argparse.Namespace, payload: object) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def read_env_file_value(path: Path, key: str) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, raw_value = line.split("=", 1)
+        if name.strip() != key:
+            continue
+        raw_value = raw_value.strip()
+        try:
+            parsed = shlex.split(raw_value, posix=True)
+            return "" if not parsed else parsed[0]
+        except ValueError:
+            return raw_value.strip("'\"")
+    return ""
+
+
 def _user_home(unix_user: str) -> Path:
     return Path(pwd.getpwnam(unix_user).pw_dir)
 
@@ -204,6 +228,7 @@ def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
             "disable",
             "--now",
             "almanac-user-agent-gateway.service",
+            "almanac-user-agent-activate.path",
             "almanac-user-agent-refresh.timer",
             "almanac-user-agent-refresh.service",
         ]
@@ -221,6 +246,7 @@ def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
         unit_dir = Path(f"/home/{unix_user}/.config/systemd/user")
         for name in (
             "almanac-user-agent-gateway.service",
+            "almanac-user-agent-activate.path",
             "almanac-user-agent-refresh.service",
             "almanac-user-agent-refresh.timer",
         ):
@@ -463,6 +489,7 @@ def main() -> None:
                 raise SystemExit("only operator channel reconfiguration is supported")
             platform = args.platform or input("Operator notification platform [discord|telegram|tui-only]: ").strip() or "tui-only"
             channel_id = args.channel_id or ""
+            telegram_bot_token = ""
             if platform != "tui-only" and not channel_id:
                 if platform == "discord":
                     channel_id = input("Discord webhook URL (https://discord.com/api/webhooks/...): ").strip()
@@ -481,10 +508,23 @@ def main() -> None:
                 if not channel_id:
                     raise SystemExit("telegram platform requires a chat_id in --channel-id")
                 telegram_bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
-                if not telegram_bot_token:
+                hermes_telegram_bot_token = read_env_file_value(cfg.curator_hermes_home / ".env", "TELEGRAM_BOT_TOKEN").strip()
+                telegram_candidates: list[tuple[str, str]] = []
+                if telegram_bot_token:
+                    telegram_candidates.append(("almanac.env", telegram_bot_token))
+                if hermes_telegram_bot_token and hermes_telegram_bot_token != telegram_bot_token:
+                    telegram_candidates.append(("curator Hermes .env", hermes_telegram_bot_token))
+                if not telegram_candidates and sys.stdin.isatty():
+                    try:
+                        telegram_bot_token = getpass.getpass("Telegram bot token: ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        telegram_bot_token = ""
+                    if telegram_bot_token:
+                        telegram_candidates.append(("prompt", telegram_bot_token))
+                if not telegram_candidates:
                     raise SystemExit(
-                        "telegram platform requires TELEGRAM_BOT_TOKEN in the environment "
-                        "(set it in almanac.env before running this command)"
+                        "telegram platform requires TELEGRAM_BOT_TOKEN; rerun interactively to enter it "
+                        "or set it in almanac.env before running this command"
                     )
             elif platform != "tui-only":
                 raise SystemExit(f"unsupported operator notify platform: {platform}")
@@ -497,11 +537,38 @@ def main() -> None:
                 if platform == "discord":
                     err = deliver_discord(test_msg, webhook_url=channel_id)
                 else:
-                    err = deliver_telegram(
-                        test_msg,
-                        bot_token=telegram_bot_token,
-                        chat_id=channel_id,
-                    )
+                    err = ""
+                    for source_name, candidate_token in telegram_candidates:
+                        err = deliver_telegram(
+                            test_msg,
+                            bot_token=candidate_token,
+                            chat_id=channel_id,
+                        ) or ""
+                        if not err:
+                            telegram_bot_token = candidate_token
+                            break
+                    if err and sys.stdin.isatty():
+                        while True:
+                            print(
+                                f"Telegram test ping failed using the saved token ({err}).",
+                                file=sys.stderr,
+                            )
+                            try:
+                                candidate_token = getpass.getpass(
+                                    "Telegram bot token (leave blank to abort): "
+                                ).strip()
+                            except (EOFError, KeyboardInterrupt):
+                                candidate_token = ""
+                            if not candidate_token:
+                                break
+                            err = deliver_telegram(
+                                test_msg,
+                                bot_token=candidate_token,
+                                chat_id=channel_id,
+                            ) or ""
+                            if not err:
+                                telegram_bot_token = candidate_token
+                                break
                 if err:
                     raise SystemExit(
                         f"channel test ping failed ({err}); not persisting configuration. "
@@ -509,13 +576,13 @@ def main() -> None:
                     )
 
             config_path = cfg.private_dir / "config" / "almanac.env"
-            ensure_config_file_update(
-                config_path,
-                {
-                    "OPERATOR_NOTIFY_CHANNEL_PLATFORM": platform,
-                    "OPERATOR_NOTIFY_CHANNEL_ID": channel_id,
-                },
-            )
+            config_updates = {
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": platform,
+                "OPERATOR_NOTIFY_CHANNEL_ID": channel_id,
+            }
+            if platform == "telegram" and telegram_bot_token:
+                config_updates["TELEGRAM_BOT_TOKEN"] = telegram_bot_token
+            ensure_config_file_update(config_path, config_updates)
             upsert_setting(conn, "operator_notify_platform", platform)
             upsert_setting(conn, "operator_notify_channel_id", channel_id)
             # Enqueue a delivered confirmation row so the audit trail shows the

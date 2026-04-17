@@ -22,6 +22,7 @@ ENABLE_NEXTCLOUD="${ENABLE_NEXTCLOUD:-1}"
 ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
 TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
+TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
 VAULT_WATCH_DEBOUNCE_SECONDS="${VAULT_WATCH_DEBOUNCE_SECONDS:-5}"
 VAULT_WATCH_RUN_EMBED="${VAULT_WATCH_RUN_EMBED:-auto}"
 ENABLE_PRIVATE_GIT="${ENABLE_PRIVATE_GIT:-1}"
@@ -40,6 +41,7 @@ OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
 OPERATOR_GENERAL_CHANNEL_ID="${OPERATOR_GENERAL_CHANNEL_ID:-}"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}"
 ALMANAC_MODEL_PRESET_OPUS="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}"
 ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover}"
@@ -308,6 +310,7 @@ detect_tailscale_serve() {
   TAILSCALE_SERVE_HOST=""
   TAILSCALE_SERVE_HAS_ROOT="0"
   TAILSCALE_SERVE_HAS_QMD="0"
+  TAILSCALE_SERVE_HAS_ALMANAC_MCP="0"
 
   if ! command -v tailscale >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     return 0
@@ -321,7 +324,7 @@ detect_tailscale_serve() {
 
   local ts_info
   ts_info="$(
-    TAILSCALE_SERVE_JSON="$ts_json" python3 - "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" <<'PY'
+    TAILSCALE_SERVE_JSON="$ts_json" python3 - "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" "$ALMANAC_MCP_PORT" "$TAILSCALE_ALMANAC_MCP_PATH" <<'PY'
 import json
 import os
 import sys
@@ -333,11 +336,14 @@ except Exception:
 
 qmd_port = sys.argv[1]
 qmd_path = sys.argv[2]
+almanac_mcp_port = sys.argv[3]
+almanac_mcp_path = sys.argv[4]
 web = data.get("Web") or {}
 
 host = ""
 has_root = False
 has_qmd = False
+has_almanac_mcp = False
 
 for hostport, entry in web.items():
     if not host:
@@ -347,15 +353,20 @@ for hostport, entry in web.items():
         has_root = True
     if qmd_path in handlers:
         has_qmd = True
+    if almanac_mcp_path in handlers:
+        has_almanac_mcp = True
     for path, handler in handlers.items():
         proxy = str((handler or {}).get("Proxy") or "")
         if path == qmd_path or f":{qmd_port}/mcp" in proxy or proxy.endswith("/mcp"):
             has_qmd = True
+        if path == almanac_mcp_path or f":{almanac_mcp_port}/mcp" in proxy:
+            has_almanac_mcp = True
 
 values = {
     "host": host,
     "root": "1" if has_root else "0",
     "qmd": "1" if has_qmd else "0",
+    "almanac_mcp": "1" if has_almanac_mcp else "0",
 }
 
 for key, value in values.items():
@@ -369,6 +380,7 @@ PY
       host) TAILSCALE_SERVE_HOST="$value" ;;
       root) TAILSCALE_SERVE_HAS_ROOT="$value" ;;
       qmd) TAILSCALE_SERVE_HAS_QMD="$value" ;;
+      almanac_mcp) TAILSCALE_SERVE_HAS_ALMANAC_MCP="$value" ;;
     esac
   done <<<"$ts_info"
 }
@@ -395,6 +407,33 @@ resolve_agent_qmd_endpoint() {
         AGENT_QMD_ROUTE_STATUS="live"
       else
         AGENT_QMD_ROUTE_STATUS="expected"
+      fi
+    fi
+  fi
+}
+
+resolve_agent_control_plane_endpoint() {
+  detect_tailscale
+  detect_tailscale_serve
+
+  AGENT_ALMANAC_MCP_TAILNET_HOST="${TAILSCALE_SERVE_HOST:-${TAILSCALE_DNS_NAME:-$NEXTCLOUD_TRUSTED_DOMAIN}}"
+  AGENT_ALMANAC_MCP_TAILNET_URL=""
+  AGENT_ALMANAC_MCP_URL="http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp"
+  AGENT_ALMANAC_MCP_URL_MODE="local"
+  AGENT_ALMANAC_MCP_ROUTE_STATUS="local_only"
+
+  if [[ -n "$AGENT_ALMANAC_MCP_TAILNET_HOST" ]]; then
+    AGENT_ALMANAC_MCP_TAILNET_URL="https://${AGENT_ALMANAC_MCP_TAILNET_HOST}${TAILSCALE_ALMANAC_MCP_PATH}"
+  fi
+
+  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_SERVE_HOST" || "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+    if [[ -n "$AGENT_ALMANAC_MCP_TAILNET_URL" ]]; then
+      AGENT_ALMANAC_MCP_URL="$AGENT_ALMANAC_MCP_TAILNET_URL"
+      AGENT_ALMANAC_MCP_URL_MODE="tailnet"
+      if [[ "$TAILSCALE_SERVE_HAS_ALMANAC_MCP" == "1" ]]; then
+        AGENT_ALMANAC_MCP_ROUTE_STATUS="live"
+      else
+        AGENT_ALMANAC_MCP_ROUTE_STATUS="expected"
       fi
     fi
   fi
@@ -489,6 +528,46 @@ load_detected_config() {
   return 1
 }
 
+reload_runtime_config_from_file() {
+  local config_path="${1:-$CONFIG_TARGET}"
+
+  if [[ -n "$config_path" && -f "$config_path" ]]; then
+    # shellcheck disable=SC1090
+    source "$config_path"
+    VAULT_QMD_COLLECTION_MASK="$(normalize_vault_qmd_collection_mask "${VAULT_QMD_COLLECTION_MASK:-}")"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_pdf_vision_endpoint() {
+  local endpoint="${1:-${PDF_VISION_ENDPOINT:-}}"
+
+  endpoint="${endpoint#"${endpoint%%[![:space:]]*}"}"
+  endpoint="${endpoint%"${endpoint##*[![:space:]]}"}"
+  endpoint="${endpoint%/}"
+
+  if [[ -z "$endpoint" ]]; then
+    return 1
+  fi
+
+  case "$endpoint" in
+    */chat/completions)
+      printf '%s\n' "$endpoint"
+      ;;
+    */completions)
+      printf '%s\n' "${endpoint%/completions}/chat/completions"
+      ;;
+    */v1)
+      printf '%s/chat/completions\n' "$endpoint"
+      ;;
+    *)
+      printf '%s\n' "$endpoint"
+      ;;
+  esac
+}
+
 random_secret() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 16
@@ -563,6 +642,7 @@ emit_runtime_config() {
     write_kv OPERATOR_NOTIFY_CHANNEL_ID "${OPERATOR_NOTIFY_CHANNEL_ID:-}"
     write_kv OPERATOR_GENERAL_CHANNEL_PLATFORM "${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
     write_kv OPERATOR_GENERAL_CHANNEL_ID "${OPERATOR_GENERAL_CHANNEL_ID:-}"
+    write_kv TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
     write_kv ALMANAC_MODEL_PRESET_CODEX "${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}"
     write_kv ALMANAC_MODEL_PRESET_OPUS "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}"
     write_kv ALMANAC_MODEL_PRESET_CHUTES "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover}"
@@ -573,6 +653,7 @@ emit_runtime_config() {
     write_kv ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
     write_kv TAILSCALE_OPERATOR_USER "${TAILSCALE_OPERATOR_USER:-}"
     write_kv TAILSCALE_QMD_PATH "${TAILSCALE_QMD_PATH:-/mcp}"
+    write_kv TAILSCALE_ALMANAC_MCP_PATH "${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
     write_kv ENABLE_PRIVATE_GIT "$ENABLE_PRIVATE_GIT"
     write_kv ENABLE_QUARTO "$ENABLE_QUARTO"
     write_kv SEED_SAMPLE_VAULT "$SEED_SAMPLE_VAULT"
@@ -653,6 +734,23 @@ run_as_user_systemd() {
   su - "$user" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' $*"
 }
 
+set_user_systemd_bus_env() {
+  local uid runtime_dir bus_path
+  uid="$(id -u)"
+  runtime_dir="/run/user/$uid"
+  bus_path="$runtime_dir/bus"
+
+  if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "$runtime_dir" ]]; then
+    export XDG_RUNTIME_DIR="$runtime_dir"
+  fi
+
+  if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "$bus_path" ]]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path"
+  fi
+
+  [[ -n "${XDG_RUNTIME_DIR:-}" && -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]
+}
+
 curator_bootstrap_env_prefix() {
   printf '%s' "ALMANAC_CONFIG_FILE='$CONFIG_TARGET'"
 
@@ -710,8 +808,10 @@ PY
 }
 
 print_post_install_guide() {
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
   detect_github_repo
   resolve_agent_qmd_endpoint
+  resolve_agent_control_plane_endpoint
 
   echo
   echo "What to do next"
@@ -820,6 +920,14 @@ print_post_install_guide() {
   echo "Almanac control plane"
   echo "  Control-plane MCP:"
   echo "    http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp"
+  if [[ "$AGENT_ALMANAC_MCP_URL_MODE" == "tailnet" ]]; then
+    echo "  Tailnet bootstrap MCP:"
+    echo "    $AGENT_ALMANAC_MCP_URL"
+    if [[ "$AGENT_ALMANAC_MCP_ROUTE_STATUS" != "live" ]]; then
+      echo "  Tailnet route note:"
+      echo "    hostname detected, but current tailscale serve status does not show ${TAILSCALE_ALMANAC_MCP_PATH}"
+    fi
+  fi
   echo "  Notion webhook:"
   echo "    http://${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}/notion/webhook"
   echo "  Curator Hermes home:"
@@ -869,10 +977,12 @@ agent_install_payload_path() {
 render_agent_install_payload_body() {
   detect_github_repo
   resolve_agent_qmd_endpoint
+  resolve_agent_control_plane_endpoint
   echo "almanac_task_v1:"
   echo "  goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + chutes MCP registration, first-contact vault defaults, and exactly one 4h refresh timer"
   echo "  qmd_url: \"$AGENT_QMD_URL\""
   echo "  almanac_mcp_url: \"http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp\""
+  echo "  almanac_bootstrap_url: \"$AGENT_ALMANAC_MCP_URL\""
   echo "  qmd_collections:"
   echo "    - \"$QMD_COLLECTION_NAME\""
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
@@ -942,6 +1052,9 @@ render_agent_install_payload_body() {
   echo "    - prefer the deployed almanac-owned qmd/vault over repo-scaffold guesses"
   if [[ "$AGENT_QMD_URL_MODE" == "tailnet" && "$AGENT_QMD_ROUTE_STATUS" != "live" ]]; then
     echo "    - tailnet hostname is known but ${TAILSCALE_QMD_PATH} is not visibly published; republish Tailscale Serve if MCP test fails"
+  fi
+  if [[ "$AGENT_ALMANAC_MCP_URL_MODE" == "tailnet" && "$AGENT_ALMANAC_MCP_ROUTE_STATUS" != "live" ]]; then
+    echo "    - tailnet hostname is known but ${TAILSCALE_ALMANAC_MCP_PATH} is not visibly published; republish Tailscale Serve if remote bootstrap test fails"
   fi
   echo "    - GET /mcp returning 404 is not an MCP failure; use hermes mcp test"
   echo "    - done means: first reconciliation ran and the single 4h cron exists"
@@ -1149,6 +1262,7 @@ collect_install_answers() {
   default_pdf_vision_endpoint="${PDF_VISION_ENDPOINT:-}"
   default_pdf_vision_model="${PDF_VISION_MODEL:-}"
   default_pdf_vision_api_key="${PDF_VISION_API_KEY:-}"
+  default_telegram_bot_token="${TELEGRAM_BOT_TOKEN:-}"
 
   ALMANAC_NAME="almanac"
   ALMANAC_HOME="$(ask "Service home" "$default_home")"
@@ -1226,6 +1340,7 @@ collect_install_answers() {
   PDF_VISION_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible vision endpoint for PDF page captions (base /v1 or full /v1/chat/completions; type none to disable)" "$default_pdf_vision_endpoint")")"
   PDF_VISION_MODEL="$(normalize_optional_answer "$(ask "Vision model name for PDF page captions (type none to disable)" "$default_pdf_vision_model")")"
   PDF_VISION_API_KEY="$(ask_secret_with_default "Vision API key for PDF page captions (ENTER keeps current, type none to clear)" "$default_pdf_vision_api_key")"
+  TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Telegram bot token for operator notifications and delivery (optional; ENTER keeps current, type none to clear)" "$default_telegram_bot_token")"
   PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
 
   if [[ -z "$PDF_VISION_ENDPOINT" && -z "$PDF_VISION_MODEL" && -z "$PDF_VISION_API_KEY" ]]; then
@@ -1308,6 +1423,7 @@ collect_remove_answers() {
   ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
   TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
   TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
+  TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
   ENABLE_PRIVATE_GIT="${ENABLE_PRIVATE_GIT:-1}"
   ENABLE_QUARTO="${ENABLE_QUARTO:-1}"
   SEED_SAMPLE_VAULT="${SEED_SAMPLE_VAULT:-1}"
@@ -1325,39 +1441,9 @@ collect_remove_answers() {
   fi
 }
 
-run_root_install() {
-  local agent_payload_file=""
-  export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
-  export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
-  export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
-  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE
-  export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
-  export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
-  export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
-  export QMD_RUN_EMBED QMD_MCP_PORT ALMANAC_MCP_HOST ALMANAC_MCP_PORT ALMANAC_NOTION_WEBHOOK_HOST ALMANAC_NOTION_WEBHOOK_PORT
-  export ALMANAC_BOOTSTRAP_WINDOW_SECONDS ALMANAC_BOOTSTRAP_PER_IP_LIMIT ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS
-  export BACKUP_GIT_AUTHOR_NAME BACKUP_GIT_AUTHOR_EMAIL NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
-  export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
-  export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD NEXTCLOUD_VAULT_MOUNT_POINT
-  export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
-  export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
-  export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
-  export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
-
-  "$BOOTSTRAP_DIR/bin/bootstrap-system.sh"
-  sync_public_repo
-  seed_private_repo "$ALMANAC_PRIV_DIR"
-  write_runtime_config "$CONFIG_TARGET"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
-  wipe_nextcloud_state_if_requested
-
-  init_public_repo_if_needed
-
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
-
+restart_shared_user_services_root() {
   local uid
+
   uid="$(id -u "$ALMANAC_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
   if [[ -S "/run/user/$uid/bus" ]]; then
@@ -1377,13 +1463,56 @@ run_root_install() {
     if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
       run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-nextcloud.service"
     fi
-    if [[ "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" != "tui-only" || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
+    if [[ "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
       run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-gateway.service" || true
     fi
-  elif [[ "${ALMANAC_ALLOW_NO_USER_BUS:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ "${ALMANAC_ALLOW_NO_USER_BUS:-0}" != "1" ]]; then
     echo "Systemd user bus unavailable for $ALMANAC_USER; services were installed but not started." >&2
     return 1
   fi
+
+  return 0
+}
+
+run_root_install() {
+  local agent_payload_file=""
+  export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
+  export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
+  export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
+  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE
+  export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
+  export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
+  export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
+  export QMD_RUN_EMBED QMD_MCP_PORT ALMANAC_MCP_HOST ALMANAC_MCP_PORT ALMANAC_NOTION_WEBHOOK_HOST ALMANAC_NOTION_WEBHOOK_PORT
+  export ALMANAC_BOOTSTRAP_WINDOW_SECONDS ALMANAC_BOOTSTRAP_PER_IP_LIMIT ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS
+  export BACKUP_GIT_AUTHOR_NAME BACKUP_GIT_AUTHOR_EMAIL NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
+  export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
+  export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD NEXTCLOUD_VAULT_MOUNT_POINT
+  export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
+  export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
+  export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
+  export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
+
+  "$BOOTSTRAP_DIR/bin/bootstrap-system.sh"
+  sync_public_repo
+  seed_private_repo "$ALMANAC_PRIV_DIR"
+  write_runtime_config "$CONFIG_TARGET"
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+  wipe_nextcloud_state_if_requested
+
+  init_public_repo_if_needed
+
+  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
+  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  local uid
+  restart_shared_user_services_root
+  uid="$(id -u "$ALMANAC_USER")"
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
     if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1; then
@@ -1497,7 +1626,7 @@ run_health_check() {
   load_detected_config || true
 
   if [[ -z "${ALMANAC_USER:-}" ]]; then
-    ALMANAC_USER="$(ask "Service user" "almanac")"
+    ALMANAC_USER="almanac"
   fi
   if [[ -z "${ALMANAC_HOME:-}" ]]; then
     ALMANAC_HOME="/home/$ALMANAC_USER"
@@ -1512,23 +1641,26 @@ run_health_check() {
   ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
   CONFIG_TARGET="${DISCOVERED_CONFIG:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}"
 
-  if [[ ! -x "$ALMANAC_REPO_DIR/bin/health.sh" ]]; then
-    echo "Health script not found at $ALMANAC_REPO_DIR/bin/health.sh" >&2
-    exit 1
-  fi
-
   if ! id -u "$ALMANAC_USER" >/dev/null 2>&1; then
     echo "Service user '$ALMANAC_USER' does not exist." >&2
     exit 1
   fi
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    if [[ ! -x "$ALMANAC_REPO_DIR/bin/health.sh" ]]; then
+      echo "Health script not found at $ALMANAC_REPO_DIR/bin/health.sh" >&2
+      exit 1
+    fi
     uid="$(id -u "$ALMANAC_USER")"
     run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
     return 0
   fi
 
   if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+    if [[ ! -x "$ALMANAC_REPO_DIR/bin/health.sh" ]]; then
+      echo "Health script not found at $ALMANAC_REPO_DIR/bin/health.sh" >&2
+      exit 1
+    fi
     env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/health.sh"
     return 0
   fi
@@ -1552,16 +1684,59 @@ run_curator_setup_flow() {
   CONFIG_TARGET="${DISCOVERED_CONFIG:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}"
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
     run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
+    reload_runtime_config_from_file "$CONFIG_TARGET" || true
+    restart_shared_user_services_root
     return 0
   fi
 
   if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" ALMANAC_ALLOW_NO_USER_BUS="${ALMANAC_ALLOW_NO_USER_BUS:-0}" "$ALMANAC_REPO_DIR/bin/install-user-services.sh"
     env $(curator_bootstrap_env_prefix) "$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh"
+    reload_runtime_config_from_file "$CONFIG_TARGET" || true
+    if set_user_systemd_bus_env; then
+      systemctl --user daemon-reload
+      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-curator-refresh.timer
+      systemctl --user start almanac-curator-refresh.service >/dev/null 2>&1 || true
+      if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
+        systemctl --user restart almanac-pdf-ingest.timer
+        systemctl --user stop almanac-pdf-ingest-watch.service >/dev/null 2>&1 || true
+      fi
+      if [[ "$ENABLE_QUARTO" == "1" ]]; then
+        systemctl --user restart almanac-quarto-render.timer
+      fi
+      if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+        systemctl --user restart almanac-nextcloud.service
+      fi
+      if [[ "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
+        systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
+      fi
+    fi
     return 0
   fi
 
-  sudo -iu "$ALMANAC_USER" env $(curator_bootstrap_env_prefix) "$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh"
+  sudo env \
+    ALMANAC_USER="$ALMANAC_USER" \
+    ALMANAC_HOME="$ALMANAC_HOME" \
+    ALMANAC_REPO_DIR="$ALMANAC_REPO_DIR" \
+    ALMANAC_PRIV_DIR="$ALMANAC_PRIV_DIR" \
+    ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_CONFIG_DIR" \
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    ALMANAC_ALLOW_NO_USER_BUS="${ALMANAC_ALLOW_NO_USER_BUS:-0}" \
+    ALMANAC_CURATOR_SKIP_HERMES_SETUP="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-}" \
+    ALMANAC_CURATOR_SKIP_GATEWAY_SETUP="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-}" \
+    ALMANAC_CURATOR_FORCE_HERMES_SETUP="${ALMANAC_CURATOR_FORCE_HERMES_SETUP:-}" \
+    ALMANAC_CURATOR_FORCE_GATEWAY_SETUP="${ALMANAC_CURATOR_FORCE_GATEWAY_SETUP:-}" \
+    ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-}" \
+    ALMANAC_CURATOR_NOTIFY_PLATFORM="${ALMANAC_CURATOR_NOTIFY_PLATFORM:-}" \
+    ALMANAC_CURATOR_NOTIFY_CHANNEL_ID="${ALMANAC_CURATOR_NOTIFY_CHANNEL_ID:-}" \
+    ALMANAC_CURATOR_GENERAL_PLATFORM="${ALMANAC_CURATOR_GENERAL_PLATFORM:-}" \
+    ALMANAC_CURATOR_GENERAL_CHANNEL_ID="${ALMANAC_CURATOR_GENERAL_CHANNEL_ID:-}" \
+    ALMANAC_CURATOR_MODEL_PRESET="${ALMANAC_CURATOR_MODEL_PRESET:-}" \
+    ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-}" \
+    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" \
+    "$BOOTSTRAP_DIR/deploy.sh" curator-setup
 }
 
 run_agent_payload() {
@@ -1578,6 +1753,7 @@ run_agent_payload() {
   NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
   ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
   TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
+  TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
 
   if [[ -d "$STATE_DIR" && -w "$STATE_DIR" ]]; then
     write_agent_install_payload_file >/dev/null 2>&1 || true

@@ -11,6 +11,7 @@ SHARED_REPO_DIR="${ALMANAC_SHARED_REPO_DIR:-$BOOTSTRAP_DIR}"
 ALMANAC_SERVICE_USER="${ALMANAC_SERVICE_USER:-almanac}"
 ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_MCP_URL="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp}"
+ALMANAC_BOOTSTRAP_URL="${ALMANAC_BOOTSTRAP_URL:-$ALMANAC_MCP_URL}"
 ALMANAC_QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
 HERMES_HOME_DEFAULT="${ALMANAC_AGENT_HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
@@ -257,24 +258,101 @@ register_default_mcps() {
   fi
 }
 
+write_enrollment_state() {
+  local state_file="$1"
+  local request_id="$2"
+  local agent_id="$3"
+  local requester_identity="$4"
+  local unix_user="$5"
+  local hermes_home="$6"
+  local model_preset="$7"
+  local model_string="$8"
+  local channels_json="$9"
+  mkdir -p "$(dirname "$state_file")"
+  REQUEST_ID="$request_id" \
+  AGENT_ID="$agent_id" \
+  REQUESTER_IDENTITY="$requester_identity" \
+  UNIX_USER="$unix_user" \
+  HERMES_HOME_ARG="$hermes_home" \
+  MODEL_PRESET="$model_preset" \
+  MODEL_STRING="$model_string" \
+  CHANNELS_JSON="$channels_json" \
+  ALMANAC_CONTROL_URL="$ALMANAC_MCP_URL" \
+  ALMANAC_BOOTSTRAP_URL_VALUE="$ALMANAC_BOOTSTRAP_URL" \
+  ALMANAC_QMD_URL_VALUE="$ALMANAC_QMD_URL" \
+  python3 - "$state_file" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+payload = {
+    "status": "pending",
+    "request_id": os.environ["REQUEST_ID"],
+    "agent_id": os.environ["AGENT_ID"],
+    "requester_identity": os.environ["REQUESTER_IDENTITY"],
+    "unix_user": os.environ["UNIX_USER"],
+    "hermes_home": os.environ["HERMES_HOME_ARG"],
+    "model_preset": os.environ["MODEL_PRESET"],
+    "model_string": os.environ["MODEL_STRING"],
+    "channels": json.loads(os.environ["CHANNELS_JSON"]),
+    "control_plane_url": os.environ["ALMANAC_CONTROL_URL"],
+    "bootstrap_url": os.environ["ALMANAC_BOOTSTRAP_URL_VALUE"],
+    "qmd_url": os.environ["ALMANAC_QMD_URL_VALUE"],
+    "requested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+}
+state_path = Path(sys.argv[1])
+state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
 run_agent_flow() {
-  local requester_identity unix_user source_ip request_file status_file request_id prior_default_model
+  local requester_identity unix_user source_ip request_file request_id prior_default_model
   local prior_default_channels model_preset channels_csv channels_json model_string token hermes_home
-  local register_file refresh_file agent_id token_file hermes_state_file
+  local agent_id token_file hermes_state_file state_file activation_status activation_trigger_path
+  local resuming_pending="0"
 
   export PATH="$HOME/.local/bin:$PATH"
   require_linux_host "enrollment"
   requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un)}"
   unix_user="$(id -un)"
   source_ip="$(awk '{print $1}' <<<"${SSH_CONNECTION:-${SSH_CLIENT:-127.0.0.1}}")"
+  hermes_home="$HERMES_HOME_DEFAULT"
+  token_file="$hermes_home/secrets/almanac-bootstrap-token"
+  state_file="$hermes_home/state/almanac-enrollment.json"
+  mkdir -p "$hermes_home/secrets" "$hermes_home/state"
   request_file="$(mktemp)"
-  status_file="$(mktemp)"
-  trap 'rm -f "$request_file" "$status_file" "${register_file:-}" "${refresh_file:-}" "${hermes_state_file:-}"' EXIT
+  trap 'rm -f "$request_file" "${hermes_state_file:-}"' EXIT
 
-  rpc_call_with_retry "$request_file" \
-    --url "$ALMANAC_MCP_URL" \
-    --tool "bootstrap.request" \
-    --json-args "$(REQUESTER_IDENTITY="$requester_identity" UNIX_USER="$unix_user" SOURCE_IP="$source_ip" python3 - <<'PY'
+  if [[ -f "$state_file" && -f "$token_file" && "$(json_get "$state_file" "status")" == "pending" ]]; then
+    request_id="$(json_get "$state_file" "request_id")"
+    agent_id="$(json_get "$state_file" "agent_id")"
+    token="$(tr -d '[:space:]' <"$token_file")"
+    model_preset="$(json_get "$state_file" "model_preset")"
+    model_string="$(json_get "$state_file" "model_string")"
+    channels_json="$(json_get "$state_file" "channels")"
+    requester_identity="$(json_get "$state_file" "requester_identity")"
+    if [[ -z "$requester_identity" ]]; then
+      requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un)}"
+    fi
+    if [[ -n "$channels_json" && "$channels_json" != "[]" ]]; then
+      channels_csv="$(
+        python3 - "$channels_json" <<'PY'
+import json
+import sys
+channels = json.loads(sys.argv[1])
+print(",".join(channels))
+PY
+      )"
+    fi
+    resuming_pending="1"
+    echo "Resuming pending Almanac enrollment: $request_id"
+  else
+    rpc_call_with_retry "$request_file" \
+      --url "$ALMANAC_BOOTSTRAP_URL" \
+      --tool "bootstrap.handshake" \
+      --json-args "$(REQUESTER_IDENTITY="$requester_identity" UNIX_USER="$unix_user" SOURCE_IP="$source_ip" python3 - <<'PY'
 import json
 import os
 print(json.dumps({
@@ -283,77 +361,55 @@ print(json.dumps({
   "source_ip": os.environ["SOURCE_IP"],
 }))
 PY
-    )"
+      )"
 
-  request_id="$(json_get "$request_file" "request_id")"
-  if [[ -z "$request_id" ]]; then
-    echo "Failed to create bootstrap request." >&2
-    cat "$request_file" >&2
-    exit 1
-  fi
+    request_id="$(json_get "$request_file" "request_id")"
+    if [[ -z "$request_id" ]]; then
+      echo "Failed to create bootstrap request." >&2
+      cat "$request_file" >&2
+      exit 1
+    fi
 
-  echo "Bootstrap request submitted: $request_id"
-  echo "Waiting for operator approval..."
-
-  while true; do
-    sleep 3
-    "$SHARED_REPO_DIR/bin/almanac-rpc" \
-      --url "$ALMANAC_MCP_URL" \
-      --tool "bootstrap.status" \
-      --json-args "$(REQUEST_ID="$request_id" SOURCE_IP="$source_ip" python3 - <<'PY'
-import json
-import os
-print(json.dumps({
-  "request_id": os.environ["REQUEST_ID"],
-  "source_ip": os.environ["SOURCE_IP"],
-}))
-PY
-      )" >"$status_file"
-    case "$(json_get "$status_file" "status")" in
-      approved) break ;;
-      denied)
-        echo "Enrollment request denied." >&2
-        cat "$status_file" >&2
+    token="$(json_get "$request_file" "raw_token")"
+    if [[ -z "$token" ]]; then
+      if [[ "$(json_get "$request_file" "resume_existing")" == "True" && -f "$token_file" ]]; then
+        token="$(tr -d '[:space:]' <"$token_file")"
+      else
+        if [[ "$(json_get "$request_file" "resume_existing")" == "True" ]]; then
+          echo "A pending bootstrap handshake already exists, but no local token file was found at $token_file." >&2
+          echo "Reuse the original host-side enrollment session or clear the pending request before starting over." >&2
+        fi
+        echo "Bootstrap handshake did not return a pending token." >&2
+        cat "$request_file" >&2
         exit 1
-        ;;
-      expired)
-        echo "Enrollment request expired." >&2
-        cat "$status_file" >&2
-        exit 1
-        ;;
-    esac
-  done
+      fi
+    fi
+    agent_id="$(json_get "$request_file" "agent_id")"
+    echo "Bootstrap handshake submitted: $request_id"
+    echo "A pending Almanac key was issued; it will activate automatically after operator approval."
 
-  token="$(json_get "$status_file" "raw_token")"
-  if [[ -z "$token" ]]; then
-    echo "Approval was granted, but no bootstrap token was returned." >&2
-    cat "$status_file" >&2
-    exit 1
-  fi
-
-  prior_default_model="$(json_get "$status_file" "prior_defaults.model_preset")"
-  prior_default_channels="$(json_get "$status_file" "prior_defaults.channels")"
-  if [[ "$prior_default_channels" == "[]" || -z "$prior_default_channels" ]]; then
-    prior_default_channels="tui-only"
-  else
-    prior_default_channels="$(
-      python3 - "$prior_default_channels" <<'PY'
+    prior_default_model="$(json_get "$request_file" "prior_defaults.model_preset")"
+    prior_default_channels="$(json_get "$request_file" "prior_defaults.channels")"
+    if [[ "$prior_default_channels" == "[]" || -z "$prior_default_channels" ]]; then
+      prior_default_channels="tui-only"
+    else
+      prior_default_channels="$(
+        python3 - "$prior_default_channels" <<'PY'
 import json
 import sys
 channels = json.loads(sys.argv[1])
 print(",".join(channels))
 PY
-    )"
+      )"
+    fi
   fi
   # Run Hermes setup BEFORE we capture model_preset/channels so the user's
   # final choice inside Hermes is the source of truth. Otherwise the manifest
   # and systemd gateway installation can drift from what Hermes is actually
   # running (e.g. the user picks a different model or gateway in the wizard).
   ensure_hermes_installed
-  hermes_home="$HERMES_HOME_DEFAULT"
-  mkdir -p "$hermes_home/secrets"
 
-  if [[ "${ALMANAC_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
     echo "Launching 'hermes setup' — Almanac will read back your model choice from Hermes when it finishes."
     HERMES_HOME="$hermes_home" hermes setup
@@ -362,11 +418,13 @@ PY
   # Gateway setup only makes sense if we actually want Discord/Telegram. Ask
   # up front in a narrow prompt so we know whether to run the wizard.
   want_gateway="no"
-  if [[ "${ALMANAC_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
     read -r -p "Configure Hermes gateway for Discord/Telegram? [y/N]: " want_gateway_answer
     if is_yes "$want_gateway_answer"; then
       want_gateway="yes"
-      HERMES_HOME="$hermes_home" hermes gateway setup
+      if ! HERMES_HOME="$hermes_home" hermes gateway setup; then
+        echo "Hermes gateway setup returned non-zero; Almanac will continue and install the gateway service from the saved Hermes config." >&2
+      fi
     fi
   fi
 
@@ -414,71 +472,69 @@ PY
     esac
   fi
 
-  token_file="$hermes_home/secrets/almanac-bootstrap-token"
   printf '%s\n' "$token" >"$token_file"
   chmod 600 "$token_file"
+  write_enrollment_state "$state_file" "$request_id" "$agent_id" "$requester_identity" "$unix_user" "$hermes_home" "$model_preset" "$model_string" "$channels_json"
 
-  register_file="$(mktemp)"
-  "$SHARED_REPO_DIR/bin/almanac-rpc" \
-    --url "$ALMANAC_MCP_URL" \
-    --tool "agents.register" \
-    --json-args "$(TOKEN="$token" UNIX_USER="$unix_user" DISPLAY_NAME="$requester_identity" HERMES_HOME_ARG="$hermes_home" MODEL_PRESET="$model_preset" MODEL_STRING="$model_string" CHANNELS_JSON="$channels_json" python3 - <<'PY'
-import json
-import os
-print(json.dumps({
-  "token": os.environ["TOKEN"],
-  "unix_user": os.environ["UNIX_USER"],
-  "display_name": os.environ["DISPLAY_NAME"],
-  "role": "user",
-  "hermes_home": os.environ["HERMES_HOME_ARG"],
-  "model_preset": os.environ["MODEL_PRESET"],
-  "model_string": os.environ["MODEL_STRING"],
-  "channels": json.loads(os.environ["CHANNELS_JSON"]),
-}))
-PY
-    )" >"$register_file"
-
-  agent_id="$(json_get "$register_file" "agent_id")"
   install_default_skills "$hermes_home"
   register_default_mcps "$hermes_home"
 
-  refresh_file="$(mktemp)"
-  "$SHARED_REPO_DIR/bin/almanac-rpc" \
-    --url "$ALMANAC_MCP_URL" \
-    --tool "vaults.refresh" \
-    --json-args "$(TOKEN="$token" python3 - <<'PY'
-import json
-import os
-print(json.dumps({"token": os.environ["TOKEN"]}))
-PY
-    )" >"$refresh_file"
-
+  activation_trigger_path="${ALMANAC_ACTIVATION_TRIGGER_PATH:-${ALMANAC_PRIV_DIR:-$SHARED_REPO_DIR/almanac-priv}/state/activation-triggers/$agent_id.json}"
   "$SHARED_REPO_DIR/bin/install-agent-user-services.sh" \
     "$agent_id" \
     "$SHARED_REPO_DIR" \
     "$hermes_home" \
-    "$channels_json"
+    "$channels_json" \
+    "$activation_trigger_path"
 
-  # Execute first-contact verification as code, not prose. Any non-zero exit is
-  # a soft warning: enrollment has already succeeded and the operator can rerun
-  # via scripts/run-first-contact.sh.
-  if [[ -x "$SHARED_REPO_DIR/skills/almanac-first-contact/scripts/run-first-contact.sh" ]]; then
-    first_contact_file="$(mktemp)"
-    if HERMES_HOME="$hermes_home" \
-       ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
-       ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
-       ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
-       ALMANAC_SHARED_REPO_DIR="$SHARED_REPO_DIR" \
-       "$SHARED_REPO_DIR/skills/almanac-first-contact/scripts/run-first-contact.sh" >"$first_contact_file" 2>&1; then
-      echo "First-contact verification:"
-      cat "$first_contact_file"
-    else
-      echo "First-contact verification reported issues; see $first_contact_file" >&2
-      cat "$first_contact_file" >&2
-    fi
+  if [[ -x "$SHARED_REPO_DIR/bin/activate-agent.sh" ]]; then
+    HERMES_HOME="$hermes_home" \
+    ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
+    ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
+    ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
+    ALMANAC_ENROLLMENT_STATE_FILE="$state_file" \
+    "$SHARED_REPO_DIR/bin/activate-agent.sh" || true
   fi
 
-  cat <<EOF
+  activation_status="$(json_get "$state_file" "status")"
+  if [[ "$activation_status" == "active" ]]; then
+    HERMES_HOME="$hermes_home" \
+    ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
+    ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
+    ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
+    ALMANAC_ENROLLMENT_STATE_FILE="$state_file" \
+    "$SHARED_REPO_DIR/bin/user-agent-refresh.sh" >/dev/null 2>&1 || true
+  elif [[ "${ALMANAC_INIT_WAIT_FOR_APPROVAL:-0}" == "1" ]]; then
+    echo "Waiting for operator approval..."
+    while true; do
+      sleep 3
+      "$SHARED_REPO_DIR/bin/almanac-rpc" \
+        --url "$ALMANAC_BOOTSTRAP_URL" \
+        --tool "bootstrap.status" \
+        --json-args "$(REQUEST_ID="$request_id" SOURCE_IP="$source_ip" python3 - <<'PY'
+import json
+import os
+print(json.dumps({
+  "request_id": os.environ["REQUEST_ID"],
+  "source_ip": os.environ["SOURCE_IP"],
+}))
+PY
+        )" >/dev/null
+      HERMES_HOME="$hermes_home" \
+      ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
+      ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
+      ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
+      ALMANAC_ENROLLMENT_STATE_FILE="$state_file" \
+      "$SHARED_REPO_DIR/bin/activate-agent.sh" || true
+      activation_status="$(json_get "$state_file" "status")"
+      if [[ "$activation_status" == "active" || "$activation_status" == "denied" || "$activation_status" == "expired" ]]; then
+        break
+      fi
+    done
+  fi
+
+  if [[ "$activation_status" == "active" ]]; then
+    cat <<EOF
 
 Agent enrollment complete.
 
@@ -488,6 +544,8 @@ Hermes home:
   $hermes_home
 Bootstrap token file:
   $token_file
+Enrollment state:
+  $state_file
 Model preset:
   $model_preset -> $model_string
 Channels:
@@ -496,9 +554,43 @@ Shared repo:
   $SHARED_REPO_DIR
 Control plane:
   $ALMANAC_MCP_URL
+Bootstrap handshake:
+  $ALMANAC_BOOTSTRAP_URL
 qmd:
   $ALMANAC_QMD_URL
 
+EOF
+    return 0
+  fi
+
+  cat <<EOF
+
+Agent enrollment initialized and pending operator approval.
+
+Request ID:
+  $request_id
+Agent ID:
+  $agent_id
+Hermes home:
+  $hermes_home
+Bootstrap token file:
+  $token_file
+Enrollment state:
+  $state_file
+Model preset:
+  $model_preset -> $model_string
+Channels:
+  $channels_csv
+Shared repo:
+  $SHARED_REPO_DIR
+Control plane:
+  $ALMANAC_MCP_URL
+Bootstrap handshake:
+  $ALMANAC_BOOTSTRAP_URL
+qmd:
+  $ALMANAC_QMD_URL
+
+The installed 4-hour user refresh timer will activate this agent automatically after approval.
 EOF
 }
 

@@ -72,7 +72,7 @@ verify_serve_config() {
     return 1
   fi
 
-  if TAILSCALE_SERVE_JSON="$ts_json" python3 - "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" <<'PY'
+  if TAILSCALE_SERVE_JSON="$ts_json" python3 - "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" <<'PY'
 import json
 import os
 import sys
@@ -80,6 +80,8 @@ import sys
 expected_root = sys.argv[1]
 expected_qmd = sys.argv[2]
 expected_path = sys.argv[3]
+expected_almanac_mcp = sys.argv[4]
+expected_almanac_mcp_path = sys.argv[5]
 
 try:
     data = json.loads(os.environ["TAILSCALE_SERVE_JSON"])
@@ -92,7 +94,12 @@ for host_cfg in web.values():
     handlers = host_cfg.get("Handlers") or {}
     root = handlers.get("/") or {}
     qmd = handlers.get(expected_path) or {}
-    if root.get("Proxy") == expected_root and qmd.get("Proxy") == expected_qmd:
+    almanac_mcp = handlers.get(expected_almanac_mcp_path) or {}
+    if (
+        root.get("Proxy") == expected_root
+        and qmd.get("Proxy") == expected_qmd
+        and almanac_mcp.get("Proxy") == expected_almanac_mcp
+    ):
         raise SystemExit(0)
 
 raise SystemExit(1)
@@ -101,7 +108,7 @@ PY
     return 0
   fi
 
-  echo "tailscale serve config does not expose both Nextcloud and qmd MCP as expected." >&2
+  echo "tailscale serve config does not expose Nextcloud, qmd MCP, and Almanac MCP as expected." >&2
   return 1
 }
 
@@ -128,4 +135,5 @@ detect_tailscale_runtime || true
 
 run_serve_cmd tailscale serve --bg --yes "http://127.0.0.1:${NEXTCLOUD_PORT}"
 run_serve_cmd tailscale serve --bg --yes --set-path "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp"
+run_serve_cmd tailscale serve --bg --yes --set-path "${TAILSCALE_ALMANAC_MCP_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp"
 verify_serve_config

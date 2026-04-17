@@ -393,13 +393,42 @@ def _request_json(
     if payload is not None and form_payload is not None:
         raise ValueError("choose either payload or form_payload")
     request_headers = dict(headers or {})
+    normalized_form_payload = None
+    if form_payload is not None:
+        normalized_form_payload = {
+            key: str(value) for key, value in form_payload.items() if value is not None
+        }
+    try:
+        import httpx
+    except ImportError:
+        httpx = None
+    if httpx is not None:
+        try:
+            with httpx.Client(timeout=float(timeout)) as client:
+                if payload is not None:
+                    response = client.post(url, json=payload, headers=request_headers)
+                elif normalized_form_payload is not None:
+                    response = client.post(url, data=normalized_form_payload, headers=request_headers)
+                else:
+                    response = client.post(url, headers=request_headers)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"{url} request failed: {exc}") from exc
+        if response.status_code in pending_statuses:
+            return None
+        if response.status_code >= 400:
+            raise RuntimeError(f"{url} returned {response.status_code}: {response.text[:200]}")
+        try:
+            parsed = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"{url} returned invalid json: {response.text[:200]}") from exc
+        if isinstance(parsed, dict):
+            return parsed
+        raise RuntimeError(f"{url} returned an unexpected response payload.")
     data = None
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-    elif form_payload is not None:
-        data = urllib.parse.urlencode(
-            {key: str(value) for key, value in form_payload.items() if value is not None}
-        ).encode("utf-8")
+    elif normalized_form_payload is not None:
+        data = urllib.parse.urlencode(normalized_form_payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=request_headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:

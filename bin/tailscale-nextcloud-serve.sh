@@ -12,7 +12,7 @@ detect_tailscale_runtime() {
     return 1
   fi
 
-  local ts_json
+  local ts_json=""
   ts_json="$(tailscale status --json 2>/dev/null || true)"
   if [[ -z "$ts_json" ]]; then
     return 1
@@ -41,7 +41,7 @@ if dns:
 run_serve_cmd() {
   local output=""
   local status=0
-  local attempt
+  local attempt=0
 
   for attempt in 1 2 3 4 5; do
     output="$("$@" 2>&1)" && status=0 || status=$?
@@ -64,7 +64,7 @@ run_serve_cmd() {
 }
 
 verify_serve_config() {
-  local ts_json
+  local ts_json=""
 
   ts_json="$(tailscale serve status --json 2>/dev/null || true)"
   if [[ -z "$ts_json" ]]; then

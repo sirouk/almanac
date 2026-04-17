@@ -56,7 +56,7 @@ is_yes() {
 
 require_linux_host() {
   local action="$1"
-  local os_name
+  local os_name=""
 
   os_name="$(uname -s 2>/dev/null || printf 'unknown')"
   if [[ "$os_name" == "Linux" ]]; then
@@ -76,11 +76,12 @@ EOF
 # almanac-rpc does not surface 429 Retry-After; handle it here by retrying with
 # a backoff that honors Retry-After when the server provides it.
 rpc_call_with_retry() {
-  local out_file="$1"; shift
+  local out_file="$1"
+  shift
   local max_attempts="${ALMANAC_INIT_RPC_MAX_ATTEMPTS:-4}"
   local attempt=0
-  local exit_code
-  local err_file
+  local exit_code=0
+  local err_file=""
   err_file="$(mktemp)"
   while (( attempt < max_attempts )); do
     attempt=$((attempt + 1))
@@ -90,7 +91,7 @@ rpc_call_with_retry() {
     fi
     exit_code=$?
     if grep -qi 'rate-limited' "$err_file"; then
-      local retry_after
+      local retry_after=""
       retry_after="$(grep -oE '[0-9]+' "$err_file" | head -n1 || true)"
       retry_after="${retry_after:-30}"
       if (( retry_after > 300 )); then retry_after=300; fi
@@ -109,7 +110,7 @@ rpc_call_with_retry() {
 
 choose_model_preset() {
   local default="${1:-codex}"
-  local answer
+  local answer=""
   if [[ -n "${ALMANAC_INIT_MODEL_PRESET:-}" ]]; then
     printf '%s\n' "$ALMANAC_INIT_MODEL_PRESET"
     return 0
@@ -125,7 +126,7 @@ choose_model_preset() {
 
 choose_channels_csv() {
   local default="${1:-tui-only}"
-  local answer discord telegram channels="tui-only"
+  local answer="" discord="" telegram="" channels="tui-only"
   if [[ -n "${ALMANAC_INIT_CHANNELS:-}" ]]; then
     printf '%s\n' "$ALMANAC_INIT_CHANNELS"
     return 0
@@ -148,7 +149,7 @@ choose_channels_csv() {
 probe_hermes_state_json() {
   local hermes_home="$1"
   local hermes_bin="${2:-hermes}"
-  local dump_file
+  local dump_file=""
   dump_file="$(mktemp)"
   if ! HERMES_HOME="$hermes_home" "$hermes_bin" dump >"$dump_file" 2>/dev/null; then
     rm -f "$dump_file"
@@ -280,9 +281,9 @@ ensure_hermes_installed() {
 
 install_default_skills() {
   local hermes_home="$1"
-  local hermes_bin
+  local hermes_bin=""
   hermes_bin="$(current_hermes_bin)"
-  local skill
+  local skill=""
   for skill in \
     "$SHARED_REPO_DIR/skills/almanac-qmd-mcp" \
     "$SHARED_REPO_DIR/skills/almanac-vault-reconciler" \
@@ -297,7 +298,7 @@ install_default_skills() {
 
 register_default_mcps() {
   local hermes_home="$1"
-  local hermes_bin
+  local hermes_bin=""
   hermes_bin="$(current_hermes_bin)"
   HERMES_HOME="$hermes_home" "$hermes_bin" mcp add almanac-mcp --url "$ALMANAC_MCP_URL" >/dev/null 2>&1 || true
   HERMES_HOME="$hermes_home" "$hermes_bin" mcp add almanac-qmd --url "$ALMANAC_QMD_URL" >/dev/null 2>&1 || true
@@ -377,7 +378,7 @@ run_agent_flow() {
   state_file="$hermes_home/state/almanac-enrollment.json"
   mkdir -p "$hermes_home/secrets" "$hermes_home/state"
   request_file="$(mktemp)"
-  trap 'rm -f "$request_file" "${hermes_state_file:-}"' EXIT
+  trap 'rm -f "${request_file:-}" "${hermes_state_file:-}"' EXIT
 
   if [[ -n "$preseeded_request_id" && -n "$preseeded_raw_token" ]]; then
     request_id="$preseeded_request_id"
@@ -663,7 +664,7 @@ run_update_flow() {
     echo "Hermes is not installed for $(id -un)." >&2
     exit 1
   }
-  local hermes_bin
+  local hermes_bin=""
   hermes_bin="$(current_hermes_bin)"
   "$hermes_bin" update || true
   if [[ -d "$SHARED_REPO_DIR/skills" ]]; then

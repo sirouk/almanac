@@ -225,7 +225,7 @@ done
 ask() {
   local prompt="$1"
   local default="${2:-}"
-  local answer
+  local answer=""
 
   if [[ -n "$default" ]]; then
     read -r -p "$prompt [$default]: " answer
@@ -243,7 +243,7 @@ ask() {
 ask_yes_no() {
   local prompt="$1"
   local default="$2"
-  local answer
+  local answer=""
   local hint="y/N"
 
   if [[ "$default" == "1" ]]; then
@@ -263,7 +263,7 @@ ask_yes_no() {
 
 ask_secret() {
   local prompt="$1"
-  local answer
+  local answer=""
 
   read -r -s -p "$prompt: " answer
   echo
@@ -301,7 +301,7 @@ normalize_optional_answer() {
 ask_secret_with_default() {
   local prompt="$1"
   local default="${2:-}"
-  local answer
+  local answer=""
   local masked_default=""
 
   if [[ -n "$default" ]]; then
@@ -320,7 +320,7 @@ ask_secret_with_default() {
 }
 
 choose_mode() {
-  local answer
+  local answer=""
 
   cat <<'EOF'
 Almanac deploy menu
@@ -369,13 +369,13 @@ detect_tailscale() {
     return 0
   fi
 
-  local ts_json
+  local ts_json=""
   ts_json="$(tailscale status --json 2>/dev/null || true)"
   if [[ -z "$ts_json" ]]; then
     return 0
   fi
 
-  local ts_info
+  local ts_info=""
   ts_info="$(
     printf '%s' "$ts_json" | python3 -c '
 import json
@@ -423,13 +423,13 @@ detect_tailscale_serve() {
     return 0
   fi
 
-  local ts_json
+  local ts_json=""
   ts_json="$(tailscale serve status --json 2>/dev/null || true)"
   if [[ -z "$ts_json" ]]; then
     return 0
   fi
 
-  local ts_info
+  local ts_info=""
   ts_info="$(
     TAILSCALE_SERVE_JSON="$ts_json" python3 - "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" "$ALMANAC_MCP_PORT" "$TAILSCALE_ALMANAC_MCP_PATH" <<'PY'
 import json
@@ -562,7 +562,7 @@ detect_github_repo() {
     return 0
   fi
 
-  local remote_url branch owner_repo
+  local remote_url="" branch="" owner_repo=""
   remote_url="$(git -C "$ALMANAC_REPO_DIR" remote get-url origin 2>/dev/null || true)"
   branch="$(git -C "$ALMANAC_REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   branch="${branch:-main}"
@@ -596,10 +596,10 @@ detect_github_repo() {
 }
 
 discover_existing_config() {
-  local candidate
-  local explicit_config
-  local artifact_config
-  local status
+  local candidate=""
+  local explicit_config=""
+  local artifact_config=""
+  local status=""
   explicit_config="${ALMANAC_CONFIG_FILE:-}"
   artifact_config="$(read_operator_artifact_config_file || true)"
 
@@ -967,7 +967,7 @@ run_as_user_systemd() {
 }
 
 set_user_systemd_bus_env() {
-  local uid runtime_dir bus_path
+  local uid="" runtime_dir="" bus_path=""
   uid="$(id -u)"
   runtime_dir="/run/user/$uid"
   bus_path="$runtime_dir/bus"
@@ -986,7 +986,7 @@ set_user_systemd_bus_env() {
 curator_bootstrap_env_prefix() {
   printf '%s' "ALMANAC_CONFIG_FILE='$CONFIG_TARGET'"
 
-  local key
+  local key=""
   for key in \
     ALMANAC_CURATOR_SKIP_HERMES_SETUP \
     ALMANAC_CURATOR_SKIP_GATEWAY_SETUP \
@@ -1011,7 +1011,7 @@ wait_for_port() {
   local port="$2"
   local attempts="${3:-30}"
   local delay="${4:-2}"
-  local i
+  local i=0
 
   for ((i = 1; i <= attempts; i++)); do
     if python3 - "$host" "$port" <<'PY'
@@ -1318,7 +1318,7 @@ render_agent_install_payload_body() {
 }
 
 write_agent_install_payload_file() {
-  local target
+  local target=""
 
   target="${1:-$(agent_install_payload_path)}"
   mkdir -p "$(dirname "$target")"
@@ -1327,7 +1327,7 @@ write_agent_install_payload_file() {
 }
 
 print_agent_install_payload() {
-  local payload_path
+  local payload_path=""
 
   payload_path="$(agent_install_payload_path)"
 
@@ -1426,18 +1426,19 @@ wipe_nextcloud_state_if_requested() {
 }
 
 collect_install_answers() {
-  local default_user default_home default_domain default_repo default_priv
-  local default_nextcloud_port default_git_name default_git_email
-  local default_enable_nextcloud default_enable_quarto default_enable_private_git
-  local default_seed_vault default_install_public_git
-  local detected_user detected_home detected_repo detected_priv
-  local detected_git_name detected_git_email use_almanac_user
-  local default_nextcloud_admin_user nextcloud_admin_password_input
-  local default_enable_tailscale_serve
-  local default_tailscale_operator_user
-  local default_pdf_vision_endpoint
-  local default_pdf_vision_model
-  local default_pdf_vision_api_key
+  local default_user="" default_home="" default_domain="" default_repo="" default_priv=""
+  local default_nextcloud_port="" default_git_name="" default_git_email=""
+  local default_enable_nextcloud="" default_enable_quarto="" default_enable_private_git=""
+  local default_seed_vault="" default_install_public_git=""
+  local detected_user="" detected_home="" detected_repo="" detected_priv=""
+  local detected_git_name="" detected_git_email="" use_almanac_user=""
+  local default_nextcloud_admin_user="" nextcloud_admin_password_input=""
+  local default_enable_tailscale_serve=""
+  local default_tailscale_operator_user=""
+  local default_pdf_vision_endpoint=""
+  local default_pdf_vision_model=""
+  local default_pdf_vision_api_key=""
+  local default_telegram_bot_token=""
 
   load_detected_config || true
 
@@ -1606,9 +1607,9 @@ collect_install_answers() {
 }
 
 collect_remove_answers() {
-  local default_user default_home default_repo default_priv
-  local default_remove_user default_remove_tooling
-  local confirm_text
+  local default_user="" default_home="" default_repo="" default_priv=""
+  local default_remove_user="" default_remove_tooling=""
+  local confirm_text=""
   local use_detected_config="0"
 
   if load_detected_config; then
@@ -1719,7 +1720,7 @@ prepare_deployed_context() {
 }
 
 ensure_deployed_config_exists() {
-  local status
+  local status=""
   status="$(probe_path_status "$CONFIG_TARGET")"
   if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
     return 0
@@ -1871,7 +1872,7 @@ PY
 }
 
 restart_shared_user_services_root() {
-  local uid
+  local uid=""
 
   uid="$(id -u "$ALMANAC_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
@@ -1951,7 +1952,7 @@ run_root_install() {
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
-  local uid
+  local uid=""
   restart_shared_user_services_root
   uid="$(id -u "$ALMANAC_USER")"
 
@@ -2030,7 +2031,7 @@ run_root_upgrade() {
 
   tmp_dir="$(mktemp -d /tmp/almanac-upgrade.XXXXXX)"
   checkout_dir="$tmp_dir/repo"
-  trap 'rm -rf "$tmp_dir"' EXIT
+  trap 'rm -rf "${tmp_dir:-}"' EXIT
 
   echo "Fetching Almanac upstream..."
   echo "  repo:   $ALMANAC_UPSTREAM_REPO_URL"
@@ -2184,7 +2185,7 @@ run_root_remove() {
 }
 
 run_enrollment_status() {
-  local onboarding_file provision_file timer_enabled timer_active service_active
+  local onboarding_file="" provision_file="" timer_enabled="" timer_active="" service_active=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-status; then
@@ -2325,8 +2326,8 @@ resolve_enrollment_trace_selector() {
 }
 
 run_enrollment_trace() {
-  local selector_spec selector_kind selector_value trace_file
-  local timer_enabled timer_active service_active resolved_unix_user
+  local selector_spec="" selector_kind="" selector_value="" trace_file=""
+  local timer_enabled="" timer_active="" service_active="" resolved_unix_user=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-trace; then
@@ -2815,9 +2816,9 @@ run_enrollment_align() {
 }
 
 run_enrollment_reset() {
-  local target_unix_user remove_unix_user purge_rate_limits remove_archives confirm_text extra_subject uid
-  local snapshot_file agent_id agent_status
-  local -a session_ids request_specs rate_subjects
+  local target_unix_user="" remove_unix_user="" purge_rate_limits="" remove_archives="" confirm_text="" extra_subject="" uid=""
+  local snapshot_file="" agent_id="" agent_status=""
+  local -a session_ids=() request_specs=() rate_subjects=()
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-reset; then
@@ -3008,7 +3009,7 @@ PY
 }
 
 run_health_check() {
-  local uid
+  local uid=""
   local status=""
 
   load_detected_config || true

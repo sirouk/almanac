@@ -39,7 +39,7 @@ check_curator_gateway_runtime() {
   local output=""
   local status=0
   local runtime_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
-  local channel
+  local channel=""
   local filtered_channels=()
 
   if has_curator_telegram_onboarding; then
@@ -140,7 +140,7 @@ PY
 check_unit_state() {
   local unit="$1"
   local expect="$2"
-  local state
+  local state=""
 
   state="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
 
@@ -164,7 +164,7 @@ check_unit_state() {
 check_system_unit_state() {
   local unit="$1"
   local expect="$2"
-  local state
+  local state=""
 
   state="$(systemctl is-active "$unit" 2>/dev/null || true)"
 
@@ -891,7 +891,7 @@ PY
 }
 
 check_nextcloud_vault_mount() {
-  local mounts_json
+  local mounts_json=""
 
   if command -v podman >/dev/null 2>&1; then
     if ! podman container inspect "$(nextcloud_app_container_name)" >/dev/null 2>&1; then
@@ -960,7 +960,7 @@ PY
 }
 
 check_pdf_ingest_status() {
-  local backend
+  local backend=""
 
   if [[ "$PDF_INGEST_ENABLED" != "1" ]]; then
     pass "PDF ingestion disabled in config"

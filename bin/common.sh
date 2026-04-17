@@ -53,10 +53,10 @@ normalize_vault_qmd_collection_mask() {
 }
 
 find_config_file() {
-  local nested_priv
-  local sibling_priv
-  local explicit_config
-  local artifact_config
+  local nested_priv=""
+  local sibling_priv=""
+  local explicit_config=""
+  local artifact_config=""
   local home_dir=""
   nested_priv="$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
   sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/almanac-priv/config/almanac.env"
@@ -85,7 +85,7 @@ find_config_file() {
       "$home_dir/almanac-priv/config/almanac.env"
     )
   fi
-  local candidate
+  local candidate=""
   for candidate in "${candidates[@]}"; do
     if [[ -n "$candidate" && -f "$candidate" ]]; then
       echo "$candidate"
@@ -298,7 +298,7 @@ qmd_cache_dir() {
 }
 
 qmd_db_path() {
-  local normalized_name
+  local normalized_name=""
   normalized_name="$(qmd_normalize_index_name "${1:-$QMD_INDEX_NAME}")"
   printf '%s/%s.sqlite\n' "$(qmd_cache_dir)" "$normalized_name"
 }
@@ -429,7 +429,7 @@ has_curator_gateway_channels() {
 
 has_curator_non_onboarding_gateway_channels() {
   local raw_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
-  local channel
+  local channel=""
   local channels=()
 
   IFS=',' read -r -a channels <<<"$raw_channels"
@@ -493,7 +493,7 @@ ensure_qmd_collection() {
   local collection_path="$2"
   local collection_mask="${3:-**/*.md}"
   ensure_nvm
-  local collection_info existing_path existing_mask
+  local collection_info="" existing_path="" existing_mask=""
 
   if collection_info="$(qmd --index "$QMD_INDEX_NAME" collection show "$collection_name" 2>/dev/null)"; then
     existing_path="$(printf '%s\n' "$collection_info" | awk -F': *' '/Path:/{print $2; exit}')"
@@ -621,7 +621,7 @@ ensure_uv() {
 }
 
 set_user_systemd_bus_env() {
-  local uid runtime_dir bus_path
+  local uid="" runtime_dir="" bus_path=""
   uid="$(id -u)"
   runtime_dir="/run/user/$uid"
   bus_path="$runtime_dir/bus"
@@ -702,7 +702,7 @@ run_compose() {
 }
 
 ensure_layout() {
-  local qmd_db_dir
+  local qmd_db_dir=""
 
   qmd_db_dir="$(dirname "$QMD_INDEX_DB_PATH")"
 

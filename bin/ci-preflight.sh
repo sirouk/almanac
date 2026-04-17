@@ -163,7 +163,7 @@ PY
 
 run_shell_lint() {
   local files=("$ROOT_DIR/test.sh")
-  local rel
+  local rel=""
 
   while IFS= read -r rel; do
     files+=("$ROOT_DIR/$rel")
@@ -179,7 +179,7 @@ run_python_checks() {
 }
 
 run_systemd_verify() {
-  local verify_log
+  local verify_log=""
 
   if ! command -v systemd-analyze >/dev/null 2>&1; then
     log "systemd-analyze not present, skipping unit verification"
@@ -297,8 +297,8 @@ run_pdf_ingest_vision_preflight() {
   local request_log="$TMP_ROOT/fake-vision-request.json"
   local port_file="$TMP_ROOT/fake-vision-port.txt"
   local server_log="$TMP_ROOT/fake-vision-server.log"
-  local server_pid
-  local vision_port
+  local server_pid=""
+  local vision_port=""
 
   mkdir -p "$repo_dir"
   setup_fake_pdftotext "$fakebin"
@@ -308,7 +308,7 @@ run_pdf_ingest_vision_preflight() {
   log "exercising pdf-ingest vision caption flow"
 
   server_pid="$(start_fake_vision_server "$request_log" "$port_file" "$server_log")"
-  trap 'kill "$server_pid" 2>/dev/null || true; cleanup' EXIT
+  trap 'kill "${server_pid:-}" 2>/dev/null || true; cleanup' EXIT
 
   for _ in $(seq 1 40); do
     if [[ -s "$port_file" ]]; then
@@ -400,7 +400,7 @@ wait_for_path_state() {
   local desired="$2"
   local attempts="${3:-20}"
   local delay="${4:-0.25}"
-  local i
+  local i=""
 
   for ((i = 1; i <= attempts; i++)); do
     if [[ "$desired" == "present" && -e "$path" ]]; then
@@ -424,7 +424,7 @@ run_vault_watch_preflight() {
   local state_dir="$priv_dir/state"
   local generated_md="$state_dir/pdf-ingest/markdown/Inbox/chutes-mesh-watch-pdf.md"
   local config_file="$config_dir/almanac.env"
-  local watcher_pid
+  local watcher_pid=""
 
   mkdir -p "$bin_dir" "$config_dir" "$vault_dir/Inbox"
   cp "$ROOT_DIR/bin/common.sh" "$bin_dir/common.sh"

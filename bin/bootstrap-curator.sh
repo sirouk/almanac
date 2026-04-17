@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 ask_default() {
   local prompt="$1"
   local default="${2:-}"
-  local answer
+  local answer=""
   if [[ -n "$default" ]]; then
     read -r -p "$prompt [$default]: " answer
   else
@@ -31,7 +31,7 @@ confirm_default() {
 
 choose_model_preset() {
   local default="${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
-  local answer
+  local answer=""
   if [[ -n "${ALMANAC_CURATOR_MODEL_PRESET:-}" ]]; then
     printf '%s\n' "$ALMANAC_CURATOR_MODEL_PRESET"
     return 0
@@ -57,7 +57,7 @@ choose_channels_csv() {
     return 0
   fi
 
-  local discord telegram channels="tui-only"
+  local discord="" telegram="" channels="tui-only"
   discord="$(ask_default "Enable Discord for Curator gateway? (yes/no)" "no")"
   telegram="$(ask_default "Enable Telegram for Curator gateway? (yes/no)" "no")"
   if [[ "${discord,,}" =~ ^(y|yes|1)$ ]]; then
@@ -116,7 +116,7 @@ EOF
 probe_hermes_state_json() {
   local hermes_home="$1"
   local hermes_bin="${2:-hermes}"
-  local dump_file
+  local dump_file=""
   dump_file="$(mktemp)"
   if ! HERMES_HOME="$hermes_home" "$hermes_bin" dump >"$dump_file" 2>/dev/null; then
     rm -f "$dump_file"
@@ -265,20 +265,20 @@ main() {
   ensure_layout
   ensure_curator_hermes
 
-  local model_preset
-  local model_string
-  local channels_csv
-  local channels_json
-  local notify_platform
-  local notify_channel_id
-  local general_platform
-  local general_channel_id
+  local model_preset=""
+  local model_string=""
+  local channels_csv=""
+  local channels_json=""
+  local notify_platform=""
+  local notify_channel_id=""
+  local general_platform=""
+  local general_channel_id=""
   local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
   local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
   local force_setup="${ALMANAC_CURATOR_FORCE_HERMES_SETUP:-0}"
   local force_gateway_setup="${ALMANAC_CURATOR_FORCE_GATEWAY_SETUP:-0}"
   local hermes_bin="$RUNTIME_DIR/hermes-venv/bin/hermes"
-  local notify_values
+  local notify_values=()
   local reuse_note=""
   local hermes_state_file=""
 
@@ -329,7 +329,7 @@ PY
 
   hermes_state_file="$(mktemp)"
   if probe_hermes_state_json "$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" >"$hermes_state_file"; then
-    local detected_model_preset detected_model_string detected_channels_csv
+    local detected_model_preset="" detected_model_string="" detected_channels_csv=""
     detected_model_preset="$(python3 - "$hermes_state_file" <<'PY'
 import json, sys
 print((json.load(open(sys.argv[1]))).get("model_preset", ""))

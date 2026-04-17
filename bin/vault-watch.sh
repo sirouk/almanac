@@ -15,7 +15,7 @@ fi
 
 is_pdf_path() {
   local event_path="$1"
-  local lower_path
+  local lower_path=""
 
   lower_path="$(printf '%s' "$event_path" | tr '[:upper:]' '[:lower:]')"
   [[ "$lower_path" == *.pdf ]]
@@ -23,7 +23,7 @@ is_pdf_path() {
 
 is_direct_vault_text_path() {
   local event_path="$1"
-  local lower_path
+  local lower_path=""
 
   lower_path="$(printf '%s' "$event_path" | tr '[:upper:]' '[:lower:]')"
   [[ "$lower_path" == *.md || "$lower_path" == *.markdown || "$lower_path" == *.mdx || "$lower_path" == *.txt || "$lower_path" == *.text ]]
@@ -139,7 +139,7 @@ is_vault_definition_path() {
 run_vault_reload_defs() {
   echo "Vault watcher: reloading .vault definitions..."
   if [[ -x "$SCRIPT_DIR/almanac-ctl" ]]; then
-    local err_file
+    local err_file=""
     err_file="$(mktemp)"
     if ! PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         "$SCRIPT_DIR/almanac-ctl" --json vault reload-defs >/dev/null 2>"$err_file"; then
@@ -208,7 +208,7 @@ stop_event_stream() {
 
 read_next_event() {
   local timeout_seconds="$1"
-  local event_line
+  local event_line=""
 
   if (( timeout_seconds > 0 )); then
     if IFS= read -r -t "$timeout_seconds" -u "$vault_watch_fd" event_line; then
@@ -227,11 +227,11 @@ read_next_event() {
 }
 
 drain_event_burst() {
-  local next_deadline
-  local wait_seconds
-  local event_line
-  local event_path
-  local event_flags
+  local next_deadline=0
+  local wait_seconds=0
+  local event_line=""
+  local event_path=""
+  local event_flags=""
 
   next_deadline=$((SECONDS + VAULT_WATCH_DEBOUNCE_SECONDS))
 

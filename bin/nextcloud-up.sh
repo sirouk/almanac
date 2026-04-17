@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 COMPOSE_FILE="$BOOTSTRAP_DIR/compose/nextcloud-compose.yml"
 
 dump_nextcloud_diagnostics() {
-  local db_name redis_name app_name
+  local db_name="" redis_name="" app_name=""
 
   db_name="$(nextcloud_db_container_name)"
   redis_name="$(nextcloud_redis_container_name)"
@@ -53,7 +53,7 @@ cleanup_legacy_compose_stack() {
 
 podman_host_uid_for_container_uid() {
   local container_uid="$1"
-  local subuid_start
+  local subuid_start=""
 
   if (( container_uid == 0 )); then
     echo "$(id -u)"
@@ -69,7 +69,7 @@ podman_host_uid_for_container_uid() {
 }
 
 apply_vault_acls_for_nextcloud() {
-  local host_uid mapped_www_data_uid acl_dirs acl_files
+  local host_uid="" mapped_www_data_uid="" acl_dirs="" acl_files=""
 
   mkdir -p "$VAULT_DIR"
 
@@ -195,8 +195,8 @@ wait_for_container_health() {
   local name="$1"
   local attempts="${2:-60}"
   local delay="${3:-2}"
-  local i
-  local status
+  local i=0
+  local status=""
 
   for ((i = 1; i <= attempts; i++)); do
     status="$(podman inspect --format '{{if .State.Healthcheck}}{{.State.Healthcheck.Status}}{{else}}{{.State.Status}}{{end}}' "$name" 2>/dev/null || true)"
@@ -219,7 +219,7 @@ wait_for_container_health() {
 wait_for_postgres_ready() {
   local attempts="${1:-60}"
   local delay="${2:-2}"
-  local i
+  local i=0
 
   for ((i = 1; i <= attempts; i++)); do
     if command -v podman >/dev/null 2>&1; then
@@ -238,7 +238,7 @@ wait_for_postgres_ready() {
 wait_for_redis_ready() {
   local attempts="${1:-30}"
   local delay="${2:-1}"
-  local i
+  local i=0
 
   for ((i = 1; i <= attempts; i++)); do
     if command -v podman >/dev/null 2>&1; then
@@ -257,8 +257,8 @@ wait_for_redis_ready() {
 wait_for_nextcloud_occ() {
   local attempts="${1:-120}"
   local delay="${2:-2}"
-  local i
-  local status_json
+  local i=0
+  local status_json=""
 
   for ((i = 1; i <= attempts; i++)); do
     status_json="$(nextcloud_occ status --output=json 2>/dev/null || true)"
@@ -285,7 +285,7 @@ PY
 wait_for_nextcloud_http() {
   local attempts="${1:-120}"
   local delay="${2:-2}"
-  local i
+  local i=0
 
   for ((i = 1; i <= attempts; i++)); do
     if curl --max-time 5 -fsS -H "Host: $NEXTCLOUD_TRUSTED_DOMAIN" \
@@ -337,8 +337,8 @@ PY
 }
 
 ensure_nextcloud_vault_mount() {
-  local mount_json mount_id mount_point mount_datadir users_count groups_count
-  local parsed_state
+  local mount_json="" mount_id="" mount_point="" mount_datadir="" users_count=0 groups_count=0
+  local parsed_state=""
 
   nextcloud_occ app:enable files_external >/dev/null
 
@@ -382,10 +382,10 @@ ensure_nextcloud_vault_mount() {
 }
 
 run_podman_nextcloud() {
-  local pod_name
-  local db_name
-  local redis_name
-  local app_name
+  local pod_name=""
+  local db_name=""
+  local redis_name=""
+  local app_name=""
 
   pod_name="$(nextcloud_pod_name)"
   db_name="$(nextcloud_db_container_name)"

@@ -175,15 +175,24 @@ ALMANAC_PRIV_TEMPLATE_DIR="${ALMANAC_PRIV_TEMPLATE_DIR:-$BOOTSTRAP_DIR/templates
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
 ALMANAC_OPERATOR_TELEGRAM_USER_IDS="${ALMANAC_OPERATOR_TELEGRAM_USER_IDS:-}"
+ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
 if [[ -z "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
-  if [[ "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
+  if [[ ",${ALMANAC_CURATOR_CHANNELS}," == *",telegram,"* || "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
     ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="1"
   else
     ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="0"
   fi
 fi
+if [[ -z "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
+  if [[ ",${ALMANAC_CURATOR_CHANNELS}," == *",discord,"* ]]; then
+    ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="1"
+  else
+    ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="0"
+  fi
+fi
 ALMANAC_ONBOARDING_WINDOW_SECONDS="${ALMANAC_ONBOARDING_WINDOW_SECONDS:-3600}"
-ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT="${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}"
+ALMANAC_ONBOARDING_PER_USER_LIMIT="${ALMANAC_ONBOARDING_PER_USER_LIMIT:-${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}}"
+ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT="${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-$ALMANAC_ONBOARDING_PER_USER_LIMIT}"
 ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT="${ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
 ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT="${ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
@@ -352,7 +361,7 @@ has_curator_gateway_channels() {
   [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",discord,"* || ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",telegram,"* ]]
 }
 
-has_curator_non_telegram_gateway_channels() {
+has_curator_non_onboarding_gateway_channels() {
   local raw_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
   local channel
   local channels=()
@@ -360,14 +369,32 @@ has_curator_non_telegram_gateway_channels() {
   IFS=',' read -r -a channels <<<"$raw_channels"
   for channel in "${channels[@]}"; do
     channel="${channel//[[:space:]]/}"
-    [[ -z "$channel" || "$channel" == "tui-only" || "$channel" == "telegram" ]] && continue
+    [[ -z "$channel" || "$channel" == "tui-only" ]] && continue
+    if [[ "$channel" == "telegram" && "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      continue
+    fi
+    if [[ "$channel" == "discord" && "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      continue
+    fi
     return 0
   done
   return 1
 }
 
+has_curator_non_telegram_gateway_channels() {
+  has_curator_non_onboarding_gateway_channels
+}
+
 has_curator_telegram_onboarding() {
-  [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" && "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]
+  [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]
+}
+
+has_curator_discord_onboarding() {
+  [[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]
+}
+
+has_curator_onboarding() {
+  has_curator_telegram_onboarding || has_curator_discord_onboarding
 }
 
 ensure_shared_hermes_runtime() {

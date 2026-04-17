@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import pwd
+import re
 import secrets
 import shlex
 import sqlite3
@@ -26,8 +27,9 @@ def utc_now_iso() -> str:
     return utc_now().replace(microsecond=0).isoformat()
 
 
-def bool_env(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
+def bool_env(name: str, default: bool = False, env: dict[str, str] | None = None) -> bool:
+    source = os.environ if env is None else env
+    value = source.get(name)
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
@@ -178,6 +180,7 @@ class Config:
     auto_provision_retry_base_seconds: int
     auto_provision_retry_max_seconds: int
     curator_telegram_onboarding_enabled: bool
+    curator_discord_onboarding_enabled: bool
     onboarding_window_seconds: int
     onboarding_per_telegram_user_limit: int
     onboarding_global_pending_limit: int
@@ -213,6 +216,11 @@ class Config:
             "codex": env.get("ALMANAC_MODEL_PRESET_CODEX", "openai:codex"),
             "opus": env.get("ALMANAC_MODEL_PRESET_OPUS", "anthropic:claude-opus"),
             "chutes": env.get("ALMANAC_MODEL_PRESET_CHUTES", "chutes:auto-failover"),
+        }
+        curator_channels = {
+            value.strip().lower()
+            for value in env.get("ALMANAC_CURATOR_CHANNELS", "tui-only").split(",")
+            if value.strip()
         }
         operator_notify_platform = env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM", "tui-only")
         operator_notify_channel_id = env.get("OPERATOR_NOTIFY_CHANNEL_ID", "")
@@ -254,10 +262,21 @@ class Config:
             auto_provision_retry_max_seconds=int(env.get("ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS", "900")),
             curator_telegram_onboarding_enabled=bool_env(
                 "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED",
-                default=(operator_notify_platform == "telegram"),
+                default=("telegram" in curator_channels or operator_notify_platform == "telegram"),
+                env=env,
+            ),
+            curator_discord_onboarding_enabled=bool_env(
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED",
+                default=("discord" in curator_channels),
+                env=env,
             ),
             onboarding_window_seconds=int(env.get("ALMANAC_ONBOARDING_WINDOW_SECONDS", "3600")),
-            onboarding_per_telegram_user_limit=int(env.get("ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT", "3")),
+            onboarding_per_telegram_user_limit=int(
+                env.get(
+                    "ALMANAC_ONBOARDING_PER_USER_LIMIT",
+                    env.get("ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT", "3"),
+                )
+            ),
             onboarding_global_pending_limit=int(env.get("ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT", "20")),
             onboarding_update_failure_limit=int(env.get("ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT", "3")),
             operator_notify_platform=operator_notify_platform,
@@ -628,11 +647,27 @@ def onboarding_secret_dir(cfg: Config) -> Path:
 
 
 def onboarding_bot_token_secret_path(cfg: Config, session_id: str) -> Path:
-    return onboarding_secret_dir(cfg) / session_id / "telegram-bot-token"
+    return onboarding_platform_token_secret_path(cfg, session_id, "telegram")
+
+
+def onboarding_platform_token_secret_path(cfg: Config, session_id: str, platform: str) -> Path:
+    normalized = re.sub(r"[^a-z0-9_-]+", "-", str(platform or "bot").strip().lower()) or "bot"
+    return onboarding_secret_dir(cfg) / session_id / f"{normalized}-bot-token"
 
 
 def write_onboarding_bot_token_secret(cfg: Config, session_id: str, raw_token: str) -> str:
-    path = onboarding_bot_token_secret_path(cfg, session_id)
+    path = onboarding_platform_token_secret_path(cfg, session_id, "telegram")
+    _write_private_text(path, raw_token)
+    return str(path)
+
+
+def write_onboarding_platform_token_secret(
+    cfg: Config,
+    session_id: str,
+    platform: str,
+    raw_token: str,
+) -> str:
+    path = onboarding_platform_token_secret_path(cfg, session_id, platform)
     _write_private_text(path, raw_token)
     return str(path)
 
@@ -684,7 +719,7 @@ def _migrate_onboarding_bot_tokens(conn: sqlite3.Connection, cfg: Config) -> Non
             _write_private_text(Path(existing_path), token)
             secret_path = existing_path
         else:
-            secret_path = write_onboarding_bot_token_secret(cfg, session_id, token)
+            secret_path = write_onboarding_platform_token_secret(cfg, session_id, "telegram", token)
         conn.execute(
             """
             UPDATE onboarding_sessions

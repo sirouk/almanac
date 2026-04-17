@@ -44,14 +44,25 @@ check_curator_gateway_runtime() {
 
   if has_curator_telegram_onboarding; then
     pass "Curator Telegram onboarding owns the Telegram worker"
-    if ! has_curator_non_telegram_gateway_channels; then
+  fi
+  if has_curator_discord_onboarding; then
+    pass "Curator Discord onboarding owns the Discord worker"
+  fi
+  if has_curator_onboarding; then
+    if ! has_curator_non_onboarding_gateway_channels; then
       return 0
     fi
     IFS=',' read -r -a filtered_channels <<<"$runtime_channels"
     runtime_channels=""
     for channel in "${filtered_channels[@]}"; do
       channel="${channel//[[:space:]]/}"
-      [[ -z "$channel" || "$channel" == "telegram" || "$channel" == "tui-only" ]] && continue
+      [[ -z "$channel" || "$channel" == "tui-only" ]] && continue
+      if [[ "$channel" == "telegram" && "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+        continue
+      fi
+      if [[ "$channel" == "discord" && "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+        continue
+      fi
       runtime_channels="${runtime_channels:+$runtime_channels,}$channel"
     done
   fi
@@ -1156,16 +1167,20 @@ if set_user_systemd_bus_env; then
 
   if has_curator_telegram_onboarding; then
     check_unit_state almanac-curator-onboarding.service required
-    if has_curator_non_telegram_gateway_channels; then
-      check_unit_state almanac-curator-gateway.service required
-    else
-      check_unit_state almanac-curator-gateway.service optional
-    fi
-  elif has_curator_gateway_channels; then
+  else
+    check_unit_state almanac-curator-onboarding.service optional
+  fi
+
+  if has_curator_discord_onboarding; then
+    check_unit_state almanac-curator-discord-onboarding.service required
+  else
+    check_unit_state almanac-curator-discord-onboarding.service optional
+  fi
+
+  if has_curator_gateway_channels && { ! has_curator_onboarding || has_curator_non_onboarding_gateway_channels; }; then
     check_unit_state almanac-curator-gateway.service required
   else
     check_unit_state almanac-curator-gateway.service optional
-    check_unit_state almanac-curator-onboarding.service optional
   fi
 else
   warn "systemd user bus unavailable; skipping service status checks"

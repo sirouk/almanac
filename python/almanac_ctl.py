@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
     Config,
     approve_request,
@@ -616,25 +617,23 @@ def main() -> None:
             dump_output(args, session)
             return
         if args.domain == "onboarding" and args.action == "approve":
-            dump_output(
-                args,
-                approve_onboarding_session(
-                    conn,
-                    session_id=args.session_id,
-                    actor=args.actor,
-                ),
+            session = approve_onboarding_session(
+                conn,
+                session_id=args.session_id,
+                actor=args.actor,
             )
+            notify_session_state(cfg, session)
+            dump_output(args, session)
             return
         if args.domain == "onboarding" and args.action == "deny":
-            dump_output(
-                args,
-                deny_onboarding_session(
-                    conn,
-                    session_id=args.session_id,
-                    actor=args.actor,
-                    reason=args.reason,
-                ),
+            session = deny_onboarding_session(
+                conn,
+                session_id=args.session_id,
+                actor=args.actor,
+                reason=args.reason,
             )
+            send_session_message(cfg, session, f"The operator declined this onboarding request: {session.get('denial_reason') or 'denied'}")
+            dump_output(args, session)
             return
 
         if args.domain == "agent" and args.action == "list":

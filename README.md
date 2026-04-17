@@ -172,6 +172,14 @@ It is not part of the live deploy and is ignored by git. It simply remembers
 which deployed `almanac.env` that checkout should manage on later `health`,
 `upgrade`, and `almanac-ctl` runs.
 
+Run those operator-facing commands from the operator's own Unix account and
+checkout, not by logging in as the service user. The wrappers are written to
+use `sudo` inline and switch to the deployed service user when a step needs
+root or service-user context. In practice, `deploy.sh`, `deploy.sh health`,
+`deploy.sh curator-setup`, and `./bin/almanac-ctl ...` should normally be run
+from the operator-maintained checkout, while direct login as the service user
+is reserved for focused debugging or recovery.
+
 Curator setup includes:
 
 - Hermes setup under the operator service user
@@ -189,6 +197,25 @@ Curator, run:
 
 That flow is intended to be idempotent: it should repair Curator state without
 duplicating manifests or blindly overwriting a working operator channel.
+
+When you enable Discord or Telegram for Curator, treat the user-facing gateway
+as a separate surface from operator notifications:
+
+- The operator notification channel only handles outbound operator notices. A
+  Discord webhook or Telegram operator chat ID does not make Curator reachable
+  to users.
+- Discord user DMs require Curator's real Discord bot app, invited with the
+  `bot` and `applications.commands` scopes. In the server where users discover
+  Curator, grant at least View Channels, Send Messages, and Read Message
+  History. Users can DM Curator once the bot shares a server with them. For a
+  DM-first onboarding flow, keep Direct Messages enabled for server members and
+  do not rely on a webhook-only install. If Curator needs to read ordinary
+  guild messages beyond DMs, mentions, or interactions, enable Message Content
+  intent in the Developer Portal.
+- Telegram user DMs require Curator's BotFather bot token and public username.
+  Each user must open a DM and press Start before Curator can reply. Telegram
+  privacy mode only affects groups, so leave it on unless you explicitly want
+  Curator to read ordinary group traffic.
 
 ### 2. Verify health
 
@@ -264,12 +291,12 @@ sudo ./bin/almanac-ctl agent deenroll <agent-id>
 User onboarding now starts with the public handshake, not with precreating a
 Unix account.
 
-If Curator Telegram onboarding is enabled, a user can instead DM Curator with
-`/start`, answer the step-by-step intake questions, wait for operator approval
-in Telegram, and then hand Curator a BotFather token for their own bot. Almanac
-will provision the Unix user on the host, wire that bot into the user agent,
-and hand the conversation off to the user's own bot instead of keeping Curator
-in the middle.
+If Curator onboarding is enabled on Telegram or Discord, a user can instead DM
+Curator with `/start`, answer the step-by-step intake questions, wait for
+operator approval, and then hand Curator the token for their own bot on that
+same platform. Almanac will provision the Unix user on the host, wire that bot
+into the user agent, and hand the conversation off to the user's own bot
+instead of keeping Curator in the middle.
 
 ### 1. Give the user the enrollment command
 

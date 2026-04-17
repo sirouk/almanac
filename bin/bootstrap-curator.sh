@@ -69,6 +69,50 @@ choose_channels_csv() {
   printf '%s\n' "$channels"
 }
 
+print_gateway_setup_guidance() {
+  local channels_csv="$1"
+
+  if [[ "$channels_csv" != *discord* && "$channels_csv" != *telegram* ]]; then
+    return 0
+  fi
+
+  cat <<EOF
+
+Curator chat gateway notes:
+  - The operator notification channel is separate from Curator's user-facing chat
+    gateway. A Discord webhook or Telegram operator chat ID only delivers
+    operator notices; it does not make Curator reachable to users.
+
+EOF
+
+  if [[ "$channels_csv" == *discord* ]]; then
+    cat <<EOF
+Discord:
+  - In the Discord Developer Portal, use a real bot application and invite it
+    with the \`bot\` and \`applications.commands\` scopes.
+  - In any server where users should discover Curator, grant at least View
+    Channels, Send Messages, and Read Message History.
+  - Users can DM Curator after the bot shares a server with them.
+  - If Curator needs to read ordinary guild messages beyond DMs, mentions, or
+    interactions, enable Message Content intent in the Developer Portal.
+
+EOF
+  fi
+
+  if [[ "$channels_csv" == *telegram* ]]; then
+    cat <<EOF
+Telegram:
+  - Create the bot in BotFather, keep its username discoverable, and use that
+    token during Hermes gateway setup.
+  - Each user must open a DM with the bot and press Start before Curator can
+    reply to that user.
+  - Privacy mode only affects groups; leave it on unless you intentionally want
+    Curator to read ordinary group traffic.
+
+EOF
+  fi
+}
+
 probe_hermes_state_json() {
   local hermes_home="$1"
   local hermes_bin="${2:-hermes}"
@@ -276,6 +320,7 @@ PY
   fi
 
   if [[ "$skip_gateway_setup" != "1" && -t 0 ]] && [[ "$channels_csv" == *discord* || "$channels_csv" == *telegram* ]] && should_rerun_setup "Hermes gateway setup" "$force_gateway_setup"; then
+    print_gateway_setup_guidance "$channels_csv"
     echo "Running curator Hermes gateway setup ..."
     if ! HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" gateway setup; then
       echo "Hermes gateway setup returned non-zero; Almanac will continue and restart the configured gateway itself." >&2
@@ -351,19 +396,24 @@ PY
     if has_curator_telegram_onboarding; then
       systemctl --user enable almanac-curator-onboarding.service >/dev/null
       systemctl --user restart almanac-curator-onboarding.service >/dev/null 2>&1 || true
-      if has_curator_non_telegram_gateway_channels; then
-        systemctl --user enable almanac-curator-gateway.service >/dev/null
-        systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
-      else
-        systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
-      fi
-    elif ! has_curator_gateway_channels; then
-      systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
-      systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
     else
       systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
+    fi
+    if has_curator_discord_onboarding; then
+      systemctl --user enable almanac-curator-discord-onboarding.service >/dev/null
+      systemctl --user restart almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+    else
+      systemctl --user disable --now almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+    fi
+    if ! has_curator_gateway_channels; then
+      systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
+      systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user disable --now almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+    elif has_curator_non_onboarding_gateway_channels || ! has_curator_onboarding; then
       systemctl --user enable almanac-curator-gateway.service >/dev/null
       systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
+    else
+      systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
     fi
   fi
 

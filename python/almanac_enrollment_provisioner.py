@@ -32,7 +32,7 @@ from almanac_control import (
     shell_quote,
     update_agent_channels,
 )
-from almanac_telegram import telegram_send_message
+from almanac_onboarding_flow import send_session_message
 
 
 def _operator_target(cfg: Config) -> tuple[str, str]:
@@ -94,28 +94,6 @@ def _queue_operator_message(conn, cfg: Config, message: str) -> None:
     )
 
 
-def _read_env_file_value(path: Path, key: str) -> str:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        if name.strip() == key:
-            return value.strip().strip("'\"")
-    return ""
-
-
-def _resolve_curator_bot_token(cfg: Config) -> str:
-    token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
-    if token:
-        return token
-    return _read_env_file_value(cfg.curator_hermes_home / ".env", "TELEGRAM_BOT_TOKEN").strip()
-
-
 def _write_env_values(path: Path, values: dict[str, str]) -> None:
     existing: dict[str, str] = {}
     if path.exists():
@@ -131,12 +109,9 @@ def _write_env_values(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _notify_user_via_curator(cfg: Config, *, chat_id: str, message: str) -> None:
-    token = _resolve_curator_bot_token(cfg)
-    if not token or not chat_id:
-        return
+def _notify_user_via_curator(cfg: Config, *, session: dict, message: str) -> None:
     try:
-        telegram_send_message(bot_token=token, chat_id=chat_id, text=message)
+        send_session_message(cfg, session, message)
     except Exception:
         return
 
@@ -240,7 +215,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     )
     _notify_user_via_curator(
         cfg,
-        chat_id=chat_id,
+        session=session,
         message=(
             f"Everything is ready. Your own bot is @{bot_username or 'your bot'} now. "
             f"Talk to it directly from here on out."
@@ -248,10 +223,121 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     )
 
 
+def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
+    agent_id = str(session.get("linked_agent_id") or "")
+    if not agent_id:
+        raise ValueError(f"onboarding session {session['session_id']} is missing linked_agent_id")
+    agent = get_agent(conn, agent_id)
+    if agent is None:
+        raise ValueError(f"unknown agent for onboarding session {session['session_id']}: {agent_id}")
+
+    unix_user = str(agent["unix_user"])
+    home = Path(pwd.getpwnam(unix_user).pw_dir)
+    hermes_home = Path(str(agent["hermes_home"]))
+    sender_id = str(session.get("sender_id") or "")
+    pending_bot_token_path = str(session.get("pending_bot_token_path") or "")
+    pending_bot_token = read_onboarding_bot_token_secret(pending_bot_token_path)
+    if not pending_bot_token:
+        pending_bot_token = str(session.get("pending_bot_token") or "")
+    answers = session.get("answers", {})
+    bot_username = str(answers.get("bot_username") or "")
+    if not pending_bot_token or not sender_id:
+        raise ValueError(f"onboarding session {session['session_id']} is missing Discord credentials")
+
+    env_path = hermes_home / ".env"
+    _write_env_values(
+        env_path,
+        {
+            "DISCORD_BOT_TOKEN": pending_bot_token,
+            "DISCORD_ALLOWED_USERS": sender_id,
+        },
+    )
+    try:
+        subprocess.run(["chown", f"{unix_user}:{unix_user}", str(env_path)], check=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"failed to chown {env_path}: {exc}") from exc
+
+    update_agent_channels(
+        conn,
+        cfg,
+        agent_id=agent_id,
+        channels=["tui-only", "discord"],
+    )
+
+    uid = pwd.getpwnam(unix_user).pw_uid
+    _wait_for_user_bus(str(uid))
+    result = subprocess.run(
+        [
+            "runuser",
+            "-u",
+            unix_user,
+            "--",
+            str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
+            agent_id,
+            str(cfg.repo_dir),
+            str(hermes_home),
+            json.dumps(["tui-only", "discord"]),
+            str(activation_trigger_path(cfg, agent_id)),
+        ],
+        env={
+            **os.environ,
+            "ALMANAC_CONFIG_FILE": os.environ.get("ALMANAC_CONFIG_FILE", ""),
+            "HOME": str(home),
+            "USER": unix_user,
+            "LOGNAME": unix_user,
+            "HERMES_HOME": str(hermes_home),
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+        },
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
+
+    save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        state="completed",
+        pending_bot_token="",
+        pending_bot_token_path="",
+        provision_error="",
+        completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+    )
+    delete_onboarding_bot_token_secret(pending_bot_token_path)
+    note_refresh_job(
+        conn,
+        job_name=f"onboarding-{session['session_id']}",
+        job_kind="onboarding",
+        target_id=agent_id,
+        schedule="approval",
+        status="ok",
+        note=f"discord gateway configured for {bot_username or 'bot'}",
+    )
+    _queue_operator_message(
+        conn,
+        cfg,
+        f"Onboarding complete for {agent_id} ({unix_user}); Discord bot {bot_username or 'unknown'} is live.",
+    )
+    _notify_user_via_curator(
+        cfg,
+        session=session,
+        message=(
+            f"Everything is ready. Your own bot is `{bot_username or 'your bot'}` now. "
+            "Talk to it directly from here on out."
+        ),
+    )
+
+
 def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
     for session in list_pending_onboarding_bot_configurations(conn):
         try:
-            _configure_user_telegram_gateway(conn, cfg, session)
+            answers = session.get("answers", {})
+            bot_platform = str(answers.get("bot_platform") or "telegram").strip().lower() or "telegram"
+            if bot_platform == "discord":
+                _configure_user_discord_gateway(conn, cfg, session)
+            else:
+                _configure_user_telegram_gateway(conn, cfg, session)
         except Exception as exc:  # noqa: BLE001
             message = str(exc).strip().replace("\n", " ")[:500] or "unknown onboarding gateway error"
             save_onboarding_session(

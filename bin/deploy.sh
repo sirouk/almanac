@@ -691,7 +691,9 @@ emit_runtime_config() {
     write_kv OPERATOR_NOTIFY_CHANNEL_ID "${OPERATOR_NOTIFY_CHANNEL_ID:-}"
     write_kv ALMANAC_OPERATOR_TELEGRAM_USER_IDS "${ALMANAC_OPERATOR_TELEGRAM_USER_IDS:-}"
     write_kv ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}"
+    write_kv ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}"
     write_kv ALMANAC_ONBOARDING_WINDOW_SECONDS "${ALMANAC_ONBOARDING_WINDOW_SECONDS:-3600}"
+    write_kv ALMANAC_ONBOARDING_PER_USER_LIMIT "${ALMANAC_ONBOARDING_PER_USER_LIMIT:-${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}}"
     write_kv ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT "${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}"
     write_kv ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT "${ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
     write_kv ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT "${ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
@@ -1643,6 +1645,12 @@ restart_shared_user_services_root() {
     if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
       run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-nextcloud.service"
     fi
+    if [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-onboarding.service" || true
+    fi
+    if [[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-discord-onboarding.service" || true
+    fi
     if [[ "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
       run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-gateway.service" || true
     fi
@@ -1864,7 +1872,7 @@ run_root_remove() {
     fi
 
     if [[ -S "/run/user/$uid/bus" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-curator-refresh.timer almanac-curator-gateway.service almanac-curator-onboarding.service >/dev/null 2>&1 || true" || true
+      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-curator-refresh.timer almanac-curator-gateway.service almanac-curator-onboarding.service almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true" || true
       run_as_user_systemd "$ALMANAC_USER" "$uid" "systemctl --user daemon-reload >/dev/null 2>&1 || true" || true
     fi
 
@@ -2019,6 +2027,12 @@ run_curator_setup_flow() {
       fi
       if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
         systemctl --user restart almanac-nextcloud.service
+      fi
+      if [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+        systemctl --user restart almanac-curator-onboarding.service >/dev/null 2>&1 || true
+      fi
+      if [[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+        systemctl --user restart almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
       fi
       if [[ "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
         systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true

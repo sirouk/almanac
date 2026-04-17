@@ -21,16 +21,18 @@ fi
 
 gateway_home="$ALMANAC_CURATOR_HERMES_HOME"
 
-if has_curator_telegram_onboarding; then
-  if ! has_curator_non_telegram_gateway_channels; then
-    echo "Curator Telegram onboarding owns the Telegram bot token; Hermes gateway stays disabled to avoid polling conflicts." >&2
+if has_curator_onboarding; then
+  if ! has_curator_non_onboarding_gateway_channels; then
+    echo "Curator onboarding owns all configured chat bot tokens; Hermes gateway stays disabled to avoid gateway conflicts." >&2
     exit 0
   fi
 
   gateway_home="$RUNTIME_DIR/curator-gateway-home"
   mkdir -p "$gateway_home"
 
-  python3 - "$ALMANAC_CURATOR_HERMES_HOME" "$gateway_home" <<'PY'
+  python3 - "$ALMANAC_CURATOR_HERMES_HOME" "$gateway_home" \
+    "$([[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]] && echo 1 || echo 0)" \
+    "$([[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]] && echo 1 || echo 0)" <<'PY'
 from pathlib import Path
 import shutil
 import sys
@@ -64,15 +66,30 @@ if source.exists():
                 link_path.unlink()
         link_path.symlink_to(entry)
 
-skip = {
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_ALLOWED_USERS",
-    "TELEGRAM_ALLOW_ALL_USERS",
-    "TELEGRAM_HOME_CHANNEL",
-    "TELEGRAM_HOME_CHANNEL_NAME",
-    "TELEGRAM_REPLY_TO_MODE",
-    "TELEGRAM_FALLBACK_IPS",
-}
+skip = set()
+if sys.argv[3] == "1":
+    skip.update(
+        {
+            "TELEGRAM_BOT_TOKEN",
+            "TELEGRAM_ALLOWED_USERS",
+            "TELEGRAM_ALLOW_ALL_USERS",
+            "TELEGRAM_HOME_CHANNEL",
+            "TELEGRAM_HOME_CHANNEL_NAME",
+            "TELEGRAM_REPLY_TO_MODE",
+            "TELEGRAM_FALLBACK_IPS",
+        }
+    )
+if sys.argv[4] == "1":
+    skip.update(
+        {
+            "DISCORD_BOT_TOKEN",
+            "DISCORD_ALLOWED_USERS",
+            "DISCORD_ALLOW_ALL_USERS",
+            "DISCORD_HOME_CHANNEL",
+            "DISCORD_HOME_CHANNEL_NAME",
+            "DISCORD_REPLY_TO_MODE",
+        }
+    )
 source_env = source / ".env"
 target_env = target / ".env"
 lines = []
@@ -93,8 +110,14 @@ else:
 target_env.chmod(0o600)
 PY
 
-  unset TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_ALLOW_ALL_USERS
-  unset TELEGRAM_HOME_CHANNEL TELEGRAM_HOME_CHANNEL_NAME TELEGRAM_REPLY_TO_MODE TELEGRAM_FALLBACK_IPS
+  if has_curator_telegram_onboarding; then
+    unset TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_ALLOW_ALL_USERS
+    unset TELEGRAM_HOME_CHANNEL TELEGRAM_HOME_CHANNEL_NAME TELEGRAM_REPLY_TO_MODE TELEGRAM_FALLBACK_IPS
+  fi
+  if has_curator_discord_onboarding; then
+    unset DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_ALLOW_ALL_USERS
+    unset DISCORD_HOME_CHANNEL DISCORD_HOME_CHANNEL_NAME DISCORD_REPLY_TO_MODE
+  fi
 fi
 
 export HERMES_HOME="$gateway_home"
@@ -116,6 +139,17 @@ if ! has_curator_telegram_onboarding && [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-onl
 
   if [[ -z "$(env_file_value "$hermes_env_file" "TELEGRAM_BOT_TOKEN")" && -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
     echo "Curator Telegram gateway is enabled but TELEGRAM_BOT_TOKEN is missing from both $hermes_env_file and almanac.env." >&2
+    exit 1
+  fi
+fi
+
+if ! has_curator_discord_onboarding && [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",discord,"* ]]; then
+  hermes_discord_token="$(env_file_value "$hermes_env_file" "DISCORD_BOT_TOKEN")"
+  if [[ -z "$hermes_discord_token" && -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+    export DISCORD_BOT_TOKEN
+  fi
+  if [[ -z "$(env_file_value "$hermes_env_file" "DISCORD_BOT_TOKEN")" && -z "${DISCORD_BOT_TOKEN:-}" ]]; then
+    echo "Curator Discord gateway is enabled but DISCORD_BOT_TOKEN is missing from both $hermes_env_file and almanac.env." >&2
     exit 1
   fi
 fi

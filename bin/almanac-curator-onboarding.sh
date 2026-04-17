@@ -6,5 +6,5 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 export PYTHONPATH="$SCRIPT_DIR/../python${PYTHONPATH:+:$PYTHONPATH}"
 
-PYTHON_BIN="$(resolve_runtime_python)"
+PYTHON_BIN="$(require_runtime_python)"
 exec "$PYTHON_BIN" "$SCRIPT_DIR/../python/almanac_curator_onboarding.py" "$@"

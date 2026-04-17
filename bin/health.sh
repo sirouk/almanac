@@ -76,11 +76,24 @@ check_curator_gateway_runtime() {
     return 0
   fi
 
-  if output="$("$RUNTIME_DIR/hermes-venv/bin/python3" - "$runtime_channels" <<'PY'
+  if output="$("$RUNTIME_DIR/hermes-venv/bin/python3" - "$runtime_channels" "$RUNTIME_DIR" <<'PY'
+import pathlib
 import sys
 
 channels = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
+runtime_dir = pathlib.Path(sys.argv[2]).resolve()
 missing = []
+
+try:
+    import hermes_cli  # noqa: F401
+except Exception:
+    missing.append("hermes-cli runtime package")
+else:
+    hermes_path = pathlib.Path(hermes_cli.__file__).resolve()
+    if not hermes_path.is_relative_to(runtime_dir):
+        print(f"Curator runtime is importing Hermes from outside Almanac runtime: {hermes_path}")
+        raise SystemExit(3)
+    print(f"Curator runtime imports Hermes from {hermes_path}")
 
 if "telegram" in channels:
     try:
@@ -108,6 +121,11 @@ PY
     status=$?
     case "$status" in
       2)
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && warn_or_fail "$line"
+        done <<<"$output"
+        ;;
+      3)
         while IFS= read -r line; do
           [[ -n "$line" ]] && warn_or_fail "$line"
         done <<<"$output"

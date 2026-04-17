@@ -147,6 +147,16 @@ resolve_runtime_python() {
   fi
   command -v python3
 }
+
+require_runtime_python() {
+  local python_bin="${RUNTIME_DIR:-}/hermes-venv/bin/python3"
+  if [[ -n "$python_bin" && -x "$python_bin" ]]; then
+    printf '%s\n' "$python_bin"
+    return 0
+  fi
+  echo "Managed Almanac runtime python is missing at $python_bin. Run bootstrap-userland first." >&2
+  return 1
+}
 BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
 BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-almanac@localhost}"
 NEXTCLOUD_PORT="${NEXTCLOUD_PORT:-18080}"

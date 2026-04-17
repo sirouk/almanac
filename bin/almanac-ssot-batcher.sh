@@ -9,4 +9,5 @@ require_real_layout "ssot batcher"
 ensure_layout
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$BOOTSTRAP_DIR/python/almanac_ssot_batcher.py" "$@"
+PYTHON_BIN="$(require_runtime_python)"
+exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_ssot_batcher.py" "$@"

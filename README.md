@@ -464,7 +464,7 @@ the system yet:
 ## Manual Components
 
 - [bootstrap-system.sh](./bin/bootstrap-system.sh): root/system setup
-- [bootstrap-userland.sh](./bin/bootstrap-userland.sh): install Hermes, qmd, and private repo scaffolding
+- [bootstrap-userland.sh](./bin/bootstrap-userland.sh): install Hermes, qmd, and private repo scaffolding. The shared Hermes source and venv live under `ALMANAC_PRIV_DIR/state/runtime/` as `hermes-agent-src/` and `hermes-venv/`; managed services are expected to use that runtime rather than any unrelated install under `$HOME`.
 - [bootstrap-curator.sh](./bin/bootstrap-curator.sh): Curator bootstrap and repair flow
 - [install-system-services.sh](./bin/install-system-services.sh): install root-owned systemd units such as the enrollment provisioner timer
 - [install-user-services.sh](./bin/install-user-services.sh): install systemd user units

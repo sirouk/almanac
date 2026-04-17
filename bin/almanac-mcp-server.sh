@@ -9,4 +9,5 @@ require_real_layout "almanac-mcp startup"
 ensure_layout
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$BOOTSTRAP_DIR/python/almanac_mcp_server.py" "$@"
+PYTHON_BIN="$(require_runtime_python)"
+exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_mcp_server.py" "$@"

@@ -6,5 +6,5 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
-PYTHON_BIN="$(resolve_runtime_python)"
+PYTHON_BIN="$(require_runtime_python)"
 exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_ctl.py" internal curator-refresh

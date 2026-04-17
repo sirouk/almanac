@@ -33,7 +33,7 @@ if [[ "$PDF_INGEST_ENABLED" != "1" ]]; then
   exit 0
 fi
 
-PYTHON_BIN="$(resolve_runtime_python)"
+PYTHON_BIN="$(require_runtime_python)"
 summary_json="$(
   flock "$PDF_INGEST_LOCK_FILE" \
     "$PYTHON_BIN" "$SCRIPT_DIR/pdf-ingest.py" "$@"

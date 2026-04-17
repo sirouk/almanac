@@ -9,4 +9,5 @@ require_real_layout "notion webhook startup"
 ensure_layout
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$BOOTSTRAP_DIR/python/almanac_notion_webhook.py" "$@"
+PYTHON_BIN="$(require_runtime_python)"
+exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_notion_webhook.py" "$@"

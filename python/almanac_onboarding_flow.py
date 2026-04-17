@@ -261,6 +261,16 @@ def _provider_secret_path(session: dict[str, Any]) -> str:
     return str(answers.get("pending_provider_secret_path") or "").strip()
 
 
+def _codex_browser_auth_error_state(message: str) -> dict[str, Any]:
+    compact = message.strip() or "unknown OpenAI Codex auth error"
+    return {
+        "flow": "device_code",
+        "provider": "openai-codex",
+        "status": "error",
+        "error_message": compact,
+    }
+
+
 def _bot_identity_answers(bot_platform: str, bot_identity: BotIdentity) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "bot_platform": bot_platform,
@@ -574,12 +584,23 @@ def process_onboarding_message(
                 save_kwargs["telegram_bot_username"] = bot_identity.username
             updated = save_onboarding_session(conn, **save_kwargs)
             if provider_setup.auth_flow == "codex-device":
-                auth_state = start_codex_device_authorization()
+                try:
+                    auth_state = start_codex_device_authorization()
+                except Exception as exc:  # noqa: BLE001
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-provider-browser-auth",
+                        answers={"provider_browser_auth": _codex_browser_auth_error_state(str(exc))},
+                        provision_error=str(exc).strip() or "failed to mint OpenAI Codex sign-in code",
+                    )
+                    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
                 updated = save_onboarding_session(
                     conn,
                     session_id=str(session["session_id"]),
                     state="awaiting-provider-browser-auth",
                     answers={"provider_browser_auth": auth_state},
+                    provision_error="",
                 )
             return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
 
@@ -587,6 +608,24 @@ def process_onboarding_message(
             provider_setup = _provider_setup(session)
             if provider_setup is None:
                 return [OutboundMessage(incoming.chat_id, "I lost track of the provider setup for this session. Send /start and we’ll begin again.")]
+            if provider_setup.auth_flow == "codex-device":
+                try:
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-provider-browser-auth",
+                        answers={"provider_browser_auth": start_codex_device_authorization()},
+                        provision_error="",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-provider-browser-auth",
+                        answers={"provider_browser_auth": _codex_browser_auth_error_state(str(exc))},
+                        provision_error=str(exc).strip() or "failed to mint OpenAI Codex sign-in code",
+                    )
+                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
             try:
                 if provider_setup.provider_id == "anthropic" and lower in {"oauth", "/oauth", "browser"}:
                     updated = save_onboarding_session(
@@ -626,12 +665,21 @@ def process_onboarding_message(
             if provider_setup is None:
                 return [OutboundMessage(incoming.chat_id, "I lost track of the provider setup for this session. Send /start and we’ll begin again.")]
             if lower in {"restart", "/restart"} and provider_setup.auth_flow == "codex-device":
-                updated = save_onboarding_session(
-                    conn,
-                    session_id=str(session["session_id"]),
-                    answers={"provider_browser_auth": start_codex_device_authorization()},
-                    provision_error="",
-                )
+                try:
+                    auth_state = start_codex_device_authorization()
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        answers={"provider_browser_auth": auth_state},
+                        provision_error="",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        answers={"provider_browser_auth": _codex_browser_auth_error_state(str(exc))},
+                        provision_error=str(exc).strip() or "failed to mint OpenAI Codex sign-in code",
+                    )
                 return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
             if provider_setup.provider_id != "anthropic":
                 return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]

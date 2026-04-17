@@ -551,7 +551,7 @@ ensure_shared_hermes_runtime() {
       return 1
     fi
     rm -rf "$venv_dir"
-    "$seed_python" -m venv "$venv_dir"
+    uv venv "$venv_dir" --python "$seed_python"
   fi
 
   uv pip install --python "$venv_dir/bin/python3" "$repo_dir[cli,mcp,messaging,cron]"

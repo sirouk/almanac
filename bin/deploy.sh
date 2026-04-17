@@ -7,6 +7,7 @@ ANSWERS_FILE="${ALMANAC_INSTALL_ANSWERS_FILE:-}"
 MODE=""
 PRIVILEGED_MODE=""
 DISCOVERED_CONFIG=""
+ALMANAC_NAME="${ALMANAC_NAME:-almanac}"
 QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
 PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
 PDF_INGEST_EXTRACTOR="${PDF_INGEST_EXTRACTOR:-auto}"
@@ -72,16 +73,44 @@ normalize_vault_qmd_collection_mask() {
   printf '%s\n' "$mask"
 }
 
+probe_path_status() {
+  local path="${1:-}"
+
+  python3 - "$path" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+if not path:
+    print("missing")
+    raise SystemExit(0)
+try:
+    os.stat(path)
+except FileNotFoundError:
+    print("missing")
+except PermissionError:
+    print("exists-unreadable")
+except OSError:
+    print("missing")
+else:
+    print("exists")
+PY
+}
+
 read_operator_artifact_config_file() {
   local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
   local ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+  local status=""
 
   if [[ -r "$artifact" ]]; then
     # shellcheck disable=SC1090
     source "$artifact"
     if [[ -n "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE" ]]; then
-      printf '%s\n' "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE"
-      return 0
+      status="$(probe_path_status "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE")"
+      if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
+        printf '%s\n' "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE"
+        return 0
+      fi
     fi
   fi
 
@@ -531,6 +560,7 @@ discover_existing_config() {
   local candidate
   local explicit_config
   local artifact_config
+  local status
   explicit_config="${ALMANAC_CONFIG_FILE:-}"
   artifact_config="$(read_operator_artifact_config_file || true)"
 
@@ -554,14 +584,16 @@ discover_existing_config() {
   )
 
   for candidate in "${candidates[@]}"; do
-    if [[ -n "$candidate" && -f "$candidate" ]]; then
+    status="$(probe_path_status "$candidate")"
+    if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
       DISCOVERED_CONFIG="$candidate"
       return 0
     fi
   done
 
   candidate="$(find /home -maxdepth 5 -path '*/almanac/almanac-priv/config/almanac.env' -print -quit 2>/dev/null || true)"
-  if [[ -n "$candidate" && -f "$candidate" ]]; then
+  status="$(probe_path_status "$candidate")"
+  if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
     DISCOVERED_CONFIG="$candidate"
     return 0
   fi
@@ -856,11 +888,19 @@ checkout_upstream_release() {
 
 write_operator_checkout_artifact() {
   local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local status=""
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 0
   fi
+  if [[ -n "${ALMANAC_CONFIG_FILE:-}" ]]; then
+    return 0
+  fi
   if [[ ! -d "$BOOTSTRAP_DIR" || ! -w "$BOOTSTRAP_DIR" ]]; then
+    return 0
+  fi
+  status="$(probe_path_status "${CONFIG_TARGET:-}")"
+  if [[ "$status" != "exists" && "$status" != "exists-unreadable" ]]; then
     return 0
   fi
 
@@ -1641,23 +1681,7 @@ prepare_deployed_context() {
 
 ensure_deployed_config_exists() {
   local status
-  status="$(python3 - "$CONFIG_TARGET" <<'PY'
-import os
-import sys
-
-path = sys.argv[1]
-try:
-    os.stat(path)
-except FileNotFoundError:
-    print("missing")
-except PermissionError:
-    print("exists-unreadable")
-except OSError:
-    print("missing")
-else:
-    print("exists")
-PY
-)"
+  status="$(probe_path_status "$CONFIG_TARGET")"
   if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
     return 0
   fi
@@ -1682,23 +1706,7 @@ maybe_reexec_with_sudo_for_config() {
     return 1
   fi
 
-  status="$(python3 - "$CONFIG_TARGET" <<'PY'
-import os
-import sys
-
-path = sys.argv[1]
-try:
-    os.stat(path)
-except FileNotFoundError:
-    print("missing")
-except PermissionError:
-    print("exists-unreadable")
-except OSError:
-    print("missing")
-else:
-    print("exists")
-PY
-)"
+  status="$(probe_path_status "$CONFIG_TARGET")"
   if [[ "$status" != "exists-unreadable" ]]; then
     return 1
   fi
@@ -2442,10 +2450,14 @@ PY
 
 run_health_check() {
   local uid
+  local status=""
 
   load_detected_config || true
 
-  if [[ ${EUID:-$(id -u)} -ne 0 && -n "${DISCOVERED_CONFIG:-}" && -f "$DISCOVERED_CONFIG" && ! -r "$DISCOVERED_CONFIG" ]]; then
+  if [[ ${EUID:-$(id -u)} -ne 0 && -n "${DISCOVERED_CONFIG:-}" ]]; then
+    status="$(probe_path_status "$DISCOVERED_CONFIG")"
+  fi
+  if [[ "$status" == "exists-unreadable" ]]; then
     if ! sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" health; then
       return 1
     fi

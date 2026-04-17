@@ -14,8 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
-import urllib.request
 from typing import Any
 
 from almanac_control import (
@@ -28,20 +26,21 @@ from almanac_control import (
     mark_notification_delivered,
     mark_notification_error,
 )
+from almanac_http import http_request
 
 
 def _http_post_json(url: str, payload: dict, headers: dict[str, str] | None = None, timeout: int = 10) -> tuple[int, str]:
     request_headers = {"Content-Type": "application/json"}
     request_headers.update(headers or {})
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=request_headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            return response.status, body
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
-        return exc.code, body
+    response = http_request(
+        url,
+        method="POST",
+        headers=request_headers,
+        json_payload=payload,
+        timeout=timeout,
+        allow_loopback_http=False,
+    )
+    return response.status_code, response.text
 
 
 def deliver_discord(message: str, *, webhook_url: str) -> str | None:

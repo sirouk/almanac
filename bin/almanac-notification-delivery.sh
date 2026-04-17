@@ -9,4 +9,5 @@ require_real_layout "notification delivery"
 ensure_layout
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$BOOTSTRAP_DIR/python/almanac_notification_delivery.py" "$@"
+PYTHON_BIN="$(resolve_runtime_python)"
+exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_notification_delivery.py" "$@"

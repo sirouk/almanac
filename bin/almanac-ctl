@@ -27,4 +27,5 @@ if [[ "$needs_root" == "1" && ${EUID:-$(id -u)} -ne 0 ]]; then
 fi
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" "$@"
+PYTHON_BIN="$(resolve_runtime_python)"
+exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_ctl.py" "$@"

@@ -4,8 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
-import urllib.request
+
+from almanac_http import http_request, parse_json_response
 
 
 def mcp_call(url: str, tool_name: str, arguments: dict) -> dict:
@@ -18,26 +18,31 @@ def mcp_call(url: str, tool_name: str, arguments: dict) -> dict:
         request_headers = dict(headers)
         if session_id:
             request_headers["mcp-session-id"] = session_id
-        request = urllib.request.Request(
+        response = http_request(
             url,
-            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
             headers=request_headers,
+            json_payload=payload,
+            timeout=20,
         )
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                parsed = json.loads(body) if body.strip() else {}
-                if "error" in parsed:
-                    raise RuntimeError(parsed["error"]["message"])
-                return response.headers.get("mcp-session-id") or session_id, parsed
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            try:
-                parsed = json.loads(body) if body.strip() else {}
-            except json.JSONDecodeError:
-                parsed = {}
-            message = (((parsed or {}).get("error") or {}).get("message")) or str(exc)
-            raise RuntimeError(message) from exc
+            parsed = parse_json_response(response, label=url)
+            if not isinstance(parsed, dict):
+                raise RuntimeError("response payload was not a JSON object")
+            if "error" in parsed:
+                raise RuntimeError(parsed["error"]["message"])
+            if response.status_code >= 400:
+                raise RuntimeError(f"{url} returned {response.status_code}")
+            return response.headers.get("mcp-session-id") or session_id, parsed
+        except RuntimeError as exc:
+            if response.status_code >= 400:
+                try:
+                    parsed = parse_json_response(response, label=url)
+                except RuntimeError:
+                    parsed = {}
+                message = (((parsed or {}).get("error") or {}).get("message")) or str(exc)
+                raise RuntimeError(message) from exc
+            raise
 
     session_id, _ = rpc(
         {
@@ -66,7 +71,7 @@ def mcp_call(url: str, tool_name: str, arguments: dict) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Call almanac-mcp tools over HTTP.")
-    parser.add_argument("--url", required=True, help="Full http://host:port/mcp URL")
+    parser.add_argument("--url", required=True, help="Full MCP URL, e.g. http://127.0.0.1:8282/mcp or https://host/almanac-mcp")
     parser.add_argument("--tool", required=True, help="Tool name, e.g. bootstrap.request")
     parser.add_argument("--json-args", default="{}", help="JSON object of tool arguments")
     return parser.parse_args()

@@ -138,6 +138,15 @@ QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ALMANAC_PRIV_DIR/quarto}"
 QUARTO_OUTPUT_DIR="${QUARTO_OUTPUT_DIR:-$PUBLISHED_DIR}"
 BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
+
+resolve_runtime_python() {
+  local python_bin="${RUNTIME_DIR:-}/hermes-venv/bin/python3"
+  if [[ -n "$python_bin" && -x "$python_bin" ]]; then
+    printf '%s\n' "$python_bin"
+    return 0
+  fi
+  command -v python3
+}
 BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
 BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-almanac@localhost}"
 NEXTCLOUD_PORT="${NEXTCLOUD_PORT:-18080}"

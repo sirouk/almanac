@@ -2,5 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
 export PYTHONPATH="$SCRIPT_DIR/../python${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$SCRIPT_DIR/../python/almanac_enrollment_provisioner.py" "$@"
+PYTHON_BIN="$(resolve_runtime_python)"
+exec "$PYTHON_BIN" "$SCRIPT_DIR/../python/almanac_enrollment_provisioner.py" "$@"

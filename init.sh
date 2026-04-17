@@ -219,28 +219,44 @@ def rpc(url: str, payload: dict, session_id: str | None = None) -> tuple[str | N
     }
     if session_id:
         headers["mcp-session-id"] = session_id
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-    )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            parsed = json.loads(response.read().decode("utf-8") or "{}")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
+        import httpx
+    except ImportError:
+        httpx = None
+    if httpx is not None:
         try:
-            parsed = json.loads(body) if body.strip() else {}
-        except json.JSONDecodeError:
-            parsed = {}
-        message = (((parsed or {}).get("error") or {}).get("message")) or str(exc)
-        raise SystemExit(message) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(str(exc)) from exc
+            response = httpx.post(url, json=payload, headers=headers, timeout=20.0)
+            parsed = json.loads(response.text or "{}")
+        except Exception as exc:  # noqa: BLE001
+            raise SystemExit(str(exc)) from exc
+        if response.status_code >= 400:
+            message = (((parsed or {}).get("error") or {}).get("message")) or response.text[:200] or str(response.status_code)
+            raise SystemExit(message)
+        response_headers = {key.lower(): value for key, value in response.headers.items()}
+    else:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                parsed = json.loads(response.read().decode("utf-8") or "{}")
+                response_headers = {key.lower(): value for key, value in response.headers.items()}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(body) if body.strip() else {}
+            except json.JSONDecodeError:
+                parsed = {}
+            message = (((parsed or {}).get("error") or {}).get("message")) or str(exc)
+            raise SystemExit(message) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise SystemExit(str(exc)) from exc
 
     if "error" in parsed:
         raise SystemExit(parsed["error"].get("message", "remote enrollment failed"))
-    return response.headers.get("mcp-session-id") or session_id, parsed
+    return response_headers.get("mcp-session-id") or session_id, parsed
 
 
 url = os.environ["ALMANAC_REMOTE_BOOTSTRAP_URL"]

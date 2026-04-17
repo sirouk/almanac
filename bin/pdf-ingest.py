@@ -9,9 +9,11 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+
+from almanac_http import http_request, parse_json_object
 
 
 VAULT_DIR = Path(os.environ["VAULT_DIR"]).resolve()
@@ -265,31 +267,20 @@ def call_vision_model(page_number: int, image_path: Path) -> str:
         ],
     }
 
-    request = urllib.request.Request(
+    response = http_request(
         PDF_VISION_ENDPOINT,
-        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
         headers={
             "Authorization": f"Bearer {PDF_VISION_API_KEY}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-        method="POST",
+        json_payload=payload,
+        timeout=VISION_TIMEOUT_SECONDS,
     )
-
-    try:
-        with urllib.request.urlopen(request, timeout=VISION_TIMEOUT_SECONDS) as response:
-            response_body = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"vision endpoint returned HTTP {exc.code}: {body[:400].strip()}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"vision endpoint request failed: {exc.reason}") from exc
-
-    try:
-        data = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"vision endpoint returned invalid JSON: {response_body[:400].strip()}") from exc
-
+    if response.status_code >= 400:
+        raise RuntimeError(f"vision endpoint returned HTTP {response.status_code}: {response.text[:400].strip()}")
+    data = parse_json_object(response, label="vision endpoint")
     return normalize_caption_text(extract_chat_message_text(data))
 
 

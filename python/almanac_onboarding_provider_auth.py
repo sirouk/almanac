@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import secrets
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
+
+from almanac_http import http_request, parse_json_object
 
 
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -393,55 +392,17 @@ def _request_json(
     if payload is not None and form_payload is not None:
         raise ValueError("choose either payload or form_payload")
     request_headers = dict(headers or {})
-    normalized_form_payload = None
-    if form_payload is not None:
-        normalized_form_payload = {
-            key: str(value) for key, value in form_payload.items() if value is not None
-        }
-    try:
-        import httpx
-    except ImportError:
-        httpx = None
-    if httpx is not None:
-        try:
-            with httpx.Client(timeout=float(timeout)) as client:
-                if payload is not None:
-                    response = client.post(url, json=payload, headers=request_headers)
-                elif normalized_form_payload is not None:
-                    response = client.post(url, data=normalized_form_payload, headers=request_headers)
-                else:
-                    response = client.post(url, headers=request_headers)
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"{url} request failed: {exc}") from exc
-        if response.status_code in pending_statuses:
-            return None
-        if response.status_code >= 400:
-            raise RuntimeError(f"{url} returned {response.status_code}: {response.text[:200]}")
-        try:
-            parsed = response.json()
-        except ValueError as exc:
-            raise RuntimeError(f"{url} returned invalid json: {response.text[:200]}") from exc
-        if isinstance(parsed, dict):
-            return parsed
-        raise RuntimeError(f"{url} returned an unexpected response payload.")
-    data = None
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-    elif normalized_form_payload is not None:
-        data = urllib.parse.urlencode(normalized_form_payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=request_headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw_body = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        if exc.code in pending_statuses:
-            return None
-        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
-        raise RuntimeError(f"{url} returned {exc.code}: {body[:200]}") from exc
-    try:
-        parsed = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{url} returned invalid json: {raw_body[:200]}") from exc
-    if isinstance(parsed, dict):
-        return parsed
-    raise RuntimeError(f"{url} returned an unexpected response payload.")
+    response = http_request(
+        url,
+        method="POST",
+        headers=request_headers,
+        json_payload=payload,
+        form_payload=form_payload,
+        timeout=timeout,
+        allow_loopback_http=False,
+    )
+    if response.status_code in pending_statuses:
+        return None
+    if response.status_code >= 400:
+        raise RuntimeError(f"{url} returned {response.status_code}: {response.text[:200]}")
+    return parse_json_object(response, label=url)

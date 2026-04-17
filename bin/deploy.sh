@@ -1708,20 +1708,22 @@ run_root_install() {
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
 
-  echo
-  echo "Running health check..."
-  if [[ -S "/run/user/$uid/bus" ]]; then
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
-  else
-    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
-  fi
-
+  # Record the release state before health so the check_upgrade_state probe
+  # doesn't false-warn about a missing release file on a first install.
   source_commit="$(git_head_commit "$BOOTSTRAP_DIR")"
   source_branch="$(git_head_branch "$BOOTSTRAP_DIR")"
   source_repo_url="$(git_origin_url "$BOOTSTRAP_DIR")"
   if [[ -n "$source_commit" ]]; then
     write_release_state "local-checkout" "$source_commit" "$source_repo_url" "$source_branch" "$BOOTSTRAP_DIR"
     chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
+  fi
+
+  echo
+  echo "Running health check..."
+  if [[ -S "/run/user/$uid/bus" ]]; then
+    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+  else
+    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
   fi
 
   echo
@@ -1808,6 +1810,14 @@ run_root_upgrade() {
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
 
+  # Record the release state before health so the check_upgrade_state probe can
+  # see the new deployed_commit. Services have already been restarted against
+  # the new code at this point; the release state reflects reality regardless
+  # of whether strict health passes. If health fails, the operator inspects
+  # the failures against an accurately-recorded current deployment.
+  write_release_state "upstream" "$upstream_commit" "$ALMANAC_UPSTREAM_REPO_URL" "$ALMANAC_UPSTREAM_BRANCH" ""
+  chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
+
   echo
   echo "Running health check..."
   if [[ -S "/run/user/$uid/bus" ]]; then
@@ -1815,9 +1825,6 @@ run_root_upgrade() {
   else
     run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
   fi
-
-  write_release_state "upstream" "$upstream_commit" "$ALMANAC_UPSTREAM_REPO_URL" "$ALMANAC_UPSTREAM_BRANCH" ""
-  chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
 
   echo
   echo "Almanac upgrade complete."

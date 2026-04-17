@@ -48,6 +48,7 @@ def telegram_send_message(
     chat_id: str,
     text: str,
     reply_to_message_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -55,8 +56,51 @@ def telegram_send_message(
     }
     if reply_to_message_id is not None:
         payload["reply_to_message_id"] = int(reply_to_message_id)
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     return _request_json(
         _telegram_url(bot_token, "sendMessage"),
+        method="POST",
+        payload=payload,
+        timeout=20,
+    )
+
+
+def telegram_answer_callback_query(
+    *,
+    bot_token: str,
+    callback_query_id: str,
+    text: str = "",
+    show_alert: bool = False,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "callback_query_id": callback_query_id,
+        "show_alert": bool(show_alert),
+    }
+    if text:
+        payload["text"] = text[:200]
+    return _request_json(
+        _telegram_url(bot_token, "answerCallbackQuery"),
+        method="POST",
+        payload=payload,
+        timeout=20,
+    )
+
+
+def telegram_edit_message_reply_markup(
+    *,
+    bot_token: str,
+    chat_id: str,
+    message_id: int,
+    reply_markup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": int(message_id),
+        "reply_markup": reply_markup if reply_markup is not None else {"inline_keyboard": []},
+    }
+    return _request_json(
+        _telegram_url(bot_token, "editMessageReplyMarkup"),
         method="POST",
         payload=payload,
         timeout=20,

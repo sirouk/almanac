@@ -10,9 +10,11 @@ from typing import Any
 
 from almanac_control import (
     Config,
+    approve_request,
     approve_onboarding_session,
     clear_onboarding_update_failure,
     connect_db,
+    deny_request,
     deny_onboarding_session,
     get_onboarding_session,
     get_setting,
@@ -27,7 +29,13 @@ from almanac_onboarding_flow import (
     process_onboarding_message,
     resolve_curator_telegram_bot_token,
 )
-from almanac_telegram import telegram_get_me, telegram_get_updates, telegram_send_message
+from almanac_telegram import (
+    telegram_answer_callback_query,
+    telegram_edit_message_reply_markup,
+    telegram_get_me,
+    telegram_get_updates,
+    telegram_send_message,
+)
 
 
 OFFSET_SETTING_KEY = "curator_telegram_onboarding_update_offset"
@@ -51,8 +59,8 @@ def send_text(bot_token: str, chat_id: str, text: str, *, reply_to_message_id: i
     )
 
 
-def _format_actor_label(message: dict[str, Any]) -> str:
-    sender = message.get("from") or {}
+def _format_actor_label(message_like: dict[str, Any]) -> str:
+    sender = message_like.get("from") or {}
     username = str(sender.get("username") or "").strip()
     if username:
         return f"@{username}"
@@ -76,8 +84,9 @@ def notify_operator_worker_failure(
         return
     if failure_count > 1 and not skipped:
         return
-    message = update.get("message") or {}
-    sender = message.get("from") or {}
+    callback_query = update.get("callback_query") or {}
+    message = update.get("message") or callback_query.get("message") or {}
+    sender = callback_query.get("from") or message.get("from") or {}
     username = str(sender.get("username") or "").strip()
     sender_label = f"@{username}" if username else str(sender.get("id") or "unknown")
     status = "skipped" if skipped else "will retry"
@@ -93,18 +102,31 @@ def notify_operator_worker_failure(
         return
 
 
-def operator_message_allowed(cfg: Config, message: dict[str, Any]) -> bool:
+def _operator_sender_allowed(
+    cfg: Config,
+    *,
+    chat_id: str,
+    sender_id: str,
+    chat_type: str,
+) -> bool:
     if cfg.operator_notify_platform != "telegram" or not cfg.operator_notify_channel_id:
         return False
-    chat = message.get("chat") or {}
-    sender = message.get("from") or {}
-    chat_id = str(chat.get("id") or "")
-    sender_id = str(sender.get("id") or "")
     if chat_id != str(cfg.operator_notify_channel_id):
         return False
     if cfg.operator_telegram_user_ids:
         return sender_id in cfg.operator_telegram_user_ids
-    return chat.get("type") == "private" and chat_id == sender_id
+    return chat_type == "private" and chat_id == sender_id
+
+
+def operator_message_allowed(cfg: Config, message: dict[str, Any]) -> bool:
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    return _operator_sender_allowed(
+        cfg,
+        chat_id=str(chat.get("id") or ""),
+        sender_id=str(sender.get("id") or ""),
+        chat_type=str(chat.get("type") or ""),
+    )
 
 
 def _handle_operator_command(
@@ -119,28 +141,147 @@ def _handle_operator_command(
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
     if command not in {"/approve", "/deny"} or len(parts) < 2:
         if command.startswith("/approve") or command.startswith("/deny"):
-            send_text(bot_token, operator_chat_id, "Use /approve onb_xxx or /deny onb_xxx optional reason.")
-        return
-    session_id = parts[1].strip()
-    actor = _format_actor_label(message)
-    with connect_db(cfg) as conn:
-        session = get_onboarding_session(conn, session_id)
-        if session is None:
-            send_text(bot_token, operator_chat_id, f"Unknown onboarding session: {session_id}")
-            return
-        if command == "/approve":
-            updated = approve_onboarding_session(conn, session_id=session_id, actor=actor)
             send_text(
                 bot_token,
                 operator_chat_id,
-                f"Approved {session_id} for {updated['answers'].get('full_name') or updated.get('sender_display_name') or updated.get('sender_id')}.",
+                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, or /deny req_xxx.",
             )
+        return
+    target_id = parts[1].strip()
+    actor = _format_actor_label(message)
+    with connect_db(cfg) as conn:
+        if target_id.startswith("onb_"):
+            session = get_onboarding_session(conn, target_id)
+            if session is None:
+                send_text(bot_token, operator_chat_id, f"Unknown onboarding session: {target_id}")
+                return
+            if command == "/approve":
+                updated = approve_onboarding_session(conn, session_id=target_id, actor=actor)
+                send_text(
+                    bot_token,
+                    operator_chat_id,
+                    f"Approved {target_id} for {updated['answers'].get('full_name') or updated.get('sender_display_name') or updated.get('sender_id')}.",
+                )
+                notify_session_state(cfg, updated)
+                return
+            reason = parts[2].strip() if len(parts) > 2 else ""
+            updated = deny_onboarding_session(conn, session_id=target_id, actor=actor, reason=reason)
+            send_text(bot_token, operator_chat_id, f"Denied {target_id}.")
             notify_session_state(cfg, updated)
             return
-        reason = parts[2].strip() if len(parts) > 2 else ""
-        updated = deny_onboarding_session(conn, session_id=session_id, actor=actor, reason=reason)
-        send_text(bot_token, operator_chat_id, f"Denied {session_id}.")
-        notify_session_state(cfg, updated)
+        if target_id.startswith("req_"):
+            if command == "/approve":
+                approve_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
+                send_text(bot_token, operator_chat_id, f"Approved {target_id}.")
+                return
+            deny_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
+            send_text(bot_token, operator_chat_id, f"Denied {target_id}.")
+            return
+        send_text(bot_token, operator_chat_id, f"Unknown approval target: {target_id}")
+
+
+def _clear_operator_callback_buttons(bot_token: str, callback_query: dict[str, Any]) -> None:
+    message = callback_query.get("message") or {}
+    chat_id = str((message.get("chat") or {}).get("id") or "")
+    message_id = message.get("message_id")
+    if not chat_id or not isinstance(message_id, int):
+        return
+    try:
+        telegram_edit_message_reply_markup(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup={"inline_keyboard": []},
+        )
+    except Exception:
+        return
+
+
+def _handle_operator_callback(
+    *,
+    cfg: Config,
+    bot_token: str,
+    callback_query: dict[str, Any],
+) -> None:
+    callback_query_id = str(callback_query.get("id") or "")
+    data = str(callback_query.get("data") or "").strip()
+    message = callback_query.get("message") or {}
+    chat = message.get("chat") or {}
+    sender = callback_query.get("from") or {}
+    chat_id = str(chat.get("id") or "")
+    sender_id = str(sender.get("id") or "")
+    chat_type = str(chat.get("type") or "")
+    if not callback_query_id or not data.startswith("almanac:"):
+        return
+    if not _operator_sender_allowed(
+        cfg,
+        chat_id=chat_id,
+        sender_id=sender_id,
+        chat_type=chat_type,
+    ):
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text="Operator approval is restricted in this chat.",
+            show_alert=True,
+        )
+        return
+    try:
+        _, scope, action, target_id = data.split(":", 3)
+    except ValueError:
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text="Malformed approval action.",
+            show_alert=True,
+        )
+        return
+    actor = _format_actor_label({"from": sender})
+    try:
+        visible_reply: str | None = None
+        with connect_db(cfg) as conn:
+            if scope == "onboarding" and target_id.startswith("onb_"):
+                if action == "approve":
+                    updated = approve_onboarding_session(conn, session_id=target_id, actor=actor)
+                    result_text = (
+                        f"Approved {target_id} for "
+                        f"{updated['answers'].get('full_name') or updated.get('sender_display_name') or updated.get('sender_id')}."
+                    )
+                elif action == "deny":
+                    updated = deny_onboarding_session(conn, session_id=target_id, actor=actor, reason="")
+                    result_text = f"Denied {target_id}."
+                else:
+                    raise ValueError(f"unknown onboarding action: {action}")
+                notify_session_state(cfg, updated)
+                visible_reply = result_text
+            elif scope == "request" and target_id.startswith("req_"):
+                if action == "approve":
+                    approve_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
+                    result_text = f"Approved {target_id}."
+                elif action == "deny":
+                    deny_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
+                    result_text = f"Denied {target_id}."
+                else:
+                    raise ValueError(f"unknown request action: {action}")
+            else:
+                raise ValueError(f"unknown approval target: {target_id}")
+        _clear_operator_callback_buttons(bot_token, callback_query)
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text=result_text,
+            show_alert=False,
+        )
+        if visible_reply and chat_id:
+            send_text(bot_token, chat_id, visible_reply)
+    except Exception as exc:  # noqa: BLE001
+        compact_error = (str(exc).strip() or exc.__class__.__name__).replace("\n", " ")[:200]
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text=compact_error,
+            show_alert=True,
+        )
 
 
 def _telegram_validator(curator_bot_id: str):
@@ -203,6 +344,10 @@ def _handle_user_message(
 
 
 def process_update(*, cfg: Config, bot_token: str, curator_bot_id: str, update: dict[str, Any]) -> None:
+    callback_query = update.get("callback_query")
+    if isinstance(callback_query, dict):
+        _handle_operator_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query)
+        return
     message = update.get("message")
     if not isinstance(message, dict):
         return

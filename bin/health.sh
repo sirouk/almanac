@@ -416,6 +416,13 @@ if not agents:
     raise SystemExit(0)
 
 failures = 0
+required_skill_names = [
+    "almanac-qmd-mcp",
+    "almanac-vault-reconciler",
+    "almanac-first-contact",
+    "almanac-vaults",
+    "almanac-ssot",
+]
 for agent in agents:
     agent_id = agent["agent_id"]
     manifest_path = Path(agent["manifest_path"] or "")
@@ -433,6 +440,23 @@ for agent in agents:
         hermes_home_exists = True
     if not hermes_home_exists:
         print(f"FAIL {agent_id}: hermes home missing at {hermes_home}")
+        failures += 1
+        continue
+    skill_root = hermes_home / "skills"
+    try:
+        missing_skills = [
+            skill_name
+            for skill_name in required_skill_names
+            if not (skill_root / skill_name / "SKILL.md").is_file()
+        ]
+    except PermissionError:
+        print(f"WARN {agent_id}: cannot inspect managed skills at {skill_root} due to permissions")
+        missing_skills = []
+    if missing_skills:
+        print(
+            f"FAIL {agent_id}: missing managed Almanac skills in {skill_root}: "
+            + ", ".join(missing_skills)
+        )
         failures += 1
         continue
 

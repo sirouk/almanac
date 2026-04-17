@@ -27,6 +27,7 @@ from almanac_control import (
     mark_notification_error,
 )
 from almanac_http import http_request
+from almanac_telegram import telegram_send_message
 
 
 def _http_post_json(url: str, payload: dict, headers: dict[str, str] | None = None, timeout: int = 10) -> tuple[int, str]:
@@ -57,17 +58,26 @@ def deliver_discord(message: str, *, webhook_url: str) -> str | None:
     return None
 
 
-def deliver_telegram(message: str, *, bot_token: str, chat_id: str) -> str | None:
+def deliver_telegram(
+    message: str,
+    *,
+    bot_token: str,
+    chat_id: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> str | None:
     if not bot_token:
         return "TELEGRAM_BOT_TOKEN is not configured"
     if not chat_id:
         return "telegram chat_id is empty"
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    # Telegram caps at 4096; keep plenty of margin.
-    text = message if len(message) <= 4000 else message[:3997] + "..."
-    status, body = _http_post_json(url, {"chat_id": chat_id, "text": text})
-    if status >= 300:
-        return f"telegram http {status}: {body[:200]}"
+    try:
+        telegram_send_message(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            text=message,
+            reply_markup=reply_markup,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return str(exc).strip() or "unknown telegram delivery error"
     return None
 
 
@@ -97,6 +107,13 @@ def _operator_platform(cfg: Config, row: dict[str, Any]) -> str:
 
 def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
     target_kind = (row.get("target_kind") or "").lower()
+    extra_raw = str(row.get("extra_json") or "").strip()
+    try:
+        extra = json.loads(extra_raw) if extra_raw else {}
+    except json.JSONDecodeError:
+        extra = {}
+    if not isinstance(extra, dict):
+        extra = {}
 
     if target_kind == "operator":
         platform = _operator_platform(cfg, row)
@@ -106,7 +123,15 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
         if platform == "telegram":
             bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
             chat_id = str(row.get("target_id") or cfg.operator_notify_channel_id or "")
-            return deliver_telegram(row["message"], bot_token=bot_token, chat_id=chat_id)
+            reply_markup = extra.get("telegram_reply_markup")
+            if not isinstance(reply_markup, dict):
+                reply_markup = None
+            return deliver_telegram(
+                row["message"],
+                bot_token=bot_token,
+                chat_id=chat_id,
+                reply_markup=reply_markup,
+            )
         # tui-only: no external delivery; row stays readable via notifications.list.
         return None
 

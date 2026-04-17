@@ -2928,6 +2928,19 @@ PY
         --bot-name "$bot_label" \
         --unix-user "$unix_user" >/dev/null 2>&1 || true
     fi
+    run_root_env_cmd runuser -u "$unix_user" -- env \
+      HOME="$user_home" \
+      USER="$unix_user" \
+      LOGNAME="$unix_user" \
+      HERMES_HOME="$hermes_home" \
+      "$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh" \
+      "$ALMANAC_REPO_DIR" \
+      "$hermes_home" \
+      almanac-qmd-mcp \
+      almanac-vault-reconciler \
+      almanac-first-contact \
+      almanac-vaults \
+      almanac-ssot >/dev/null
     echo "Reinstalling user-agent services for $agent_id ($unix_user)..."
     run_root_env_cmd runuser -u "$unix_user" -- env \
       XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -2990,15 +3003,13 @@ for row in rows:
         channels = json.loads(row["channels_json"] or "[]")
     except Exception:
         channels = []
-    normalized = [str(item).strip().lower() for item in channels]
-    if any(channel in {"discord", "telegram"} for channel in normalized):
-        print("\t".join([
-            str(row["agent_id"] or ""),
-            str(row["unix_user"] or ""),
-            str(row["hermes_home"] or ""),
-            json.dumps(channels),
-            bot_labels.get(str(row["agent_id"] or ""), ""),
-        ]))
+    print("\t".join([
+        str(row["agent_id"] or ""),
+        str(row["unix_user"] or ""),
+        str(row["hermes_home"] or ""),
+        json.dumps(channels),
+        bot_labels.get(str(row["agent_id"] or ""), ""),
+    ]))
 PY
 )
   restart_shared_user_services_root || true

@@ -438,6 +438,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           target_id TEXT NOT NULL,
           channel_kind TEXT NOT NULL,
           message TEXT NOT NULL,
+          extra_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL,
           delivered_at TEXT,
           delivery_error TEXT
@@ -529,6 +530,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "onboarding_sessions", "provision_error", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "completed_at", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "last_prompt_at", "TEXT")
+    _ensure_column(conn, "notification_outbox", "extra_json", "TEXT NOT NULL DEFAULT '{}'")
     conn.commit()
 
 
@@ -1580,13 +1582,14 @@ def queue_notification(
     target_id: str,
     channel_kind: str,
     message: str,
+    extra: dict[str, Any] | None = None,
 ) -> int:
     cursor = conn.execute(
         """
-        INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (target_kind, target_id, channel_kind, message, utc_now_iso()),
+        (target_kind, target_id, channel_kind, message, json_dumps(extra or {}), utc_now_iso()),
     )
     conn.commit()
     return int(cursor.lastrowid)
@@ -1619,7 +1622,7 @@ def fetch_undelivered_notifications(
         where.append("target_kind != 'user-agent'")
     rows = conn.execute(
         f"""
-        SELECT id, target_kind, target_id, channel_kind, message, created_at, delivery_error
+        SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error
         FROM notification_outbox
         WHERE {' AND '.join(where)}
         ORDER BY
@@ -1648,6 +1651,31 @@ def has_pending_curator_brief_fanout(conn: sqlite3.Connection) -> bool:
         """
     ).fetchone()
     return row is not None
+
+
+def operator_telegram_action_extra(
+    cfg: Config,
+    *,
+    scope: str,
+    target_id: str,
+) -> dict[str, Any] | None:
+    normalized_scope = scope.strip().lower()
+    target = target_id.strip()
+    if (
+        cfg.operator_notify_platform != "telegram"
+        or not cfg.curator_telegram_onboarding_enabled
+        or normalized_scope not in {"request", "onboarding"}
+        or not target
+    ):
+        return None
+    return {
+        "telegram_reply_markup": {
+            "inline_keyboard": [[
+                {"text": "Approve", "callback_data": f"almanac:{normalized_scope}:approve:{target}"},
+                {"text": "Deny", "callback_data": f"almanac:{normalized_scope}:deny:{target}"},
+            ]]
+        }
+    }
 
 
 def consume_agent_notifications(
@@ -2397,12 +2425,15 @@ def request_bootstrap(
         f"{requester_identity} ({unix_user}) is requesting enrollment from {origin_note}."
         f"{prior_note}{provisioning_note} Approve via almanac-ctl request approve {request_id}"
     )
+    if cfg.operator_notify_platform == "telegram" and cfg.curator_telegram_onboarding_enabled:
+        message += " or tap Approve / Deny below."
     queue_notification(
         conn,
         target_kind="operator",
         target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
         channel_kind=cfg.operator_notify_platform or "tui-only",
         message=message,
+        extra=operator_telegram_action_extra(cfg, scope="request", target_id=request_id),
     )
 
     response = {

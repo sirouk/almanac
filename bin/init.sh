@@ -281,19 +281,14 @@ ensure_hermes_installed() {
 
 install_default_skills() {
   local hermes_home="$1"
-  local hermes_bin=""
-  hermes_bin="$(current_hermes_bin)"
-  local skill=""
-  for skill in \
-    "$SHARED_REPO_DIR/skills/almanac-qmd-mcp" \
-    "$SHARED_REPO_DIR/skills/almanac-vault-reconciler" \
-    "$SHARED_REPO_DIR/skills/almanac-first-contact" \
-    "$SHARED_REPO_DIR/skills/almanac-vaults" \
-    "$SHARED_REPO_DIR/skills/almanac-ssot"
-  do
-    [[ -d "$skill" ]] || continue
-    HERMES_HOME="$hermes_home" "$hermes_bin" skills install "$skill" --yes >/dev/null 2>&1 || true
-  done
+  "$SHARED_REPO_DIR/bin/install-almanac-skills.sh" \
+    "$SHARED_REPO_DIR" \
+    "$hermes_home" \
+    almanac-qmd-mcp \
+    almanac-vault-reconciler \
+    almanac-first-contact \
+    almanac-vaults \
+    almanac-ssot
 }
 
 register_default_mcps() {

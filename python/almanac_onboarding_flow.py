@@ -15,6 +15,7 @@ from almanac_control import (
     connect_db,
     delete_onboarding_secret,
     find_active_onboarding_session,
+    operator_telegram_action_extra,
     queue_notification,
     request_bootstrap,
     save_onboarding_session,
@@ -205,6 +206,7 @@ def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
     if cfg.operator_notify_platform == "telegram":
         lines.extend(
             [
+                "Tap Approve / Deny below, or use one of these commands:",
                 f"Telegram approve: /approve {session_id}",
                 f"Telegram deny: /deny {session_id} optional reason",
             ]
@@ -220,6 +222,11 @@ def _notify_operator(conn, cfg: Config, session: dict[str, Any]) -> None:
         target_id=target_id,
         channel_kind=channel_kind,
         message=_operator_review_message(cfg, session),
+        extra=operator_telegram_action_extra(
+            cfg,
+            scope="onboarding",
+            target_id=str(session.get("session_id") or ""),
+        ),
     )
 
 

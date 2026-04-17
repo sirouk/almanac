@@ -392,12 +392,15 @@ PY
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
     python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" internal curator-refresh >/dev/null
 
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-qmd-mcp" --yes >/dev/null 2>&1 || true
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-vault-reconciler" --yes >/dev/null 2>&1 || true
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-first-contact" --yes >/dev/null 2>&1 || true
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-vaults" --yes >/dev/null 2>&1 || true
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-ssot" --yes >/dev/null 2>&1 || true
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-upgrade-orchestrator" --yes >/dev/null 2>&1 || true
+  "$BOOTSTRAP_DIR/bin/install-almanac-skills.sh" \
+    "$BOOTSTRAP_DIR" \
+    "$ALMANAC_CURATOR_HERMES_HOME" \
+    almanac-qmd-mcp \
+    almanac-vault-reconciler \
+    almanac-first-contact \
+    almanac-vaults \
+    almanac-ssot \
+    almanac-upgrade-orchestrator
 
   if set_user_systemd_bus_env; then
     systemctl --user daemon-reload

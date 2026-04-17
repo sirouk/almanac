@@ -180,6 +180,62 @@ require_runtime_python() {
   return 1
 }
 
+runtime_python_realpath() {
+  local python_bin="${1:-${RUNTIME_DIR:-}/hermes-venv/bin/python3}"
+  python3 - "$python_bin" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+if not path:
+    raise SystemExit(1)
+print(os.path.realpath(path))
+PY
+}
+
+shared_runtime_python_is_share_safe() {
+  local venv_dir="${1:-${RUNTIME_DIR:-}/hermes-venv}"
+  local python_bin="$venv_dir/bin/python3"
+  local resolved=""
+
+  if [[ ! -x "$python_bin" ]]; then
+    return 1
+  fi
+
+  resolved="$(runtime_python_realpath "$python_bin" 2>/dev/null || true)"
+  if [[ -z "$resolved" ]]; then
+    return 1
+  fi
+
+  case "$resolved" in
+    "$venv_dir"/*|/usr/*|/bin/*|/usr/local/*|/opt/*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_shared_runtime_seed_python() {
+  local candidate=""
+  for candidate in /usr/bin/python3.11 /usr/bin/python3; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  if command -v python3.11 >/dev/null 2>&1; then
+    command -v python3.11
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+  return 1
+}
+
 resolve_runtime_hermes() {
   local hermes_bin="${RUNTIME_DIR:-}/hermes-venv/bin/hermes"
   if [[ -n "$hermes_bin" && -x "$hermes_bin" ]]; then
@@ -467,6 +523,8 @@ ensure_shared_hermes_runtime() {
   ensure_uv
   local repo_dir="$RUNTIME_DIR/hermes-agent-src"
   local venv_dir="$RUNTIME_DIR/hermes-venv"
+  local seed_python=""
+  local rebuild_runtime="0"
 
   if ! command -v uv >/dev/null 2>&1; then
     echo "uv is required to manage the shared Hermes runtime." >&2
@@ -480,12 +538,23 @@ ensure_shared_hermes_runtime() {
   fi
 
   if [[ ! -x "$venv_dir/bin/hermes" ]]; then
-    uv venv "$venv_dir" --python 3.11
+    rebuild_runtime="1"
+  elif ! shared_runtime_python_is_share_safe "$venv_dir"; then
+    rebuild_runtime="1"
+    echo "Rebuilding shared Hermes runtime with a system Python so enrolled users can execute it." >&2
   fi
 
-  # shellcheck disable=SC1090
-  source "$venv_dir/bin/activate"
-  uv pip install -e "$repo_dir[cli,mcp,messaging,cron]"
+  if [[ "$rebuild_runtime" == "1" ]]; then
+    seed_python="$(resolve_shared_runtime_seed_python || true)"
+    if [[ -z "$seed_python" ]]; then
+      echo "A system-accessible python3 is required to build the shared Hermes runtime." >&2
+      return 1
+    fi
+    rm -rf "$venv_dir"
+    "$seed_python" -m venv "$venv_dir"
+  fi
+
+  uv pip install --python "$venv_dir/bin/python3" -e "$repo_dir[cli,mcp,messaging,cron]"
 }
 
 ensure_qmd_collection() {

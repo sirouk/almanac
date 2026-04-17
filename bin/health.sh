@@ -1113,6 +1113,11 @@ fi
 
 if [[ -x "$RUNTIME_DIR/hermes-venv/bin/hermes" ]]; then
   pass "hermes available at $RUNTIME_DIR/hermes-venv/bin/hermes"
+  if shared_runtime_python_is_share_safe "$RUNTIME_DIR/hermes-venv"; then
+    pass "shared Hermes runtime uses a user-shareable Python interpreter"
+  else
+    warn_or_fail "shared Hermes runtime python resolves outside shared/system paths; rebuild with bootstrap-userland or deploy.sh upgrade"
+  fi
 else
   warn "hermes venv not found at $RUNTIME_DIR/hermes-venv/bin/hermes"
 fi

@@ -222,7 +222,12 @@ PY
 }
 
 resolve_shared_hermes_bin() {
+  local wrapper_bin="$SHARED_REPO_DIR/bin/hermes-shell.sh"
   local hermes_bin="${ALMANAC_HERMES_BIN:-}"
+  if [[ -x "$wrapper_bin" ]]; then
+    printf '%s\n' "$wrapper_bin"
+    return 0
+  fi
   if [[ -n "$hermes_bin" && -x "$hermes_bin" ]]; then
     printf '%s\n' "$hermes_bin"
     return 0

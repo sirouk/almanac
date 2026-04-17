@@ -179,6 +179,25 @@ require_runtime_python() {
   echo "Managed Almanac runtime python is missing at $python_bin. Run bootstrap-userland first." >&2
   return 1
 }
+
+resolve_runtime_hermes() {
+  local hermes_bin="${RUNTIME_DIR:-}/hermes-venv/bin/hermes"
+  if [[ -n "$hermes_bin" && -x "$hermes_bin" ]]; then
+    printf '%s\n' "$hermes_bin"
+    return 0
+  fi
+  command -v hermes
+}
+
+require_runtime_hermes() {
+  local hermes_bin="${RUNTIME_DIR:-}/hermes-venv/bin/hermes"
+  if [[ -n "$hermes_bin" && -x "$hermes_bin" ]]; then
+    printf '%s\n' "$hermes_bin"
+    return 0
+  fi
+  echo "Managed Almanac runtime hermes is missing at $hermes_bin. Run bootstrap-userland first." >&2
+  return 1
+}
 BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
 BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-almanac@localhost}"
 NEXTCLOUD_PORT="${NEXTCLOUD_PORT:-18080}"

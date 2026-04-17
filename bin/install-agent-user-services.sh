@@ -11,7 +11,7 @@ SHARED_REPO_DIR="$2"
 HERMES_HOME="$3"
 CHANNELS_JSON="${4:-[\"tui-only\"]}"
 ACTIVATION_TRIGGER_PATH="${5:-}"
-HERMES_BIN="${6:-${ALMANAC_HERMES_BIN:-${RUNTIME_DIR:-}/hermes-venv/bin/hermes}}"
+HERMES_BIN="${6:-${ALMANAC_HERMES_BIN:-$SHARED_REPO_DIR/bin/hermes-shell.sh}}"
 TARGET_DIR="$HOME/.config/systemd/user"
 mkdir -p "$TARGET_DIR"
 

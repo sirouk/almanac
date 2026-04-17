@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="${1:-agent}"
-if [[ $# -gt 0 ]]; then
-  shift
-fi
-
 SOURCE_PATH="${BASH_SOURCE[0]-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 LOCAL_REPO_DIR=""
@@ -13,6 +8,8 @@ if [[ -x "$SCRIPT_DIR/bin/init.sh" ]]; then
   LOCAL_REPO_DIR="$SCRIPT_DIR"
 fi
 
+MODE=""
+FORWARD_ARGS=()
 REPO_URL="${ALMANAC_INIT_REPO_URL:-https://github.com/sirouk/almanac.git}"
 RAW_INIT_URL="${ALMANAC_INIT_RAW_URL:-https://raw.githubusercontent.com/sirouk/almanac/main/init.sh}"
 CACHE_DIR="${ALMANAC_INIT_CACHE_DIR:-$HOME/.cache/almanac-init}"
@@ -22,6 +19,57 @@ TARGET_USER="${ALMANAC_TARGET_USER:-$(id -un 2>/dev/null || printf '')}"
 PUBLIC_MCP_URL="${ALMANAC_PUBLIC_MCP_URL:-}"
 PUBLIC_MCP_PATH="${ALMANAC_PUBLIC_MCP_PATH:-/almanac-mcp}"
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    agent|infra|update)
+      if [[ -z "$MODE" ]]; then
+        MODE="$1"
+      else
+        FORWARD_ARGS+=("$1")
+      fi
+      shift
+      ;;
+    --target-host)
+      if [[ $# -lt 2 ]]; then
+        echo "--target-host requires a hostname." >&2
+        exit 2
+      fi
+      TARGET_HOST="$2"
+      shift 2
+      ;;
+    --target-user)
+      if [[ $# -lt 2 ]]; then
+        echo "--target-user requires a username." >&2
+        exit 2
+      fi
+      TARGET_USER="$2"
+      shift 2
+      ;;
+    --public-mcp-url)
+      if [[ $# -lt 2 ]]; then
+        echo "--public-mcp-url requires a URL." >&2
+        exit 2
+      fi
+      PUBLIC_MCP_URL="$2"
+      shift 2
+      ;;
+    --public-mcp-path)
+      if [[ $# -lt 2 ]]; then
+        echo "--public-mcp-path requires a path." >&2
+        exit 2
+      fi
+      PUBLIC_MCP_PATH="$2"
+      shift 2
+      ;;
+    *)
+      FORWARD_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+MODE="${MODE:-agent}"
+
 current_os() {
   uname -s 2>/dev/null || printf 'unknown'
 }
@@ -30,13 +78,27 @@ have_tty() {
   [[ -e /dev/tty ]] && (: </dev/tty) 2>/dev/null
 }
 
+remote_bootstrap_hint() {
+  local host_example="${TARGET_HOST:-kor.tailnet.ts.net}"
+  cat >&2 <<EOF
+Remote enrollment from a non-Linux client needs the Almanac host.
+
+Use one of these forms:
+  curl -fsSL $RAW_INIT_URL | ALMANAC_TARGET_HOST=$host_example bash -s -- $MODE
+  curl -fsSL $RAW_INIT_URL | bash -s -- $MODE --target-host $host_example
+
+Note: ALMANAC_TARGET_HOST must be set for bash, not curl. This will not work:
+  ALMANAC_TARGET_HOST=$host_example curl -fsSL ... | bash -s -- $MODE
+EOF
+}
+
 prompt_tty() {
   local prompt="$1"
   local default="${2:-}"
   local answer=""
 
   if ! have_tty; then
-    echo "A target Almanac host is required; set ALMANAC_TARGET_HOST." >&2
+    remote_bootstrap_hint
     return 1
   fi
 
@@ -154,11 +216,11 @@ EOF
 
 main() {
   if should_delegate_remote; then
-    delegate_to_remote_host "$@"
+    delegate_to_remote_host "${FORWARD_ARGS[@]}"
   fi
 
   ensure_repo_cache
-  exec_real_init "$REPO_DIR/bin/init.sh" "$MODE" "$@"
+  exec_real_init "$REPO_DIR/bin/init.sh" "$MODE" "${FORWARD_ARGS[@]}"
 }
 
 main "$@"

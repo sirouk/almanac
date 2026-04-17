@@ -244,12 +244,21 @@ In v1, that is what local TUI access means.
 If the repo is public, the user can enroll with the curl-friendly bootstrap:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh | bash -s -- agent
+curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh \
+  | ALMANAC_TARGET_HOST=kor.tail77f45e.ts.net bash -s -- agent
+```
+
+Or, without relying on environment-variable placement in a pipe:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh \
+  | bash -s -- agent --target-host kor.tail77f45e.ts.net
 ```
 
 When run from a non-Linux client such as a Mac, that bootstrap now:
 
-- asks for the target Almanac hostname
+- requires the target Almanac hostname, either through `ALMANAC_TARGET_HOST`
+  on the `bash` side of the pipe or via `--target-host`
 - asks for the SSH user, defaulting to the current local username
 - points the host-side bootstrap at the tailnet HTTPS control-plane endpoint by default (`https://<host>/almanac-mcp`)
 - SSHes to the Almanac host
@@ -262,6 +271,10 @@ handshake goes through the public tailnet-scoped control-plane endpoint.
 It does not create SSH access by itself. The operator still has to prepare the
 Unix account and Tailscale SSH or host-key access first; the remote bootstrap
 only works after the user can already log into the Almanac host.
+
+Do not write the command as `ALMANAC_TARGET_HOST=... curl ... | bash ...`.
+That sets the variable for `curl`, not for `bash`, so the bootstrap process
+will not see the target host.
 
 If the repo is private or already cloned on the host, the equivalent local
 command is:
@@ -303,8 +316,10 @@ The curl entrypoint is the repo-root [init.sh](./init.sh). It is designed to be
 safe to publish because it only bootstraps the checked-out repo and then
 delegates to [bin/init.sh](./bin/init.sh).
 
-On non-Linux clients it prompts for a target Almanac host and SSHes there
-before continuing. On the host itself it just runs the local enrollment flow.
+On non-Linux clients it uses the supplied target host, or prompts for one when
+a TTY is available; otherwise it exits with a copy-paste usage hint. Once the
+host is known it SSHes there and continues. On the host itself it just runs the
+local enrollment flow.
 
 Useful overrides for remote bootstrap:
 
@@ -324,6 +339,15 @@ CHUTES_MCP_URL=https://example.invalid/mcp
 For a typical shared-host enrollment from a user laptop, the important inputs
 are the target hostname, SSH access, and the published tailnet control-plane
 URL when you want to override the default `/almanac-mcp` path.
+
+The remote bootstrap entrypoint also accepts:
+
+```bash
+--target-host <hostname>
+--target-user <unix-user>
+--public-mcp-url <https-url>
+--public-mcp-path </almanac-mcp>
+```
 
 After `install`, the script prints a short operator guide that tells you:
 

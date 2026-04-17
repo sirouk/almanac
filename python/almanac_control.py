@@ -650,9 +650,20 @@ def onboarding_bot_token_secret_path(cfg: Config, session_id: str) -> Path:
     return onboarding_platform_token_secret_path(cfg, session_id, "telegram")
 
 
+def onboarding_named_secret_path(cfg: Config, session_id: str, secret_name: str) -> Path:
+    normalized = re.sub(r"[^a-z0-9_-]+", "-", str(secret_name or "secret").strip().lower()) or "secret"
+    return onboarding_secret_dir(cfg) / session_id / normalized
+
+
 def onboarding_platform_token_secret_path(cfg: Config, session_id: str, platform: str) -> Path:
     normalized = re.sub(r"[^a-z0-9_-]+", "-", str(platform or "bot").strip().lower()) or "bot"
     return onboarding_secret_dir(cfg) / session_id / f"{normalized}-bot-token"
+
+
+def write_onboarding_secret(cfg: Config, session_id: str, secret_name: str, raw_value: str) -> str:
+    path = onboarding_named_secret_path(cfg, session_id, secret_name)
+    _write_private_text(path, raw_value)
+    return str(path)
 
 
 def write_onboarding_bot_token_secret(cfg: Config, session_id: str, raw_token: str) -> str:
@@ -672,7 +683,7 @@ def write_onboarding_platform_token_secret(
     return str(path)
 
 
-def read_onboarding_bot_token_secret(raw_path: str) -> str:
+def read_onboarding_secret(raw_path: str) -> str:
     path = Path(raw_path).expanduser()
     try:
         return path.read_text(encoding="utf-8").strip()
@@ -680,7 +691,11 @@ def read_onboarding_bot_token_secret(raw_path: str) -> str:
         return ""
 
 
-def delete_onboarding_bot_token_secret(raw_path: str) -> None:
+def read_onboarding_bot_token_secret(raw_path: str) -> str:
+    return read_onboarding_secret(raw_path)
+
+
+def delete_onboarding_secret(raw_path: str) -> None:
     if not raw_path:
         return
     path = Path(raw_path).expanduser()
@@ -695,6 +710,10 @@ def delete_onboarding_bot_token_secret(raw_path: str) -> None:
         parent.rmdir()
     except OSError:
         pass
+
+
+def delete_onboarding_bot_token_secret(raw_path: str) -> None:
+    delete_onboarding_secret(raw_path)
 
 
 def _migrate_onboarding_bot_tokens(conn: sqlite3.Connection, cfg: Config) -> None:

@@ -5,21 +5,24 @@ import datetime as dt
 import json
 import os
 import pwd
+import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from almanac_control import (
     Config,
     activation_trigger_path,
     auto_provision_retry_delay_seconds,
-    config_env_value,
     connect_db,
     delete_onboarding_bot_token_secret,
+    delete_onboarding_secret,
     ensure_unix_user_ready,
     get_agent,
     issue_auto_provision_token,
     json_loads,
+    list_onboarding_sessions,
     list_pending_onboarding_bot_configurations,
     list_pending_auto_provision_requests,
     make_agent_id,
@@ -28,11 +31,21 @@ from almanac_control import (
     note_refresh_job,
     queue_notification,
     read_onboarding_bot_token_secret,
+    read_onboarding_secret,
     save_onboarding_session,
     shell_quote,
     update_agent_channels,
+    write_onboarding_secret,
 )
-from almanac_onboarding_flow import send_session_message
+from almanac_onboarding_flow import begin_onboarding_provisioning, send_session_message, session_prompt
+from almanac_onboarding_provider_auth import (
+    poll_codex_device_authorization,
+    provider_browser_auth_prompt,
+    provider_secret_name,
+    provider_setup_from_dict,
+    resolve_provider_setup,
+    start_codex_device_authorization,
+)
 
 
 def _operator_target(cfg: Config) -> tuple[str, str]:
@@ -116,6 +129,260 @@ def _notify_user_via_curator(cfg: Config, *, session: dict, message: str) -> Non
         return
 
 
+def _run_as_user(
+    *,
+    unix_user: str,
+    home: Path,
+    uid: int,
+    cmd: list[str],
+    hermes_home: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["runuser", "-u", unix_user, "--", *cmd],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "USER": unix_user,
+            "LOGNAME": unix_user,
+            "HERMES_HOME": str(hermes_home),
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+        },
+        text=True,
+        capture_output=True,
+    )
+
+
+def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) -> None:
+    setfacl_bin = shutil.which("setfacl")
+    if not setfacl_bin:
+        raise RuntimeError("auto-provision requires setfacl so enrolled users can traverse the shared Almanac runtime")
+
+    activation_dir = activation_trigger_path(cfg, agent_id).parent
+    activation_dir.mkdir(parents=True, exist_ok=True)
+
+    traverse_only = [
+        cfg.almanac_home,
+        cfg.private_dir,
+        cfg.state_dir,
+        cfg.runtime_dir,
+    ]
+    readable_trees = [
+        cfg.repo_dir,
+        cfg.runtime_dir / "hermes-venv",
+        activation_dir,
+    ]
+
+    for target in traverse_only:
+        if target.exists():
+            subprocess.run([setfacl_bin, "-m", f"u:{unix_user}:--x", str(target)], check=True)
+    for target in readable_trees:
+        if target.exists():
+            subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rX", str(target)], check=True)
+
+
+def _stage_provider_secret_for_user(
+    *,
+    session: dict,
+    unix_user: str,
+    hermes_home: Path,
+) -> Path:
+    session_id = str(session["session_id"])
+    answers = session.get("answers", {})
+    pending_provider_secret_path = str(answers.get("pending_provider_secret_path") or "")
+    if not pending_provider_secret_path:
+        raise ValueError(f"onboarding session {session_id} is missing provider credentials")
+
+    provider_secret = read_onboarding_secret(pending_provider_secret_path)
+    if not provider_secret:
+        raise ValueError(f"onboarding session {session_id} provider credentials are unreadable")
+
+    passwd = pwd.getpwnam(unix_user)
+    secrets_dir = hermes_home / "secrets"
+    secrets_dir.mkdir(parents=True, exist_ok=True)
+    os.chown(secrets_dir, passwd.pw_uid, passwd.pw_gid)
+    try:
+        secrets_dir.chmod(0o700)
+    except OSError:
+        pass
+
+    staged_path = secrets_dir / f"almanac-onboarding-{session_id}.secret"
+    staged_path.write_text(provider_secret, encoding="utf-8")
+    os.chown(staged_path, passwd.pw_uid, passwd.pw_gid)
+    staged_path.chmod(0o600)
+    return staged_path
+
+
+def _seed_user_provider(cfg: Config, *, session: dict, unix_user: str, home: Path, hermes_home: Path, uid: int) -> dict[str, Any]:
+    answers = session.get("answers", {})
+    provider_setup = provider_setup_from_dict(answers.get("provider_setup"))
+    if provider_setup is None:
+        raise ValueError(f"onboarding session {session['session_id']} is missing provider setup")
+
+    python_bin = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
+    if not python_bin.exists():
+        raise RuntimeError(f"missing Hermes runtime at {python_bin}")
+    script_path = cfg.repo_dir / "python" / "almanac_headless_hermes_setup.py"
+    staged_secret_path = _stage_provider_secret_for_user(
+        session=session,
+        unix_user=unix_user,
+        hermes_home=hermes_home,
+    )
+    try:
+        result = _run_as_user(
+            unix_user=unix_user,
+            home=home,
+            uid=uid,
+            hermes_home=hermes_home,
+            cmd=[
+                str(python_bin),
+                str(script_path),
+                "--provider-spec-json",
+                json.dumps(provider_setup.as_dict(), sort_keys=True),
+                "--secret-path",
+                str(staged_secret_path),
+            ],
+        )
+    finally:
+        try:
+            staged_secret_path.unlink()
+        except FileNotFoundError:
+            pass
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "headless hermes setup failed").strip())
+    try:
+        return json.loads((result.stdout or "{}").strip() or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"headless hermes setup returned invalid json: {result.stdout[:200]}") from exc
+
+
+def _assert_user_gateway_active(*, unix_user: str, home: Path, hermes_home: Path, uid: int) -> None:
+    deadline = time.time() + 15
+    status = ""
+    while time.time() < deadline:
+        result = _run_as_user(
+            unix_user=unix_user,
+            home=home,
+            uid=uid,
+            hermes_home=hermes_home,
+            cmd=["systemctl", "--user", "is-active", "almanac-user-agent-gateway.service"],
+        )
+        status = (result.stdout or result.stderr or "").strip()
+        if result.returncode == 0 and status == "active":
+            return
+        time.sleep(1)
+    raise RuntimeError(f"user gateway service did not come up cleanly (last status: {status or 'unknown'})")
+
+
+def _run_pending_onboarding_provider_authorizations(conn, cfg: Config) -> None:
+    for session in list_onboarding_sessions(conn, redact_secrets=False):
+        if str(session.get("state") or "") != "awaiting-provider-browser-auth":
+            continue
+        provider_setup = provider_setup_from_dict((session.get("answers") or {}).get("provider_setup"))
+        if provider_setup is None or provider_setup.provider_id != "openai-codex":
+            continue
+        browser_auth = (session.get("answers") or {}).get("provider_browser_auth")
+        if not isinstance(browser_auth, dict):
+            continue
+        previous_status = str(browser_auth.get("status") or "")
+        try:
+            token_payload, updated_auth = poll_codex_device_authorization(browser_auth)
+        except Exception as exc:  # noqa: BLE001
+            token_payload = None
+            updated_auth = dict(browser_auth)
+            updated_auth["status"] = "error"
+            updated_auth["error_message"] = str(exc).strip() or "unknown OpenAI Codex auth error"
+
+        if token_payload is None:
+            new_status = str(updated_auth.get("status") or "")
+            if new_status and new_status != previous_status and new_status in {"error", "expired"}:
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    answers={"provider_browser_auth": updated_auth},
+                    provision_error=str(updated_auth.get("error_message") or ""),
+                )
+                _notify_user_via_curator(
+                    cfg,
+                    session=updated,
+                    message=provider_browser_auth_prompt(provider_setup, updated_auth),
+                )
+            continue
+
+        try:
+            provider_secret_path = write_onboarding_secret(
+                cfg,
+                str(session["session_id"]),
+                provider_secret_name(provider_setup),
+                json.dumps(token_payload, sort_keys=True),
+            )
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                answers={
+                    "provider_browser_auth": updated_auth,
+                    "pending_provider_secret_path": provider_secret_path,
+                },
+                provision_error="",
+            )
+            updated = begin_onboarding_provisioning(
+                conn,
+                cfg,
+                updated,
+                provider_secret_path=provider_secret_path,
+            )
+            bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or "your bot")
+            unix_user = str(updated.get("answers", {}).get("unix_user") or updated.get("sender_id") or "")
+            if str(updated.get("answers", {}).get("bot_platform") or "") == "discord":
+                message = f"I have your OpenAI Codex authorization. I’m provisioning `{unix_user}` now and wiring `{bot_label}`."
+            else:
+                message = f"I have your OpenAI Codex authorization. I’m provisioning `{unix_user}` now and wiring @{bot_label}."
+            _notify_user_via_curator(cfg, session=updated, message=message)
+        except Exception as exc:  # noqa: BLE001
+            save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                answers={"provider_browser_auth": updated_auth},
+                provision_error=str(exc).strip() or "failed to continue onboarding after OpenAI approval",
+            )
+
+
+def _migrate_legacy_onboarding_session(conn, cfg: Config, session: dict[str, Any]) -> dict[str, Any] | None:
+    if str(session.get("state") or "") != "provision-pending":
+        return session
+
+    answers = session.get("answers", {})
+    if answers.get("pending_provider_secret_path"):
+        return session
+
+    model_preset = str(answers.get("model_preset") or "codex").strip().lower() or "codex"
+    provider_setup = resolve_provider_setup(cfg, model_preset)
+    update_answers: dict[str, Any] = {"provider_setup": provider_setup.as_dict()}
+    new_state = "awaiting-provider-credential"
+    if provider_setup.auth_flow == "codex-device":
+        new_state = "awaiting-provider-browser-auth"
+        update_answers["provider_browser_auth"] = start_codex_device_authorization()
+
+    updated = save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        state=new_state,
+        answers=update_answers,
+        provision_error="",
+    )
+    _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+    note_refresh_job(
+        conn,
+        job_name=f"onboarding-{session['session_id']}",
+        job_kind="onboarding",
+        target_id=str(session.get("linked_agent_id") or session["session_id"]),
+        schedule="approval",
+        status="warn",
+        note="migrated legacy onboarding session into provider authorization flow",
+    )
+    return None
+
+
 def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     agent_id = str(session.get("linked_agent_id") or "")
     if not agent_id:
@@ -135,6 +402,17 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     bot_username = str(session.get("telegram_bot_username") or "")
     if not pending_bot_token or not chat_id:
         raise ValueError(f"onboarding session {session['session_id']} is missing Telegram credentials")
+
+    uid = pwd.getpwnam(unix_user).pw_uid
+    _wait_for_user_bus(str(uid))
+    provider_runtime = _seed_user_provider(
+        cfg,
+        session=session,
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
 
     env_path = hermes_home / ".env"
     _write_env_values(
@@ -158,14 +436,12 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         home_channel={"platform": "telegram", "channel_id": chat_id},
     )
 
-    uid = pwd.getpwnam(unix_user).pw_uid
-    _wait_for_user_bus(str(uid))
-    result = subprocess.run(
-        [
-            "runuser",
-            "-u",
-            unix_user,
-            "--",
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=[
             str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
             agent_id,
             str(cfg.repo_dir),
@@ -173,21 +449,10 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             json.dumps(["tui-only", "telegram"]),
             str(activation_trigger_path(cfg, agent_id)),
         ],
-        env={
-            **os.environ,
-            "ALMANAC_CONFIG_FILE": os.environ.get("ALMANAC_CONFIG_FILE", ""),
-            "HOME": str(home),
-            "USER": unix_user,
-            "LOGNAME": unix_user,
-            "HERMES_HOME": str(hermes_home),
-            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-        },
-        text=True,
-        capture_output=True,
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
+    _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
 
     save_onboarding_session(
         conn,
@@ -199,6 +464,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
     )
     delete_onboarding_bot_token_secret(pending_bot_token_path)
+    delete_onboarding_secret(str((session.get("answers") or {}).get("pending_provider_secret_path") or ""))
     note_refresh_job(
         conn,
         job_name=f"onboarding-{session['session_id']}",
@@ -206,7 +472,10 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         target_id=agent_id,
         schedule="approval",
         status="ok",
-        note=f"telegram gateway configured for @{bot_username or 'bot'}",
+        note=(
+            f"telegram gateway configured for @{bot_username or 'bot'} "
+            f"(provider={provider_runtime.get('provider') or 'unknown'} model={provider_runtime.get('model') or 'unknown'})"
+        ),
     )
     _queue_operator_message(
         conn,
@@ -244,6 +513,17 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
     if not pending_bot_token or not sender_id:
         raise ValueError(f"onboarding session {session['session_id']} is missing Discord credentials")
 
+    uid = pwd.getpwnam(unix_user).pw_uid
+    _wait_for_user_bus(str(uid))
+    provider_runtime = _seed_user_provider(
+        cfg,
+        session=session,
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
+
     env_path = hermes_home / ".env"
     _write_env_values(
         env_path,
@@ -264,14 +544,12 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         channels=["tui-only", "discord"],
     )
 
-    uid = pwd.getpwnam(unix_user).pw_uid
-    _wait_for_user_bus(str(uid))
-    result = subprocess.run(
-        [
-            "runuser",
-            "-u",
-            unix_user,
-            "--",
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=[
             str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
             agent_id,
             str(cfg.repo_dir),
@@ -279,21 +557,10 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             json.dumps(["tui-only", "discord"]),
             str(activation_trigger_path(cfg, agent_id)),
         ],
-        env={
-            **os.environ,
-            "ALMANAC_CONFIG_FILE": os.environ.get("ALMANAC_CONFIG_FILE", ""),
-            "HOME": str(home),
-            "USER": unix_user,
-            "LOGNAME": unix_user,
-            "HERMES_HOME": str(hermes_home),
-            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-        },
-        text=True,
-        capture_output=True,
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
+    _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
 
     save_onboarding_session(
         conn,
@@ -305,6 +572,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
     )
     delete_onboarding_bot_token_secret(pending_bot_token_path)
+    delete_onboarding_secret(str((session.get("answers") or {}).get("pending_provider_secret_path") or ""))
     note_refresh_job(
         conn,
         job_name=f"onboarding-{session['session_id']}",
@@ -312,7 +580,10 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         target_id=agent_id,
         schedule="approval",
         status="ok",
-        note=f"discord gateway configured for {bot_username or 'bot'}",
+        note=(
+            f"discord gateway configured for {bot_username or 'bot'} "
+            f"(provider={provider_runtime.get('provider') or 'unknown'} model={provider_runtime.get('model') or 'unknown'})"
+        ),
     )
     _queue_operator_message(
         conn,
@@ -332,6 +603,9 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
 def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
     for session in list_pending_onboarding_bot_configurations(conn):
         try:
+            session = _migrate_legacy_onboarding_session(conn, cfg, session)
+            if session is None:
+                continue
             answers = session.get("answers", {})
             bot_platform = str(answers.get("bot_platform") or "telegram").strip().lower() or "telegram"
             if bot_platform == "discord":
@@ -432,17 +706,18 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
         info = ensure_unix_user_ready(unix_user)
         home = Path(info["home"])
         uid = info["uid"]
+        _grant_auto_provision_access(cfg, unix_user=unix_user, agent_id=agent_id)
         _wait_for_user_bus(uid)
 
         token_payload = issue_auto_provision_token(conn, request_id)
         channels = _normalize_channels(row)
         model_preset = _model_preset(cfg, row)
         hermes_home = home / ".local" / "share" / "almanac-agent" / "hermes-home"
+        activation_path = activation_trigger_path(cfg, agent_id)
 
         env = dict(os.environ)
         env.update(
             {
-                "ALMANAC_CONFIG_FILE": os.environ.get("ALMANAC_CONFIG_FILE", ""),
                 "ALMANAC_REQUESTER_IDENTITY": requester_identity,
                 "ALMANAC_BOOTSTRAP_REQUEST_ID": request_id,
                 "ALMANAC_BOOTSTRAP_RAW_TOKEN": token_payload["raw_token"],
@@ -455,6 +730,18 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
                 "ALMANAC_MCP_URL": f"http://127.0.0.1:{cfg.public_mcp_port}/mcp",
                 "ALMANAC_BOOTSTRAP_URL": f"http://127.0.0.1:{cfg.public_mcp_port}/mcp",
                 "ALMANAC_QMD_URL": cfg.qmd_url,
+                "ALMANAC_HOME": str(cfg.almanac_home),
+                "ALMANAC_REPO_DIR": str(cfg.repo_dir),
+                "ALMANAC_SHARED_REPO_DIR": str(cfg.repo_dir),
+                "ALMANAC_PRIV_DIR": str(cfg.private_dir),
+                "ALMANAC_PRIV_CONFIG_DIR": str(cfg.private_dir / "config"),
+                "STATE_DIR": str(cfg.state_dir),
+                "RUNTIME_DIR": str(cfg.runtime_dir),
+                "VAULT_DIR": str(cfg.vault_dir),
+                "ALMANAC_DB_PATH": str(cfg.db_path),
+                "ALMANAC_AGENTS_STATE_DIR": str(cfg.agents_state_dir),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(cfg.archived_agents_dir),
+                "ALMANAC_ACTIVATION_TRIGGER_PATH": str(activation_path),
                 "HOME": str(home),
                 "USER": unix_user,
                 "LOGNAME": unix_user,
@@ -514,6 +801,7 @@ def main() -> None:
         raise SystemExit("Run this as root.")
     cfg = Config.from_env()
     with connect_db(cfg) as conn:
+        _run_pending_onboarding_provider_authorizations(conn, cfg)
         for row in list_pending_auto_provision_requests(conn, cfg):
             _run_one(conn, cfg, row)
         _run_pending_onboarding_gateway_configs(conn, cfg)

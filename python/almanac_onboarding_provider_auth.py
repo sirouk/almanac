@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import secrets
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import asdict, dataclass
+from typing import Any
+
+
+CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+CODEX_ISSUER = "https://auth.openai.com"
+CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
+CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+ANTHROPIC_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
+ANTHROPIC_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+ANTHROPIC_OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
+ANTHROPIC_OAUTH_SCOPES = "org:create_api_key user:profile user:inference"
+CHUTES_BASE_URL = "https://llm.chutes.ai/v1"
+
+
+@dataclass(frozen=True)
+class ProviderSetupSpec:
+    preset: str
+    provider_id: str
+    model_id: str
+    display_name: str
+    auth_flow: str
+    key_env: str = ""
+    base_url: str = ""
+    api_mode: str = ""
+    is_custom: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def provider_setup_from_dict(raw: dict[str, Any] | None) -> ProviderSetupSpec | None:
+    if not isinstance(raw, dict):
+        return None
+    provider_id = str(raw.get("provider_id") or "").strip()
+    model_id = str(raw.get("model_id") or "").strip()
+    auth_flow = str(raw.get("auth_flow") or "").strip()
+    if not provider_id or not model_id or not auth_flow:
+        return None
+    return ProviderSetupSpec(
+        preset=str(raw.get("preset") or "").strip(),
+        provider_id=provider_id,
+        model_id=model_id,
+        display_name=str(raw.get("display_name") or provider_id).strip() or provider_id,
+        auth_flow=auth_flow,
+        key_env=str(raw.get("key_env") or "").strip(),
+        base_url=str(raw.get("base_url") or "").strip(),
+        api_mode=str(raw.get("api_mode") or "").strip(),
+        is_custom=bool(raw.get("is_custom")),
+    )
+
+
+def resolve_provider_setup(cfg: Any, preset: str) -> ProviderSetupSpec:
+    normalized_preset = str(preset or "").strip().lower() or "codex"
+    raw_target = str(getattr(cfg, "model_presets", {}).get(normalized_preset) or "").strip()
+    if not raw_target or ":" not in raw_target:
+        raise ValueError(f"Model preset `{normalized_preset}` is not configured for headless onboarding.")
+
+    provider_hint, model_hint = raw_target.split(":", 1)
+    provider_hint = provider_hint.strip().lower()
+    model_hint = model_hint.strip()
+    if not provider_hint or not model_hint:
+        raise ValueError(f"Model preset `{normalized_preset}` is incomplete: {raw_target}")
+
+    if provider_hint == "openai" and model_hint.lower() == "codex":
+        return ProviderSetupSpec(
+            preset=normalized_preset,
+            provider_id="openai-codex",
+            model_id="gpt-5.4",
+            display_name="OpenAI Codex",
+            auth_flow="codex-device",
+            base_url=CODEX_BASE_URL,
+        )
+
+    if provider_hint == "anthropic" and model_hint.lower() in {"claude-opus", "opus"}:
+        return ProviderSetupSpec(
+            preset=normalized_preset,
+            provider_id="anthropic",
+            model_id="claude-opus-4-6",
+            display_name="Claude Opus",
+            auth_flow="anthropic-credential",
+        )
+
+    if provider_hint == "chutes":
+        return ProviderSetupSpec(
+            preset=normalized_preset,
+            provider_id="chutes",
+            model_id=model_hint,
+            display_name="Chutes",
+            auth_flow="api-key",
+            key_env="CHUTES_API_KEY",
+            base_url=CHUTES_BASE_URL,
+            api_mode="chat_completions",
+            is_custom=True,
+        )
+
+    if provider_hint == "openai-codex":
+        return ProviderSetupSpec(
+            preset=normalized_preset,
+            provider_id="openai-codex",
+            model_id=model_hint or "gpt-5.4",
+            display_name="OpenAI Codex",
+            auth_flow="codex-device",
+            base_url=CODEX_BASE_URL,
+        )
+
+    if provider_hint == "anthropic":
+        return ProviderSetupSpec(
+            preset=normalized_preset,
+            provider_id="anthropic",
+            model_id=_normalize_anthropic_model(model_hint),
+            display_name="Anthropic",
+            auth_flow="anthropic-credential",
+        )
+
+    generic_api_key_providers: dict[str, tuple[str, str, str]] = {
+        "openrouter": ("OpenRouter", "OPENROUTER_API_KEY", ""),
+        "gemini": ("Google AI Studio", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        "zai": ("Z.AI / GLM", "GLM_API_KEY", "https://api.z.ai/api/paas/v4"),
+        "kimi-coding": ("Kimi / Moonshot", "KIMI_API_KEY", "https://api.moonshot.ai/v1"),
+        "minimax": ("MiniMax", "MINIMAX_API_KEY", "https://api.minimax.io/anthropic"),
+        "deepseek": ("DeepSeek", "DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
+        "xai": ("xAI", "XAI_API_KEY", "https://api.x.ai/v1"),
+        "alibaba": ("Alibaba Cloud (DashScope)", "DASHSCOPE_API_KEY", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+        "arcee": ("Arcee AI", "ARCEEAI_API_KEY", "https://api.arcee.ai/api/v1"),
+    }
+    generic = generic_api_key_providers.get(provider_hint)
+    if generic:
+        display_name, key_env, base_url = generic
+        return ProviderSetupSpec(
+            preset=normalized_preset,
+            provider_id=provider_hint,
+            model_id=model_hint,
+            display_name=display_name,
+            auth_flow="api-key",
+            key_env=key_env,
+            base_url=base_url,
+        )
+
+    raise ValueError(
+        f"Model preset `{normalized_preset}` targets `{raw_target}`, which is not supported by headless onboarding yet."
+    )
+
+
+def provider_secret_name(spec: ProviderSetupSpec) -> str:
+    if spec.provider_id == "openai-codex":
+        return "openai-codex-oauth"
+    if spec.provider_id == "anthropic":
+        return "anthropic-credential"
+    if spec.key_env:
+        return spec.key_env.lower()
+    return f"{spec.provider_id}-credential"
+
+
+def provider_credential_prompt(spec: ProviderSetupSpec) -> str:
+    if spec.auth_flow == "anthropic-credential":
+        return (
+            f"One more thing. To finish wiring {spec.display_name}, send one of these:\n"
+            "1. `oauth` to open the Claude browser authorization flow.\n"
+            "2. An Anthropic API key (`sk-ant-api-...`).\n"
+            "3. A Claude setup-token (`sk-ant-oat-...`)."
+        )
+    if spec.auth_flow == "api-key":
+        label = spec.key_env or "API key"
+        return f"One more thing. Send the {spec.display_name} API key now and I’ll wire it into your agent privately."
+    if spec.auth_flow == "codex-device":
+        return "One more thing. I’m minting an OpenAI Codex sign-in code for you now."
+    return f"Send the credential for {spec.display_name} now."
+
+
+def provider_browser_auth_prompt(spec: ProviderSetupSpec, auth_state: dict[str, Any]) -> str:
+    if spec.auth_flow == "codex-device":
+        status = str(auth_state.get("status") or "pending").strip().lower()
+        if status == "expired":
+            return "That OpenAI Codex sign-in code expired. Send `restart` and I’ll mint a fresh one."
+        if status == "error":
+            return (
+                f"OpenAI Codex sign-in hit an error: {auth_state.get('error_message') or 'unknown error'}. "
+                "Send `restart` and I’ll try again."
+            )
+        return (
+            "One more thing. To finish wiring OpenAI Codex:\n"
+            f"1. Open {auth_state.get('verification_url') or f'{CODEX_ISSUER}/codex/device'}\n"
+            f"2. Enter this code: `{auth_state.get('user_code') or '(missing)'}`\n"
+            "I’ll keep watching and I’ll continue automatically once OpenAI approves it."
+        )
+
+    if spec.provider_id == "anthropic":
+        return (
+            f"Open this link to authorize {spec.display_name}:\n"
+            f"{auth_state.get('auth_url') or '(missing auth url)'}\n"
+            "When Claude shows you the authorization code, paste that whole code string back to me here."
+        )
+
+    return f"Finish browser authorization for {spec.display_name} and come back here."
+
+
+def start_codex_device_authorization() -> dict[str, Any]:
+    payload = _request_json(
+        f"{CODEX_ISSUER}/api/accounts/deviceauth/usercode",
+        payload={"client_id": CODEX_OAUTH_CLIENT_ID},
+        headers={"Content-Type": "application/json"},
+    )
+    user_code = str(payload.get("user_code") or "").strip()
+    device_auth_id = str(payload.get("device_auth_id") or "").strip()
+    interval = max(3, int(payload.get("interval") or 5))
+    if not user_code or not device_auth_id:
+        raise RuntimeError("OpenAI device auth did not return a usable code.")
+    expires_in = 15 * 60
+    return {
+        "flow": "device_code",
+        "provider": "openai-codex",
+        "user_code": user_code,
+        "device_auth_id": device_auth_id,
+        "verification_url": f"{CODEX_ISSUER}/codex/device",
+        "poll_interval": interval,
+        "status": "pending",
+        "started_at": int(time.time()),
+        "expires_in": expires_in,
+        "expires_at": int(time.time()) + expires_in,
+    }
+
+
+def poll_codex_device_authorization(auth_state: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    updated = dict(auth_state or {})
+    if not updated:
+        raise RuntimeError("OpenAI Codex authorization state is missing.")
+    if int(updated.get("expires_at") or 0) <= int(time.time()):
+        updated["status"] = "expired"
+        updated["error_message"] = "Device code expired before approval."
+        return None, updated
+
+    response = _request_json(
+        f"{CODEX_ISSUER}/api/accounts/deviceauth/token",
+        payload={
+            "device_auth_id": str(updated.get("device_auth_id") or ""),
+            "user_code": str(updated.get("user_code") or ""),
+        },
+        headers={"Content-Type": "application/json"},
+        pending_statuses=(403, 404),
+    )
+    if response is None:
+        return None, updated
+
+    authorization_code = str(response.get("authorization_code") or "").strip()
+    code_verifier = str(response.get("code_verifier") or "").strip()
+    if not authorization_code or not code_verifier:
+        updated["status"] = "error"
+        updated["error_message"] = "OpenAI device auth returned an incomplete authorization response."
+        return None, updated
+
+    tokens = _request_json(
+        CODEX_OAUTH_TOKEN_URL,
+        form_payload={
+            "grant_type": "authorization_code",
+            "code": authorization_code,
+            "redirect_uri": f"{CODEX_ISSUER}/deviceauth/callback",
+            "client_id": CODEX_OAUTH_CLIENT_ID,
+            "code_verifier": code_verifier,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    access_token = str(tokens.get("access_token") or "").strip()
+    refresh_token = str(tokens.get("refresh_token") or "").strip()
+    if not access_token or not refresh_token:
+        updated["status"] = "error"
+        updated["error_message"] = "OpenAI token exchange did not return both access and refresh tokens."
+        return None, updated
+
+    updated["status"] = "approved"
+    updated["approved_at"] = int(time.time())
+    return (
+        {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "base_url": CODEX_BASE_URL,
+        },
+        updated,
+    )
+
+
+def start_anthropic_pkce_authorization() -> dict[str, Any]:
+    verifier, challenge = _generate_pkce_pair()
+    params = {
+        "code": "true",
+        "client_id": ANTHROPIC_OAUTH_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": ANTHROPIC_OAUTH_REDIRECT_URI,
+        "scope": ANTHROPIC_OAUTH_SCOPES,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": verifier,
+    }
+    return {
+        "flow": "pkce",
+        "provider": "anthropic",
+        "status": "pending",
+        "verifier": verifier,
+        "state": verifier,
+        "auth_url": f"{ANTHROPIC_OAUTH_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}",
+        "started_at": int(time.time()),
+    }
+
+
+def complete_anthropic_pkce_authorization(
+    auth_state: dict[str, Any],
+    code_input: str,
+) -> tuple[str, dict[str, Any]]:
+    updated = dict(auth_state or {})
+    code_parts = str(code_input or "").strip().split("#", 1)
+    code = code_parts[0].strip()
+    callback_state = code_parts[1].strip() if len(code_parts) > 1 else ""
+    if not code:
+        raise RuntimeError("Claude did not return a usable authorization code.")
+
+    response = _request_json(
+        ANTHROPIC_OAUTH_TOKEN_URL,
+        payload={
+            "grant_type": "authorization_code",
+            "client_id": ANTHROPIC_OAUTH_CLIENT_ID,
+            "code": code,
+            "state": callback_state or str(updated.get("state") or ""),
+            "redirect_uri": ANTHROPIC_OAUTH_REDIRECT_URI,
+            "code_verifier": str(updated.get("verifier") or ""),
+        },
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "almanac-curator-onboarding/1.0",
+        },
+    )
+    access_token = str(response.get("access_token") or "").strip()
+    if not access_token:
+        raise RuntimeError("Claude token exchange did not return an access token.")
+
+    updated["status"] = "approved"
+    updated["approved_at"] = int(time.time())
+    return access_token, updated
+
+
+def normalize_anthropic_credential(raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        raise RuntimeError("That Anthropic credential was empty.")
+    if value.startswith("sk-ant-api-") or value.startswith("sk-ant-oat-"):
+        return value
+    raise RuntimeError("Send `oauth`, an Anthropic API key (`sk-ant-api-...`), or a Claude setup-token (`sk-ant-oat-...`).")
+
+
+def normalize_api_key_credential(spec: ProviderSetupSpec, raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        raise RuntimeError(f"That {spec.display_name} credential was empty.")
+    return value
+
+
+def _normalize_anthropic_model(raw_model: str) -> str:
+    normalized = str(raw_model or "").strip()
+    if not normalized:
+        return "claude-opus-4-6"
+    if normalized.lower().startswith("anthropic/"):
+        normalized = normalized.split("/", 1)[1]
+    return normalized.replace(".", "-")
+
+
+def _generate_pkce_pair() -> tuple[str, str]:
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("utf-8")).digest()).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def _request_json(
+    url: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    form_payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 20,
+    pending_statuses: tuple[int, ...] = (),
+) -> dict[str, Any] | None:
+    if payload is not None and form_payload is not None:
+        raise ValueError("choose either payload or form_payload")
+    request_headers = dict(headers or {})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+    elif form_payload is not None:
+        data = urllib.parse.urlencode(
+            {key: str(value) for key, value in form_payload.items() if value is not None}
+        ).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=request_headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw_body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code in pending_statuses:
+            return None
+        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+        raise RuntimeError(f"{url} returned {exc.code}: {body[:200]}") from exc
+    try:
+        parsed = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{url} returned invalid json: {raw_body[:200]}") from exc
+    if isinstance(parsed, dict):
+        return parsed
+    raise RuntimeError(f"{url} returned an unexpected response payload.")

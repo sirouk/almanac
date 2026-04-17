@@ -13,15 +13,30 @@ from almanac_control import (
     approve_request,
     config_env_value,
     connect_db,
+    delete_onboarding_secret,
     find_active_onboarding_session,
     queue_notification,
     request_bootstrap,
     save_onboarding_session,
     start_onboarding_session,
     utc_now_iso,
+    write_onboarding_secret,
     write_onboarding_platform_token_secret,
 )
 from almanac_discord import discord_send_message
+from almanac_onboarding_provider_auth import (
+    ProviderSetupSpec,
+    complete_anthropic_pkce_authorization,
+    normalize_anthropic_credential,
+    normalize_api_key_credential,
+    provider_browser_auth_prompt,
+    provider_credential_prompt,
+    provider_secret_name,
+    provider_setup_from_dict,
+    resolve_provider_setup,
+    start_anthropic_pkce_authorization,
+    start_codex_device_authorization,
+)
 from almanac_telegram import telegram_send_message
 
 
@@ -220,11 +235,100 @@ def _model_options(cfg: Config) -> str:
     return ", ".join(sorted(cfg.model_presets))
 
 
+def _session_requester_identity(session: dict[str, Any]) -> str:
+    answers = session.get("answers", {})
+    return format_user_label(
+        str(session.get("platform") or ""),
+        str(session.get("sender_username") or ""),
+        str(session.get("sender_display_name") or answers.get("full_name") or ""),
+        str(session.get("sender_id") or ""),
+    )
+
+
+def _provider_setup(session: dict[str, Any]) -> ProviderSetupSpec | None:
+    answers = session.get("answers", {})
+    return provider_setup_from_dict(answers.get("provider_setup"))
+
+
+def _provider_auth_state(session: dict[str, Any]) -> dict[str, Any]:
+    answers = session.get("answers", {})
+    raw = answers.get("provider_browser_auth")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _provider_secret_path(session: dict[str, Any]) -> str:
+    answers = session.get("answers", {})
+    return str(answers.get("pending_provider_secret_path") or "").strip()
+
+
+def _bot_identity_answers(bot_platform: str, bot_identity: BotIdentity) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "bot_platform": bot_platform,
+        "bot_id": bot_identity.bot_id,
+        "bot_username": bot_identity.username,
+        "bot_display_name": bot_identity.display_name,
+    }
+    if bot_platform == "telegram":
+        payload["telegram_bot_id"] = bot_identity.bot_id
+        payload["telegram_bot_username"] = bot_identity.username
+    return payload
+
+
+def begin_onboarding_provisioning(
+    conn,
+    cfg: Config,
+    session: dict[str, Any],
+    *,
+    provider_secret_path: str,
+) -> dict[str, Any]:
+    if str(session.get("linked_request_id") or "").strip() and str(session.get("state") or "") == "provision-pending":
+        return session
+
+    answers = session.get("answers", {})
+    bot_platform = _bot_platform_name(session)
+    request = request_bootstrap(
+        conn,
+        cfg,
+        requester_identity=_session_requester_identity(session),
+        unix_user=str(answers.get("unix_user") or session.get("sender_id") or ""),
+        source_ip=f"{session.get('platform') or 'chat'}:{session.get('sender_id') or 'unknown'}",
+        tailnet_identity=None,
+        issue_pending_token=False,
+        auto_provision=True,
+        requested_model_preset=str(answers.get("model_preset") or "codex"),
+        requested_channels=[bot_platform],
+    )
+    approve_request(
+        conn,
+        request_id=str(request["request_id"]),
+        surface="curator-channel",
+        actor=str(session.get("approved_by_actor") or f"{session.get('platform') or 'chat'}-operator"),
+        cfg=cfg,
+    )
+    save_kwargs: dict[str, Any] = {
+        "session_id": str(session["session_id"]),
+        "state": "provision-pending",
+        "answers": {
+            "pending_provider_secret_path": provider_secret_path,
+            "provider_browser_auth": {},
+        },
+        "linked_request_id": str(request["request_id"]),
+        "linked_agent_id": str(request.get("agent_id") or ""),
+        "provision_error": "",
+    }
+    if bot_platform == "telegram":
+        save_kwargs["telegram_bot_id"] = str(answers.get("bot_id") or "")
+        save_kwargs["telegram_bot_username"] = str(answers.get("bot_username") or "")
+    return save_onboarding_session(conn, **save_kwargs)
+
+
 def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     state = str(session.get("state") or "")
     answers = session.get("answers", {})
     preferred_bot_name = _preferred_bot_name(session)
     bot_platform = _bot_platform_name(session)
+    provider_setup = _provider_setup(session)
+    browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
         return "Hi. I’m Curator. What should I call you?"
     if state == "awaiting-unix-user":
@@ -242,13 +346,27 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "awaiting-bot-token":
         if bot_platform == "discord":
             return (
-                "You’re approved. Create your Discord bot in the Discord developer portal, copy its bot token, "
-                f"and send it to me for {preferred_bot_name}. I’ll wire it to your agent and then step out."
+                "You’re approved. Set up your Discord bot like this:\n"
+                "1. Go to https://discord.com/developers/applications and click New Application.\n"
+                f"2. Name it {preferred_bot_name} or whatever you prefer.\n"
+                "3. Open the Bot page for that application.\n"
+                "4. Turn Public Bot on.\n"
+                "5. Leave Requires OAuth2 Code Grant off.\n"
+                "6. Leave the Permissions Integer at 0.\n"
+                "7. Leave all privileged intents off.\n"
+                "8. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
+                "9. If you want to use it in one of your own servers later, invite it there. For DM-only use, you can skip that for now.\n"
+                "10. Paste the bot token back to me here.\n"
+                "Once I have the token, I’ll ask for the model provider credential, wire it to your agent, and then step out."
             )
         return (
             "You’re approved. Create your bot with BotFather, give it the name you want, "
-            f"and send me the API token for {preferred_bot_name}. I’ll wire it to your agent and then step out."
+            f"and send me the API token for {preferred_bot_name}. I’ll ask for the model provider credential next, then wire everything and step out."
         )
+    if state == "awaiting-provider-credential" and provider_setup is not None:
+        return provider_credential_prompt(provider_setup)
+    if state == "awaiting-provider-browser-auth" and provider_setup is not None:
+        return provider_browser_auth_prompt(provider_setup, browser_auth)
     if state == "provision-pending":
         return "I’m provisioning your agent and wiring your bot now. This usually lands within a minute."
     if state == "denied":
@@ -288,6 +406,8 @@ def _status_or_cancel(
     if normalized in STATUS_COMMANDS:
         return session, [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
     if normalized in CANCEL_COMMANDS:
+        delete_onboarding_secret(str(session.get("pending_bot_token_path") or ""))
+        delete_onboarding_secret(_provider_secret_path(session))
         updated = save_onboarding_session(
             conn,
             session_id=str(session["session_id"]),
@@ -429,67 +549,116 @@ def process_onboarding_message(
                 return [OutboundMessage(incoming.chat_id, str(exc).strip() or "That token was rejected.")]
             answers = session.get("answers", {})
             try:
-                request = request_bootstrap(
-                    conn,
-                    cfg,
-                    requester_identity=_requester_identity(incoming, session),
-                    unix_user=str(answers.get("unix_user") or incoming.sender_id),
-                    source_ip=f"{incoming.platform}:{incoming.sender_id}",
-                    tailnet_identity=None,
-                    issue_pending_token=False,
-                    auto_provision=True,
-                    requested_model_preset=str(answers.get("model_preset") or "codex"),
-                    requested_channels=[bot_platform],
-                )
-                approve_request(
-                    conn,
-                    request_id=str(request["request_id"]),
-                    surface="curator-channel",
-                    actor=str(session.get("approved_by_actor") or f"{incoming.platform}-operator"),
-                    cfg=cfg,
-                )
                 pending_bot_token_path = write_onboarding_platform_token_secret(
                     cfg,
                     str(session["session_id"]),
                     bot_platform,
                     text,
                 )
+                provider_setup = resolve_provider_setup(cfg, str(answers.get("model_preset") or "codex"))
             except Exception as exc:  # noqa: BLE001
-                return [OutboundMessage(incoming.chat_id, f"I couldn't start provisioning yet: {exc}")]
+                return [OutboundMessage(incoming.chat_id, f"I couldn't continue onboarding yet: {exc}")]
 
-            extra_answers = {
-                "bot_platform": bot_platform,
-                "bot_id": bot_identity.bot_id,
-                "bot_username": bot_identity.username,
-                "bot_display_name": bot_identity.display_name,
-            }
+            extra_answers = _bot_identity_answers(bot_platform, bot_identity)
+            extra_answers["provider_setup"] = provider_setup.as_dict()
             save_kwargs: dict[str, Any] = {
                 "session_id": str(session["session_id"]),
-                "state": "provision-pending",
+                "state": "awaiting-provider-credential",
                 "answers": extra_answers,
                 "pending_bot_token": "",
                 "pending_bot_token_path": pending_bot_token_path,
-                "linked_request_id": str(request["request_id"]),
-                "linked_agent_id": str(request.get("agent_id") or ""),
                 "provision_error": "",
             }
             if bot_platform == "telegram":
                 save_kwargs["telegram_bot_id"] = bot_identity.bot_id
                 save_kwargs["telegram_bot_username"] = bot_identity.username
-            save_onboarding_session(conn, **save_kwargs)
-            bot_label = bot_identity.username or bot_identity.display_name or _preferred_bot_name(session)
-            if bot_platform == "discord":
-                return [
-                    OutboundMessage(
-                        incoming.chat_id,
-                        f"Thanks. I’m provisioning `{answers.get('unix_user')}` now and wiring `{bot_label}`. I’ll tell you when it’s ready.",
-                    )
-                ]
-            return [
-                OutboundMessage(
-                    incoming.chat_id,
-                    f"Thanks. I’m provisioning `{answers.get('unix_user')}` now and wiring @{bot_label}. I’ll tell you when it’s ready.",
+            updated = save_onboarding_session(conn, **save_kwargs)
+            if provider_setup.auth_flow == "codex-device":
+                auth_state = start_codex_device_authorization()
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    state="awaiting-provider-browser-auth",
+                    answers={"provider_browser_auth": auth_state},
                 )
-            ]
+            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+
+        if state == "awaiting-provider-credential":
+            provider_setup = _provider_setup(session)
+            if provider_setup is None:
+                return [OutboundMessage(incoming.chat_id, "I lost track of the provider setup for this session. Send /start and we’ll begin again.")]
+            try:
+                if provider_setup.provider_id == "anthropic" and lower in {"oauth", "/oauth", "browser"}:
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-provider-browser-auth",
+                        answers={"provider_browser_auth": start_anthropic_pkce_authorization()},
+                    )
+                    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                if provider_setup.provider_id == "anthropic":
+                    provider_secret = normalize_anthropic_credential(text)
+                else:
+                    provider_secret = normalize_api_key_credential(provider_setup, text)
+                provider_secret_path = write_onboarding_secret(
+                    cfg,
+                    str(session["session_id"]),
+                    provider_secret_name(provider_setup),
+                    provider_secret,
+                )
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    answers={"pending_provider_secret_path": provider_secret_path},
+                )
+                updated = begin_onboarding_provisioning(conn, cfg, updated, provider_secret_path=provider_secret_path)
+            except Exception as exc:  # noqa: BLE001
+                return [OutboundMessage(incoming.chat_id, str(exc).strip() or "That credential was rejected.")]
+
+            bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or _preferred_bot_name(updated))
+            unix_user = str(updated.get("answers", {}).get("unix_user") or incoming.sender_id)
+            if _bot_platform_name(updated) == "discord":
+                return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when it’s ready.")]
+            return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when it’s ready.")]
+
+        if state == "awaiting-provider-browser-auth":
+            provider_setup = _provider_setup(session)
+            if provider_setup is None:
+                return [OutboundMessage(incoming.chat_id, "I lost track of the provider setup for this session. Send /start and we’ll begin again.")]
+            if lower in {"restart", "/restart"} and provider_setup.auth_flow == "codex-device":
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    answers={"provider_browser_auth": start_codex_device_authorization()},
+                    provision_error="",
+                )
+                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            if provider_setup.provider_id != "anthropic":
+                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+            try:
+                provider_secret, auth_state = complete_anthropic_pkce_authorization(_provider_auth_state(session), text)
+                provider_secret_path = write_onboarding_secret(
+                    cfg,
+                    str(session["session_id"]),
+                    provider_secret_name(provider_setup),
+                    provider_secret,
+                )
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    answers={
+                        "provider_browser_auth": auth_state,
+                        "pending_provider_secret_path": provider_secret_path,
+                    },
+                )
+                updated = begin_onboarding_provisioning(conn, cfg, updated, provider_secret_path=provider_secret_path)
+            except Exception as exc:  # noqa: BLE001
+                return [OutboundMessage(incoming.chat_id, str(exc).strip() or "That Claude authorization code was rejected.")]
+
+            bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or _preferred_bot_name(updated))
+            unix_user = str(updated.get("answers", {}).get("unix_user") or incoming.sender_id)
+            if _bot_platform_name(updated) == "discord":
+                return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when it’s ready.")]
+            return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when it’s ready.")]
 
         return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]

@@ -448,6 +448,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             str(hermes_home),
             json.dumps(["tui-only", "telegram"]),
             str(activation_trigger_path(cfg, agent_id)),
+            str(cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"),
         ],
     )
     if result.returncode != 0:
@@ -556,6 +557,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             str(hermes_home),
             json.dumps(["tui-only", "discord"]),
             str(activation_trigger_path(cfg, agent_id)),
+            str(cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"),
         ],
     )
     if result.returncode != 0:

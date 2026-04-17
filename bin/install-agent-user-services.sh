@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
-  echo "Usage: $0 <agent-id> <shared-repo-dir> <hermes-home> [channels-json] [activation-trigger-path]" >&2
+  echo "Usage: $0 <agent-id> <shared-repo-dir> <hermes-home> [channels-json] [activation-trigger-path] [hermes-bin]" >&2
   exit 2
 fi
 
@@ -11,8 +11,18 @@ SHARED_REPO_DIR="$2"
 HERMES_HOME="$3"
 CHANNELS_JSON="${4:-[\"tui-only\"]}"
 ACTIVATION_TRIGGER_PATH="${5:-}"
+HERMES_BIN="${6:-${ALMANAC_HERMES_BIN:-${RUNTIME_DIR:-}/hermes-venv/bin/hermes}}"
 TARGET_DIR="$HOME/.config/systemd/user"
 mkdir -p "$TARGET_DIR"
+
+if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES_BIN="$(command -v hermes)"
+  else
+    echo "Hermes binary not found. Expected executable at $HERMES_BIN" >&2
+    exit 1
+  fi
+fi
 
 cat >"$TARGET_DIR/almanac-user-agent-refresh.service" <<EOF
 [Unit]
@@ -72,7 +82,7 @@ Description=Almanac user-agent messaging gateway for $AGENT_ID
 
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
-ExecStart=/bin/bash -lc 'exec hermes gateway'
+ExecStart=$HERMES_BIN gateway
 Restart=on-failure
 RestartSec=5
 

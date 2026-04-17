@@ -221,8 +221,43 @@ PY
   rm -f "$dump_file"
 }
 
-ensure_hermes_installed() {
+resolve_shared_hermes_bin() {
+  local hermes_bin="${ALMANAC_HERMES_BIN:-}"
+  if [[ -n "$hermes_bin" && -x "$hermes_bin" ]]; then
+    printf '%s\n' "$hermes_bin"
+    return 0
+  fi
+  hermes_bin="${RUNTIME_DIR:-}/hermes-venv/bin/hermes"
+  if [[ -x "$hermes_bin" ]]; then
+    printf '%s\n' "$hermes_bin"
+    return 0
+  fi
+  return 1
+}
+
+current_hermes_bin() {
+  local hermes_bin=""
+  if hermes_bin="$(resolve_shared_hermes_bin 2>/dev/null)"; then
+    printf '%s\n' "$hermes_bin"
+    return 0
+  fi
   if command -v hermes >/dev/null 2>&1; then
+    command -v hermes
+    return 0
+  fi
+  return 1
+}
+
+ensure_hermes_installed() {
+  local hermes_bin=""
+  if hermes_bin="$(resolve_shared_hermes_bin 2>/dev/null)"; then
+    export ALMANAC_HERMES_BIN="$hermes_bin"
+    export PATH="$(dirname "$hermes_bin"):$HOME/.local/bin:$PATH"
+    return 0
+  fi
+  if command -v hermes >/dev/null 2>&1; then
+    export ALMANAC_HERMES_BIN="$(command -v hermes)"
+    export PATH="$(dirname "$ALMANAC_HERMES_BIN"):$HOME/.local/bin:$PATH"
     return 0
   fi
   if [[ "${ALMANAC_INIT_SKIP_HERMES_INSTALL:-0}" == "1" ]]; then
@@ -231,11 +266,17 @@ ensure_hermes_installed() {
   fi
   curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
   export PATH="$HOME/.local/bin:$PATH"
-  command -v hermes >/dev/null 2>&1
+  if command -v hermes >/dev/null 2>&1; then
+    export ALMANAC_HERMES_BIN="$(command -v hermes)"
+    return 0
+  fi
+  return 1
 }
 
 install_default_skills() {
   local hermes_home="$1"
+  local hermes_bin
+  hermes_bin="$(current_hermes_bin)"
   local skill
   for skill in \
     "$SHARED_REPO_DIR/skills/almanac-qmd-mcp" \
@@ -245,16 +286,18 @@ install_default_skills() {
     "$SHARED_REPO_DIR/skills/almanac-ssot"
   do
     [[ -d "$skill" ]] || continue
-    HERMES_HOME="$hermes_home" hermes skills install "$skill" --yes >/dev/null 2>&1 || true
+    HERMES_HOME="$hermes_home" "$hermes_bin" skills install "$skill" --yes >/dev/null 2>&1 || true
   done
 }
 
 register_default_mcps() {
   local hermes_home="$1"
-  HERMES_HOME="$hermes_home" hermes mcp add almanac-mcp --url "$ALMANAC_MCP_URL" >/dev/null 2>&1 || true
-  HERMES_HOME="$hermes_home" hermes mcp add almanac-qmd --url "$ALMANAC_QMD_URL" >/dev/null 2>&1 || true
+  local hermes_bin
+  hermes_bin="$(current_hermes_bin)"
+  HERMES_HOME="$hermes_home" "$hermes_bin" mcp add almanac-mcp --url "$ALMANAC_MCP_URL" >/dev/null 2>&1 || true
+  HERMES_HOME="$hermes_home" "$hermes_bin" mcp add almanac-qmd --url "$ALMANAC_QMD_URL" >/dev/null 2>&1 || true
   if [[ -n "$CHUTES_MCP_URL" ]]; then
-    HERMES_HOME="$hermes_home" hermes mcp add chutes-kb --url "$CHUTES_MCP_URL" >/dev/null 2>&1 || true
+    HERMES_HOME="$hermes_home" "$hermes_bin" mcp add chutes-kb --url "$CHUTES_MCP_URL" >/dev/null 2>&1 || true
   fi
 }
 
@@ -312,6 +355,7 @@ run_agent_flow() {
   local prior_default_channels model_preset channels_csv channels_json model_string token hermes_home
   local agent_id token_file hermes_state_file state_file activation_status activation_trigger_path
   local resuming_pending="0"
+  local hermes_bin=""
   local preseeded_request_id="${ALMANAC_BOOTSTRAP_REQUEST_ID:-}"
   local preseeded_raw_token="${ALMANAC_BOOTSTRAP_RAW_TOKEN:-}"
   local preseeded_agent_id="${ALMANAC_BOOTSTRAP_AGENT_ID:-}"
@@ -420,11 +464,12 @@ PY
   # and systemd gateway installation can drift from what Hermes is actually
   # running (e.g. the user picks a different model or gateway in the wizard).
   ensure_hermes_installed
+  hermes_bin="$(current_hermes_bin)"
 
   if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
     echo "Launching 'hermes setup' — Almanac will read back your model choice from Hermes when it finishes."
-    HERMES_HOME="$hermes_home" hermes setup
+    HERMES_HOME="$hermes_home" "$hermes_bin" setup
   fi
 
   # Gateway setup only makes sense if we actually want Discord/Telegram. Ask
@@ -434,14 +479,14 @@ PY
     read -r -p "Configure Hermes gateway for Discord/Telegram? [y/N]: " want_gateway_answer
     if is_yes "$want_gateway_answer"; then
       want_gateway="yes"
-      if ! HERMES_HOME="$hermes_home" hermes gateway setup; then
+      if ! HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup; then
         echo "Hermes gateway setup returned non-zero; Almanac will continue and install the gateway service from the saved Hermes config." >&2
       fi
     fi
   fi
 
   hermes_state_file="$(mktemp)"
-  if probe_hermes_state_json "$hermes_home" >"$hermes_state_file"; then
+  if probe_hermes_state_json "$hermes_home" "$hermes_bin" >"$hermes_state_file"; then
     model_preset="$(json_get "$hermes_state_file" "model_preset")"
     model_string="$(json_get "$hermes_state_file" "model_string")"
     channels_csv="$(json_get "$hermes_state_file" "channels_csv")"
@@ -497,7 +542,8 @@ PY
     "$SHARED_REPO_DIR" \
     "$hermes_home" \
     "$channels_json" \
-    "$activation_trigger_path"
+    "$activation_trigger_path" \
+    "$hermes_bin"
 
   if [[ -x "$SHARED_REPO_DIR/bin/activate-agent.sh" ]]; then
     HERMES_HOME="$hermes_home" \
@@ -607,13 +653,14 @@ EOF
 }
 
 run_update_flow() {
-  export PATH="$HOME/.local/bin:$PATH"
   require_linux_host "update"
-  command -v hermes >/dev/null 2>&1 || {
+  ensure_hermes_installed || {
     echo "Hermes is not installed for $(id -un)." >&2
     exit 1
   }
-  hermes update || true
+  local hermes_bin
+  hermes_bin="$(current_hermes_bin)"
+  "$hermes_bin" update || true
   if [[ -d "$SHARED_REPO_DIR/skills" ]]; then
     install_default_skills "$HERMES_HOME_DEFAULT"
   fi

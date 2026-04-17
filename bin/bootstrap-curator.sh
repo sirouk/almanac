@@ -342,6 +342,7 @@ PY
   HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-first-contact" --yes >/dev/null 2>&1 || true
   HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-vaults" --yes >/dev/null 2>&1 || true
   HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-ssot" --yes >/dev/null 2>&1 || true
+  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" skills install "$BOOTSTRAP_DIR/skills/almanac-upgrade-orchestrator" --yes >/dev/null 2>&1 || true
 
   if set_user_systemd_bus_env; then
     systemctl --user daemon-reload

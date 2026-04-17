@@ -24,6 +24,7 @@ from almanac_control import (
     ensure_config_file_update,
     generate_raw_token,
     get_agent,
+    get_setting,
     hash_token,
     list_agents,
     list_notifications,
@@ -105,6 +106,12 @@ def parse_args() -> argparse.Namespace:
     user_sub = user.add_subparsers(dest="action", required=True)
     prepare = user_sub.add_parser("prepare")
     prepare.add_argument("unix_user")
+
+    upgrade = subparsers.add_parser("upgrade")
+    upgrade_sub = upgrade.add_subparsers(dest="action", required=True)
+    upgrade_check = upgrade_sub.add_parser("check")
+    upgrade_check.add_argument("--notify", action="store_true", help="Queue an operator notification when a new upstream commit is detected.")
+    upgrade_check.add_argument("--actor", default=os.environ.get("USER", "operator"), help="Actor label recorded for this check.")
 
     internal = subparsers.add_parser("internal")
     internal_sub = internal.add_subparsers(dest="action", required=True)
@@ -357,6 +364,171 @@ def _ensure_curator_token_file(cfg: Config, token_id: str) -> str:
     return raw_token
 
 
+def _read_release_state(cfg: Config) -> dict[str, object]:
+    path = cfg.release_state_file
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _short_sha(value: str) -> str:
+    return value[:12] if value else ""
+
+
+def _resolve_deployed_commit(cfg: Config, release_state: dict[str, object]) -> str:
+    commit = str(release_state.get("deployed_commit") or "").strip()
+    if commit:
+        return commit
+    if shutil.which("git") is None:
+        return ""
+    result = subprocess.run(
+        ["git", "-C", str(cfg.repo_dir), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _query_upstream_head(repo_url: str, branch: str) -> str:
+    if shutil.which("git") is None:
+        raise RuntimeError("git is not installed")
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", repo_url, branch],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(detail or f"git ls-remote exited {result.returncode}")
+    ref_suffix = f"refs/heads/{branch}"
+    for raw_line in result.stdout.splitlines():
+        parts = raw_line.strip().split()
+        if len(parts) >= 2 and parts[1] == ref_suffix:
+            return parts[0]
+    raise RuntimeError(f"branch {branch!r} was not found at {repo_url}")
+
+
+def upgrade_check(
+    conn,
+    cfg: Config,
+    *,
+    actor: str,
+    notify: bool = False,
+) -> dict[str, object]:
+    release_state = _read_release_state(cfg)
+    upstream_repo_url = str(
+        release_state.get("tracked_upstream_repo_url") or cfg.upstream_repo_url or ""
+    ).strip()
+    upstream_branch = str(
+        release_state.get("tracked_upstream_branch") or cfg.upstream_branch or "main"
+    ).strip() or "main"
+    deployed_commit = _resolve_deployed_commit(cfg, release_state)
+
+    result: dict[str, object] = {
+        "release_state_file": str(cfg.release_state_file),
+        "release_state_present": cfg.release_state_file.is_file(),
+        "deployed_from": str(release_state.get("deployed_from") or ""),
+        "deployed_commit": deployed_commit,
+        "deployed_commit_short": _short_sha(deployed_commit),
+        "deployed_source_repo": str(release_state.get("deployed_source_repo") or ""),
+        "deployed_source_branch": str(release_state.get("deployed_source_branch") or ""),
+        "tracked_upstream_repo_url": upstream_repo_url,
+        "tracked_upstream_branch": upstream_branch,
+        "notification_sent": False,
+    }
+
+    try:
+        upstream_commit = _query_upstream_head(upstream_repo_url, upstream_branch)
+    except Exception as exc:  # noqa: BLE001
+        note = f"upstream check failed for {upstream_repo_url}#{upstream_branch}: {exc}"
+        note_refresh_job(
+            conn,
+            job_name="almanac-upgrade-check",
+            job_kind="upgrade-check",
+            target_id="almanac",
+            schedule="every 1h",
+            status="warn",
+            note=note,
+        )
+        result.update(
+            {
+                "status": "warn",
+                "update_available": False,
+                "upstream_commit": "",
+                "upstream_commit_short": "",
+                "note": note,
+                "error": str(exc),
+            }
+        )
+        return result
+
+    update_available = bool(deployed_commit and deployed_commit != upstream_commit)
+    if not deployed_commit:
+        status = "warn"
+        note = (
+            f"upstream {_short_sha(upstream_commit)} known, but deployed release state is missing or incomplete"
+        )
+    elif update_available:
+        status = "warn"
+        note = (
+            f"update available: {_short_sha(deployed_commit)} -> {_short_sha(upstream_commit)} "
+            f"from {upstream_repo_url}#{upstream_branch}"
+        )
+    else:
+        status = "ok"
+        note = f"up to date at {_short_sha(upstream_commit)} from {upstream_repo_url}#{upstream_branch}"
+
+    result.update(
+        {
+            "status": status,
+            "update_available": update_available,
+            "upstream_commit": upstream_commit,
+            "upstream_commit_short": _short_sha(upstream_commit),
+            "note": note,
+        }
+    )
+
+    upsert_setting(conn, "almanac_upgrade_last_seen_sha", upstream_commit)
+
+    if notify and update_available:
+        last_notified_sha = get_setting(conn, "almanac_upgrade_last_notified_sha", "")
+        if upstream_commit != last_notified_sha:
+            queue_notification(
+                conn,
+                target_kind="operator",
+                target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+                channel_kind=cfg.operator_notify_platform or "tui-only",
+                message=(
+                    "Almanac update available: "
+                    f"deployed {_short_sha(deployed_commit)} -> upstream {_short_sha(upstream_commit)} "
+                    f"on {upstream_repo_url}#{upstream_branch}. "
+                    "Review with Curator using almanac-upgrade-orchestrator, then run ./deploy.sh upgrade on the host."
+                ),
+            )
+            upsert_setting(conn, "almanac_upgrade_last_notified_sha", upstream_commit)
+            result["notification_sent"] = True
+
+    note_refresh_job(
+        conn,
+        job_name="almanac-upgrade-check",
+        job_kind="upgrade-check",
+        target_id="almanac",
+        schedule="every 1h",
+        status=status,
+        note=note,
+    )
+    return result
+
+
 def main() -> None:
     args = parse_args()
     cfg = Config.from_env()
@@ -521,6 +693,10 @@ def main() -> None:
             )
             return
 
+        if args.domain == "upgrade" and args.action == "check":
+            dump_output(args, upgrade_check(conn, cfg, actor=args.actor, notify=args.notify))
+            return
+
         if args.domain == "channel" and args.action == "reconfigure":
             if args.scope != "operator":
                 raise SystemExit("only operator channel reconfiguration is supported")
@@ -652,6 +828,7 @@ def main() -> None:
 
             scan = reload_vault_definitions(conn, cfg)
             fanout = consume_curator_brief_fanout(conn, cfg)
+            upgrade = upgrade_check(conn, cfg, actor=args.actor, notify=True)
             note_refresh_job(
                 conn,
                 job_name="curator-refresh",
@@ -664,7 +841,7 @@ def main() -> None:
                     f"published {len(fanout.get('published_agents', []))} central stub(s)"
                 ),
             )
-            dump_output(args, {"scan": scan, "fanout": fanout})
+            dump_output(args, {"scan": scan, "fanout": fanout, "upgrade": upgrade})
             return
 
         if args.domain == "notion" and args.action == "process-pending":

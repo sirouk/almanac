@@ -2,6 +2,23 @@
 set -euo pipefail
 
 BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+
+read_operator_artifact_config_file() {
+  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+
+  if [[ -r "$artifact" ]]; then
+    # shellcheck disable=SC1090
+    source "$artifact"
+    if [[ -n "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE" ]]; then
+      printf '%s\n' "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE"
+      return 0
+    fi
+  fi
+
+  return 1
+}
 
 normalize_vault_qmd_collection_mask() {
   local mask="${1:-}"
@@ -22,11 +39,24 @@ normalize_vault_qmd_collection_mask() {
 find_config_file() {
   local nested_priv
   local sibling_priv
+  local explicit_config
+  local artifact_config
   nested_priv="$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
   sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/almanac-priv/config/almanac.env"
 
+  explicit_config="${ALMANAC_CONFIG_FILE:-}"
+  if [[ -n "$explicit_config" ]]; then
+    echo "$explicit_config"
+    return 0
+  fi
+
+  artifact_config="$(read_operator_artifact_config_file || true)"
+  if [[ -n "$artifact_config" ]]; then
+    echo "$artifact_config"
+    return 0
+  fi
+
   local candidates=(
-    "${ALMANAC_CONFIG_FILE:-}"
     "$BOOTSTRAP_DIR/config/almanac.env"
     "$nested_priv"
     "$sibling_priv"
@@ -45,7 +75,7 @@ find_config_file() {
 
 CONFIG_FILE="$(find_config_file || true)"
 
-if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
+if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$CONFIG_FILE"
 fi
@@ -73,6 +103,7 @@ ALMANAC_CURATOR_DIR="${ALMANAC_CURATOR_DIR:-$STATE_DIR/curator}"
 ALMANAC_CURATOR_MANIFEST="${ALMANAC_CURATOR_MANIFEST:-$ALMANAC_CURATOR_DIR/manifest.json}"
 ALMANAC_CURATOR_HERMES_HOME="${ALMANAC_CURATOR_HERMES_HOME:-$ALMANAC_CURATOR_DIR/hermes-home}"
 ALMANAC_ARCHIVED_AGENTS_DIR="${ALMANAC_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
+ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
 QMD_INDEX_NAME="${QMD_INDEX_NAME:-almanac}"
 QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
 PDF_INGEST_COLLECTION_NAME="${PDF_INGEST_COLLECTION_NAME:-vault-pdf-ingest}"
@@ -149,6 +180,8 @@ ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}"
 ALMANAC_MODEL_PRESET_OPUS="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}"
 ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover}"
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
+ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
+ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
 
 qmd_normalize_index_name() {
   local index_name="${1:-index}"

@@ -96,11 +96,19 @@ The main entrypoint is the interactive deploy script:
 /path/to/almanac/deploy.sh
 ```
 
-It opens a small menu with modes for install/update, config-only, health, and
-remove/teardown. When a deployed `almanac.env` is found, remove/teardown offers
-to use it automatically so you do not have to re-enter the paths.
+It opens a small menu with modes for:
 
-Install/update asks for:
+- install or repair from the checkout you are currently running
+- upgrade from the configured upstream repo and branch
+- config-only writes
+- Curator repair
+- health
+- remove/teardown
+
+When a deployed `almanac.env` is found, remove/teardown offers to use it
+automatically so you do not have to re-enter the paths.
+
+Install or repair from the current checkout asks for:
 
 - whether to use `almanac` as the service user, defaulting to `almanac`
 - service user and home
@@ -131,11 +139,13 @@ Useful direct modes:
 
 ```bash
 ./deploy.sh install
+./deploy.sh upgrade
 ./deploy.sh curator-setup
 ./deploy.sh agent-payload
 ./deploy.sh write-config
 ./deploy.sh health
 ./deploy.sh remove
+./bin/almanac-ctl upgrade check
 ./init.sh agent
 ./init.sh update
 sudo ./bin/almanac-ctl user prepare <unix-user>   # optional manual repair path
@@ -153,7 +163,14 @@ Clone the repo onto the host, then run:
 ```
 
 That flow stands up the shared infrastructure, writes `almanac-priv`, installs
-the shared systemd services, and then launches Curator onboarding.
+the shared systemd services, records the deployed release state, and then
+launches Curator onboarding.
+
+When you run deploy or health commands from a separate operator checkout, that
+checkout also writes a local maintenance pointer at `.almanac-operator.env`.
+It is not part of the live deploy and is ignored by git. It simply remembers
+which deployed `almanac.env` that checkout should manage on later `health`,
+`upgrade`, and `almanac-ctl` runs.
 
 Curator setup includes:
 
@@ -184,6 +201,30 @@ After install or repair:
 This checks the shared services, Curator registration and refresh state, qmd,
 vault warnings, notification delivery, the root auto-provision timer, and
 enrolled-agent service health.
+
+### 2a. Upgrade the deployed host from upstream
+
+When you want to roll the shared host forward from the tracked upstream repo and
+branch in `almanac.env`, run:
+
+```bash
+./deploy.sh upgrade
+```
+
+That path does not use the local dev checkout as the live source of truth. It
+fetches the configured upstream, syncs the deployed public repo, refreshes the
+shared services, repairs Curator noninteractively, records the new release
+state, and finishes with a strict health check.
+
+The manual check command is:
+
+```bash
+./bin/almanac-ctl upgrade check
+```
+
+Curator also runs that check hourly from `almanac-curator-refresh.timer` and
+nudges the operator when a new upstream commit appears. The Curator maintenance
+skill for that flow is `almanac-upgrade-orchestrator`.
 
 ### 3. Use the recovery surfaces
 
@@ -225,14 +266,14 @@ If the repo is public, the user can enroll with the curl-friendly bootstrap:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh \
-  | ALMANAC_TARGET_HOST=kor.tail77f45e.ts.net bash -s -- agent
+  | ALMANAC_TARGET_HOST=almanac.your-tailnet.ts.net bash -s -- agent
 ```
 
 Or, without relying on environment-variable placement in a pipe:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh \
-  | bash -s -- agent --target-host kor.tail77f45e.ts.net
+  | bash -s -- agent --target-host almanac.your-tailnet.ts.net
 ```
 
 When run from a non-Linux client such as a Mac, that bootstrap now:
@@ -340,11 +381,11 @@ Useful overrides for remote bootstrap:
 ```bash
 ALMANAC_INIT_REPO_URL=https://github.com/sirouk/almanac.git
 ALMANAC_INIT_RAW_URL=https://raw.githubusercontent.com/sirouk/almanac/main/init.sh
-ALMANAC_TARGET_HOST=kor.tail77f45e.ts.net
+ALMANAC_TARGET_HOST=almanac.your-tailnet.ts.net
 ALMANAC_TARGET_USER=ian
-ALMANAC_PUBLIC_MCP_URL=https://kor.tail77f45e.ts.net/almanac-mcp
+ALMANAC_PUBLIC_MCP_URL=https://almanac.your-tailnet.ts.net/almanac-mcp
 ALMANAC_PUBLIC_MCP_PATH=/almanac-mcp
-ALMANAC_BOOTSTRAP_URL=https://kor.tail77f45e.ts.net/almanac-mcp
+ALMANAC_BOOTSTRAP_URL=https://almanac.your-tailnet.ts.net/almanac-mcp
 ALMANAC_MCP_URL=http://127.0.0.1:8282/mcp
 ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
 CHUTES_MCP_URL=https://example.invalid/mcp
@@ -467,7 +508,9 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 
 ## Updates and Lifecycle
 
-- shared-host repair or upgrade: `./deploy.sh install`
+- shared-host repair from the current checkout: `./deploy.sh install`
+- shared-host upgrade from configured upstream: `./deploy.sh upgrade`
+- manual upstream check: `./bin/almanac-ctl upgrade check`
 - Curator-only repair: `./deploy.sh curator-setup`
 - user-agent update from the user's account: `./init.sh update`
 - token revocation: `./bin/almanac-ctl token revoke <target>`

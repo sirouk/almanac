@@ -51,6 +51,10 @@ ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover
 ALMANAC_CURATOR_MODEL_PRESET="${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
 ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
+ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
+ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-}"
+ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
 
 normalize_vault_qmd_collection_mask() {
   local mask="${1:-}"
@@ -68,11 +72,28 @@ normalize_vault_qmd_collection_mask() {
   printf '%s\n' "$mask"
 }
 
+read_operator_artifact_config_file() {
+  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+
+  if [[ -r "$artifact" ]]; then
+    # shellcheck disable=SC1090
+    source "$artifact"
+    if [[ -n "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE" ]]; then
+      printf '%s\n' "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 usage() {
   cat <<'EOF'
 Usage:
   deploy.sh                # interactive menu
   deploy.sh install
+  deploy.sh upgrade
   deploy.sh curator-setup
   deploy.sh agent-payload
   deploy.sh write-config
@@ -86,7 +107,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|curator-setup|agent-payload|agent|write-config|remove|health|menu)
+    install|upgrade|curator-setup|agent-payload|agent|write-config|remove|health|menu)
       MODE="$1"
       shift
       ;;
@@ -115,6 +136,10 @@ while [[ $# -gt 0 ]]; do
       else
         shift
       fi
+      ;;
+    --apply-upgrade)
+      PRIVILEGED_MODE="upgrade"
+      shift
       ;;
     -h|--help)
       usage
@@ -231,26 +256,28 @@ choose_mode() {
   cat <<'EOF'
 Almanac deploy menu
 
-  1) Install / update
-  2) Write config only
-  3) Curator setup / repair
-  4) Print agent payload
-  5) Health check
-  6) Remove / teardown
-  7) Exit
+  1) Install / repair from current checkout
+  2) Upgrade deployed host from configured upstream
+  3) Write config only
+  4) Curator setup / repair
+  5) Print agent payload
+  6) Health check
+  7) Remove / teardown
+  8) Exit
 EOF
 
   while true; do
     read -r -p "Choose mode [1]: " answer
     case "${answer:-1}" in
       1) MODE="install"; return 0 ;;
-      2) MODE="write-config"; return 0 ;;
-      3) MODE="curator-setup"; return 0 ;;
-      4) MODE="agent-payload"; return 0 ;;
-      5) MODE="health"; return 0 ;;
-      6) MODE="remove"; return 0 ;;
-      7) exit 0 ;;
-      *) echo "Please choose 1, 2, 3, 4, 5, 6, or 7." ;;
+      2) MODE="upgrade"; return 0 ;;
+      3) MODE="write-config"; return 0 ;;
+      4) MODE="curator-setup"; return 0 ;;
+      5) MODE="agent-payload"; return 0 ;;
+      6) MODE="health"; return 0 ;;
+      7) MODE="remove"; return 0 ;;
+      8) exit 0 ;;
+      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, or 8." ;;
     esac
   done
 }
@@ -493,16 +520,29 @@ detect_github_repo() {
 
 discover_existing_config() {
   local candidate
+  local explicit_config
+  local artifact_config
+  explicit_config="${ALMANAC_CONFIG_FILE:-}"
+  artifact_config="$(read_operator_artifact_config_file || true)"
+
+  DISCOVERED_CONFIG=""
+
+  if [[ -n "$explicit_config" ]]; then
+    DISCOVERED_CONFIG="$explicit_config"
+    return 0
+  fi
+  if [[ -n "$artifact_config" ]]; then
+    DISCOVERED_CONFIG="$artifact_config"
+    return 0
+  fi
+
   local candidates=(
-    "${ALMANAC_CONFIG_FILE:-}"
     "/home/almanac/almanac/almanac-priv/config/almanac.env"
     "$HOME/almanac/almanac-priv/config/almanac.env"
     "$HOME/almanac/almanac/almanac-priv/config/almanac.env"
     "$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
     "$BOOTSTRAP_DIR/config/almanac.env"
   )
-
-  DISCOVERED_CONFIG=""
 
   for candidate in "${candidates[@]}"; do
     if [[ -n "$candidate" && -f "$candidate" ]]; then
@@ -522,6 +562,9 @@ discover_existing_config() {
 
 load_detected_config() {
   if discover_existing_config; then
+    if [[ ! -r "$DISCOVERED_CONFIG" ]]; then
+      return 1
+    fi
     # shellcheck disable=SC1090
     source "$DISCOVERED_CONFIG"
     VAULT_QMD_COLLECTION_MASK="$(normalize_vault_qmd_collection_mask "${VAULT_QMD_COLLECTION_MASK:-}")"
@@ -534,7 +577,7 @@ load_detected_config() {
 reload_runtime_config_from_file() {
   local config_path="${1:-$CONFIG_TARGET}"
 
-  if [[ -n "$config_path" && -f "$config_path" ]]; then
+  if [[ -n "$config_path" && -f "$config_path" && -r "$config_path" ]]; then
     # shellcheck disable=SC1090
     source "$config_path"
     VAULT_QMD_COLLECTION_MASK="$(normalize_vault_qmd_collection_mask "${VAULT_QMD_COLLECTION_MASK:-}")"
@@ -655,6 +698,9 @@ emit_runtime_config() {
     write_kv ALMANAC_CURATOR_MODEL_PRESET "${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
     write_kv ALMANAC_CURATOR_CHANNELS "${ALMANAC_CURATOR_CHANNELS:-tui-only}"
     write_kv CHUTES_MCP_URL "${CHUTES_MCP_URL:-}"
+    write_kv ALMANAC_UPSTREAM_REPO_URL "${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
+    write_kv ALMANAC_UPSTREAM_BRANCH "${ALMANAC_UPSTREAM_BRANCH:-main}"
+    write_kv ALMANAC_RELEASE_STATE_FILE "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
     write_kv ENABLE_NEXTCLOUD "$ENABLE_NEXTCLOUD"
     write_kv ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
     write_kv TAILSCALE_OPERATOR_USER "${TAILSCALE_OPERATOR_USER:-}"
@@ -698,8 +744,12 @@ seed_private_repo() {
 }
 
 sync_public_repo() {
-  local source_dir="$BOOTSTRAP_DIR"
-  local target_dir="$ALMANAC_REPO_DIR"
+  sync_public_repo_from_source "$BOOTSTRAP_DIR" "$ALMANAC_REPO_DIR"
+}
+
+sync_public_repo_from_source() {
+  local source_dir="$1"
+  local target_dir="$2"
   local same_path=""
 
   same_path="$(
@@ -721,10 +771,90 @@ PY
   rsync -a --delete \
     --exclude '.git/' \
     --exclude 'almanac-priv/' \
+    --exclude '.almanac-operator.env' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
     --exclude '.DS_Store' \
     "$source_dir/" "$target_dir/"
+}
+
+git_head_commit() {
+  local repo_dir="$1"
+  git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true
+}
+
+git_head_branch() {
+  local repo_dir="$1"
+  git -C "$repo_dir" symbolic-ref --quiet --short HEAD 2>/dev/null ||
+    git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true
+}
+
+git_origin_url() {
+  local repo_dir="$1"
+  git -C "$repo_dir" remote get-url origin 2>/dev/null || true
+}
+
+write_release_state() {
+  local source_kind="$1"
+  local deployed_commit="$2"
+  local source_repo_url="${3:-}"
+  local source_branch="${4:-}"
+  local source_path="${5:-}"
+  local target="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+
+  mkdir -p "$(dirname "$target")"
+  python3 - "$target" "$source_kind" "$deployed_commit" "$source_repo_url" "$source_branch" "$source_path" "${ALMANAC_UPSTREAM_REPO_URL:-}" "${ALMANAC_UPSTREAM_BRANCH:-}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+target = Path(sys.argv[1])
+payload = {
+    "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "deployed_from": sys.argv[2],
+    "deployed_commit": sys.argv[3],
+    "deployed_source_repo": sys.argv[4],
+    "deployed_source_branch": sys.argv[5],
+    "deployed_source_path": sys.argv[6],
+    "tracked_upstream_repo_url": sys.argv[7],
+    "tracked_upstream_branch": sys.argv[8],
+}
+target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+checkout_upstream_release() {
+  local checkout_dir="$1"
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git is required for deploy.sh upgrade." >&2
+    return 1
+  fi
+
+  rm -rf "$checkout_dir"
+  git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
+    "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
+}
+
+write_operator_checkout_artifact() {
+  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    return 0
+  fi
+  if [[ ! -d "$BOOTSTRAP_DIR" || ! -w "$BOOTSTRAP_DIR" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$artifact")"
+  {
+    printf '# Managed by Almanac deploy helpers. Local maintenance pointer only.\n'
+    printf 'ALMANAC_OPERATOR_DEPLOYED_USER=%q\n' "${ALMANAC_USER:-}"
+    printf 'ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=%q\n' "${ALMANAC_REPO_DIR:-}"
+    printf 'ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=%q\n' "${ALMANAC_PRIV_DIR:-}"
+    printf 'ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=%q\n' "${CONFIG_TARGET:-}"
+  } >"$artifact"
 }
 
 run_as_user() {
@@ -942,6 +1072,19 @@ print_post_install_guide() {
   echo "    ${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only} ${OPERATOR_NOTIFY_CHANNEL_ID:-"(tui-only)"}"
   echo "  Recovery CLI:"
   echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl"
+  echo
+
+  echo "Almanac software updates"
+  echo "  Tracked upstream:"
+  echo "    ${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}#${ALMANAC_UPSTREAM_BRANCH:-main}"
+  echo "  Release state:"
+  echo "    ${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+  echo "  Upgrade command:"
+  echo "    $ALMANAC_REPO_DIR/deploy.sh upgrade"
+  echo "  Manual upstream check:"
+  echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl upgrade check"
+  echo "  Curator routine:"
+  echo "    hourly via almanac-curator-refresh.timer using skill almanac-upgrade-orchestrator"
   echo
 
   print_agent_install_payload
@@ -1198,7 +1341,7 @@ collect_install_answers() {
 
   load_detected_config || true
 
-  echo "Almanac deploy: install / update"
+  echo "Almanac deploy: install / repair from current checkout"
   echo
 
   detected_user="${ALMANAC_USER:-}"
@@ -1280,11 +1423,14 @@ collect_install_answers() {
   NEXTCLOUD_STATE_DIR="$STATE_DIR/nextcloud"
   RUNTIME_DIR="$STATE_DIR/runtime"
   PUBLISHED_DIR="$ALMANAC_PRIV_DIR/published"
+  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
   QMD_INDEX_NAME="almanac"
   QMD_COLLECTION_NAME="vault"
   QMD_RUN_EMBED="1"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
+  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
+  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   ALMANAC_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
   BACKUP_GIT_REMOTE="$(ask "Private GitHub remote for almanac-priv (blank to skip)" "${BACKUP_GIT_REMOTE:-}")"
   BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
@@ -1409,11 +1555,14 @@ collect_remove_answers() {
   NEXTCLOUD_STATE_DIR="$STATE_DIR/nextcloud"
   RUNTIME_DIR="$STATE_DIR/runtime"
   PUBLISHED_DIR="$ALMANAC_PRIV_DIR/published"
+  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
   QMD_INDEX_NAME="${QMD_INDEX_NAME:-almanac}"
   QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
   QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
+  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
+  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
   BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
   BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-$ALMANAC_USER@localhost}"
@@ -1445,6 +1594,25 @@ collect_remove_answers() {
     echo "Teardown cancelled."
     exit 1
   fi
+}
+
+prepare_deployed_context() {
+  load_detected_config || true
+
+  ALMANAC_USER="${ALMANAC_USER:-almanac}"
+  ALMANAC_HOME="${ALMANAC_HOME:-/home/$ALMANAC_USER}"
+  ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$ALMANAC_HOME/almanac}"
+  ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
+  ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
+  VAULT_DIR="${VAULT_DIR:-$ALMANAC_PRIV_DIR/vault}"
+  STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
+  NEXTCLOUD_STATE_DIR="${NEXTCLOUD_STATE_DIR:-$STATE_DIR/nextcloud}"
+  RUNTIME_DIR="${RUNTIME_DIR:-$STATE_DIR/runtime}"
+  PUBLISHED_DIR="${PUBLISHED_DIR:-$ALMANAC_PRIV_DIR/published}"
+  CONFIG_TARGET="${DISCOVERED_CONFIG:-${ALMANAC_CONFIG_FILE:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}}"
+  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
+  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
 }
 
 restart_shared_user_services_root() {
@@ -1485,6 +1653,9 @@ restart_shared_user_services_root() {
 
 run_root_install() {
   local agent_payload_file=""
+  local source_commit=""
+  local source_branch=""
+  local source_repo_url=""
   export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
   export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
   export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
@@ -1500,6 +1671,7 @@ run_root_install() {
   export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD NEXTCLOUD_VAULT_MOUNT_POINT
   export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
   export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
+  export ALMANAC_UPSTREAM_REPO_URL ALMANAC_UPSTREAM_BRANCH ALMANAC_RELEASE_STATE_FILE
   export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
   export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
 
@@ -1526,7 +1698,7 @@ run_root_install() {
     if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1; then
       tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
     fi
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/tailscale-nextcloud-serve.sh"
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
   fi
 
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
@@ -1544,16 +1716,126 @@ run_root_install() {
     run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
   fi
 
+  source_commit="$(git_head_commit "$BOOTSTRAP_DIR")"
+  source_branch="$(git_head_branch "$BOOTSTRAP_DIR")"
+  source_repo_url="$(git_origin_url "$BOOTSTRAP_DIR")"
+  if [[ -n "$source_commit" ]]; then
+    write_release_state "local-checkout" "$source_commit" "$source_repo_url" "$source_branch" "$BOOTSTRAP_DIR"
+    chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
+  fi
+
   echo
   echo "Almanac install complete."
   echo "Public repo:  $ALMANAC_REPO_DIR"
   echo "Private repo: $ALMANAC_PRIV_DIR"
   echo "Config:       $CONFIG_TARGET"
+  if [[ -n "$source_commit" ]]; then
+    echo "Release:      ${source_commit:0:12} from current checkout"
+  fi
   agent_payload_file="$(write_agent_install_payload_file || true)"
   if [[ -n "$agent_payload_file" && -f "$agent_payload_file" ]]; then
     chown "$ALMANAC_USER:$ALMANAC_USER" "$agent_payload_file" >/dev/null 2>&1 || true
   fi
   print_post_install_guide
+}
+
+run_root_upgrade() {
+  local tmp_dir=""
+  local checkout_dir=""
+  local upstream_commit=""
+  local uid=""
+  local agent_payload_file=""
+
+  export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
+  export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
+  export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
+  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE
+  export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
+  export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
+  export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
+  export QMD_RUN_EMBED QMD_MCP_PORT ALMANAC_MCP_HOST ALMANAC_MCP_PORT ALMANAC_NOTION_WEBHOOK_HOST ALMANAC_NOTION_WEBHOOK_PORT
+  export ALMANAC_BOOTSTRAP_WINDOW_SECONDS ALMANAC_BOOTSTRAP_PER_IP_LIMIT ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS
+  export ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS
+  export BACKUP_GIT_AUTHOR_NAME BACKUP_GIT_AUTHOR_EMAIL NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
+  export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
+  export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD NEXTCLOUD_VAULT_MOUNT_POINT
+  export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
+  export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
+  export ALMANAC_UPSTREAM_REPO_URL ALMANAC_UPSTREAM_BRANCH ALMANAC_RELEASE_STATE_FILE
+  export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
+  export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
+
+  tmp_dir="$(mktemp -d /tmp/almanac-upgrade.XXXXXX)"
+  checkout_dir="$tmp_dir/repo"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  echo "Fetching Almanac upstream..."
+  echo "  repo:   $ALMANAC_UPSTREAM_REPO_URL"
+  echo "  branch: $ALMANAC_UPSTREAM_BRANCH"
+  checkout_upstream_release "$checkout_dir"
+  upstream_commit="$(git_head_commit "$checkout_dir")"
+  if [[ -z "$upstream_commit" ]]; then
+    echo "Could not determine upstream commit after cloning $ALMANAC_UPSTREAM_REPO_URL." >&2
+    return 1
+  fi
+
+  sync_public_repo_from_source "$checkout_dir" "$ALMANAC_REPO_DIR"
+  seed_private_repo "$ALMANAC_PRIV_DIR"
+  write_runtime_config "$CONFIG_TARGET"
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+
+  "$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"
+  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
+  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
+  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  restart_shared_user_services_root
+  uid="$(id -u "$ALMANAC_USER")"
+
+  if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+    if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1; then
+      tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
+    fi
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
+  fi
+
+  wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
+  wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 20 1
+  wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 20 1
+  if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+    wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
+  fi
+
+  echo
+  echo "Running health check..."
+  if [[ -S "/run/user/$uid/bus" ]]; then
+    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+  else
+    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+  fi
+
+  write_release_state "upstream" "$upstream_commit" "$ALMANAC_UPSTREAM_REPO_URL" "$ALMANAC_UPSTREAM_BRANCH" ""
+  chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
+
+  echo
+  echo "Almanac upgrade complete."
+  echo "Public repo:  $ALMANAC_REPO_DIR"
+  echo "Private repo: $ALMANAC_PRIV_DIR"
+  echo "Config:       $CONFIG_TARGET"
+  echo "Release:      ${upstream_commit:0:12} from ${ALMANAC_UPSTREAM_REPO_URL}#${ALMANAC_UPSTREAM_BRANCH}"
+  agent_payload_file="$(write_agent_install_payload_file || true)"
+  if [[ -n "$agent_payload_file" && -f "$agent_payload_file" ]]; then
+    chown "$ALMANAC_USER:$ALMANAC_USER" "$agent_payload_file" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$tmp_dir"
+  trap - EXIT
+  echo
+  echo "Manual upstream check:"
+  echo "  $ALMANAC_REPO_DIR/bin/almanac-ctl upgrade check"
+  echo "Host health check:"
+  echo "  $ALMANAC_REPO_DIR/deploy.sh health"
 }
 
 run_root_remove() {
@@ -1638,6 +1920,14 @@ run_health_check() {
 
   load_detected_config || true
 
+  if [[ ${EUID:-$(id -u)} -ne 0 && -n "${DISCOVERED_CONFIG:-}" && -f "$DISCOVERED_CONFIG" && ! -r "$DISCOVERED_CONFIG" ]]; then
+    if ! sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" health; then
+      return 1
+    fi
+    write_operator_checkout_artifact
+    return 0
+  fi
+
   if [[ -z "${ALMANAC_USER:-}" ]]; then
     ALMANAC_USER="almanac"
   fi
@@ -1684,17 +1974,11 @@ run_health_check() {
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
     "$ALMANAC_REPO_DIR/bin/health.sh"
+  write_operator_checkout_artifact
 }
 
 run_curator_setup_flow() {
-  load_detected_config || true
-
-  ALMANAC_USER="${ALMANAC_USER:-almanac}"
-  ALMANAC_HOME="${ALMANAC_HOME:-/home/$ALMANAC_USER}"
-  ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$ALMANAC_HOME/almanac}"
-  ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
-  ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
-  CONFIG_TARGET="${DISCOVERED_CONFIG:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}"
+  prepare_deployed_context
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
@@ -1751,6 +2035,52 @@ run_curator_setup_flow() {
     ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-}" \
     TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" \
     "$BOOTSTRAP_DIR/deploy.sh" curator-setup
+  write_operator_checkout_artifact
+}
+
+run_upgrade_flow() {
+  prepare_deployed_context
+
+  if [[ ${EUID:-$(id -u)} -ne 0 && -n "${CONFIG_TARGET:-}" && ! -r "$CONFIG_TARGET" ]]; then
+    echo "Switching to sudo to inspect the deployed config..."
+    if ! sudo env \
+      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+      ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
+      ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
+      "$SELF_PATH" --apply-upgrade; then
+      return 1
+    fi
+    write_operator_checkout_artifact
+    return 0
+  fi
+
+  if [[ ! -f "$CONFIG_TARGET" ]]; then
+    echo "Almanac upgrade needs an existing deployed config. Expected: $CONFIG_TARGET" >&2
+    echo "Run ./deploy.sh install first, or point ALMANAC_CONFIG_FILE at the deployed almanac.env." >&2
+    exit 1
+  fi
+
+  echo "Almanac deploy: upgrade from configured upstream"
+  echo
+  echo "Config:   $CONFIG_TARGET"
+  echo "Upstream: ${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}#${ALMANAC_UPSTREAM_BRANCH:-main}"
+  echo "Target:   $ALMANAC_REPO_DIR"
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    run_root_upgrade
+    return 0
+  fi
+
+  echo
+  echo "Switching to sudo for upgrade..."
+  if ! sudo env \
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
+    ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
+    "$SELF_PATH" --apply-upgrade; then
+    return 1
+  fi
+  write_operator_checkout_artifact
 }
 
 run_agent_payload() {
@@ -1802,6 +2132,7 @@ run_install_flow() {
     return 1
   fi
   rm -f "$ANSWERS_FILE"
+  write_operator_checkout_artifact
 }
 
 run_remove_flow() {
@@ -1824,7 +2155,14 @@ run_remove_flow() {
 }
 
 if [[ -n "$PRIVILEGED_MODE" ]]; then
-  load_answers
+  case "$PRIVILEGED_MODE" in
+    install|remove)
+      load_answers
+      ;;
+    upgrade)
+      prepare_deployed_context
+      ;;
+  esac
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     echo "Privileged step must run as root." >&2
     exit 1
@@ -1832,6 +2170,7 @@ if [[ -n "$PRIVILEGED_MODE" ]]; then
 
   case "$PRIVILEGED_MODE" in
     install) run_root_install ;;
+    upgrade) run_root_upgrade ;;
     remove) run_root_remove ;;
   esac
   exit 0
@@ -1844,6 +2183,9 @@ fi
 case "$MODE" in
   install|write-config)
     run_install_flow
+    ;;
+  upgrade)
+    run_upgrade_flow
     ;;
   curator-setup)
     run_curator_setup_flow

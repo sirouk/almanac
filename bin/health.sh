@@ -625,6 +625,116 @@ PY
   fi
 }
 
+check_upgrade_state() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 is unavailable; skipping upgrade-state probe"
+    return 0
+  fi
+
+  local output=""
+  local status_code=0
+  if ! output="$(ALMANAC_RELEASE_STATE_FILE="$ALMANAC_RELEASE_STATE_FILE" \
+                ALMANAC_DB_PATH="$ALMANAC_DB_PATH" \
+                ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
+                ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}" \
+                python3 - <<'PY'
+import datetime as dt
+import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+release_path = Path(os.environ.get("ALMANAC_RELEASE_STATE_FILE") or "")
+db_path = os.environ.get("ALMANAC_DB_PATH") or ""
+upstream_repo = os.environ.get("ALMANAC_UPSTREAM_REPO_URL") or ""
+upstream_branch = os.environ.get("ALMANAC_UPSTREAM_BRANCH") or "main"
+
+release_state = {}
+if release_path.is_file():
+    try:
+        release_state = json.loads(release_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        release_state = {}
+
+deployed_commit = str(release_state.get("deployed_commit") or "").strip()
+deployed_short = deployed_commit[:12]
+tracked_repo = str(release_state.get("tracked_upstream_repo_url") or upstream_repo or "").strip()
+tracked_branch = str(release_state.get("tracked_upstream_branch") or upstream_branch or "main").strip() or "main"
+
+if not release_path.is_file() or not deployed_commit:
+    print(f"WARN Almanac release state missing or empty at {release_path}; run ./deploy.sh install or upgrade")
+    raise SystemExit(1)
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+job = conn.execute(
+    "SELECT last_run_at, last_status, last_note FROM refresh_jobs WHERE job_name = 'almanac-upgrade-check'"
+).fetchone()
+last_seen_sha_row = conn.execute(
+    "SELECT value FROM settings WHERE key = 'almanac_upgrade_last_seen_sha'"
+).fetchone()
+last_seen_sha = str(last_seen_sha_row["value"]) if last_seen_sha_row else ""
+
+if job is None or not job["last_run_at"]:
+    print(
+        f"WARN Almanac upgrade-check has never run; deployed {deployed_short} "
+        f"from {tracked_repo}#{tracked_branch}. Run ./bin/almanac-ctl upgrade check."
+    )
+    raise SystemExit(1)
+
+last_run = dt.datetime.fromisoformat(job["last_run_at"])
+if last_run.tzinfo is None:
+    last_run = last_run.replace(tzinfo=dt.timezone.utc)
+age_seconds = (dt.datetime.now(dt.timezone.utc) - last_run).total_seconds()
+
+# The curator-refresh timer runs every 1h; a stale probe means the timer or
+# Curator itself is dead. Flag anything older than 2h15m.
+if age_seconds > 2 * 3600 + 900:
+    print(
+        f"FAIL Almanac upgrade-check is stale (last_run_at={job['last_run_at']}, "
+        f"age={int(age_seconds / 60)}m); Curator hourly refresh may be dead"
+    )
+    raise SystemExit(2)
+
+if last_seen_sha and last_seen_sha != deployed_commit:
+    print(
+        f"WARN Almanac upstream ahead of deployed: deployed {deployed_short} -> "
+        f"upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
+        "run ./deploy.sh upgrade"
+    )
+    raise SystemExit(1)
+
+status = str(job["last_status"] or "unknown")
+note = str(job["last_note"] or "")
+print(
+    f"OK Almanac up to date at {deployed_short} on {tracked_repo}#{tracked_branch}; "
+    f"last upgrade-check {status} ({int(age_seconds / 60)}m ago)"
+)
+raise SystemExit(0)
+PY
+  )"; then
+    status_code=$?
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        FAIL\ *) fail "${line#FAIL }" ;;
+        WARN\ *) warn "${line#WARN }" ;;
+        OK\ *) pass "${line#OK }" ;;
+        *) warn_or_fail "$line" ;;
+      esac
+    done <<<"$output"
+    return 0
+  fi
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      OK\ *) pass "${line#OK }" ;;
+      *) pass "$line" ;;
+    esac
+  done <<<"$output"
+}
+
 check_qmd_mcp_status() {
   local disk_source_count=0
   local disk_derived_count=0
@@ -1047,6 +1157,7 @@ check_curator_gateway_runtime
 check_active_agent_state
 check_auto_provision_state
 check_notification_delivery_state
+check_upgrade_state
 
 check_port_listening "$QMD_MCP_PORT"
 check_qmd_mcp_status

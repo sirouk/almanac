@@ -1024,6 +1024,109 @@ if state.get("status") != "active":
 PY
 }
 
+assert_upgrade_check_notification_dedup() {
+  # Prove two things about the upgrade-check flow:
+  #   1. When deployed_commit is stale, the check flags update_available=True
+  #      and queues exactly ONE operator notification.
+  #   2. A second identical check does not re-queue another notification for
+  #      the same upstream SHA (dedup via almanac_upgrade_last_notified_sha).
+  # We do not care what the live upstream SHA is; we only check the state
+  # machine behaves correctly when deployed != upstream.
+  local notif_before notif_after_first notif_after_second first_result second_result
+
+  run_almanac_shell \
+    "PYTHONPATH='$ALMANAC_REPO_DIR/python' python3 - <<'PY'
+import json
+from pathlib import Path
+import sqlite3
+
+import almanac_control
+
+cfg = almanac_control.Config.from_env()
+state_path = cfg.release_state_file
+state_path.parent.mkdir(parents=True, exist_ok=True)
+# Force the deployed commit to a sentinel value that cannot match any live
+# upstream, so update_available is guaranteed to be true.
+state_path.write_text(json.dumps({
+    'deployed_from': 'smoke-fixture',
+    'deployed_commit': '0000000000000000000000000000000000000000',
+    'deployed_source_repo': cfg.upstream_repo_url,
+    'deployed_source_branch': cfg.upstream_branch,
+    'tracked_upstream_repo_url': cfg.upstream_repo_url,
+    'tracked_upstream_branch': cfg.upstream_branch,
+}), encoding='utf-8')
+
+# Also clear any previous dedup state so this run is deterministic.
+conn = sqlite3.connect(cfg.db_path)
+conn.row_factory = sqlite3.Row
+conn.execute('DELETE FROM settings WHERE key IN (\"almanac_upgrade_last_seen_sha\", \"almanac_upgrade_last_notified_sha\")')
+conn.commit()
+conn.close()
+PY"
+
+  notif_before="$(run_almanac_shell \
+    "sqlite3 '$ALMANAC_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'Almanac update available%'\"")"
+
+  first_result="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json upgrade check --notify --actor upgrade-smoke")"
+  notif_after_first="$(run_almanac_shell \
+    "sqlite3 '$ALMANAC_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'Almanac update available%'\"")"
+
+  second_result="$(run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json upgrade check --notify --actor upgrade-smoke")"
+  notif_after_second="$(run_almanac_shell \
+    "sqlite3 '$ALMANAC_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'Almanac update available%'\"")"
+
+  python3 - "$first_result" "$second_result" "$notif_before" "$notif_after_first" "$notif_after_second" <<'PY'
+import json
+import sys
+
+first = json.loads(sys.argv[1])
+second = json.loads(sys.argv[2])
+before = int(sys.argv[3].strip())
+after_first = int(sys.argv[4].strip())
+after_second = int(sys.argv[5].strip())
+
+# A live upstream lookup may fail in restricted CI networks; in that case the
+# check returns status=warn with error set, which is still a valid shape. We
+# only assert stronger behavior when the network lookup succeeded.
+if first.get("error"):
+    if second.get("error"):
+        # Both network lookups failed; still make sure no notifications were
+        # incorrectly fired on a failed upstream query.
+        if after_first != before or after_second != before:
+            raise SystemExit(
+                f"upgrade-check fired operator notifications on failed upstream lookups "
+                f"(before={before}, after_first={after_first}, after_second={after_second})"
+            )
+        print("upgrade-check network lookup unavailable in this environment; dedup path skipped.")
+        raise SystemExit(0)
+
+if not first.get("update_available"):
+    raise SystemExit(
+        f"expected update_available=True with fake stale deployed_commit; got {first!r}"
+    )
+if not first.get("notification_sent"):
+    raise SystemExit("expected first upgrade-check to fire operator notification")
+if second.get("notification_sent"):
+    raise SystemExit("second upgrade-check must not re-fire for the same upstream SHA")
+
+if after_first - before != 1:
+    raise SystemExit(
+        f"expected first check to queue exactly 1 notification; delta={after_first - before}"
+    )
+if after_second != after_first:
+    raise SystemExit(
+        f"expected second check to queue 0 notifications; delta={after_second - after_first}"
+    )
+
+if first["deployed_commit_short"] != "000000000000":
+    raise SystemExit(
+        f"expected sentinel deployed_commit to round-trip into result, got {first!r}"
+    )
+PY
+}
+
 assert_bootstrap_rate_limit() {
   # The configured per-IP cap is ALMANAC_BOOTSTRAP_PER_IP_LIMIT; after we exceed it
   # the server must respond with status 429 (RuntimeError mapping in almanac-mcp) AND
@@ -1840,6 +1943,9 @@ assert_async_bootstrap_handshake
 
 echo "Checking remote auto-provision enrollment..."
 assert_remote_auto_provision_enrollment
+
+echo "Checking upgrade-check notification dedup..."
+assert_upgrade_check_notification_dedup
 
 echo "Checking rate-limit enforcement with structured 429..."
 assert_bootstrap_rate_limit

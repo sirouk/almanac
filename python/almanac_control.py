@@ -68,6 +68,29 @@ def _discover_config_file() -> Path | None:
         return path if path.is_file() else path
 
     repo_root = Path(os.environ.get("ALMANAC_REPO_DIR", _python_repo_root())).expanduser().resolve()
+    operator_artifact = Path(
+        os.environ.get("ALMANAC_OPERATOR_ARTIFACT_FILE", str(repo_root / ".almanac-operator.env"))
+    ).expanduser()
+    if operator_artifact.is_file():
+        try:
+            for raw_line in operator_artifact.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, raw_value = line.split("=", 1)
+                if key.strip() != "ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE":
+                    continue
+                try:
+                    parsed = shlex.split(raw_value.strip(), posix=True)
+                    value = "" if not parsed else parsed[0]
+                except ValueError:
+                    value = raw_value.strip().strip("'\"")
+                if value:
+                    path = Path(value).expanduser()
+                    return path
+        except OSError:
+            pass
+
     nested_priv = repo_root / "almanac-priv" / "config" / "almanac.env"
     sibling_priv = repo_root.parent / "almanac-priv" / "config" / "almanac.env"
     candidates = (
@@ -86,7 +109,13 @@ def _load_config_env() -> dict[str, str]:
     if config_path is None or not config_path.is_file():
         return merged
 
-    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        merged.setdefault("ALMANAC_CONFIG_FILE", str(config_path))
+        return merged
+
+    for raw_line in config_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -125,6 +154,7 @@ class Config:
     curator_manifest_path: Path
     curator_hermes_home: Path
     archived_agents_dir: Path
+    release_state_file: Path
     public_mcp_host: str
     public_mcp_port: int
     notion_webhook_host: str
@@ -142,6 +172,8 @@ class Config:
     operator_general_channel_id: str
     qmd_url: str
     chutes_mcp_url: str
+    upstream_repo_url: str
+    upstream_branch: str
     model_presets: dict[str, str]
 
     @classmethod
@@ -180,6 +212,7 @@ class Config:
             curator_manifest_path=Path(env.get("ALMANAC_CURATOR_MANIFEST", state_dir / "curator" / "manifest.json")).resolve(),
             curator_hermes_home=Path(env.get("ALMANAC_CURATOR_HERMES_HOME", state_dir / "curator" / "hermes-home")).resolve(),
             archived_agents_dir=Path(env.get("ALMANAC_ARCHIVED_AGENTS_DIR", state_dir / "archived-agents")).resolve(),
+            release_state_file=Path(env.get("ALMANAC_RELEASE_STATE_FILE", state_dir / "almanac-release.json")).resolve(),
             public_mcp_host=public_mcp_host,
             public_mcp_port=public_mcp_port,
             notion_webhook_host=notion_webhook_host,
@@ -197,6 +230,8 @@ class Config:
             operator_general_channel_id=env.get("OPERATOR_GENERAL_CHANNEL_ID", ""),
             qmd_url=qmd_url,
             chutes_mcp_url=chutes_mcp_url,
+            upstream_repo_url=env.get("ALMANAC_UPSTREAM_REPO_URL", "https://github.com/sirouk/almanac.git"),
+            upstream_branch=env.get("ALMANAC_UPSTREAM_BRANCH", "main"),
             model_presets=model_presets,
         )
 

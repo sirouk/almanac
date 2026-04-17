@@ -1640,11 +1640,73 @@ prepare_deployed_context() {
 }
 
 ensure_deployed_config_exists() {
+  local status
+  status="$(python3 - "$CONFIG_TARGET" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    os.stat(path)
+except FileNotFoundError:
+    print("missing")
+except PermissionError:
+    print("exists-unreadable")
+except OSError:
+    print("missing")
+else:
+    print("exists")
+PY
+)"
+  if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
+    return 0
+  fi
   if [[ ! -f "$CONFIG_TARGET" ]]; then
     echo "Deployed config not found at $CONFIG_TARGET" >&2
     echo "Run ./deploy.sh install first, or point ALMANAC_CONFIG_FILE at the deployed almanac.env." >&2
     exit 1
   fi
+}
+
+maybe_reexec_with_sudo_for_config() {
+  local mode="$1"
+  local status=""
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    return 1
+  fi
+  if [[ -z "${CONFIG_TARGET:-}" ]]; then
+    return 1
+  fi
+  if [[ -r "$CONFIG_TARGET" ]]; then
+    return 1
+  fi
+
+  status="$(python3 - "$CONFIG_TARGET" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    os.stat(path)
+except FileNotFoundError:
+    print("missing")
+except PermissionError:
+    print("exists-unreadable")
+except OSError:
+    print("missing")
+else:
+    print("exists")
+PY
+)"
+  if [[ "$status" != "exists-unreadable" ]]; then
+    return 1
+  fi
+
+  echo "Switching to sudo to inspect the deployed config..."
+  sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" "$mode"
+  write_operator_checkout_artifact
+  return 0
 }
 
 run_root_env_cmd() {
@@ -2062,6 +2124,9 @@ run_enrollment_status() {
   local onboarding_file provision_file timer_enabled timer_active service_active
 
   prepare_deployed_context
+  if maybe_reexec_with_sudo_for_config enrollment-status; then
+    return 0
+  fi
   ensure_deployed_config_exists
 
   onboarding_file="$(mktemp)"
@@ -2158,6 +2223,9 @@ PY
 
 run_enrollment_align() {
   prepare_deployed_context
+  if maybe_reexec_with_sudo_for_config enrollment-align; then
+    return 0
+  fi
   ensure_deployed_config_exists
 
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
@@ -2185,6 +2253,9 @@ run_enrollment_reset() {
   local -a session_ids request_specs rate_subjects
 
   prepare_deployed_context
+  if maybe_reexec_with_sudo_for_config enrollment-reset; then
+    return 0
+  fi
   ensure_deployed_config_exists
 
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then

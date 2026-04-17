@@ -82,8 +82,9 @@ Description=Almanac user-agent messaging gateway for $AGENT_ID
 
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
+WorkingDirectory=$HERMES_HOME
 ExecStart=$HERMES_BIN gateway
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

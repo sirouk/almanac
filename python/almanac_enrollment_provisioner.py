@@ -153,6 +153,13 @@ def _run_as_user(
     )
 
 
+def _resolve_user_gateway_bin(cfg: Config) -> Path:
+    wrapper = cfg.repo_dir / "bin" / "hermes-shell.sh"
+    if wrapper.exists():
+        return wrapper
+    return cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"
+
+
 def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) -> None:
     setfacl_bin = shutil.which("setfacl")
     if not setfacl_bin:
@@ -279,9 +286,35 @@ def _seed_user_provider(cfg: Config, *, session: dict, unix_user: str, home: Pat
         raise RuntimeError(f"headless hermes setup returned invalid json: {result.stdout[:200]}") from exc
 
 
+def _describe_user_gateway(*, unix_user: str, home: Path, hermes_home: Path, uid: int) -> str:
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=[
+            "systemctl",
+            "--user",
+            "show",
+            "almanac-user-agent-gateway.service",
+            "--property=LoadState",
+            "--property=ActiveState",
+            "--property=SubState",
+            "--property=Result",
+            "--property=ExecMainCode",
+            "--property=ExecMainStatus",
+            "--no-pager",
+        ],
+    )
+    text = (result.stdout or result.stderr or "").strip().replace("\n", " ")
+    return text or "gateway details unavailable"
+
+
 def _assert_user_gateway_active(*, unix_user: str, home: Path, hermes_home: Path, uid: int) -> None:
-    deadline = time.time() + 15
+    deadline = time.time() + 45
+    stable_window_seconds = 10
     status = ""
+    active_since: float | None = None
     while time.time() < deadline:
         result = _run_as_user(
             unix_user=unix_user,
@@ -292,9 +325,23 @@ def _assert_user_gateway_active(*, unix_user: str, home: Path, hermes_home: Path
         )
         status = (result.stdout or result.stderr or "").strip()
         if result.returncode == 0 and status == "active":
-            return
+            if active_since is None:
+                active_since = time.time()
+            if time.time() - active_since >= stable_window_seconds:
+                return
+        else:
+            active_since = None
         time.sleep(1)
-    raise RuntimeError(f"user gateway service did not come up cleanly (last status: {status or 'unknown'})")
+    details = _describe_user_gateway(
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
+    raise RuntimeError(
+        "user gateway service did not stay active long enough "
+        f"(last status: {status or 'unknown'}; {details})"
+    )
 
 
 def _run_pending_onboarding_provider_authorizations(conn, cfg: Config) -> None:
@@ -471,7 +518,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             str(hermes_home),
             json.dumps(["tui-only", "telegram"]),
             str(activation_trigger_path(cfg, agent_id)),
-            str(cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"),
+            str(_resolve_user_gateway_bin(cfg)),
         ],
     )
     if result.returncode != 0:
@@ -580,7 +627,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             str(hermes_home),
             json.dumps(["tui-only", "discord"]),
             str(activation_trigger_path(cfg, agent_id)),
-            str(cfg.runtime_dir / "hermes-venv" / "bin" / "hermes"),
+            str(_resolve_user_gateway_bin(cfg)),
         ],
     )
     if result.returncode != 0:

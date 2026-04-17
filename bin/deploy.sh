@@ -2755,6 +2755,46 @@ PY
     fi
   fi
 
+  user_gateway_expected="$(python3 - "$trace_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+agent = data.get("agent") or {}
+channels = [str(item).strip().lower() for item in (agent.get("channels") or [])]
+latest_session = (data.get("onboarding") or [None])[0] or {}
+answers = latest_session.get("answers") or {}
+bot_platform = str(answers.get("bot_platform") or "").strip().lower()
+
+expected = any(channel in {"discord", "telegram"} for channel in channels)
+if not expected and bot_platform in {"discord", "telegram"}:
+    state = str(latest_session.get("state") or "")
+    expected = state in {"provision-pending", "completed"}
+
+print("1" if expected else "0")
+PY
+)"
+  if [[ "$user_gateway_expected" == "1" && -n "$resolved_unix_user" ]] && getent passwd "$resolved_unix_user" >/dev/null 2>&1; then
+    resolved_uid="$(getent passwd "$resolved_unix_user" | awk -F: '{print $3}')"
+    user_gateway_unit="/home/$resolved_unix_user/.config/systemd/user/almanac-user-agent-gateway.service"
+    gateway_enabled="$(run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user is-enabled almanac-user-agent-gateway.service 2>/dev/null || true)"
+    gateway_active="$(run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user is-active almanac-user-agent-gateway.service 2>/dev/null || true)"
+    echo
+    echo "User gateway:"
+    if [[ -f "$user_gateway_unit" ]]; then
+      echo "  unit file:      $user_gateway_unit"
+    else
+      echo "  unit file:      missing ($user_gateway_unit)"
+    fi
+    echo "  enabled:        ${gateway_enabled:-unknown}"
+    echo "  active:         ${gateway_active:-unknown}"
+    echo
+    echo "Recent user gateway status:"
+    run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user status almanac-user-agent-gateway.service -n "$TRACE_LOG_LINES" --no-pager || true
+  fi
+
   echo
   echo "Recent root provisioner journal:"
   run_root_env_cmd journalctl -u almanac-enrollment-provision.service -n "$TRACE_LOG_LINES" --no-pager || true
@@ -2790,6 +2830,8 @@ PY
 }
 
 run_enrollment_align() {
+  local agent_id="" unix_user="" hermes_home="" channels_json="" uid="" activation_path=""
+
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-align; then
     return 0
@@ -2805,12 +2847,65 @@ run_enrollment_align() {
   echo "Realigning enrollment services..."
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-1}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  while IFS=$'\t' read -r agent_id unix_user hermes_home channels_json; do
+    [[ -n "$agent_id" && -n "$unix_user" && -n "$hermes_home" && -n "$channels_json" ]] || continue
+    if ! getent passwd "$unix_user" >/dev/null 2>&1; then
+      echo "Skipping $agent_id: unix user '$unix_user' is missing."
+      continue
+    fi
+    uid="$(id -u "$unix_user")"
+    activation_path="$STATE_DIR/activation-triggers/$agent_id.json"
+    echo "Reinstalling user-agent services for $agent_id ($unix_user)..."
+    run_root_env_cmd runuser -u "$unix_user" -- env \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      HERMES_HOME="$hermes_home" \
+      "$ALMANAC_REPO_DIR/bin/install-agent-user-services.sh" \
+      "$agent_id" \
+      "$ALMANAC_REPO_DIR" \
+      "$hermes_home" \
+      "$channels_json" \
+      "$activation_path" \
+      "$ALMANAC_REPO_DIR/bin/hermes-shell.sh" || true
+  done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
+import json
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+conn.row_factory = sqlite3.Row
+
+rows = conn.execute(
+    """
+    SELECT agent_id, unix_user, hermes_home, channels_json
+    FROM agents
+    WHERE role = 'user' AND status = 'active'
+    ORDER BY unix_user
+    """
+).fetchall()
+
+for row in rows:
+    channels = []
+    try:
+        channels = json.loads(row["channels_json"] or "[]")
+    except Exception:
+        channels = []
+    normalized = [str(item).strip().lower() for item in channels]
+    if any(channel in {"discord", "telegram"} for channel in normalized):
+        print("\t".join([
+            str(row["agent_id"] or ""),
+            str(row["unix_user"] or ""),
+            str(row["hermes_home"] or ""),
+            json.dumps(channels),
+        ]))
+PY
+)
   restart_shared_user_services_root || true
   systemctl reset-failed almanac-enrollment-provision.service almanac-enrollment-provision.timer >/dev/null 2>&1 || true
   systemctl enable almanac-enrollment-provision.timer >/dev/null
   systemctl restart almanac-enrollment-provision.timer
   systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
-  echo "Enrollment provisioner and shared services realigned."
+  echo "Enrollment provisioner, shared services, and active external user-agent units realigned."
   echo
   run_enrollment_status
 }

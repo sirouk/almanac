@@ -166,8 +166,14 @@ class Config:
     auto_provision_max_attempts: int
     auto_provision_retry_base_seconds: int
     auto_provision_retry_max_seconds: int
+    curator_telegram_onboarding_enabled: bool
+    onboarding_window_seconds: int
+    onboarding_per_telegram_user_limit: int
+    onboarding_global_pending_limit: int
+    onboarding_update_failure_limit: int
     operator_notify_platform: str
     operator_notify_channel_id: str
+    operator_telegram_user_ids: tuple[str, ...]
     operator_general_platform: str
     operator_general_channel_id: str
     qmd_url: str
@@ -197,6 +203,17 @@ class Config:
             "opus": env.get("ALMANAC_MODEL_PRESET_OPUS", "anthropic:claude-opus"),
             "chutes": env.get("ALMANAC_MODEL_PRESET_CHUTES", "chutes:auto-failover"),
         }
+        operator_notify_platform = env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM", "tui-only")
+        operator_notify_channel_id = env.get("OPERATOR_NOTIFY_CHANNEL_ID", "")
+        operator_telegram_user_ids_raw = env.get(
+            "ALMANAC_OPERATOR_TELEGRAM_USER_IDS",
+            "",
+        )
+        operator_telegram_user_ids = tuple(
+            value.strip()
+            for value in operator_telegram_user_ids_raw.split(",")
+            if value.strip()
+        )
 
         return cls(
             almanac_user=almanac_user,
@@ -224,8 +241,17 @@ class Config:
             auto_provision_max_attempts=int(env.get("ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS", "5")),
             auto_provision_retry_base_seconds=int(env.get("ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS", "60")),
             auto_provision_retry_max_seconds=int(env.get("ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS", "900")),
-            operator_notify_platform=env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM", "tui-only"),
-            operator_notify_channel_id=env.get("OPERATOR_NOTIFY_CHANNEL_ID", ""),
+            curator_telegram_onboarding_enabled=bool_env(
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED",
+                default=(operator_notify_platform == "telegram"),
+            ),
+            onboarding_window_seconds=int(env.get("ALMANAC_ONBOARDING_WINDOW_SECONDS", "3600")),
+            onboarding_per_telegram_user_limit=int(env.get("ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT", "3")),
+            onboarding_global_pending_limit=int(env.get("ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT", "20")),
+            onboarding_update_failure_limit=int(env.get("ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT", "3")),
+            operator_notify_platform=operator_notify_platform,
+            operator_notify_channel_id=operator_notify_channel_id,
+            operator_telegram_user_ids=operator_telegram_user_ids,
             operator_general_platform=env.get("OPERATOR_GENERAL_CHANNEL_PLATFORM", ""),
             operator_general_channel_id=env.get("OPERATOR_GENERAL_CHANNEL_ID", ""),
             qmd_url=qmd_url,
@@ -254,6 +280,7 @@ def connect_db(cfg: Config) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     ensure_schema(conn)
+    _migrate_onboarding_bot_tokens(conn, cfg)
     return conn
 
 
@@ -405,6 +432,43 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           last_status TEXT,
           last_note TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS onboarding_sessions (
+          session_id TEXT PRIMARY KEY,
+          platform TEXT NOT NULL,
+          chat_id TEXT NOT NULL,
+          sender_id TEXT NOT NULL,
+          sender_username TEXT,
+          sender_display_name TEXT,
+          state TEXT NOT NULL,
+          answers_json TEXT NOT NULL DEFAULT '{}',
+          operator_notified_at TEXT,
+          approved_at TEXT,
+          approved_by_actor TEXT,
+          denied_at TEXT,
+          denied_by_actor TEXT,
+          denial_reason TEXT,
+          linked_request_id TEXT,
+          linked_agent_id TEXT,
+          telegram_bot_id TEXT,
+          telegram_bot_username TEXT,
+          pending_bot_token TEXT,
+          pending_bot_token_path TEXT,
+          provision_error TEXT,
+          completed_at TEXT,
+          last_prompt_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS onboarding_update_failures (
+          update_id TEXT PRIMARY KEY,
+          failure_count INTEGER NOT NULL DEFAULT 0,
+          first_failed_at TEXT NOT NULL,
+          last_failed_at TEXT NOT NULL,
+          last_error TEXT NOT NULL,
+          skipped_at TEXT
+        );
         """
     )
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
@@ -421,6 +485,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "bootstrap_requests", "cancelled_by_surface", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "cancelled_by_actor", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "cancelled_reason", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "approved_at", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "approved_by_actor", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "denied_at", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "denied_by_actor", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "denial_reason", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "linked_request_id", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "linked_agent_id", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "telegram_bot_id", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "telegram_bot_username", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "pending_bot_token", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "pending_bot_token_path", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "provision_error", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "completed_at", "TEXT")
+    _ensure_column(conn, "onboarding_sessions", "last_prompt_at", "TEXT")
     conn.commit()
 
 
@@ -466,6 +544,10 @@ def generate_request_id() -> str:
     return f"req_{secrets.token_hex(16)}"
 
 
+def generate_onboarding_session_id() -> str:
+    return f"onb_{secrets.token_hex(8)}"
+
+
 class RateLimitError(RuntimeError):
     def __init__(self, message: str, *, retry_after_seconds: int, scope: str) -> None:
         super().__init__(message)
@@ -504,6 +586,483 @@ def rate_limit_count(conn: sqlite3.Connection, scope: str, subject: str, since_i
         (scope, subject, since_iso),
     ).fetchone()
     return int(row["count"] if row else 0)
+
+
+TERMINAL_ONBOARDING_STATES = ("denied", "completed", "cancelled")
+
+
+def _write_private_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(value.strip() + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def onboarding_secret_dir(cfg: Config) -> Path:
+    path = cfg.state_dir / "onboarding-secrets"
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+    return path
+
+
+def onboarding_bot_token_secret_path(cfg: Config, session_id: str) -> Path:
+    return onboarding_secret_dir(cfg) / session_id / "telegram-bot-token"
+
+
+def write_onboarding_bot_token_secret(cfg: Config, session_id: str, raw_token: str) -> str:
+    path = onboarding_bot_token_secret_path(cfg, session_id)
+    _write_private_text(path, raw_token)
+    return str(path)
+
+
+def read_onboarding_bot_token_secret(raw_path: str) -> str:
+    path = Path(raw_path).expanduser()
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def delete_onboarding_bot_token_secret(raw_path: str) -> None:
+    if not raw_path:
+        return
+    path = Path(raw_path).expanduser()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+    parent = path.parent
+    try:
+        parent.rmdir()
+    except OSError:
+        pass
+
+
+def _migrate_onboarding_bot_tokens(conn: sqlite3.Connection, cfg: Config) -> None:
+    rows = conn.execute(
+        """
+        SELECT session_id, pending_bot_token, pending_bot_token_path
+        FROM onboarding_sessions
+        WHERE pending_bot_token IS NOT NULL
+          AND pending_bot_token != ''
+        """
+    ).fetchall()
+    if not rows:
+        return
+    now_iso = utc_now_iso()
+    for row in rows:
+        session_id = str(row["session_id"] or "").strip()
+        token = str(row["pending_bot_token"] or "").strip()
+        existing_path = str(row["pending_bot_token_path"] or "").strip()
+        if not session_id or not token:
+            continue
+        if existing_path:
+            _write_private_text(Path(existing_path), token)
+            secret_path = existing_path
+        else:
+            secret_path = write_onboarding_bot_token_secret(cfg, session_id, token)
+        conn.execute(
+            """
+            UPDATE onboarding_sessions
+            SET pending_bot_token = '',
+                pending_bot_token_path = ?,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (secret_path, now_iso, session_id),
+        )
+    conn.commit()
+
+
+def _onboarding_row_to_dict(
+    row: sqlite3.Row | None,
+    *,
+    redact_secrets: bool = True,
+) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["answers"] = json_loads(str(payload.get("answers_json") or ""), {})
+    has_pending_secret = bool(
+        str(payload.get("pending_bot_token") or "").strip()
+        or str(payload.get("pending_bot_token_path") or "").strip()
+    )
+    payload["pending_bot_token_present"] = has_pending_secret
+    if redact_secrets:
+        payload["pending_bot_token"] = "[redacted]" if has_pending_secret else ""
+        payload["pending_bot_token_path"] = (
+            "[redacted]" if str(payload.get("pending_bot_token_path") or "").strip() else ""
+        )
+    return payload
+
+
+def find_active_onboarding_session(
+    conn: sqlite3.Connection,
+    *,
+    platform: str,
+    sender_id: str,
+    redact_secrets: bool = True,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM onboarding_sessions
+        WHERE platform = ?
+          AND sender_id = ?
+          AND state NOT IN ('denied', 'completed', 'cancelled')
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (platform, sender_id),
+    ).fetchone()
+    return _onboarding_row_to_dict(row, redact_secrets=redact_secrets)
+
+
+def get_onboarding_session(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    redact_secrets: bool = True,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM onboarding_sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    return _onboarding_row_to_dict(row, redact_secrets=redact_secrets)
+
+
+def list_onboarding_sessions(
+    conn: sqlite3.Connection,
+    *,
+    redact_secrets: bool = True,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM onboarding_sessions
+        ORDER BY updated_at DESC
+        """
+    ).fetchall()
+    return [
+        _onboarding_row_to_dict(row, redact_secrets=redact_secrets) or {}
+        for row in rows
+    ]
+
+
+def start_onboarding_session(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    platform: str,
+    chat_id: str,
+    sender_id: str,
+    sender_username: str = "",
+    sender_display_name: str = "",
+) -> dict[str, Any]:
+    existing = find_active_onboarding_session(conn, platform=platform, sender_id=sender_id)
+    if existing is not None:
+        conn.execute(
+            """
+            UPDATE onboarding_sessions
+            SET chat_id = ?, sender_username = ?, sender_display_name = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (chat_id, sender_username or None, sender_display_name or None, utc_now_iso(), existing["session_id"]),
+        )
+        conn.commit()
+        return get_onboarding_session(conn, str(existing["session_id"])) or existing
+
+    window_start = (utc_now() - dt.timedelta(seconds=cfg.onboarding_window_seconds)).replace(microsecond=0).isoformat()
+    subject = f"{platform}:{sender_id}"
+    if rate_limit_count(conn, "onboarding-user", subject, window_start) >= cfg.onboarding_per_telegram_user_limit:
+        raise RateLimitError(
+            (
+                "rate-limited: onboarding start limit "
+                f"({cfg.onboarding_per_telegram_user_limit}) exceeded for {subject}"
+            ),
+            retry_after_seconds=cfg.onboarding_window_seconds,
+            scope="onboarding-user",
+        )
+
+    pending_count = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM onboarding_sessions
+        WHERE state NOT IN ('denied', 'completed', 'cancelled')
+        """
+    ).fetchone()
+    if pending_count and int(pending_count["count"]) >= cfg.onboarding_global_pending_limit:
+        raise RateLimitError(
+            (
+                "rate-limited: onboarding pending limit "
+                f"({cfg.onboarding_global_pending_limit}) exceeded"
+            ),
+            retry_after_seconds=cfg.onboarding_window_seconds,
+            scope="onboarding-global",
+        )
+
+    record_rate_limit_event(conn, "onboarding-user", subject)
+    session_id = generate_onboarding_session_id()
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO onboarding_sessions (
+          session_id, platform, chat_id, sender_id, sender_username, sender_display_name,
+          state, answers_json, created_at, updated_at, last_prompt_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'awaiting-name', '{}', ?, ?, ?)
+        """,
+        (
+            session_id,
+            platform,
+            chat_id,
+            sender_id,
+            sender_username or None,
+            sender_display_name or None,
+            now_iso,
+            now_iso,
+            now_iso,
+        ),
+    )
+    conn.commit()
+    return get_onboarding_session(conn, session_id) or {}
+
+
+def save_onboarding_session(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    state: str | None = None,
+    answers: dict[str, Any] | None = None,
+    chat_id: str | None = None,
+    sender_username: str | None = None,
+    sender_display_name: str | None = None,
+    operator_notified_at: str | None = None,
+    approved_at: str | None = None,
+    approved_by_actor: str | None = None,
+    denied_at: str | None = None,
+    denied_by_actor: str | None = None,
+    denial_reason: str | None = None,
+    linked_request_id: str | None = None,
+    linked_agent_id: str | None = None,
+    telegram_bot_id: str | None = None,
+    telegram_bot_username: str | None = None,
+    pending_bot_token: str | None = None,
+    pending_bot_token_path: str | None = None,
+    provision_error: str | None = None,
+    completed_at: str | None = None,
+    last_prompt_at: str | None = None,
+) -> dict[str, Any]:
+    current = get_onboarding_session(conn, session_id, redact_secrets=False)
+    if current is None:
+        raise ValueError(f"unknown onboarding session: {session_id}")
+    merged_answers = current.get("answers", {})
+    if answers is not None:
+        merged_answers = dict(merged_answers)
+        merged_answers.update(answers)
+    conn.execute(
+        """
+        UPDATE onboarding_sessions
+        SET state = COALESCE(?, state),
+            answers_json = ?,
+            chat_id = COALESCE(?, chat_id),
+            sender_username = COALESCE(?, sender_username),
+            sender_display_name = COALESCE(?, sender_display_name),
+            operator_notified_at = COALESCE(?, operator_notified_at),
+            approved_at = COALESCE(?, approved_at),
+            approved_by_actor = COALESCE(?, approved_by_actor),
+            denied_at = COALESCE(?, denied_at),
+            denied_by_actor = COALESCE(?, denied_by_actor),
+            denial_reason = COALESCE(?, denial_reason),
+            linked_request_id = COALESCE(?, linked_request_id),
+            linked_agent_id = COALESCE(?, linked_agent_id),
+            telegram_bot_id = COALESCE(?, telegram_bot_id),
+            telegram_bot_username = COALESCE(?, telegram_bot_username),
+            pending_bot_token = CASE
+                WHEN ? IS NOT NULL THEN ?
+                ELSE pending_bot_token
+            END,
+            pending_bot_token_path = CASE
+                WHEN ? IS NOT NULL THEN ?
+                ELSE pending_bot_token_path
+            END,
+            provision_error = CASE
+                WHEN ? IS NOT NULL THEN ?
+                ELSE provision_error
+            END,
+            completed_at = COALESCE(?, completed_at),
+            last_prompt_at = COALESCE(?, last_prompt_at),
+            updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            state,
+            json_dumps(merged_answers),
+            chat_id,
+            sender_username,
+            sender_display_name,
+            operator_notified_at,
+            approved_at,
+            approved_by_actor,
+            denied_at,
+            denied_by_actor,
+            denial_reason,
+            linked_request_id,
+            linked_agent_id,
+            telegram_bot_id,
+            telegram_bot_username,
+            pending_bot_token,
+            pending_bot_token,
+            pending_bot_token_path,
+            pending_bot_token_path,
+            provision_error,
+            provision_error,
+            completed_at,
+            last_prompt_at,
+            utc_now_iso(),
+            session_id,
+        ),
+    )
+    conn.commit()
+    return get_onboarding_session(conn, session_id) or {}
+
+
+def approve_onboarding_session(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    actor: str,
+) -> dict[str, Any]:
+    session = get_onboarding_session(conn, session_id)
+    if session is None:
+        raise ValueError(f"unknown onboarding session: {session_id}")
+    if str(session["state"]) == "denied":
+        raise ValueError("onboarding session is already denied")
+    if str(session["state"]) == "completed":
+        raise ValueError("onboarding session is already completed")
+    if str(session["state"]) not in {"awaiting-operator-approval", "awaiting-bot-token", "provision-pending"}:
+        raise ValueError(f"onboarding session is not ready for operator approval: {session['state']}")
+    return save_onboarding_session(
+        conn,
+        session_id=session_id,
+        state="awaiting-bot-token",
+        approved_at=utc_now_iso(),
+        approved_by_actor=actor,
+        denied_at="",
+        denied_by_actor="",
+        denial_reason="",
+        provision_error="",
+    )
+
+
+def deny_onboarding_session(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    actor: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    session = get_onboarding_session(conn, session_id)
+    if session is None:
+        raise ValueError(f"unknown onboarding session: {session_id}")
+    if str(session["state"]) == "completed":
+        raise ValueError("onboarding session is already completed")
+    now_iso = utc_now_iso()
+    return save_onboarding_session(
+        conn,
+        session_id=session_id,
+        state="denied",
+        denied_at=now_iso,
+        denied_by_actor=actor,
+        denial_reason=reason or "denied",
+        completed_at=now_iso,
+        provision_error="",
+    )
+
+
+def list_pending_onboarding_bot_configurations(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT s.*, r.status AS request_status, r.provisioned_at
+        FROM onboarding_sessions AS s
+        JOIN bootstrap_requests AS r
+          ON r.request_id = s.linked_request_id
+        WHERE (
+                (s.pending_bot_token IS NOT NULL AND s.pending_bot_token != '')
+             OR (s.pending_bot_token_path IS NOT NULL AND s.pending_bot_token_path != '')
+              )
+          AND s.state = 'provision-pending'
+          AND r.provisioned_at IS NOT NULL
+        ORDER BY s.updated_at ASC
+        """
+    ).fetchall()
+    return [_onboarding_row_to_dict(row, redact_secrets=False) or {} for row in rows]
+
+
+def get_onboarding_update_failure(conn: sqlite3.Connection, update_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM onboarding_update_failures WHERE update_id = ?",
+        (update_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def record_onboarding_update_failure(
+    conn: sqlite3.Connection,
+    *,
+    update_id: str,
+    error: str,
+) -> dict[str, Any]:
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO onboarding_update_failures (
+          update_id, failure_count, first_failed_at, last_failed_at, last_error
+        )
+        VALUES (?, 1, ?, ?, ?)
+        ON CONFLICT(update_id) DO UPDATE SET
+          failure_count = onboarding_update_failures.failure_count + 1,
+          last_failed_at = excluded.last_failed_at,
+          last_error = excluded.last_error
+        """,
+        (update_id, now_iso, now_iso, error),
+    )
+    conn.commit()
+    return get_onboarding_update_failure(conn, update_id) or {}
+
+
+def clear_onboarding_update_failure(conn: sqlite3.Connection, update_id: str) -> None:
+    conn.execute(
+        "DELETE FROM onboarding_update_failures WHERE update_id = ?",
+        (update_id,),
+    )
+    conn.commit()
+
+
+def mark_onboarding_update_skipped(conn: sqlite3.Connection, update_id: str) -> dict[str, Any]:
+    conn.execute(
+        """
+        UPDATE onboarding_update_failures
+        SET skipped_at = COALESCE(skipped_at, ?)
+        WHERE update_id = ?
+        """,
+        (utc_now_iso(), update_id),
+    )
+    conn.commit()
+    return get_onboarding_update_failure(conn, update_id) or {}
 
 
 def make_agent_id(unix_user: str, role: str) -> str:
@@ -1585,36 +2144,37 @@ def request_bootstrap(
     # subject when present so the bucket is per-user, not per-proxy.
     rate_limit_subject = tailnet_identity.get("login") or source_ip
     ensure_request_expiry(conn)
-    if issue_pending_token:
-        existing = find_pending_bootstrap_request(conn, unix_user=unix_user, source_ip=source_ip)
-        if existing is not None:
-            agent_id = str(existing["agent_id"] or existing["prior_agent_id"] or make_agent_id(str(existing["unix_user"]), "user"))
-            existing_auto_provision = bool(int(existing["auto_provision"] or 0))
-            if auto_provision or existing_auto_provision:
-                write_activation_trigger(
-                    cfg,
-                    agent_id=agent_id,
-                    request_id=str(existing["request_id"]),
-                    status="pending",
-                    requester_identity=str(existing["requester_identity"]),
-                    unix_user=str(existing["unix_user"]),
-                    source_ip=str(existing["source_ip"]),
-                    token_id=str(existing["token_id"] or ""),
-                    note="Resumed existing pending auto-provision handshake.",
-                )
-                return {
-                    "request_id": str(existing["request_id"]),
-                    "status": "pending",
-                    "expires_at": str(existing["expires_at"]),
-                    "prior_defaults": json_loads(existing["prior_defaults_json"], {}),
-                    "prior_agent_id": existing["prior_agent_id"],
-                    "agent_id": agent_id,
-                    "activation_state": "pending-operator-approval",
-                    "resume_existing": True,
-                    "auto_provision": True,
-                    "message": "A pending remote auto-provision enrollment already exists for this user and source. Wait for operator approval instead of submitting another request.",
-                }
+    existing = find_pending_bootstrap_request(conn, unix_user=unix_user, source_ip=source_ip)
+    if existing is not None:
+        agent_id = str(existing["agent_id"] or existing["prior_agent_id"] or make_agent_id(str(existing["unix_user"]), "user"))
+        existing_auto_provision = bool(int(existing["auto_provision"] or 0))
+        if auto_provision or existing_auto_provision:
+            write_activation_trigger(
+                cfg,
+                agent_id=agent_id,
+                request_id=str(existing["request_id"]),
+                status="pending",
+                requester_identity=str(existing["requester_identity"]),
+                unix_user=str(existing["unix_user"]),
+                source_ip=str(existing["source_ip"]),
+                token_id=str(existing["token_id"] or ""),
+                note="Resumed existing pending auto-provision handshake.",
+            )
+            return {
+                "request_id": str(existing["request_id"]),
+                "status": "pending",
+                "expires_at": str(existing["expires_at"]),
+                "prior_defaults": json_loads(existing["prior_defaults_json"], {}),
+                "prior_agent_id": existing["prior_agent_id"],
+                "agent_id": agent_id,
+                "activation_state": "pending-operator-approval",
+                "resume_existing": True,
+                "auto_provision": True,
+                "message": "A pending remote auto-provision enrollment already exists for this user and source. Wait for operator approval instead of submitting another request.",
+            }
 
+    if issue_pending_token:
+        if existing is not None:
             pending_token = _issue_bootstrap_token(
                 conn,
                 request_id=str(existing["request_id"]),
@@ -2528,6 +3088,64 @@ def get_agent(conn: sqlite3.Connection, target: str) -> dict[str, Any] | None:
         (target, target),
     ).fetchone()
     return dict(row) if row else None
+
+
+def update_agent_channels(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    channels: list[str],
+    home_channel: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown agent: {agent_id}")
+
+    channels_value = _channels_payload(channels)
+    resolved_home_channel = dict(home_channel or {})
+    if not resolved_home_channel:
+        non_tui = [channel for channel in channels_value if channel != "tui-only"]
+        if non_tui:
+            resolved_home_channel = {"platform": non_tui[0], "channel_id": ""}
+        else:
+            resolved_home_channel = {"platform": "tui", "channel_id": ""}
+
+    conn.execute(
+        """
+        UPDATE agents
+        SET channels_json = ?, home_channel_json = ?
+        WHERE agent_id = ?
+        """,
+        (json_dumps(channels_value), json_dumps(resolved_home_channel), agent_id),
+    )
+    conn.commit()
+
+    subscriptions = subscriptions_for_agent(conn, agent_id)
+    manifest_path = write_shared_manifest(
+        cfg,
+        agent_id=agent_id,
+        role=str(row["role"]),
+        unix_user=str(row["unix_user"]),
+        display_name=str(row["display_name"]),
+        hermes_home=str(row["hermes_home"]),
+        model_preset=str(row["model_preset"] or ""),
+        model_string=str(row["model_string"] or ""),
+        channels=channels_value,
+        allowed_mcps=json_loads(str(row["allowed_mcps_json"] or ""), []),
+        subscriptions=subscriptions,
+        home_channel=resolved_home_channel,
+        operator_notify_channel=json_loads(str(row["operator_notify_channel_json"] or ""), {}),
+    )
+    conn.execute(
+        "UPDATE agents SET manifest_path = ? WHERE agent_id = ?",
+        (str(manifest_path), agent_id),
+    )
+    conn.commit()
+    return get_agent(conn, agent_id) or {}
 
 
 def list_agents(conn: sqlite3.Connection) -> list[dict[str, Any]]:

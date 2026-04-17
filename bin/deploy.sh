@@ -689,6 +689,12 @@ emit_runtime_config() {
     write_kv NEXTCLOUD_VAULT_MOUNT_POINT "${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
     write_kv OPERATOR_NOTIFY_CHANNEL_PLATFORM "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
     write_kv OPERATOR_NOTIFY_CHANNEL_ID "${OPERATOR_NOTIFY_CHANNEL_ID:-}"
+    write_kv ALMANAC_OPERATOR_TELEGRAM_USER_IDS "${ALMANAC_OPERATOR_TELEGRAM_USER_IDS:-}"
+    write_kv ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}"
+    write_kv ALMANAC_ONBOARDING_WINDOW_SECONDS "${ALMANAC_ONBOARDING_WINDOW_SECONDS:-3600}"
+    write_kv ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT "${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}"
+    write_kv ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT "${ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
+    write_kv ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT "${ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
     write_kv OPERATOR_GENERAL_CHANNEL_PLATFORM "${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
     write_kv OPERATOR_GENERAL_CHANNEL_ID "${OPERATOR_GENERAL_CHANNEL_ID:-}"
     write_kv TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
@@ -1858,7 +1864,7 @@ run_root_remove() {
     fi
 
     if [[ -S "/run/user/$uid/bus" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-curator-refresh.timer almanac-curator-gateway.service >/dev/null 2>&1 || true" || true
+      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-curator-refresh.timer almanac-curator-gateway.service almanac-curator-onboarding.service >/dev/null 2>&1 || true" || true
       run_as_user_systemd "$ALMANAC_USER" "$uid" "systemctl --user daemon-reload >/dev/null 2>&1 || true" || true
     fi
 

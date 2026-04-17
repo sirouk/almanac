@@ -63,7 +63,13 @@ else
   systemctl --user disable --now almanac-nextcloud.service >/dev/null 2>&1 || true
 fi
 
-if has_curator_gateway_channels; then
+if has_curator_telegram_onboarding; then
+  systemctl --user enable almanac-curator-onboarding.service
+else
+  systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
+fi
+
+if has_curator_gateway_channels && { ! has_curator_telegram_onboarding || has_curator_non_telegram_gateway_channels; }; then
   systemctl --user enable almanac-curator-gateway.service
 else
   systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true

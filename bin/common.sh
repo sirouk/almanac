@@ -174,6 +174,18 @@ TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
 ALMANAC_PRIV_TEMPLATE_DIR="${ALMANAC_PRIV_TEMPLATE_DIR:-$BOOTSTRAP_DIR/templates/almanac-priv}"
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
+ALMANAC_OPERATOR_TELEGRAM_USER_IDS="${ALMANAC_OPERATOR_TELEGRAM_USER_IDS:-}"
+if [[ -z "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
+  if [[ "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
+    ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="1"
+  else
+    ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="0"
+  fi
+fi
+ALMANAC_ONBOARDING_WINDOW_SECONDS="${ALMANAC_ONBOARDING_WINDOW_SECONDS:-3600}"
+ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT="${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}"
+ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT="${ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
+ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT="${ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
 OPERATOR_GENERAL_CHANNEL_ID="${OPERATOR_GENERAL_CHANNEL_ID:-}"
 ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}"
@@ -338,6 +350,24 @@ PY
 
 has_curator_gateway_channels() {
   [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",discord,"* || ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",telegram,"* ]]
+}
+
+has_curator_non_telegram_gateway_channels() {
+  local raw_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
+  local channel
+  local channels=()
+
+  IFS=',' read -r -a channels <<<"$raw_channels"
+  for channel in "${channels[@]}"; do
+    channel="${channel//[[:space:]]/}"
+    [[ -z "$channel" || "$channel" == "tui-only" || "$channel" == "telegram" ]] && continue
+    return 0
+  done
+  return 1
+}
+
+has_curator_telegram_onboarding() {
+  [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" && "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]
 }
 
 ensure_shared_hermes_runtime() {

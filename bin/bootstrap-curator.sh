@@ -348,9 +348,20 @@ PY
     systemctl --user daemon-reload
     systemctl --user enable almanac-curator-refresh.timer >/dev/null
     systemctl --user restart almanac-curator-refresh.timer >/dev/null || true
-    if ! has_curator_gateway_channels; then
+    if has_curator_telegram_onboarding; then
+      systemctl --user enable almanac-curator-onboarding.service >/dev/null
+      systemctl --user restart almanac-curator-onboarding.service >/dev/null 2>&1 || true
+      if has_curator_non_telegram_gateway_channels; then
+        systemctl --user enable almanac-curator-gateway.service >/dev/null
+        systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
+      else
+        systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
+      fi
+    elif ! has_curator_gateway_channels; then
       systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
+      systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
     else
+      systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
       systemctl --user enable almanac-curator-gateway.service >/dev/null
       systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
     fi

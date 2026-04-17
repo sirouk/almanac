@@ -240,6 +240,10 @@ Typical operator commands:
 ./bin/almanac-ctl request list
 ./bin/almanac-ctl request approve <request-id>
 ./bin/almanac-ctl request deny <request-id>
+./bin/almanac-ctl onboarding list
+./bin/almanac-ctl onboarding show <session-id>
+./bin/almanac-ctl onboarding approve <session-id>
+./bin/almanac-ctl onboarding deny <session-id>
 ./bin/almanac-ctl provision list
 ./bin/almanac-ctl provision cancel <request-id>
 ./bin/almanac-ctl provision retry <request-id>
@@ -259,6 +263,13 @@ sudo ./bin/almanac-ctl agent deenroll <agent-id>
 
 User onboarding now starts with the public handshake, not with precreating a
 Unix account.
+
+If Curator Telegram onboarding is enabled, a user can instead DM Curator with
+`/start`, answer the step-by-step intake questions, wait for operator approval
+in Telegram, and then hand Curator a BotFather token for their own bot. Almanac
+will provision the Unix user on the host, wire that bot into the user agent,
+and hand the conversation off to the user's own bot instead of keeping Curator
+in the middle.
 
 ### 1. Give the user the enrollment command
 

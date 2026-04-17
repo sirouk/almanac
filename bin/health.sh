@@ -38,6 +38,23 @@ warn_or_fail() {
 check_curator_gateway_runtime() {
   local output=""
   local status=0
+  local runtime_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
+  local channel
+  local filtered_channels=()
+
+  if has_curator_telegram_onboarding; then
+    pass "Curator Telegram onboarding owns the Telegram worker"
+    if ! has_curator_non_telegram_gateway_channels; then
+      return 0
+    fi
+    IFS=',' read -r -a filtered_channels <<<"$runtime_channels"
+    runtime_channels=""
+    for channel in "${filtered_channels[@]}"; do
+      channel="${channel//[[:space:]]/}"
+      [[ -z "$channel" || "$channel" == "telegram" || "$channel" == "tui-only" ]] && continue
+      runtime_channels="${runtime_channels:+$runtime_channels,}$channel"
+    done
+  fi
 
   if ! has_curator_gateway_channels; then
     return 0
@@ -48,7 +65,7 @@ check_curator_gateway_runtime() {
     return 0
   fi
 
-  if output="$("$RUNTIME_DIR/hermes-venv/bin/python3" - "$ALMANAC_CURATOR_CHANNELS" <<'PY'
+  if output="$("$RUNTIME_DIR/hermes-venv/bin/python3" - "$runtime_channels" <<'PY'
 import sys
 
 channels = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
@@ -1137,10 +1154,18 @@ if set_user_systemd_bus_env; then
     pass "Quarto timer disabled in config"
   fi
 
-  if has_curator_gateway_channels; then
+  if has_curator_telegram_onboarding; then
+    check_unit_state almanac-curator-onboarding.service required
+    if has_curator_non_telegram_gateway_channels; then
+      check_unit_state almanac-curator-gateway.service required
+    else
+      check_unit_state almanac-curator-gateway.service optional
+    fi
+  elif has_curator_gateway_channels; then
     check_unit_state almanac-curator-gateway.service required
   else
     check_unit_state almanac-curator-gateway.service optional
+    check_unit_state almanac-curator-onboarding.service optional
   fi
 else
   warn "systemd user bus unavailable; skipping service status checks"

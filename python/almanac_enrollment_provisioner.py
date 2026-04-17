@@ -4,24 +4,35 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import pwd
 import subprocess
 import time
 from pathlib import Path
 
 from almanac_control import (
     Config,
+    activation_trigger_path,
     auto_provision_retry_delay_seconds,
+    config_env_value,
     connect_db,
+    delete_onboarding_bot_token_secret,
     ensure_unix_user_ready,
+    get_agent,
     issue_auto_provision_token,
     json_loads,
+    list_pending_onboarding_bot_configurations,
     list_pending_auto_provision_requests,
     make_agent_id,
     mark_auto_provision_finished,
     mark_auto_provision_started,
     note_refresh_job,
     queue_notification,
+    read_onboarding_bot_token_secret,
+    save_onboarding_session,
+    shell_quote,
+    update_agent_channels,
 )
+from almanac_telegram import telegram_send_message
 
 
 def _operator_target(cfg: Config) -> tuple[str, str]:
@@ -81,6 +92,183 @@ def _queue_operator_message(conn, cfg: Config, message: str) -> None:
         channel_kind=channel_kind,
         message=message,
     )
+
+
+def _read_env_file_value(path: Path, key: str) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() == key:
+            return value.strip().strip("'\"")
+    return ""
+
+
+def _resolve_curator_bot_token(cfg: Config) -> str:
+    token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+    if token:
+        return token
+    return _read_env_file_value(cfg.curator_hermes_home / ".env", "TELEGRAM_BOT_TOKEN").strip()
+
+
+def _write_env_values(path: Path, values: dict[str, str]) -> None:
+    existing: dict[str, str] = {}
+    if path.exists():
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            existing[key.strip()] = value.strip().strip("'\"")
+    existing.update(values)
+    lines = [f"{key}={shell_quote(value)}" for key, value in sorted(existing.items())]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _notify_user_via_curator(cfg: Config, *, chat_id: str, message: str) -> None:
+    token = _resolve_curator_bot_token(cfg)
+    if not token or not chat_id:
+        return
+    try:
+        telegram_send_message(bot_token=token, chat_id=chat_id, text=message)
+    except Exception:
+        return
+
+
+def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
+    agent_id = str(session.get("linked_agent_id") or "")
+    if not agent_id:
+        raise ValueError(f"onboarding session {session['session_id']} is missing linked_agent_id")
+    agent = get_agent(conn, agent_id)
+    if agent is None:
+        raise ValueError(f"unknown agent for onboarding session {session['session_id']}: {agent_id}")
+
+    unix_user = str(agent["unix_user"])
+    home = Path(pwd.getpwnam(unix_user).pw_dir)
+    hermes_home = Path(str(agent["hermes_home"]))
+    chat_id = str(session.get("chat_id") or "")
+    pending_bot_token_path = str(session.get("pending_bot_token_path") or "")
+    pending_bot_token = read_onboarding_bot_token_secret(pending_bot_token_path)
+    if not pending_bot_token:
+        pending_bot_token = str(session.get("pending_bot_token") or "")
+    bot_username = str(session.get("telegram_bot_username") or "")
+    if not pending_bot_token or not chat_id:
+        raise ValueError(f"onboarding session {session['session_id']} is missing Telegram credentials")
+
+    env_path = hermes_home / ".env"
+    _write_env_values(
+        env_path,
+        {
+            "TELEGRAM_BOT_TOKEN": pending_bot_token,
+            "TELEGRAM_ALLOWED_USERS": chat_id,
+            "TELEGRAM_HOME_CHANNEL": chat_id,
+        },
+    )
+    try:
+        subprocess.run(["chown", f"{unix_user}:{unix_user}", str(env_path)], check=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"failed to chown {env_path}: {exc}") from exc
+
+    update_agent_channels(
+        conn,
+        cfg,
+        agent_id=agent_id,
+        channels=["tui-only", "telegram"],
+        home_channel={"platform": "telegram", "channel_id": chat_id},
+    )
+
+    uid = pwd.getpwnam(unix_user).pw_uid
+    _wait_for_user_bus(str(uid))
+    result = subprocess.run(
+        [
+            "runuser",
+            "-u",
+            unix_user,
+            "--",
+            str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
+            agent_id,
+            str(cfg.repo_dir),
+            str(hermes_home),
+            json.dumps(["tui-only", "telegram"]),
+            str(activation_trigger_path(cfg, agent_id)),
+        ],
+        env={
+            **os.environ,
+            "ALMANAC_CONFIG_FILE": os.environ.get("ALMANAC_CONFIG_FILE", ""),
+            "HOME": str(home),
+            "USER": unix_user,
+            "LOGNAME": unix_user,
+            "HERMES_HOME": str(hermes_home),
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+        },
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
+
+    save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        state="completed",
+        pending_bot_token="",
+        pending_bot_token_path="",
+        provision_error="",
+        completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+    )
+    delete_onboarding_bot_token_secret(pending_bot_token_path)
+    note_refresh_job(
+        conn,
+        job_name=f"onboarding-{session['session_id']}",
+        job_kind="onboarding",
+        target_id=agent_id,
+        schedule="approval",
+        status="ok",
+        note=f"telegram gateway configured for @{bot_username or 'bot'}",
+    )
+    _queue_operator_message(
+        conn,
+        cfg,
+        f"Onboarding complete for {agent_id} ({unix_user}); Telegram bot @{bot_username or 'unknown'} is live.",
+    )
+    _notify_user_via_curator(
+        cfg,
+        chat_id=chat_id,
+        message=(
+            f"Everything is ready. Your own bot is @{bot_username or 'your bot'} now. "
+            f"Talk to it directly from here on out."
+        ),
+    )
+
+
+def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
+    for session in list_pending_onboarding_bot_configurations(conn):
+        try:
+            _configure_user_telegram_gateway(conn, cfg, session)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).strip().replace("\n", " ")[:500] or "unknown onboarding gateway error"
+            save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="provision-pending",
+                provision_error=message,
+            )
+            note_refresh_job(
+                conn,
+                job_name=f"onboarding-{session['session_id']}",
+                job_kind="onboarding",
+                target_id=str(session.get("linked_agent_id") or session["session_id"]),
+                schedule="approval",
+                status="warn",
+                note=message,
+            )
 
 
 def _schedule_failure(
@@ -242,6 +430,7 @@ def main() -> None:
     with connect_db(cfg) as conn:
         for row in list_pending_auto_provision_requests(conn, cfg):
             _run_one(conn, cfg, row)
+        _run_pending_onboarding_gateway_configs(conn, cfg)
 
 
 if __name__ == "__main__":

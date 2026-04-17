@@ -20,14 +20,17 @@ from almanac_control import (
     config_env_value,
     connect_db,
     deny_request,
+    deny_onboarding_session,
     ensure_unix_user_ready,
     ensure_config_file_update,
     generate_raw_token,
     get_agent,
+    get_onboarding_session,
     get_setting,
     hash_token,
     list_agents,
     list_notifications,
+    list_onboarding_sessions,
     list_auto_provision_requests,
     list_requests,
     list_tokens,
@@ -43,6 +46,7 @@ from almanac_control import (
     reload_vault_definitions,
     retry_auto_provision_request,
     revoke_token,
+    approve_onboarding_session,
     subscriptions_for_agent,
     utc_now_iso,
     upsert_setting,
@@ -78,6 +82,19 @@ def parse_args() -> argparse.Namespace:
     deny.add_argument("request_id")
     deny.add_argument("--surface", default="ctl")
     deny.add_argument("--actor", default=os.environ.get("USER", "operator"))
+
+    onboarding = subparsers.add_parser("onboarding")
+    onboarding_sub = onboarding.add_subparsers(dest="action", required=True)
+    onboarding_sub.add_parser("list")
+    onboarding_show = onboarding_sub.add_parser("show")
+    onboarding_show.add_argument("session_id")
+    onboarding_approve = onboarding_sub.add_parser("approve")
+    onboarding_approve.add_argument("session_id")
+    onboarding_approve.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    onboarding_deny = onboarding_sub.add_parser("deny")
+    onboarding_deny.add_argument("session_id")
+    onboarding_deny.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    onboarding_deny.add_argument("--reason", default="")
 
     agent = subparsers.add_parser("agent")
     agent_sub = agent.add_subparsers(dest="action", required=True)
@@ -585,6 +602,37 @@ def main() -> None:
                 args,
                 deny_request(
                     conn, request_id=args.request_id, surface=args.surface, actor=args.actor, cfg=cfg
+                ),
+            )
+            return
+
+        if args.domain == "onboarding" and args.action == "list":
+            dump_output(args, list_onboarding_sessions(conn))
+            return
+        if args.domain == "onboarding" and args.action == "show":
+            session = get_onboarding_session(conn, args.session_id)
+            if session is None:
+                raise SystemExit(f"unknown onboarding session: {args.session_id}")
+            dump_output(args, session)
+            return
+        if args.domain == "onboarding" and args.action == "approve":
+            dump_output(
+                args,
+                approve_onboarding_session(
+                    conn,
+                    session_id=args.session_id,
+                    actor=args.actor,
+                ),
+            )
+            return
+        if args.domain == "onboarding" and args.action == "deny":
+            dump_output(
+                args,
+                deny_onboarding_session(
+                    conn,
+                    session_id=args.session_id,
+                    actor=args.actor,
+                    reason=args.reason,
                 ),
             )
             return

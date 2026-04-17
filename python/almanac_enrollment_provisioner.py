@@ -170,6 +170,7 @@ def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) 
     readable_trees = [
         cfg.repo_dir,
         cfg.runtime_dir / "hermes-venv",
+        cfg.runtime_dir / "hermes-agent-src",
         activation_dir,
     ]
 
@@ -218,6 +219,10 @@ def _seed_user_provider(cfg: Config, *, session: dict, unix_user: str, home: Pat
     provider_setup = provider_setup_from_dict(answers.get("provider_setup"))
     if provider_setup is None:
         raise ValueError(f"onboarding session {session['session_id']} is missing provider setup")
+
+    agent_id = str(session.get("linked_agent_id") or "")
+    if agent_id:
+        _grant_auto_provision_access(cfg, unix_user=unix_user, agent_id=agent_id)
 
     python_bin = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
     if not python_bin.exists():

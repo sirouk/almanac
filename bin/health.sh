@@ -395,7 +395,7 @@ check_active_agent_state() {
     return 0
   fi
 
-  if output="$(python3 - "$ALMANAC_DB_PATH" <<'PY'
+if output="$(python3 - "$ALMANAC_DB_PATH" <<'PY'
 import datetime as dt
 import json
 import os
@@ -426,7 +426,12 @@ for agent in agents:
         print(f"FAIL {agent_id}: manifest missing at {manifest_path}")
         failures += 1
         continue
-    if not hermes_home.exists():
+    try:
+        hermes_home_exists = hermes_home.exists()
+    except PermissionError:
+        print(f"WARN {agent_id}: cannot inspect hermes home at {hermes_home} due to permissions")
+        hermes_home_exists = True
+    if not hermes_home_exists:
         print(f"FAIL {agent_id}: hermes home missing at {hermes_home}")
         failures += 1
         continue
@@ -466,6 +471,7 @@ PY
       case "$line" in
         FAIL\ *) fail "${line#FAIL }" ;;
         OK\ *) pass "${line#OK }" ;;
+        WARN\ *) warn "${line#WARN }" ;;
         *) warn_or_fail "$line" ;;
       esac
     done <<<"$output"

@@ -554,7 +554,7 @@ ensure_shared_hermes_runtime() {
     "$seed_python" -m venv "$venv_dir"
   fi
 
-  uv pip install --python "$venv_dir/bin/python3" -e "$repo_dir[cli,mcp,messaging,cron]"
+  uv pip install --python "$venv_dir/bin/python3" "$repo_dir[cli,mcp,messaging,cron]"
 }
 
 ensure_qmd_collection() {

@@ -52,14 +52,37 @@ EOF
 }
 
 choose_channels_csv() {
-  if [[ -n "${ALMANAC_CURATOR_CHANNELS:-}" ]]; then
-    printf '%s\n' "$ALMANAC_CURATOR_CHANNELS"
+  local existing_channels="${ALMANAC_CURATOR_CHANNELS:-}"
+  local reuse_existing="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
+  local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
+  local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
+  local default_discord="no"
+  local default_telegram="no"
+
+  if [[ "$skip_setup" == "1" && "$skip_gateway_setup" == "1" && -n "$existing_channels" ]]; then
+    printf '%s\n' "$existing_channels"
     return 0
   fi
 
+  if [[ ",${existing_channels}," == *",discord,"* ]]; then
+    default_discord="yes"
+  fi
+  if [[ ",${existing_channels}," == *",telegram,"* ]]; then
+    default_telegram="yes"
+  fi
+
+  if [[ -n "$existing_channels" && "$reuse_existing" != "1" ]]; then
+    if [[ "$existing_channels" != "tui-only" || -f "$ALMANAC_CURATOR_MANIFEST" ]]; then
+      if [[ ! -t 0 ]] || confirm_default "Reuse existing Curator chat channels ($existing_channels)?" "yes"; then
+        printf '%s\n' "$existing_channels"
+        return 0
+      fi
+    fi
+  fi
+
   local discord="" telegram="" channels="tui-only"
-  discord="$(ask_default "Enable Discord for Curator gateway? (yes/no)" "no")"
-  telegram="$(ask_default "Enable Telegram for Curator gateway? (yes/no)" "no")"
+  discord="$(ask_default "Enable Discord for Curator gateway? (yes/no)" "$default_discord")"
+  telegram="$(ask_default "Enable Telegram for Curator gateway? (yes/no)" "$default_telegram")"
   if [[ "${discord,,}" =~ ^(y|yes|1)$ ]]; then
     channels="$channels,discord"
   fi

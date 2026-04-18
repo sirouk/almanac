@@ -97,6 +97,9 @@ Important:
 - validate MCP with the agent's MCP test command or MCP tool call
 - if the GitHub repo is private and a raw `SKILL.md` URL returns `404`, treat
   that as an authentication problem, not as proof that the skill does not exist
+- do not browse other users' home directories; for user-agent runs, stay within
+  the current user's `HERMES_HOME` plus the shared Almanac MCP and qmd
+  surfaces
 
 ## Discovery signals
 
@@ -126,6 +129,10 @@ If the live qmd listener belongs to another user such as `almanac`, prefer the
 deployed instance behind that listener over source-checkout defaults owned by
 the current interactive user.
 
+If that deployed instance lives under `/home/almanac/almanac`, treat that path
+as the shared service-user deployment root. It is normal shared infrastructure,
+not another enrolled user's private workspace.
+
 ## What to inspect
 
 Prefer native tools first, then local files as supporting evidence.
@@ -135,6 +142,11 @@ Useful supporting locations:
 - `$HERMES_HOME/memories/MEMORY.md`
 - `$HERMES_HOME/memories/USER.md`
 - `$HERMES_HOME/state/almanac-vault-reconciler.json`
+
+For user-agent runs on a shared host, do not inspect central deployment files
+such as `/home/almanac/almanac/almanac-priv/config/almanac.env`,
+`.almanac-operator.env`, or source `/home/almanac/almanac/bin/common.sh`.
+Use the already wired MCP endpoints and the agent-local state above instead.
 
 Read the memory files if you need to understand current managed entries, but do
 not hand-edit them unless the user explicitly asks for direct file edits, other
@@ -166,6 +178,9 @@ Use the lightest correct path:
 
 If the agent has only remote MCP access and cannot refresh qmd locally, report
 that limitation and continue with reconciliation against the current index.
+
+For user-agent runs on a shared host, never switch from the shared qmd surface
+into browsing another user's home directory just to infer the vault target.
 
 Do not run refresh commands against a repo-local scaffold vault unless a real
 deployment config points there or the user explicitly confirms that target.

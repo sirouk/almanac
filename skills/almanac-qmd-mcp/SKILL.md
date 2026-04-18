@@ -19,12 +19,12 @@ Use this skill when the user wants an agent to work with the Almanac vault throu
 
 Check these local files first:
 
+- `$HERMES_HOME/state/almanac-vault-reconciler.json` and `$HERMES_HOME/memories/almanac-managed-stubs.md` for safe, agent-local Almanac routing state
 - `docs/hermes-qmd-config.yaml` for the default MCP client snippet
 - `bin/qmd-daemon.sh` for how the qmd MCP server is started
 - `bin/qmd-refresh.sh` for index refresh and embeddings
 - `bin/health.sh` for the expected service and port state
-- `almanac-priv/config/almanac.env` if present, for site-specific values such as `QMD_INDEX_NAME` and `QMD_MCP_PORT`
-- `/home/almanac/almanac/skills/almanac-qmd-mcp` and `/home/almanac/almanac/skills/almanac-vault-reconciler` when Hermes is running on the same host as the deployed Almanac instance
+- `/home/almanac/almanac/skills/almanac-qmd-mcp` and `/home/almanac/almanac/skills/almanac-vault-reconciler` when Hermes is running on the same host as the deployed Almanac instance and needs the shared skill text, not central secrets or private config
 
 Typical deployed paths:
 
@@ -35,7 +35,19 @@ Typical deployed paths:
 - default qmd index name: `almanac`
 - default qmd collection name: `vault`
 
-Do not assume these values; prefer the local config when available.
+On a shared-host user agent, `/home/almanac/almanac` is the service-user
+deployment root. Reading shared repo content there is expected. Treat it as
+read-only shared infrastructure, not as another enrolled user's workspace.
+
+Do not read `/home/almanac/almanac/almanac-priv/config/almanac.env`,
+`.almanac-operator.env`, or source `bin/common.sh` from a user-agent session.
+Those central deployment files may contain secrets and are outside the normal
+least-privilege boundary for an enrolled user bot. Prefer the already wired MCP
+URLs, `bin/almanac-rpc`, and the agent-local Almanac state under `$HERMES_HOME`
+instead.
+
+Do not assume these values; prefer agent-local state and already wired MCP
+configuration before central deploy config.
 
 Do not treat a repo-adjacent `almanac-priv` directory as proof that you found
 the live vault. If `config/almanac.env` is missing there, it may only be a
@@ -192,6 +204,9 @@ Related vault-sync services:
 
 - Treat the vault as the authoritative knowledge source and avoid writing to it unless the user explicitly asks.
 - Prefer reading effective config over assuming defaults.
+- For a user-agent session on a shared host, never inspect central deployment
+  secrets such as `almanac.env` or source `bin/common.sh`; use the already
+  wired MCP endpoints and agent-local Almanac state instead.
 - Do not hard-code Hermes-specific behavior when a generic MCP client path will do.
 - If both MCP and direct qmd CLI are viable, choose the lighter path for the user’s task.
 - Prefer MCP and qmd over direct filesystem scraping when the vault is meant to stay read-oriented.

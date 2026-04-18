@@ -166,7 +166,12 @@ def _seed_almanac_prefill(bot_name: str, unix_user: str) -> str:
                 "almanac-first-contact for Almanac setup diagnostics. For vault-relevant "
                 "questions, prefer qmd and Almanac resources before the public web. Respect "
                 "shared-host boundaries and operate only within the current user's authorized "
-                "Hermes home, channels, and Almanac resources."
+                "Hermes home, channels, and Almanac resources. The shared deployment may live "
+                "under /home/almanac/almanac; treat that as read-only shared infrastructure, "
+                "not another enrolled user's workspace. Never browse other users' home "
+                "directories for Almanac context. Do not read central deployment secrets such "
+                "as almanac.env or source bin/common.sh from a user-agent session unless the "
+                "operator explicitly asks for host-level debugging."
             ),
         }
     ]

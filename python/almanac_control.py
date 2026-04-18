@@ -3647,7 +3647,11 @@ def build_managed_memory_payload(
         topology_lines.append(f"  {mark} {vault['vault_name']}: {brief}")
 
     display_name = str(agent["display_name"] or "").strip()
-    vault_ref = f"Vault root: {vault_root}\nAgent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
+    vault_ref = (
+        f"Vault root: {vault_root}\n"
+        f"Shared deployment root: {cfg.repo_dir}\n"
+        f"Agent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
+    )
     if display_name:
         vault_ref += f"\nAgent label: {display_name}"
     skill_ref = (
@@ -3655,12 +3659,18 @@ def build_managed_memory_payload(
         " retrieval and follow-ups, almanac-vaults for subscription and catalog work,"
         " almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot"
         " for SSOT coordination, and almanac-first-contact for Almanac setup or"
-        " diagnostic checks."
+        " diagnostic checks. On a shared host, the shared deployment root may live"
+        " under /home/almanac/almanac; treat that as read-only shared"
+        " infrastructure, not another enrolled user's workspace."
     )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
         "Always query qmd before web for vault-relevant work, including the\n"
-        "'vault-pdf-ingest' collection when present for PDF-derived markdown."
+        "'vault-pdf-ingest' collection when present for PDF-derived markdown.\n"
+        "Never browse other users' home directories for Almanac context.\n"
+        "Use the already wired MCP endpoints and agent-local Almanac state for\n"
+        "site context. Do not read central deployment secrets such as\n"
+        "almanac.env or source common.sh from a user-agent session."
     )
     topology = "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n" + "\n".join(
         topology_lines
@@ -3751,7 +3761,9 @@ def write_managed_memory_stubs(
         " retrieval and follow-ups, almanac-vaults for subscription and catalog work,"
         " almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot"
         " for SSOT coordination, and almanac-first-contact for Almanac setup or"
-        " diagnostic checks.",
+        " diagnostic checks. On a shared host, the shared deployment root may live"
+        " under /home/almanac/almanac; treat that as read-only shared"
+        " infrastructure, not another enrolled user's workspace.",
     )
     state_dir = hermes_home / "state"
     memories_dir = hermes_home / "memories"

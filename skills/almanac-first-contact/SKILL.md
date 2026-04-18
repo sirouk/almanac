@@ -25,6 +25,10 @@ The script expects these environment variables (all normally exported by `init.s
 Its output is a JSON summary on stdout. A non-zero exit code means first-contact
 failed a hard check; the operator should inspect before proceeding.
 
+On a shared host, `ALMANAC_SHARED_REPO_DIR` may live under
+`/home/almanac/almanac`. Treat that as the shared deployment root, not as
+another enrolled user's workspace.
+
 ## Goals
 
 - confirm the agent is using the shared-host Almanac deployment
@@ -40,6 +44,11 @@ failed a hard check; the operator should inspect before proceeding.
 ## Guardrails
 
 - treat qmd as the retrieval plane and `almanac-mcp` as the control plane
+- use the passed environment variables plus MCP responses; do not inspect
+  central deployment secrets such as `almanac.env`, `.almanac-operator.env`,
+  or source `bin/common.sh` from a user-agent session
+- do not browse other users' home directories; stay within the current user's
+  `HERMES_HOME` plus the shared Almanac MCP and qmd surfaces
 - do not store raw vault bodies or PDF bodies in built-in memory
 - if vault subscription defaults already exist from a prior archived enrollment, keep them unless the user explicitly changes them
 - if the user only has TUI enabled, skip home-channel configuration without treating it as a failure

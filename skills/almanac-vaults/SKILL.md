@@ -16,6 +16,8 @@ Use this skill when an enrolled user wants to manage Almanac vault subscriptions
 
 ## Operations
 
+- use the shared Almanac catalog and subscription rails, not direct browsing of
+  other users' directories
 - list the vault catalog with:
   - vault name
   - description
@@ -28,6 +30,9 @@ Use this skill when an enrolled user wants to manage Almanac vault subscriptions
 
 ## Guardrails
 
+- stay within the current user's `HERMES_HOME` plus the shared Almanac control
+  plane; do not browse other users' home directories or central deployment
+  config files
 - do not edit `.vault` files unless the user explicitly asks
 - do not treat qmd access as revoked when a user unsubscribes from a vault
 - if a vault listed in memory no longer exists in the catalog, treat that as drift and refresh before answering

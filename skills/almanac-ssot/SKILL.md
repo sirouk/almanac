@@ -29,4 +29,7 @@ Use this skill for Notion-backed SSOT tasks.
 
 - write only on behalf of the user who owns the agent
 - do not silently cross-edit records owned by another user
+- do not inspect other users' home directories or central deployment config to
+  infer ownership; use the SSOT metadata and Almanac rails already exposed to
+  this agent
 - if a requested action would archive or delete content, stop and ask first

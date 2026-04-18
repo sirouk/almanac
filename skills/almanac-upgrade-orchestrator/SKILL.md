@@ -16,6 +16,9 @@ This skill is for the shared host and Curator only.
 
 It is not for user-agent refresh work.
 
+Enrolled user bots should not use this skill and should not inspect host-level
+deployment config such as `almanac.env`.
+
 ## Authority boundary
 
 Curator does not execute upgrades.
@@ -90,6 +93,7 @@ Post-upgrade verification:
 
 - Do not claim Curator ran or will run the upgrade. Curator nags; the operator
   executes.
+- Do not route enrolled user bots into this workflow. It is operator-only.
 - Do not use a local developer checkout (for example `~/almanac` on a laptop)
   as the upgrade source for production.
 - Prefer the configured `ALMANAC_UPSTREAM_REPO_URL` and `ALMANAC_UPSTREAM_BRANCH`.

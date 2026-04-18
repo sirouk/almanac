@@ -62,13 +62,13 @@ check_placeholder_secrets() {
   fi
 
   if is_placeholder_secret "${POSTGRES_PASSWORD:-}"; then
-    warn "POSTGRES_PASSWORD still uses a placeholder secret; rotate it deliberately for the live Nextcloud database"
+    warn "POSTGRES_PASSWORD still uses a placeholder secret; rotate it deliberately for the live Nextcloud database with ./deploy.sh rotate-nextcloud-secrets"
   else
     pass "POSTGRES_PASSWORD is not a placeholder secret"
   fi
 
   if is_placeholder_secret "${NEXTCLOUD_ADMIN_PASSWORD:-}"; then
-    warn "NEXTCLOUD_ADMIN_PASSWORD still uses a placeholder secret; rotate the live Nextcloud admin credential"
+    warn "NEXTCLOUD_ADMIN_PASSWORD still uses a placeholder secret; rotate the live Nextcloud admin credential with ./deploy.sh rotate-nextcloud-secrets"
   else
     pass "NEXTCLOUD_ADMIN_PASSWORD is not a placeholder secret"
   fi

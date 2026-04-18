@@ -60,6 +60,9 @@ ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirou
 ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
 ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-}"
 ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+NEXTCLOUD_ROTATE_POSTGRES_PASSWORD="${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-}"
+NEXTCLOUD_ROTATE_ADMIN_PASSWORD="${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-}"
+NEXTCLOUD_ROTATE_ASSUME_YES="${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
 
 normalize_vault_qmd_collection_mask() {
   local mask="${1:-}"
@@ -167,6 +170,7 @@ Usage:
   deploy.sh enrollment-align
   deploy.sh enrollment-reset
   deploy.sh curator-setup
+  deploy.sh rotate-nextcloud-secrets
   deploy.sh agent-payload
   deploy.sh write-config
   deploy.sh remove
@@ -179,7 +183,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|upgrade|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|agent-payload|agent|write-config|remove|health|menu)
+    install|upgrade|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu)
       MODE="$1"
       shift
       ;;
@@ -389,10 +393,11 @@ Almanac deploy menu
   6) Enrollment align / repair
   7) Enrollment reset / cleanup
   8) Curator setup / repair
-  9) Print agent payload
- 10) Health check
- 11) Remove / teardown
- 12) Exit
+  9) Rotate Nextcloud secrets
+ 10) Print agent payload
+ 11) Health check
+ 12) Remove / teardown
+ 13) Exit
 EOF
 
   while true; do
@@ -406,11 +411,12 @@ EOF
       6) MODE="enrollment-align"; return 0 ;;
       7) MODE="enrollment-reset"; return 0 ;;
       8) MODE="curator-setup"; return 0 ;;
-      9) MODE="agent-payload"; return 0 ;;
-      10) MODE="health"; return 0 ;;
-      11) MODE="remove"; return 0 ;;
-      12) exit 0 ;;
-      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, or 12." ;;
+      9) MODE="rotate-nextcloud-secrets"; return 0 ;;
+      10) MODE="agent-payload"; return 0 ;;
+      11) MODE="health"; return 0 ;;
+      12) MODE="remove"; return 0 ;;
+      13) exit 0 ;;
+      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, or 13." ;;
     esac
   done
 }
@@ -3549,6 +3555,86 @@ run_health_check() {
   write_operator_checkout_artifact
 }
 
+run_rotate_nextcloud_secrets() {
+  local new_postgres_password="" new_admin_password="" masked_postgres="" masked_admin="" confirm_text=""
+  local uid="" pg_q="" admin_q=""
+
+  prepare_deployed_context
+  ensure_deployed_config_exists
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    local -a cmd=(
+      sudo env
+      "ALMANAC_CONFIG_FILE=$CONFIG_TARGET"
+      "NEXTCLOUD_ROTATE_ASSUME_YES=${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
+    )
+    if [[ -n "${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-}" ]]; then
+      cmd+=("NEXTCLOUD_ROTATE_POSTGRES_PASSWORD=${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD}")
+    fi
+    if [[ -n "${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-}" ]]; then
+      cmd+=("NEXTCLOUD_ROTATE_ADMIN_PASSWORD=${NEXTCLOUD_ROTATE_ADMIN_PASSWORD}")
+    fi
+    cmd+=("$SELF_PATH" rotate-nextcloud-secrets)
+
+    echo "Switching to sudo for live Nextcloud credential rotation..."
+    "${cmd[@]}"
+    write_operator_checkout_artifact
+    return 0
+  fi
+
+  if [[ "${ENABLE_NEXTCLOUD:-0}" != "1" ]]; then
+    echo "Nextcloud is disabled in $CONFIG_TARGET; nothing to rotate." >&2
+    exit 1
+  fi
+
+  if ! id -u "$ALMANAC_USER" >/dev/null 2>&1; then
+    echo "Service user '$ALMANAC_USER' does not exist." >&2
+    exit 1
+  fi
+
+  new_postgres_password="${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-$(random_secret)}"
+  new_admin_password="${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-$(random_secret)}"
+  masked_postgres="$(mask_secret "$new_postgres_password")"
+  masked_admin="$(mask_secret "$new_admin_password")"
+
+  echo "Almanac deploy: rotate live Nextcloud credentials"
+  echo
+  echo "Config:             $CONFIG_TARGET"
+  echo "Service user:       $ALMANAC_USER"
+  echo "Nextcloud admin:    ${NEXTCLOUD_ADMIN_USER:-admin}"
+  echo "New Postgres pass:  $masked_postgres"
+  echo "New admin pass:     $masked_admin"
+
+  if [[ "${NEXTCLOUD_ROTATE_ASSUME_YES:-0}" != "1" ]]; then
+    confirm_text="$(ask "Type ROTATE to apply the live credential rotation" "")"
+    if [[ "$confirm_text" != "ROTATE" ]]; then
+      echo "Credential rotation cancelled."
+      exit 1
+    fi
+  fi
+
+  uid="$(id -u "$ALMANAC_USER")"
+  systemctl start "user@$uid.service" >/dev/null 2>&1 || true
+  run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-nextcloud.service >/dev/null 2>&1 || true"
+
+  printf -v pg_q '%q' "$new_postgres_password"
+  printf -v admin_q '%q' "$new_admin_password"
+  run_as_user "$ALMANAC_USER" \
+    "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' NEXTCLOUD_ROTATE_POSTGRES_PASSWORD=$pg_q NEXTCLOUD_ROTATE_ADMIN_PASSWORD=$admin_q '$ALMANAC_REPO_DIR/bin/rotate-nextcloud-secrets.sh'"
+
+  POSTGRES_PASSWORD="$new_postgres_password"
+  NEXTCLOUD_ADMIN_PASSWORD="$new_admin_password"
+  write_runtime_config "$CONFIG_TARGET"
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-nextcloud.service"
+  run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+
+  echo
+  echo "Live Nextcloud credentials rotated and persisted to $CONFIG_TARGET."
+}
+
 run_curator_setup_flow() {
   prepare_deployed_context
 
@@ -3783,6 +3869,9 @@ case "$MODE" in
     ;;
   curator-setup)
     run_curator_setup_flow
+    ;;
+  rotate-nextcloud-secrets)
+    run_rotate_nextcloud_secrets
     ;;
   agent-payload|agent)
     run_agent_payload

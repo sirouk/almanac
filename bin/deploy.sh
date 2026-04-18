@@ -790,6 +790,38 @@ random_secret() {
   fi
 }
 
+trim_secret_marker() {
+  local value="${1:-}"
+
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+is_placeholder_secret() {
+  local value=""
+
+  value="$(trim_secret_marker "${1:-}")"
+  case "${value,,}" in
+    change-me|changeme|generated-at-deploy)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+preserve_or_randomize_secret() {
+  local value="${1:-}"
+
+  if [[ -z "$value" ]] || is_placeholder_secret "$value"; then
+    random_secret
+    return 0
+  fi
+
+  printf '%s' "$value"
+}
+
 write_kv() {
   local key="$1"
   local value="${2:-}"
@@ -1560,6 +1592,8 @@ collect_install_answers() {
   local default_pdf_vision_model=""
   local default_pdf_vision_api_key=""
   local default_telegram_bot_token=""
+  local current_postgres_password="" current_nextcloud_admin_password=""
+  local nextcloud_state_present="0"
 
   load_detected_config || true
 
@@ -1695,15 +1729,6 @@ collect_install_answers() {
   NEXTCLOUD_TRUSTED_DOMAIN="$(ask "Nextcloud trusted domain / Tailscale hostname" "$default_domain")"
   POSTGRES_DB="${POSTGRES_DB:-${MARIADB_DATABASE:-nextcloud}}"
   POSTGRES_USER="${POSTGRES_USER:-${MARIADB_USER:-nextcloud}}"
-  POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${MARIADB_PASSWORD:-$(random_secret)}}"
-  NEXTCLOUD_ADMIN_USER="$(ask "Nextcloud admin user" "$default_nextcloud_admin_user")"
-  if [[ -n "${NEXTCLOUD_ADMIN_PASSWORD:-}" ]]; then
-    nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
-    NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
-  else
-    nextcloud_admin_password_input="$(ask_secret "Nextcloud admin password (leave blank to auto-generate)")"
-    NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$(random_secret)}"
-  fi
   NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
   ENABLE_NEXTCLOUD="$(ask_yes_no "Enable Nextcloud" "$default_enable_nextcloud")"
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
@@ -1718,12 +1743,30 @@ collect_install_answers() {
     TAILSCALE_OPERATOR_USER=""
   fi
   WIPE_NEXTCLOUD_STATE="0"
-  if [[ "$MODE" != "write-config" && "$ENABLE_NEXTCLOUD" == "1" && nextcloud_state_has_existing_data ]]; then
+  if nextcloud_state_has_existing_data; then
+    nextcloud_state_present="1"
+  fi
+  if [[ "$MODE" != "write-config" && "$ENABLE_NEXTCLOUD" == "1" && "$nextcloud_state_present" == "1" ]]; then
     echo "Detected existing Nextcloud state under:"
     echo "  $NEXTCLOUD_STATE_DIR"
     echo "This wipes Nextcloud app/db/data state only; the vault stays untouched."
     WIPE_NEXTCLOUD_STATE="$(ask_yes_no "Wipe existing Nextcloud state for a clean install" "0")"
   fi
+  current_postgres_password="${POSTGRES_PASSWORD:-${MARIADB_PASSWORD:-}}"
+  if [[ -z "$current_postgres_password" || "$nextcloud_state_present" != "1" || "$WIPE_NEXTCLOUD_STATE" == "1" ]]; then
+    POSTGRES_PASSWORD="$(preserve_or_randomize_secret "$current_postgres_password")"
+  else
+    POSTGRES_PASSWORD="$current_postgres_password"
+  fi
+  NEXTCLOUD_ADMIN_USER="$(ask "Nextcloud admin user" "$default_nextcloud_admin_user")"
+  current_nextcloud_admin_password="${NEXTCLOUD_ADMIN_PASSWORD:-}"
+  if [[ -z "$current_nextcloud_admin_password" || "$nextcloud_state_present" != "1" || "$WIPE_NEXTCLOUD_STATE" == "1" ]]; then
+    NEXTCLOUD_ADMIN_PASSWORD="$(preserve_or_randomize_secret "$current_nextcloud_admin_password")"
+  else
+    NEXTCLOUD_ADMIN_PASSWORD="$current_nextcloud_admin_password"
+  fi
+  nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
+  NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
   ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize almanac-priv as a git repo" "$default_enable_private_git")"
   ENABLE_QUARTO="$(ask_yes_no "Enable Quarto timer/hooks" "$default_enable_quarto")"
   SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"

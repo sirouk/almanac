@@ -340,6 +340,116 @@ printf 'KEEP_DEFAULT=%q\\n' "$keep_default_result"
     print("PASS test_secret_prompt_helpers_do_not_prefix_newlines")
 
 
+def test_collect_install_answers_randomizes_placeholder_passwords() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "random_secret() {", "write_kv() {")
+    collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    script = f"""
+{helpers}
+{collect}
+ask() {{ printf '%s' "${{2:-}}"; }}
+ask_yes_no() {{ printf '%s' "${{2:-0}}"; }}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  POSTGRES_PASSWORD='change-me'
+  NEXTCLOUD_ADMIN_PASSWORD='generated-at-deploy'
+  NEXTCLOUD_ADMIN_USER='operator'
+  return 0
+}}
+random_secret() {{ printf '%s' "generated-secret"; }}
+MODE=write-config
+collect_install_answers
+printf 'POSTGRES_PASSWORD=%s\\n' "$POSTGRES_PASSWORD"
+printf 'NEXTCLOUD_ADMIN_PASSWORD=%s\\n' "$NEXTCLOUD_ADMIN_PASSWORD"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"placeholder-password case failed: {result.stderr}")
+    expect(
+        "POSTGRES_PASSWORD=generated-secret" in result.stdout,
+        f"expected placeholder Postgres password to randomize, got: {result.stdout!r}",
+    )
+    expect(
+        "NEXTCLOUD_ADMIN_PASSWORD=generated-secret" in result.stdout,
+        f"expected placeholder Nextcloud admin password to randomize, got: {result.stdout!r}",
+    )
+    expect("change-me" not in result.stdout, f"expected placeholders to be replaced, got: {result.stdout!r}")
+    print("PASS test_collect_install_answers_randomizes_placeholder_passwords")
+
+
+def test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "random_secret() {", "write_kv() {")
+    collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    script = f"""
+{helpers}
+{collect}
+ask() {{ printf '%s' "${{2:-}}"; }}
+ask_yes_no() {{
+  case "$1" in
+    *Wipe\ existing\ Nextcloud\ state*) printf '%s' 0 ;;
+    *) printf '%s' "${{2:-0}}" ;;
+  esac
+}}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 0; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  POSTGRES_PASSWORD='change-me'
+  NEXTCLOUD_ADMIN_PASSWORD='change-me'
+  NEXTCLOUD_ADMIN_USER='operator'
+  return 0
+}}
+random_secret() {{ printf '%s' "generated-secret"; }}
+MODE=install
+collect_install_answers
+printf 'POSTGRES_PASSWORD=%s\\n' "$POSTGRES_PASSWORD"
+printf 'NEXTCLOUD_ADMIN_PASSWORD=%s\\n' "$NEXTCLOUD_ADMIN_PASSWORD"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"stateful-repair placeholder case failed: {result.stderr}")
+    expect(
+        "POSTGRES_PASSWORD=change-me" in result.stdout,
+        f"expected stateful repair to preserve existing Postgres password, got: {result.stdout!r}",
+    )
+    expect(
+        "NEXTCLOUD_ADMIN_PASSWORD=change-me" in result.stdout,
+        f"expected stateful repair to preserve existing Nextcloud admin password, got: {result.stdout!r}",
+    )
+    expect(
+        "generated-secret" not in result.stdout,
+        f"expected no random rotation during stateful repair, got: {result.stdout!r}",
+    )
+    print("PASS test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair")
+
+
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
@@ -414,6 +524,8 @@ def main() -> int:
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,
         test_secret_prompt_helpers_do_not_prefix_newlines,
+        test_collect_install_answers_randomizes_placeholder_passwords,
+        test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
     ]

@@ -150,6 +150,24 @@ run_vault_reload_defs() {
   fi
 }
 
+run_vault_notify_paths() {
+  if (( ${#vault_watch_notify_paths[@]} == 0 )); then
+    return 0
+  fi
+  if [[ ! -x "$SCRIPT_DIR/almanac-ctl" ]]; then
+    return 0
+  fi
+  echo "Vault watcher: routing subscriber notifications for changed vault content..."
+  local err_file=""
+  err_file="$(mktemp)"
+  if ! PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      "$SCRIPT_DIR/almanac-ctl" --json vault notify-paths --source vault-watch "${vault_watch_notify_paths[@]}" >/dev/null 2>"$err_file"; then
+    echo "Vault watcher: notify-paths failed (continuing):" >&2
+    cat "$err_file" >&2 || true
+  fi
+  rm -f "$err_file"
+}
+
 fold_event_into_flags() {
   local event_path="$1"
   local event_flags="$2"
@@ -171,12 +189,14 @@ fold_event_into_flags() {
     if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
       vault_watch_need_pdf=1
       vault_watch_need_qmd=1
+      vault_watch_notify_paths+=("$event_path")
     fi
     return 0
   fi
 
   if is_direct_vault_text_path "$event_path"; then
     vault_watch_need_qmd=1
+    vault_watch_notify_paths+=("$event_path")
     return 0
   fi
 
@@ -267,6 +287,7 @@ while true; do
   vault_watch_need_pdf=0
   vault_watch_need_qmd=0
   vault_watch_need_vault_reload=0
+  vault_watch_notify_paths=()
   event_path="${event_line%%|*}"
   event_flags="${event_line#*|}"
   fold_event_into_flags "$event_path" "$event_flags" || continue
@@ -305,6 +326,10 @@ while true; do
       echo "Vault watcher: refreshing qmd index after late PDF changes..."
       run_qmd_refresh
     fi
+  fi
+
+  if (( ${#vault_watch_notify_paths[@]} > 0 )); then
+    run_vault_notify_paths
   fi
 
   if [[ "${VAULT_WATCH_RUN_EMBED,,}" != "1" ]]; then

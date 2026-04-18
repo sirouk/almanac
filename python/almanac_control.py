@@ -28,12 +28,19 @@ def utc_now_iso() -> str:
     return utc_now().replace(microsecond=0).isoformat()
 
 
+def auto_provision_stale_before_iso(seconds: int = 300) -> str:
+    return (utc_now() - dt.timedelta(seconds=seconds)).replace(microsecond=0).isoformat()
+
+
 def bool_env(name: str, default: bool = False, env: dict[str, str] | None = None) -> bool:
     source = os.environ if env is None else env
     value = source.get(name)
     if value is None:
         return default
-    return value.lower() in {"1", "true", "yes", "on"}
+    normalized = value.strip().lower()
+    if normalized == "":
+        return default
+    return normalized in {"1", "true", "yes", "on"}
 
 
 def json_dumps(value: Any) -> str:
@@ -1596,6 +1603,128 @@ def queue_notification(
     return int(cursor.lastrowid)
 
 
+def subscribed_agent_ids_for_vault(conn: sqlite3.Connection, vault_name: str) -> list[str]:
+    vault = conn.execute(
+        "SELECT default_subscribed FROM vaults WHERE vault_name = ? AND state = 'active'",
+        (vault_name,),
+    ).fetchone()
+    if vault is None:
+        return []
+    default_subscribed = int(vault["default_subscribed"] or 0)
+    rows = conn.execute(
+        """
+        SELECT a.agent_id, s.subscribed
+        FROM agents a
+        LEFT JOIN agent_vault_subscriptions s
+          ON s.agent_id = a.agent_id AND s.vault_name = ?
+        WHERE a.role = 'user' AND a.status = 'active'
+        ORDER BY a.agent_id
+        """,
+        (vault_name,),
+    ).fetchall()
+    result: list[str] = []
+    for row in rows:
+        explicit = row["subscribed"]
+        if explicit is None:
+            if default_subscribed == 1:
+                result.append(str(row["agent_id"]))
+            continue
+        if int(explicit) == 1:
+            result.append(str(row["agent_id"]))
+    return result
+
+
+def _changed_paths_by_vault(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    changed_paths: Sequence[str],
+) -> dict[str, list[str]]:
+    active_vaults = [
+        (str(row["vault_name"]), Path(str(row["vault_path"])).expanduser().resolve(strict=False))
+        for row in conn.execute(
+            "SELECT vault_name, vault_path FROM vaults WHERE state = 'active' ORDER BY LENGTH(vault_path) DESC"
+        ).fetchall()
+    ]
+    grouped: dict[str, set[str]] = {}
+    for raw_path in changed_paths:
+        if not raw_path:
+            continue
+        path = Path(str(raw_path)).expanduser()
+        if not path.is_absolute():
+            path = cfg.vault_dir / path
+        path = path.resolve(strict=False)
+        for vault_name, vault_root in active_vaults:
+            if path == vault_root or path.is_relative_to(vault_root):
+                try:
+                    rel_path = str(path.relative_to(vault_root))
+                except ValueError:
+                    rel_path = path.name
+                grouped.setdefault(vault_name, set()).add(rel_path or ".")
+                break
+    return {vault_name: sorted(paths) for vault_name, paths in grouped.items()}
+
+
+def queue_vault_content_notifications(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    changed_paths: Sequence[str],
+    source: str = "vault-watch",
+) -> dict[str, Any]:
+    changed_by_vault = _changed_paths_by_vault(conn, cfg, changed_paths=changed_paths)
+    queued_notifications = 0
+    agents_notified: set[str] = set()
+    activation_triggers: dict[str, str] = {}
+
+    for vault_name, relative_paths in changed_by_vault.items():
+        subscribers = subscribed_agent_ids_for_vault(conn, vault_name)
+        if not subscribers:
+            continue
+        preview = ", ".join(relative_paths[:3])
+        if len(relative_paths) > 3:
+            preview += f" ... (+{len(relative_paths) - 3} more)"
+        message = f"Vault content changed: {vault_name} ({len(relative_paths)} path(s)): {preview}"
+        for agent_id in subscribers:
+            queue_notification(
+                conn,
+                target_kind="user-agent",
+                target_id=agent_id,
+                channel_kind="vault-change",
+                message=message,
+                extra={"vault_name": vault_name, "paths": relative_paths, "source": source},
+            )
+            queued_notifications += 1
+            agents_notified.add(agent_id)
+        note_refresh_job(
+            conn,
+            job_name=f"vault-notify-{vault_name}",
+            job_kind="vault-notify",
+            target_id=vault_name,
+            schedule=source,
+            status="ok",
+            note=f"queued {len(subscribers)} notification(s) for {len(relative_paths)} changed path(s)",
+        )
+
+    for agent_id in sorted(agents_notified):
+        trigger_path = signal_agent_refresh_from_curator(
+            conn,
+            cfg,
+            agent_id=agent_id,
+            note=f"{source}: vault content notifications ready",
+        )
+        if trigger_path is not None:
+            activation_triggers[agent_id] = str(trigger_path)
+
+    return {
+        "vaults_changed": sorted(changed_by_vault),
+        "paths_by_vault": changed_by_vault,
+        "queued_notifications": queued_notifications,
+        "agents_notified": sorted(agents_notified),
+        "activation_triggers": activation_triggers,
+    }
+
+
 def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) -> None:
     conn.execute(
         "UPDATE notification_outbox SET delivered_at = ?, delivery_error = NULL WHERE id = ?",
@@ -2210,7 +2339,20 @@ def write_activation_trigger(
         "note": note,
         "updated_at": utc_now_iso(),
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix=".almanac-activation-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     try:
         path.chmod(0o644)
     except OSError:
@@ -2745,6 +2887,7 @@ def issue_auto_provision_token(conn: sqlite3.Connection, request_id: str) -> dic
 
 def list_pending_auto_provision_requests(conn: sqlite3.Connection, cfg: Config) -> list[dict[str, Any]]:
     now_iso = utc_now_iso()
+    stale_before_iso = auto_provision_stale_before_iso()
     rows = conn.execute(
         """
         SELECT *
@@ -2754,16 +2897,18 @@ def list_pending_auto_provision_requests(conn: sqlite3.Connection, cfg: Config) 
           AND provisioned_at IS NULL
           AND COALESCE(provision_attempts, 0) < ?
           AND (provision_next_attempt_at IS NULL OR provision_next_attempt_at <= ?)
+          AND (provision_started_at IS NULL OR provision_started_at <= ?)
         ORDER BY COALESCE(provision_next_attempt_at, approved_at, requested_at) ASC
         """
         ,
-        (cfg.auto_provision_max_attempts, now_iso),
+        (cfg.auto_provision_max_attempts, now_iso, stale_before_iso),
     ).fetchall()
     return [dict(row) for row in rows]
 
 
 def mark_auto_provision_started(conn: sqlite3.Connection, request_id: str) -> int:
-    conn.execute(
+    stale_before_iso = auto_provision_stale_before_iso()
+    cursor = conn.execute(
         """
         UPDATE bootstrap_requests
         SET provision_started_at = ?,
@@ -2771,10 +2916,16 @@ def mark_auto_provision_started(conn: sqlite3.Connection, request_id: str) -> in
             provision_error = NULL,
             provision_next_attempt_at = NULL
         WHERE request_id = ?
+          AND status = 'approved'
+          AND auto_provision = 1
+          AND provisioned_at IS NULL
+          AND (provision_started_at IS NULL OR provision_started_at <= ?)
         """,
-        (utc_now_iso(), request_id),
+        (utc_now_iso(), request_id, stale_before_iso),
     )
     conn.commit()
+    if cursor.rowcount == 0:
+        return 0
     row = conn.execute(
         "SELECT provision_attempts FROM bootstrap_requests WHERE request_id = ?",
         (request_id,),
@@ -2793,7 +2944,9 @@ def mark_auto_provision_finished(
         conn.execute(
             """
             UPDATE bootstrap_requests
-            SET provision_error = ?, provision_next_attempt_at = ?
+            SET provision_started_at = NULL,
+                provision_error = ?,
+                provision_next_attempt_at = ?
             WHERE request_id = ?
             """,
             (error, next_attempt_at or None, request_id),
@@ -2802,7 +2955,10 @@ def mark_auto_provision_finished(
         conn.execute(
             """
             UPDATE bootstrap_requests
-            SET provisioned_at = ?, provision_error = NULL, provision_next_attempt_at = NULL
+            SET provision_started_at = NULL,
+                provisioned_at = ?,
+                provision_error = NULL,
+                provision_next_attempt_at = NULL
             WHERE request_id = ?
             """,
             (utc_now_iso(), request_id),
@@ -3656,12 +3812,15 @@ def build_managed_memory_payload(
         vault_ref += f"\nAgent label: {display_name}"
     skill_ref = (
         "Installed Almanac skills are live defaults. Use almanac-qmd-mcp for vault"
-        " retrieval and follow-ups, almanac-vaults for subscription and catalog work,"
-        " almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot"
-        " for SSOT coordination, and almanac-first-contact for Almanac setup or"
-        " diagnostic checks. On a shared host, the shared deployment root may live"
-        " under /home/almanac/almanac; treat that as read-only shared"
-        " infrastructure, not another enrolled user's workspace."
+        " retrieval and follow-ups, almanac-vaults for subscription, catalog, and"
+        " curate-vaults work, almanac-vault-reconciler for Almanac memory drift or"
+        " repair, almanac-ssot for SSOT coordination, and almanac-first-contact for"
+        " Almanac setup or diagnostic checks. First flight should already have run"
+        " the initial vault discovery and managed-memory stubbing. After that, the"
+        " intended sync rail is curator fanout -> activation trigger / refresh timer"
+        " -> user-agent-refresh -> local managed-memory stubs. On a shared host, the"
+        " shared deployment root may live under /home/almanac/almanac; treat that as"
+        " read-only shared infrastructure, not another enrolled user's workspace."
     )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
@@ -3848,6 +4007,37 @@ def publish_central_managed_memory(
     return out_path
 
 
+def signal_agent_refresh_from_curator(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    note: str,
+) -> Path | None:
+    row = conn.execute(
+        "SELECT role, status, unix_user, display_name FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if str(row["role"] or "") != "user" or str(row["status"] or "") != "active":
+        return None
+    unix_user = str(row["unix_user"] or "").strip()
+    if not unix_user:
+        return None
+    requester_identity = str(row["display_name"] or unix_user or agent_id).strip() or agent_id
+    return write_activation_trigger(
+        cfg,
+        agent_id=agent_id,
+        request_id=f"curator-refresh:{agent_id}",
+        status="refresh",
+        requester_identity=requester_identity,
+        unix_user=unix_user,
+        source_ip="127.0.0.1",
+        note=note,
+    )
+
+
 def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[str, Any]:
     """Pull pending curator:brief-fanout notifications, publish fresh central
     managed-memory payloads for each impacted agent (shared state, no HERMES
@@ -3886,7 +4076,16 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
     for agent_id in sorted(regen_targets):
         try:
             path = publish_central_managed_memory(conn, cfg, agent_id=agent_id)
-            published.append({"agent_id": agent_id, "path": str(path)})
+            trigger_path = signal_agent_refresh_from_curator(
+                conn,
+                cfg,
+                agent_id=agent_id,
+                note="curator brief-fanout: refresh managed memory stubs",
+            )
+            published_payload = {"agent_id": agent_id, "path": str(path)}
+            if trigger_path is not None:
+                published_payload["activation_trigger_path"] = str(trigger_path)
+            published.append(published_payload)
         except Exception as exc:  # noqa: BLE001
             failures.append(f"{agent_id}:{exc}")
 

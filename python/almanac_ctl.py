@@ -43,6 +43,7 @@ from almanac_control import (
     note_refresh_job,
     process_pending_notion_events,
     queue_notification,
+    queue_vault_content_notifications,
     reinstate_token,
     reload_vault_definitions,
     retry_auto_provision_request,
@@ -110,6 +111,9 @@ def parse_args() -> argparse.Namespace:
     vault_sub = vault.add_subparsers(dest="action", required=True)
     vault_sub.add_parser("list")
     vault_sub.add_parser("reload-defs")
+    notify_paths = vault_sub.add_parser("notify-paths")
+    notify_paths.add_argument("paths", nargs="+")
+    notify_paths.add_argument("--source", default="vault-watch")
     refresh = vault_sub.add_parser("refresh")
     refresh.add_argument("vault_name")
 
@@ -652,6 +656,17 @@ def main() -> None:
             return
         if args.domain == "vault" and args.action == "reload-defs":
             dump_output(args, reload_vault_definitions(conn, cfg))
+            return
+        if args.domain == "vault" and args.action == "notify-paths":
+            dump_output(
+                args,
+                queue_vault_content_notifications(
+                    conn,
+                    cfg,
+                    changed_paths=args.paths,
+                    source=args.source,
+                ),
+            )
             return
         if args.domain == "vault" and args.action == "refresh":
             scan = reload_vault_definitions(conn, cfg)

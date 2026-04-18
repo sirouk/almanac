@@ -56,6 +56,7 @@ Description=Watch for Almanac activation events for $AGENT_ID
 
 [Path]
 PathChanged=$ACTIVATION_TRIGGER_PATH
+PathModified=$ACTIVATION_TRIGGER_PATH
 Unit=almanac-user-agent-refresh.service
 
 [Install]

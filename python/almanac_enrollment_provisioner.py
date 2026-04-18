@@ -793,6 +793,8 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
         return
 
     attempts = mark_auto_provision_started(conn, request_id)
+    if attempts <= 0:
+        return
     log_path = _log_dir(cfg) / f"{request_id}.log"
 
     try:
@@ -849,6 +851,7 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
             env=env,
             text=True,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
         log_path.write_text(
             (result.stdout or "")

@@ -378,6 +378,16 @@ PY
   "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$notify_platform" --channel-id "$notify_channel_id" >/dev/null
   set_config_value "OPERATOR_GENERAL_CHANNEL_PLATFORM" "$general_platform"
   set_config_value "OPERATOR_GENERAL_CHANNEL_ID" "$general_channel_id"
+  if [[ ",${channels_csv}," == *",telegram,"* || "$notify_platform" == "telegram" ]]; then
+    set_config_value "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED" "1"
+  else
+    set_config_value "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED" "0"
+  fi
+  if [[ ",${channels_csv}," == *",discord,"* ]]; then
+    set_config_value "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED" "1"
+  else
+    set_config_value "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED" "0"
+  fi
 
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
     python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" internal register-curator \

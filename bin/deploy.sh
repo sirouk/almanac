@@ -708,7 +708,35 @@ write_kv() {
   printf '%s=%q\n' "$key" "$value"
 }
 
+default_curator_telegram_onboarding_enabled() {
+  local channels=",${ALMANAC_CURATOR_CHANNELS:-tui-only},"
+  if [[ "$channels" == *",telegram,"* || "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
+    printf '%s' "1"
+  else
+    printf '%s' "0"
+  fi
+}
+
+default_curator_discord_onboarding_enabled() {
+  local channels=",${ALMANAC_CURATOR_CHANNELS:-tui-only},"
+  if [[ "$channels" == *",discord,"* ]]; then
+    printf '%s' "1"
+  else
+    printf '%s' "0"
+  fi
+}
+
+normalize_runtime_config_defaults() {
+  if [[ -z "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
+    ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="$(default_curator_telegram_onboarding_enabled)"
+  fi
+  if [[ -z "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
+    ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="$(default_curator_discord_onboarding_enabled)"
+  fi
+}
+
 emit_runtime_config() {
+  normalize_runtime_config_defaults
   {
     write_kv ALMANAC_NAME "$ALMANAC_NAME"
     write_kv ALMANAC_USER "$ALMANAC_USER"
@@ -1279,8 +1307,9 @@ render_agent_install_payload_body() {
     echo "    - register chutes-kb during first contact when CHUTES_MCP_URL is provided"
   fi
   echo "    - run almanac-first-contact immediately after MCP registration"
-  echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, and trigger the initial Curator refresh"
-  echo "    - install exactly one 4h refresh timer/service for the user agent"
+  echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, fetch agents.managed-memory, and materialize the initial managed-memory stubs"
+  echo "    - use almanac-vaults via scripts/curate-vaults.sh for catalog, subscription, and stub curation work"
+  echo "    - install exactly one 4h refresh timer/service for the user agent, and rely on Curator fanout -> activation trigger -> user-agent-refresh for immediate stub sync after vault/catalog changes"
   echo "  memory_contract:"
   echo "    - maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:qmd-ref], [managed:vault-topology]"
   echo "    - write or refresh those stubs now; MEMORY.md is a frozen snapshot at session start"
@@ -1774,6 +1803,30 @@ maybe_reexec_with_sudo_for_config() {
   return 0
 }
 
+maybe_reexec_install_for_config_defaults() {
+  local requested_mode="${1:-$MODE}"
+  local status=""
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    return 1
+  fi
+  if ! discover_existing_config; then
+    return 1
+  fi
+
+  status="$(probe_path_status "$DISCOVERED_CONFIG")"
+  if [[ "$status" != "exists-unreadable" ]]; then
+    return 1
+  fi
+
+  echo "Switching to sudo before prompting so existing defaults can be loaded from $DISCOVERED_CONFIG ..."
+  if ! sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" "$requested_mode"; then
+    return 1
+  fi
+  write_operator_checkout_artifact
+  return 0
+}
+
 run_root_env_cmd() {
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
@@ -1950,6 +2003,7 @@ run_root_install() {
 
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
@@ -2053,6 +2107,7 @@ run_root_upgrade() {
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
@@ -3422,6 +3477,10 @@ run_agent_payload() {
 }
 
 run_install_flow() {
+  if maybe_reexec_install_for_config_defaults "$MODE"; then
+    return 0
+  fi
+
   collect_install_answers
 
   if [[ "$MODE" == "write-config" ]]; then

@@ -5,7 +5,6 @@ import datetime as dt
 import json
 import os
 import pwd
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -19,6 +18,7 @@ from almanac_control import (
     delete_onboarding_bot_token_secret,
     delete_onboarding_secret,
     ensure_unix_user_ready,
+    grant_agent_runtime_access,
     get_agent,
     issue_auto_provision_token,
     json_loads,
@@ -174,50 +174,7 @@ def _resolve_user_gateway_bin(cfg: Config) -> Path:
 
 
 def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) -> None:
-    setfacl_bin = shutil.which("setfacl")
-    if not setfacl_bin:
-        raise RuntimeError("auto-provision requires setfacl so enrolled users can traverse the shared Almanac runtime")
-
-    activation_dir = activation_trigger_path(cfg, agent_id).parent
-    activation_dir.mkdir(parents=True, exist_ok=True)
-    runtime_python = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
-    runtime_python_root: Path | None = None
-    extra_traverse: list[Path] = []
-    try:
-        resolved_runtime_python = runtime_python.resolve(strict=True)
-    except FileNotFoundError:
-        resolved_runtime_python = None
-    if resolved_runtime_python is not None:
-        candidate_root = resolved_runtime_python.parent.parent if resolved_runtime_python.parent.name == "bin" else resolved_runtime_python.parent
-        if str(candidate_root).startswith(str(cfg.almanac_home)):
-            runtime_python_root = candidate_root
-            for parent in candidate_root.parents:
-                if not str(parent).startswith(str(cfg.almanac_home)):
-                    break
-                extra_traverse.append(parent)
-
-    traverse_only = [
-        cfg.almanac_home,
-        cfg.private_dir,
-        cfg.state_dir,
-        cfg.runtime_dir,
-        *extra_traverse,
-    ]
-    readable_trees = [
-        cfg.repo_dir,
-        cfg.runtime_dir / "hermes-venv",
-        cfg.runtime_dir / "hermes-agent-src",
-        activation_dir,
-    ]
-    if runtime_python_root is not None:
-        readable_trees.append(runtime_python_root)
-
-    for target in traverse_only:
-        if target.exists():
-            subprocess.run([setfacl_bin, "-m", f"u:{unix_user}:--x", str(target)], check=True)
-    for target in readable_trees:
-        if target.exists():
-            subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rX", str(target)], check=True)
+    grant_agent_runtime_access(cfg, unix_user=unix_user, agent_id=agent_id)
 
 
 def _stage_provider_secret_for_user(
@@ -288,6 +245,8 @@ def _seed_user_provider(cfg: Config, *, session: dict, unix_user: str, home: Pat
                 _session_bot_label(session),
                 "--unix-user",
                 unix_user,
+                "--user-name",
+                str(answers.get("full_name") or session.get("sender_display_name") or "").strip(),
             ],
         )
     finally:
@@ -632,6 +591,10 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         cfg,
         agent_id=agent_id,
         channels=["tui-only", "discord"],
+        home_channel={
+            "platform": "discord",
+            "channel_id": str(session.get("chat_id") or ""),
+        },
         display_name=_session_bot_label(session),
     )
 
@@ -688,7 +651,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         message=(
             f"Everything is ready. Your own bot is `{bot_username or 'your bot'}` now. "
             "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
-            "If you want it in one of your own servers too, invite it there, then use Add App so it stays easy to reach in DMs."
+            "Start with it from now on. If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
         ),
     )
 

@@ -211,6 +211,14 @@ def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
                 f"Telegram deny: /deny {session_id} optional reason",
             ]
         )
+    elif cfg.operator_notify_platform == "discord":
+        lines.extend(
+            [
+                "Use the configured primary Discord operator channel for approvals:",
+                f"Discord approve: /approve {session_id}",
+                f"Discord deny: /deny {session_id} optional reason",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -373,9 +381,10 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 "7. Turn Message Content Intent on.\n"
                 "8. Turn Server Members Intent on.\n"
                 "9. Leave Presence Intent off unless you specifically want it.\n"
-                "10. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
-                "11. If you want to use it in one of your own servers later, invite it there with the `bot` and `applications.commands` scopes. For DM-only use, you can skip that for now.\n"
-                "12. Paste the bot token back to me here.\n"
+                "10. Open Installation and copy the install link for the app.\n"
+                "11. Use that link to add the app to one of your servers or use Add App so you can start a DM with it. Discord DMs work once you and the bot share a server or the app has been installed for you.\n"
+                "12. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
+                "13. Paste the bot token back to me here.\n"
                 "Once I have the token, I’ll ask for the model provider credential, wire it to your agent, and then step out."
             )
         return (
@@ -401,7 +410,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             return (
                 f"Your agent is live through the Discord bot `{bot_username}`. "
                 "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
-                "DM it directly from now on."
+                "Use that bot from here on out. If Discord will not open the DM yet, add the app from the Developer Portal Installation link or place it in a server you both share, then try again."
             )
         if bot_platform == "telegram" and bot_username:
             return (

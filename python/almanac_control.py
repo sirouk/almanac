@@ -11,6 +11,7 @@ import pwd
 import re
 import secrets
 import shlex
+import shutil
 import sqlite3
 import string
 import subprocess
@@ -78,6 +79,49 @@ def _safe_path_is_file(path: Path) -> bool:
         return False
 
 
+def _artifact_value(raw_value: str) -> str:
+    try:
+        parsed = shlex.split(raw_value.strip(), posix=True)
+        return "" if not parsed else parsed[0]
+    except ValueError:
+        return raw_value.strip().strip("'\"")
+
+
+def _read_operator_artifact_hints(operator_artifact: Path) -> dict[str, str]:
+    hints = {
+        "ALMANAC_OPERATOR_DEPLOYED_USER": "",
+        "ALMANAC_OPERATOR_DEPLOYED_REPO_DIR": "",
+        "ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR": "",
+        "ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE": "",
+    }
+    if not _safe_path_is_file(operator_artifact):
+        return hints
+
+    try:
+        for raw_line in operator_artifact.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, raw_value = line.split("=", 1)
+            key = key.strip()
+            if key not in hints:
+                continue
+            hints[key] = _artifact_value(raw_value)
+    except OSError:
+        pass
+
+    return hints
+
+
+def _resolve_user_home(user: str) -> Path | None:
+    if not user:
+        return None
+    try:
+        return Path(pwd.getpwnam(user).pw_dir).expanduser()
+    except KeyError:
+        return Path("/home") / user
+
+
 def _discover_config_file() -> Path | None:
     explicit = os.environ.get("ALMANAC_CONFIG_FILE")
     if explicit:
@@ -88,34 +132,49 @@ def _discover_config_file() -> Path | None:
     operator_artifact = Path(
         os.environ.get("ALMANAC_OPERATOR_ARTIFACT_FILE", str(repo_root / ".almanac-operator.env"))
     ).expanduser()
-    if _safe_path_is_file(operator_artifact):
-        try:
-            for raw_line in operator_artifact.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, raw_value = line.split("=", 1)
-                if key.strip() != "ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE":
-                    continue
-                try:
-                    parsed = shlex.split(raw_value.strip(), posix=True)
-                    value = "" if not parsed else parsed[0]
-                except ValueError:
-                    value = raw_value.strip().strip("'\"")
-                if value:
-                    path = Path(value).expanduser()
-                    return path
-        except OSError:
-            pass
+    artifact_hints = _read_operator_artifact_hints(operator_artifact)
+    artifact_user = artifact_hints.get("ALMANAC_OPERATOR_DEPLOYED_USER", "")
+    artifact_repo = artifact_hints.get("ALMANAC_OPERATOR_DEPLOYED_REPO_DIR", "")
+    artifact_priv = artifact_hints.get("ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR", "")
+    artifact_config = artifact_hints.get("ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE", "")
+    artifact_home = _resolve_user_home(artifact_user)
 
     nested_priv = repo_root / "almanac-priv" / "config" / "almanac.env"
     sibling_priv = repo_root.parent / "almanac-priv" / "config" / "almanac.env"
-    candidates = (
+    candidates: list[Path] = []
+    if artifact_config:
+        candidates.append(Path(artifact_config).expanduser())
+    if artifact_priv:
+        artifact_priv_path = Path(artifact_priv).expanduser()
+        candidates.extend(
+            (
+                artifact_priv_path / "config" / "almanac.env",
+                artifact_priv_path / "almanac.env",
+            )
+        )
+    if artifact_repo:
+        artifact_repo_path = Path(artifact_repo).expanduser()
+        candidates.extend(
+            (
+                artifact_repo_path / "almanac-priv" / "config" / "almanac.env",
+                artifact_repo_path / "config" / "almanac.env",
+            )
+        )
+    if artifact_home is not None:
+        candidates.extend(
+            (
+                artifact_home / "almanac" / "almanac-priv" / "config" / "almanac.env",
+                artifact_home / "almanac-priv" / "config" / "almanac.env",
+            )
+        )
+    candidates.extend(
+        (
         repo_root / "config" / "almanac.env",
         nested_priv,
         sibling_priv,
         Path.home() / "almanac" / "almanac-priv" / "config" / "almanac.env",
         Path.home() / "almanac-priv" / "config" / "almanac.env",
+        )
     )
     return next((candidate for candidate in candidates if _safe_path_is_file(candidate)), None)
 
@@ -275,7 +334,7 @@ class Config:
             ),
             curator_discord_onboarding_enabled=bool_env(
                 "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED",
-                default=("discord" in curator_channels),
+                default=("discord" in curator_channels or operator_notify_platform == "discord"),
                 env=env,
             ),
             onboarding_window_seconds=int(env.get("ALMANAC_ONBOARDING_WINDOW_SECONDS", "3600")),
@@ -1676,6 +1735,7 @@ def queue_vault_content_notifications(
     queued_notifications = 0
     agents_notified: set[str] = set()
     activation_triggers: dict[str, str] = {}
+    brief_fanout_queued = False
 
     for vault_name, relative_paths in changed_by_vault.items():
         subscribers = subscribed_agent_ids_for_vault(conn, vault_name)
@@ -1716,12 +1776,30 @@ def queue_vault_content_notifications(
         if trigger_path is not None:
             activation_triggers[agent_id] = str(trigger_path)
 
+    if changed_by_vault:
+        summary = ", ".join(
+            f"{vault_name}({len(relative_paths)} path(s))"
+            for vault_name, relative_paths in sorted(changed_by_vault.items())
+        )
+        queue_notification(
+            conn,
+            target_kind="curator",
+            target_id="curator",
+            channel_kind="brief-fanout",
+            message=(
+                "vault-content-refresh: "
+                f"{summary}. Refresh managed-memory stubs for org-wide vault awareness."
+            ),
+        )
+        brief_fanout_queued = True
+
     return {
         "vaults_changed": sorted(changed_by_vault),
         "paths_by_vault": changed_by_vault,
         "queued_notifications": queued_notifications,
         "agents_notified": sorted(agents_notified),
         "activation_triggers": activation_triggers,
+        "brief_fanout_queued": brief_fanout_queued,
     }
 
 
@@ -2313,6 +2391,78 @@ def activation_trigger_dir(cfg: Config) -> Path:
 
 def activation_trigger_path(cfg: Config, agent_id: str) -> Path:
     return activation_trigger_dir(cfg) / f"{agent_id}.json"
+
+
+def grant_agent_runtime_access(
+    cfg: Config,
+    *,
+    unix_user: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    """Idempotently restore enrolled-user access to shared Almanac paths."""
+
+    setfacl_bin = shutil.which("setfacl")
+    if not setfacl_bin:
+        raise RuntimeError(
+            "setfacl is required so enrolled users can traverse the shared Almanac runtime"
+        )
+
+    activation_dir = activation_trigger_path(cfg, agent_id).parent
+    activation_dir.mkdir(parents=True, exist_ok=True)
+    runtime_python = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
+    runtime_python_root: Path | None = None
+    extra_traverse: list[Path] = []
+    try:
+        resolved_runtime_python = runtime_python.resolve(strict=True)
+    except FileNotFoundError:
+        resolved_runtime_python = None
+
+    if resolved_runtime_python is not None:
+        candidate_root = (
+            resolved_runtime_python.parent.parent
+            if resolved_runtime_python.parent.name == "bin"
+            else resolved_runtime_python.parent
+        )
+        if str(candidate_root).startswith(str(cfg.almanac_home)):
+            runtime_python_root = candidate_root
+            for parent in candidate_root.parents:
+                if not str(parent).startswith(str(cfg.almanac_home)):
+                    break
+                extra_traverse.append(parent)
+
+    traverse_only = [
+        cfg.almanac_home,
+        cfg.private_dir,
+        cfg.state_dir,
+        cfg.runtime_dir,
+        *extra_traverse,
+    ]
+    readable_trees = [
+        cfg.repo_dir,
+        cfg.runtime_dir / "hermes-venv",
+        cfg.runtime_dir / "hermes-agent-src",
+        activation_dir,
+    ]
+    if runtime_python_root is not None:
+        readable_trees.append(runtime_python_root)
+
+    applied_traverse: list[str] = []
+    applied_readable: list[str] = []
+    for target in traverse_only:
+        if target.exists():
+            subprocess.run([setfacl_bin, "-m", f"u:{unix_user}:--x", str(target)], check=True)
+            applied_traverse.append(str(target))
+    for target in readable_trees:
+        if target.exists():
+            subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rX", str(target)], check=True)
+            applied_readable.append(str(target))
+
+    return {
+        "unix_user": unix_user,
+        "agent_id": agent_id,
+        "traverse_only": applied_traverse,
+        "readable_trees": applied_readable,
+    }
 
 
 def write_activation_trigger(
@@ -3803,29 +3953,41 @@ def build_managed_memory_payload(
         topology_lines.append(f"  {mark} {vault['vault_name']}: {brief}")
 
     display_name = str(agent["display_name"] or "").strip()
+    agent_role = str(agent["role"] or "").strip() or "user"
+    agent_unix_user = str(agent["unix_user"] or "").strip()
     vault_ref = (
         f"Vault root: {vault_root}\n"
         f"Shared deployment root: {cfg.repo_dir}\n"
-        f"Agent: {agent_id} (role={agent['role']}, unix_user={agent['unix_user']})"
+        f"Agent id: {agent_id}\n"
+        f"Dedicated agent name: {display_name or agent_id}\n"
+        f"Assigned unix user: {agent_unix_user or '(unknown)'}\n"
+        f"Role: {agent_role}\n"
+        "Curator runs the shared Almanac deployment and operator control plane.\n"
+        "This agent works on behalf of one enrolled user inside that shared deployment."
     )
-    if display_name:
-        vault_ref += f"\nAgent label: {display_name}"
     skill_ref = (
-        "Installed Almanac skills are live defaults. Use almanac-qmd-mcp for vault"
-        " retrieval and follow-ups, almanac-vaults for subscription, catalog, and"
-        " curate-vaults work, almanac-vault-reconciler for Almanac memory drift or"
-        " repair, almanac-ssot for SSOT coordination, and almanac-first-contact for"
-        " Almanac setup or diagnostic checks. First flight should already have run"
-        " the initial vault discovery and managed-memory stubbing. After that, the"
-        " intended sync rail is curator fanout -> activation trigger / refresh timer"
-        " -> user-agent-refresh -> local managed-memory stubs. On a shared host, the"
-        " shared deployment root may live under /home/almanac/almanac; treat that as"
-        " read-only shared infrastructure, not another enrolled user's workspace."
+        "Installed Almanac skills are live defaults on this dedicated user agent."
+        " Use almanac-qmd-mcp for vault retrieval and follow-ups, almanac-vaults"
+        " for subscription, catalog, and curate-vaults work, almanac-vault-reconciler"
+        " for Almanac memory drift or repair, almanac-ssot for organization-aware"
+        " SSOT coordination in the shared Notion workspace, and almanac-first-contact"
+        " for Almanac setup or diagnostic checks. All vaults remain retrievable through"
+        " Almanac/qmd even when a vault is unsubscribed; subscriptions only shape"
+        " managed-memory awareness and Curator push behavior. First flight should"
+        " already have run the initial vault discovery and managed-memory stubbing."
+        " After that, the intended sync rail is curator fanout -> activation trigger"
+        " / refresh timer -> user-agent-refresh -> local managed-memory stubs and"
+        " recent events. Use those stubs plus qmd for depth instead of trying to"
+        " memorize the vault. On a shared host, the shared deployment root may live"
+        " under /home/almanac/almanac; treat that as read-only shared infrastructure,"
+        " not another enrolled user's workspace."
     )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
         "Always query qmd before web for vault-relevant work, including the\n"
         "'vault-pdf-ingest' collection when present for PDF-derived markdown.\n"
+        "Use almanac-ssot when the task is about organization state, Notion,\n"
+        "or user-scoped SSOT updates; use qmd when the task is about vault depth.\n"
         "Never browse other users' home directories for Almanac context.\n"
         "Use the already wired MCP endpoints and agent-local Almanac state for\n"
         "site context. Do not read central deployment secrets such as\n"
@@ -3916,12 +4078,15 @@ def write_managed_memory_stubs(
         payload["almanac-skill-ref"] = payload["skill-ref"]
     payload.setdefault(
         "almanac-skill-ref",
-        "Installed Almanac skills are live defaults. Use almanac-qmd-mcp for vault"
-        " retrieval and follow-ups, almanac-vaults for subscription and catalog work,"
-        " almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot"
-        " for SSOT coordination, and almanac-first-contact for Almanac setup or"
-        " diagnostic checks. On a shared host, the shared deployment root may live"
-        " under /home/almanac/almanac; treat that as read-only shared"
+        "Installed Almanac skills are live defaults on this dedicated user agent."
+        " Use almanac-qmd-mcp for vault retrieval and follow-ups, almanac-vaults"
+        " for subscription and catalog work, almanac-vault-reconciler for Almanac"
+        " memory drift or repair, almanac-ssot for organization-aware SSOT"
+        " coordination, and almanac-first-contact for Almanac setup or diagnostic"
+        " checks. All vaults remain retrievable through Almanac/qmd even when a"
+        " vault is unsubscribed; subscriptions only shape managed-memory awareness"
+        " and Curator push behavior. On a shared host, the shared deployment root"
+        " may live under /home/almanac/almanac; treat that as read-only shared"
         " infrastructure, not another enrolled user's workspace.",
     )
     state_dir = hermes_home / "state"

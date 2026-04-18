@@ -4,20 +4,25 @@ set -euo pipefail
 BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
 
-read_operator_artifact_config_file() {
+read_operator_artifact_hints() {
   local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
-  local ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
 
-  if [[ -r "$artifact" ]]; then
-    # shellcheck disable=SC1090
-    source "$artifact"
-    if [[ -n "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE" ]]; then
-      printf '%s\n' "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE"
-      return 0
-    fi
+  if [[ ! -r "$artifact" ]]; then
+    return 1
   fi
 
-  return 1
+  (
+    ALMANAC_OPERATOR_DEPLOYED_USER=""
+    ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=""
+    ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=""
+    ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+    # shellcheck disable=SC1090
+    source "$artifact"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_USER:-}"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_REPO_DIR:-}"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR:-}"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
+  )
 }
 
 resolve_home_dir() {
@@ -34,6 +39,22 @@ resolve_home_dir() {
   fi
 
   return 1
+}
+
+resolve_user_home() {
+  local user="${1:-}"
+  local home_dir=""
+
+  if [[ -z "$user" ]]; then
+    return 1
+  fi
+
+  home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  if [[ -z "$home_dir" ]]; then
+    home_dir="/home/$user"
+  fi
+
+  printf '%s\n' "$home_dir"
 }
 
 normalize_vault_qmd_collection_mask() {
@@ -53,10 +74,11 @@ normalize_vault_qmd_collection_mask() {
 }
 
 find_config_file() {
+  local -a artifact_hints=()
   local nested_priv=""
   local sibling_priv=""
   local explicit_config=""
-  local artifact_config=""
+  local artifact_user="" artifact_repo="" artifact_priv="" artifact_config="" artifact_home=""
   local home_dir=""
   nested_priv="$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
   sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/almanac-priv/config/almanac.env"
@@ -68,13 +90,37 @@ find_config_file() {
     return 0
   fi
 
-  artifact_config="$(read_operator_artifact_config_file || true)"
+  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  artifact_user="${artifact_hints[0]:-}"
+  artifact_repo="${artifact_hints[1]:-}"
+  artifact_priv="${artifact_hints[2]:-}"
+  artifact_config="${artifact_hints[3]:-}"
+  artifact_home="$(resolve_user_home "$artifact_user" || true)"
+
+  local -a candidates=()
   if [[ -n "$artifact_config" ]]; then
-    echo "$artifact_config"
-    return 0
+    candidates+=("$artifact_config")
+  fi
+  if [[ -n "$artifact_priv" ]]; then
+    candidates+=(
+      "$artifact_priv/config/almanac.env"
+      "$artifact_priv/almanac.env"
+    )
+  fi
+  if [[ -n "$artifact_repo" ]]; then
+    candidates+=(
+      "$artifact_repo/almanac-priv/config/almanac.env"
+      "$artifact_repo/config/almanac.env"
+    )
+  fi
+  if [[ -n "$artifact_home" ]]; then
+    candidates+=(
+      "$artifact_home/almanac/almanac-priv/config/almanac.env"
+      "$artifact_home/almanac-priv/config/almanac.env"
+    )
   fi
 
-  local candidates=(
+  candidates+=(
     "$BOOTSTRAP_DIR/config/almanac.env"
     "$nested_priv"
     "$sibling_priv"

@@ -190,12 +190,165 @@ def test_install_does_not_reexec_for_readable_breadcrumb_config() -> None:
     print("PASS test_install_does_not_reexec_for_readable_breadcrumb_config")
 
 
+def test_discover_existing_config_uses_artifact_priv_dir_hint() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "probe_path_status() {", "load_detected_config() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        priv_dir = tmp_path / "deployed" / "almanac-priv"
+        config_path = priv_dir / "config" / "almanac.env"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("ALMANAC_USER=operator-svc\n")
+        artifact_path = tmp_path / ".almanac-operator.env"
+        artifact_path.write_text(
+            "\n".join(
+                [
+                    "ALMANAC_OPERATOR_DEPLOYED_USER=operator-svc",
+                    f"ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR={shlex.quote(str(priv_dir))}",
+                    "",
+                ]
+            )
+        )
+        script = f"""
+BOOTSTRAP_DIR={shlex.quote(str(REPO))}
+ALMANAC_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
+{snippet}
+discover_existing_config
+status=$?
+printf 'STATUS=%s\\n' "$status"
+printf 'DISCOVERED=%s\\n' "${{DISCOVERED_CONFIG:-}}"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"discover_existing_config case failed: {result.stderr}")
+        expect(f"STATUS=0" in result.stdout, f"expected discover_existing_config to succeed, got: {result.stdout!r}")
+        expect(
+            f"DISCOVERED={config_path}" in result.stdout,
+            f"expected artifact priv-dir hint to resolve {config_path}, got: {result.stdout!r}",
+        )
+    print("PASS test_discover_existing_config_uses_artifact_priv_dir_hint")
+
+
+def test_collect_install_answers_defaults_to_detected_service_user() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    script = f"""
+{snippet}
+ask() {{ printf '%s' "${{2:-}}"; }}
+ask_yes_no() {{ printf '%s' "${{2:-0}}"; }}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+random_secret() {{ printf '%s' "generated-secret"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  BACKUP_GIT_AUTHOR_NAME='Existing Backup'
+  BACKUP_GIT_AUTHOR_EMAIL='operator-svc@example.test'
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  return 0
+}}
+MODE=write-config
+collect_install_answers
+printf 'ALMANAC_USER=%s\\n' "$ALMANAC_USER"
+printf 'ALMANAC_HOME=%s\\n' "$ALMANAC_HOME"
+printf 'ALMANAC_REPO_DIR=%s\\n' "$ALMANAC_REPO_DIR"
+printf 'ALMANAC_PRIV_DIR=%s\\n' "$ALMANAC_PRIV_DIR"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"collect_install_answers case failed: {result.stderr}")
+    expect("ALMANAC_USER=operator-svc" in result.stdout, f"expected detected service user default, got: {result.stdout!r}")
+    expect("ALMANAC_HOME=/srv/operator-svc" in result.stdout, f"expected detected home default, got: {result.stdout!r}")
+    expect("ALMANAC_REPO_DIR=/srv/operator-svc/almanac" in result.stdout, f"expected detected repo default, got: {result.stdout!r}")
+    expect("ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv" in result.stdout, f"expected detected priv default, got: {result.stdout!r}")
+    print("PASS test_collect_install_answers_defaults_to_detected_service_user")
+
+
+def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
+    text = DEPLOY_SH.read_text()
+    install = extract(text, "run_root_install() {", "run_root_upgrade() {")
+    upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    enrollment_align = extract(text, "run_enrollment_align() {", "run_enrollment_reset() {")
+    expect(
+        "repair_active_agent_runtime_access" in install,
+        "run_root_install should repair enrolled-user runtime access after syncing the shared repo",
+    )
+    expect(
+        "chown_managed_paths" in install,
+        "run_root_install should use the scoped ownership helper instead of blanket chowning private state",
+    )
+    expect(
+        "repair_active_agent_runtime_access" in upgrade,
+        "run_root_upgrade should repair enrolled-user runtime access after syncing the shared repo",
+    )
+    expect(
+        "chown_managed_paths" in upgrade,
+        "run_root_upgrade should use the scoped ownership helper instead of blanket chowning private state",
+    )
+    expect(
+        'user sync-access "$unix_user" --agent-id "$agent_id"' in enrollment_align,
+        "run_enrollment_align should reapply per-user runtime access before running user-owned services",
+    )
+    print("PASS test_deploy_reapplies_runtime_access_after_repo_sync")
+
+
+def test_control_py_discovers_artifact_priv_dir_config() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_artifact_discovery")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        priv_dir = tmp_path / "deployed" / "almanac-priv"
+        config_path = priv_dir / "config" / "almanac.env"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("ALMANAC_USER=operator-svc\n", encoding="utf-8")
+        artifact_path = tmp_path / ".almanac-operator.env"
+        artifact_path.write_text(
+            "\n".join(
+                [
+                    "ALMANAC_OPERATOR_DEPLOYED_USER=operator-svc",
+                    f"ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR={shlex.quote(str(priv_dir))}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        try:
+            os.environ.pop("ALMANAC_CONFIG_FILE", None)
+            os.environ["ALMANAC_REPO_DIR"] = str(repo_root)
+            os.environ["ALMANAC_OPERATOR_ARTIFACT_FILE"] = str(artifact_path)
+            discovered = mod._discover_config_file()
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        expect(discovered == config_path, f"expected control module to discover {config_path}, got {discovered!r}")
+    print("PASS test_control_py_discovers_artifact_priv_dir_config")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
         test_install_reexecs_for_unreadable_breadcrumb_config,
         test_install_does_not_reexec_for_readable_breadcrumb_config,
+        test_discover_existing_config_uses_artifact_priv_dir_hint,
+        test_collect_install_answers_defaults_to_detected_service_user,
+        test_deploy_reapplies_runtime_access_after_repo_sync,
+        test_control_py_discovers_artifact_priv_dir_config,
     ]
     for test in tests:
         test()

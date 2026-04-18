@@ -168,6 +168,7 @@ def test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents
             expect(result["queued_notifications"] == 2, result)
             expect(set(result["vaults_changed"]) == {"Projects", "Teams"}, result)
             expect(set(result["agents_notified"]) == {"agent-default", "agent-optin"}, result)
+            expect(result["brief_fanout_queued"] is True, result)
 
             default_notifs = mod.consume_agent_notifications(conn, agent_id="agent-default")
             optout_notifs = mod.consume_agent_notifications(conn, agent_id="agent-optout")
@@ -189,6 +190,21 @@ def test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents
             expect(default_trigger.is_file(), f"missing activation trigger for default subscriber: {default_trigger}")
             expect(not optout_trigger.exists(), f"unexpected activation trigger for opt-out subscriber: {optout_trigger}")
             expect(optin_trigger.is_file(), f"missing activation trigger for opt-in subscriber: {optin_trigger}")
+
+            curator_rows = conn.execute(
+                """
+                SELECT message
+                FROM notification_outbox
+                WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            vault_refresh_rows = [
+                str(row["message"] or "")
+                for row in curator_rows
+                if "vault-content-refresh" in str(row["message"] or "")
+            ]
+            expect(len(vault_refresh_rows) == 1, curator_rows)
             print("PASS test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents")
         finally:
             os.environ.clear()

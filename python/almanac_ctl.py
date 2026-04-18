@@ -25,6 +25,7 @@ from almanac_control import (
     ensure_unix_user_ready,
     ensure_config_file_update,
     generate_raw_token,
+    grant_agent_runtime_access,
     get_agent,
     get_onboarding_session,
     get_setting,
@@ -49,6 +50,7 @@ from almanac_control import (
     retry_auto_provision_request,
     revoke_token,
     approve_onboarding_session,
+    signal_agent_refresh_from_curator,
     subscriptions_for_agent,
     utc_now_iso,
     upsert_setting,
@@ -128,6 +130,9 @@ def parse_args() -> argparse.Namespace:
     user_sub = user.add_subparsers(dest="action", required=True)
     prepare = user_sub.add_parser("prepare")
     prepare.add_argument("unix_user")
+    sync_access = user_sub.add_parser("sync-access")
+    sync_access.add_argument("unix_user")
+    sync_access.add_argument("--agent-id", required=True)
 
     upgrade = subparsers.add_parser("upgrade")
     upgrade_sub = upgrade.add_subparsers(dest="action", required=True)
@@ -216,6 +221,20 @@ def read_env_file_value(path: Path, key: str) -> str:
     return ""
 
 
+def _discord_target_kind(value: str) -> str:
+    target = value.strip()
+    if not target:
+        return ""
+    if (
+        target.startswith("https://discord.com/api/webhooks/")
+        or target.startswith("https://discordapp.com/api/webhooks/")
+    ):
+        return "webhook"
+    if target.isdigit():
+        return "channel"
+    return ""
+
+
 def _user_home(unix_user: str) -> Path:
     return Path(pwd.getpwnam(unix_user).pw_dir)
 
@@ -233,6 +252,11 @@ def user_prepare(cfg: Config, unix_user: str) -> dict:
             "confirm any tailnet identity mapping or host-access policy outside Almanac",
         ],
     }
+
+
+def user_sync_access(cfg: Config, unix_user: str, agent_id: str) -> dict:
+    require_root("almanac-ctl user sync-access must run as root.")
+    return grant_agent_runtime_access(cfg, unix_user=unix_user, agent_id=agent_id)
 
 
 def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
@@ -536,6 +560,35 @@ def upgrade_check(
                     "Review with Curator using almanac-upgrade-orchestrator, then run ./deploy.sh upgrade on the host."
                 ),
             )
+            for row in conn.execute(
+                "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active' ORDER BY agent_id"
+            ).fetchall():
+                agent_id = str(row["agent_id"] or "")
+                if not agent_id:
+                    continue
+                queue_notification(
+                    conn,
+                    target_kind="user-agent",
+                    target_id=agent_id,
+                    channel_kind="almanac-upgrade",
+                    message=(
+                        "Curator reports an Almanac host update is available: "
+                        f"{_short_sha(deployed_commit)} -> {_short_sha(upstream_commit)}. "
+                        "Let your user know shared infrastructure will be refreshed once the operator runs ./deploy.sh upgrade."
+                    ),
+                    extra={
+                        "deployed_commit": deployed_commit,
+                        "upstream_commit": upstream_commit,
+                        "tracked_upstream_repo_url": upstream_repo_url,
+                        "tracked_upstream_branch": upstream_branch,
+                    },
+                )
+                signal_agent_refresh_from_curator(
+                    conn,
+                    cfg,
+                    agent_id=agent_id,
+                    note="curator upgrade notification ready",
+                )
             upsert_setting(conn, "almanac_upgrade_last_notified_sha", upstream_commit)
             result["notification_sent"] = True
 
@@ -557,6 +610,9 @@ def main() -> None:
 
     if args.domain == "user" and args.action == "prepare":
         dump_output(args, user_prepare(cfg, args.unix_user))
+        return
+    if args.domain == "user" and args.action == "sync-access":
+        dump_output(args, user_sync_access(cfg, args.unix_user, args.agent_id))
         return
 
     if args.domain == "agent" and args.action == "deenroll":
@@ -765,20 +821,42 @@ def main() -> None:
             platform = args.platform or input("Operator notification platform [discord|telegram|tui-only]: ").strip() or "tui-only"
             channel_id = args.channel_id or ""
             telegram_bot_token = ""
+            discord_bot_token = ""
+            discord_target_kind = ""
+            discord_candidates: list[tuple[str, str]] = []
             if platform != "tui-only" and not channel_id:
                 if platform == "discord":
-                    channel_id = input("Discord webhook URL (https://discord.com/api/webhooks/...): ").strip()
+                    channel_id = input("Discord channel ID or webhook URL: ").strip()
                 else:
                     channel_id = input("Channel ID / chat ID: ").strip()
 
             # Shape validation before we persist anything.
             if platform == "discord":
-                if not (channel_id.startswith("https://discord.com/api/webhooks/") or
-                        channel_id.startswith("https://discordapp.com/api/webhooks/")):
+                discord_target_kind = _discord_target_kind(channel_id)
+                if not discord_target_kind:
                     raise SystemExit(
-                        "discord platform requires a Discord webhook URL in --channel-id "
-                        "(looks like https://discord.com/api/webhooks/<id>/<token>)"
+                        "discord platform requires either a Discord channel ID or a Discord webhook URL "
+                        "in --channel-id"
                     )
+                if discord_target_kind == "channel":
+                    discord_bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
+                    hermes_discord_bot_token = read_env_file_value(cfg.curator_hermes_home / ".env", "DISCORD_BOT_TOKEN").strip()
+                    if discord_bot_token:
+                        discord_candidates.append(("almanac.env", discord_bot_token))
+                    if hermes_discord_bot_token and hermes_discord_bot_token != discord_bot_token:
+                        discord_candidates.append(("curator Hermes .env", hermes_discord_bot_token))
+                    if not discord_candidates and sys.stdin.isatty():
+                        try:
+                            discord_bot_token = getpass.getpass("Discord bot token: ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            discord_bot_token = ""
+                        if discord_bot_token:
+                            discord_candidates.append(("prompt", discord_bot_token))
+                    if not discord_candidates:
+                        raise SystemExit(
+                            "discord channel delivery requires DISCORD_BOT_TOKEN; rerun interactively to enter it "
+                            "or set it in almanac.env before running this command"
+                        )
             elif platform == "telegram":
                 if not channel_id:
                     raise SystemExit("telegram platform requires a chat_id in --channel-id")
@@ -806,11 +884,49 @@ def main() -> None:
 
             # Synchronous test ping BEFORE persisting config.
             if platform != "tui-only":
-                from almanac_notification_delivery import deliver_discord, deliver_telegram
+                from almanac_notification_delivery import (
+                    deliver_discord,
+                    deliver_discord_channel,
+                    deliver_telegram,
+                )
 
                 test_msg = f"almanac-ctl channel reconfigure operator test ping at {utc_now_iso()}"
                 if platform == "discord":
-                    err = deliver_discord(test_msg, webhook_url=channel_id)
+                    if discord_target_kind == "webhook":
+                        err = deliver_discord(test_msg, webhook_url=channel_id)
+                    else:
+                        err = ""
+                        for source_name, candidate_token in discord_candidates:
+                            err = deliver_discord_channel(
+                                test_msg,
+                                bot_token=candidate_token,
+                                channel_id=channel_id,
+                            ) or ""
+                            if not err:
+                                discord_bot_token = candidate_token
+                                break
+                        if err and sys.stdin.isatty():
+                            while True:
+                                print(
+                                    f"Discord test ping failed using the saved token ({err}).",
+                                    file=sys.stderr,
+                                )
+                                try:
+                                    candidate_token = getpass.getpass(
+                                        "Discord bot token (leave blank to abort): "
+                                    ).strip()
+                                except (EOFError, KeyboardInterrupt):
+                                    candidate_token = ""
+                                if not candidate_token:
+                                    break
+                                err = deliver_discord_channel(
+                                    test_msg,
+                                    bot_token=candidate_token,
+                                    channel_id=channel_id,
+                                ) or ""
+                                if not err:
+                                    discord_bot_token = candidate_token
+                                    break
                 else:
                     err = ""
                     for source_name, candidate_token in telegram_candidates:
@@ -855,6 +971,8 @@ def main() -> None:
                 "OPERATOR_NOTIFY_CHANNEL_PLATFORM": platform,
                 "OPERATOR_NOTIFY_CHANNEL_ID": channel_id,
             }
+            if platform == "discord" and discord_target_kind == "channel" and discord_bot_token:
+                config_updates["DISCORD_BOT_TOKEN"] = discord_bot_token
             if platform == "telegram" and telegram_bot_token:
                 config_updates["TELEGRAM_BOT_TOKEN"] = telegram_bot_token
             ensure_config_file_update(config_path, config_updates)

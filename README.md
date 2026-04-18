@@ -250,8 +250,10 @@ The manual check command is:
 ```
 
 Curator also runs that check hourly from `almanac-curator-refresh.timer` and
-nudges the operator when a new upstream commit appears. The Curator maintenance
-skill for that flow is `almanac-upgrade-orchestrator`.
+nudges the operator when a new upstream commit appears. It also queues a user
+agent nudge so enrolled agents can mention the pending shared-host update to
+their users. The Curator maintenance skill for that flow is
+`almanac-upgrade-orchestrator`.
 
 ### 3. Use the recovery surfaces
 
@@ -286,6 +288,12 @@ sudo ./bin/almanac-ctl agent deenroll <agent-id>
 ./bin/almanac-ctl channel reconfigure operator
 ```
 
+The operator control surface is the configured primary operator channel:
+
+- Telegram: the operator chat handles notifications plus `/approve` / `/deny`
+- Discord: the operator channel handles notifications plus `/approve` / `/deny`
+- TUI / CLI remain the recovery path if chat access is unavailable
+
 ## Enrolling a User
 
 User onboarding now starts with the public handshake, not with precreating a
@@ -297,6 +305,10 @@ operator approval, and then hand Curator the token for their own bot on that
 same platform. Almanac will provision the Unix user on the host, wire that bot
 into the user agent, and hand the conversation off to the user's own bot
 instead of keeping Curator in the middle.
+
+For Discord handoff, the user should also install the app from the Discord
+Developer Portal Installation page or add it to a shared server so the final DM
+path is reachable.
 
 ### 1. Give the user the enrollment command
 
@@ -542,6 +554,7 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 - nested vault roots are invalid in v1 and show up as health warnings
 - all approved users may retrieve from any vault through qmd
 - subscriptions only control managed memory and Curator push behavior
+- vault changes queue Curator fanout so managed-memory stubs stay fresh across enrolled agents while qmd remains the deep-retrieval source of truth
 - malformed or missing `.vault` files fail safe as non-default vaults and warn in health output
 
 ## Updates and Lifecycle

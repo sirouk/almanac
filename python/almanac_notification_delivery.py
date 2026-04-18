@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from almanac_control import (
@@ -26,6 +27,7 @@ from almanac_control import (
     mark_notification_delivered,
     mark_notification_error,
 )
+from almanac_discord import discord_send_message
 from almanac_http import http_request
 from almanac_telegram import telegram_send_message
 
@@ -58,6 +60,20 @@ def deliver_discord(message: str, *, webhook_url: str) -> str | None:
     return None
 
 
+def deliver_discord_channel(message: str, *, bot_token: str, channel_id: str) -> str | None:
+    if not bot_token:
+        return "DISCORD_BOT_TOKEN is not configured"
+    if not channel_id:
+        return "discord channel_id is empty"
+    if not channel_id.isdigit():
+        return f"discord channel_id must be numeric, got {channel_id[:60]!r}"
+    try:
+        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc).strip() or "unknown discord delivery error"
+    return None
+
+
 def deliver_telegram(
     message: str,
     *,
@@ -81,19 +97,59 @@ def deliver_telegram(
     return None
 
 
-def _resolve_discord_target(cfg: Config, row: dict[str, Any]) -> str:
-    """Prefer the per-row target_id when it looks like a Discord webhook URL;
-    fall back to the configured operator channel_id when it is a webhook URL;
-    finally fall back to the DISCORD_WEBHOOK_URL env var for legacy deploys."""
+def _read_env_file_value(path: Path, key: str) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() != key:
+            continue
+        return value.strip().strip("'\"")
+    return ""
+
+
+def _discord_target_kind(value: str) -> str:
+    target = value.strip()
+    if not target:
+        return ""
+    if (
+        target.startswith("https://discord.com/api/webhooks/")
+        or target.startswith("https://discordapp.com/api/webhooks/")
+    ):
+        return "webhook"
+    if target.isdigit():
+        return "channel"
+    return ""
+
+
+def _resolve_curator_discord_bot_token(cfg: Config) -> str:
+    token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
+    if token:
+        return token
+    return _read_env_file_value(cfg.curator_hermes_home / ".env", "DISCORD_BOT_TOKEN").strip()
+
+
+def _resolve_discord_target(cfg: Config, row: dict[str, Any]) -> tuple[str, str]:
+    """Resolve the current Discord operator target.
+
+    Preferred order is the per-row target_id, then the configured operator
+    channel id, then the legacy DISCORD_WEBHOOK_URL env var.
+    """
     candidates = [
         str(row.get("target_id") or "").strip(),
         str(cfg.operator_notify_channel_id or "").strip(),
         config_env_value("DISCORD_WEBHOOK_URL", "").strip(),
     ]
     for value in candidates:
-        if value.startswith("https://discord"):
-            return value
-    return ""
+        kind = _discord_target_kind(value)
+        if kind:
+            return kind, value
+    return "", ""
 
 
 def _operator_platform(cfg: Config, row: dict[str, Any]) -> str:
@@ -118,8 +174,16 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
     if target_kind == "operator":
         platform = _operator_platform(cfg, row)
         if platform == "discord":
-            webhook = _resolve_discord_target(cfg, row)
-            return deliver_discord(row["message"], webhook_url=webhook)
+            target_kind, target_value = _resolve_discord_target(cfg, row)
+            if target_kind == "webhook":
+                return deliver_discord(row["message"], webhook_url=target_value)
+            if target_kind == "channel":
+                return deliver_discord_channel(
+                    row["message"],
+                    bot_token=_resolve_curator_discord_bot_token(cfg),
+                    channel_id=target_value,
+                )
+            return "discord target is not configured"
         if platform == "telegram":
             bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
             chat_id = str(row.get("target_id") or cfg.operator_notify_channel_id or "")

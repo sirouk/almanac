@@ -1221,19 +1221,19 @@ if set_user_systemd_bus_env; then
   if has_curator_telegram_onboarding; then
     check_unit_state almanac-curator-onboarding.service required
   else
-    check_unit_state almanac-curator-onboarding.service optional
+    pass "Curator Telegram onboarding disabled in config"
   fi
 
   if has_curator_discord_onboarding; then
     check_unit_state almanac-curator-discord-onboarding.service required
   else
-    check_unit_state almanac-curator-discord-onboarding.service optional
+    pass "Curator Discord onboarding disabled in config"
   fi
 
   if has_curator_gateway_channels && { ! has_curator_onboarding || has_curator_non_onboarding_gateway_channels; }; then
     check_unit_state almanac-curator-gateway.service required
   else
-    check_unit_state almanac-curator-gateway.service optional
+    pass "Curator gateway service not required for configured channels"
   fi
 else
   warn "systemd user bus unavailable; skipping service status checks"

@@ -102,23 +102,58 @@ PY
 }
 
 read_operator_artifact_config_file() {
-  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
-  local ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+  local -a artifact_hints=()
+  local artifact_config=""
   local status=""
 
-  if [[ -r "$artifact" ]]; then
-    # shellcheck disable=SC1090
-    source "$artifact"
-    if [[ -n "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE" ]]; then
-      status="$(probe_path_status "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE")"
-      if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
-        printf '%s\n' "$ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE"
-        return 0
-      fi
+  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  artifact_config="${artifact_hints[3]:-}"
+  if [[ -n "$artifact_config" ]]; then
+    status="$(probe_path_status "$artifact_config")"
+    if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
+      printf '%s\n' "$artifact_config"
+      return 0
     fi
   fi
 
   return 1
+}
+
+read_operator_artifact_hints() {
+  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+
+  if [[ ! -r "$artifact" ]]; then
+    return 1
+  fi
+
+  (
+    ALMANAC_OPERATOR_DEPLOYED_USER=""
+    ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=""
+    ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=""
+    ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+    # shellcheck disable=SC1090
+    source "$artifact"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_USER:-}"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_REPO_DIR:-}"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR:-}"
+    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
+  )
+}
+
+resolve_user_home() {
+  local user="${1:-}"
+  local home_dir=""
+
+  if [[ -z "$user" ]]; then
+    return 1
+  fi
+
+  home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  if [[ -z "$home_dir" ]]; then
+    home_dir="/home/$user"
+  fi
+
+  printf '%s\n' "$home_dir"
 }
 
 usage() {
@@ -317,6 +352,27 @@ ask_secret_with_default() {
   fi
 
   normalize_optional_answer "$answer"
+}
+
+ask_secret_keep_default() {
+  local prompt="$1"
+  local default="${2:-}"
+  local answer=""
+  local masked_default=""
+
+  if [[ -n "$default" ]]; then
+    masked_default="$(mask_secret "$default")"
+    read -r -s -p "$prompt [$masked_default]: " answer
+  else
+    read -r -s -p "$prompt: " answer
+  fi
+  echo
+
+  if [[ -z "$answer" ]]; then
+    answer="$default"
+  fi
+
+  printf '%s' "$answer"
 }
 
 choose_mode() {
@@ -596,12 +652,18 @@ detect_github_repo() {
 }
 
 discover_existing_config() {
+  local -a artifact_hints=()
   local candidate=""
   local explicit_config=""
   local artifact_config=""
+  local artifact_user="" artifact_repo="" artifact_priv="" artifact_home=""
   local status=""
   explicit_config="${ALMANAC_CONFIG_FILE:-}"
-  artifact_config="$(read_operator_artifact_config_file || true)"
+  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  artifact_user="${artifact_hints[0]:-}"
+  artifact_repo="${artifact_hints[1]:-}"
+  artifact_priv="${artifact_hints[2]:-}"
+  artifact_config="${artifact_hints[3]:-}"
 
   DISCOVERED_CONFIG=""
 
@@ -614,7 +676,33 @@ discover_existing_config() {
     return 0
   fi
 
-  local candidates=(
+  local -a candidates=()
+
+  if [[ -n "$artifact_priv" ]]; then
+    candidates+=(
+      "$artifact_priv/config/almanac.env"
+      "$artifact_priv/almanac.env"
+    )
+  fi
+
+  if [[ -n "$artifact_repo" ]]; then
+    candidates+=(
+      "$artifact_repo/almanac-priv/config/almanac.env"
+      "$artifact_repo/config/almanac.env"
+    )
+  fi
+
+  if [[ -n "$artifact_user" ]]; then
+    artifact_home="$(resolve_user_home "$artifact_user" || true)"
+    if [[ -n "$artifact_home" ]]; then
+      candidates+=(
+        "$artifact_home/almanac/almanac-priv/config/almanac.env"
+        "$artifact_home/almanac-priv/config/almanac.env"
+      )
+    fi
+  fi
+
+  candidates+=(
     "/home/almanac/almanac/almanac-priv/config/almanac.env"
     "$HOME/almanac/almanac-priv/config/almanac.env"
     "$HOME/almanac/almanac/almanac-priv/config/almanac.env"
@@ -1456,12 +1544,14 @@ wipe_nextcloud_state_if_requested() {
 }
 
 collect_install_answers() {
+  local -a artifact_hints=()
   local default_user="" default_home="" default_domain="" default_repo="" default_priv=""
   local default_nextcloud_port="" default_git_name="" default_git_email=""
   local default_enable_nextcloud="" default_enable_quarto="" default_enable_private_git=""
   local default_seed_vault="" default_install_public_git=""
   local detected_user="" detected_home="" detected_repo="" detected_priv=""
-  local detected_git_name="" detected_git_email="" use_almanac_user=""
+  local detected_git_name="" detected_git_email=""
+  local artifact_user="" artifact_repo="" artifact_priv="" artifact_home=""
   local default_nextcloud_admin_user="" nextcloud_admin_password_input=""
   local default_enable_tailscale_serve=""
   local default_tailscale_operator_user=""
@@ -1481,38 +1571,54 @@ collect_install_answers() {
   detected_priv="${ALMANAC_PRIV_DIR:-}"
   detected_git_name="${BACKUP_GIT_AUTHOR_NAME:-}"
   detected_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-}"
-  use_almanac_user="$(ask_yes_no "Use 'almanac' as the service user" "1")"
+  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  artifact_user="${artifact_hints[0]:-}"
+  artifact_repo="${artifact_hints[1]:-}"
+  artifact_priv="${artifact_hints[2]:-}"
+  artifact_home="$(resolve_user_home "$artifact_user" || true)"
 
-  if [[ "$use_almanac_user" == "1" ]]; then
-    ALMANAC_USER="almanac"
-  else
-    if [[ -n "$detected_user" && "$detected_user" != "almanac" ]]; then
-      echo "Detected existing configured user: $detected_user"
-    fi
-
-    while true; do
-      default_user="${detected_user:-}"
-      ALMANAC_USER="$(ask "Service user" "$default_user")"
-      if [[ -n "$ALMANAC_USER" ]]; then
-        break
-      fi
-      echo "Service user cannot be blank."
-    done
+  if [[ -z "$detected_user" && -n "$artifact_user" ]]; then
+    detected_user="$artifact_user"
+  fi
+  if [[ -z "$detected_home" && -n "$artifact_home" ]]; then
+    detected_home="$artifact_home"
+  fi
+  if [[ -z "$detected_home" && -n "$artifact_repo" ]]; then
+    detected_home="$(dirname "$artifact_repo")"
+  fi
+  if [[ -z "$detected_repo" && -n "$artifact_repo" ]]; then
+    detected_repo="$artifact_repo"
+  fi
+  if [[ -z "$detected_priv" && -n "$artifact_priv" ]]; then
+    detected_priv="$artifact_priv"
   fi
 
-  if [[ -n "$detected_home" && "$detected_user" == "$ALMANAC_USER" ]]; then
+  if [[ -n "$detected_user" && "$detected_user" != "almanac" ]]; then
+    echo "Detected existing configured user: $detected_user"
+  fi
+
+  while true; do
+    default_user="${detected_user:-almanac}"
+    ALMANAC_USER="$(ask "Service user" "$default_user")"
+    if [[ -n "$ALMANAC_USER" ]]; then
+      break
+    fi
+    echo "Service user cannot be blank."
+  done
+
+  if [[ -n "$detected_home" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
     default_home="$detected_home"
   else
     default_home="/home/$ALMANAC_USER"
   fi
 
-  if [[ -n "$detected_repo" && "$detected_user" == "$ALMANAC_USER" ]]; then
+  if [[ -n "$detected_repo" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
     default_repo="$detected_repo"
   else
     default_repo="$default_home/almanac"
   fi
 
-  if [[ -n "$detected_priv" && "$detected_user" == "$ALMANAC_USER" ]]; then
+  if [[ -n "$detected_priv" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
     default_priv="$detected_priv"
   else
     default_priv="$default_repo/almanac-priv"
@@ -1520,7 +1626,7 @@ collect_install_answers() {
 
   default_nextcloud_port="${NEXTCLOUD_PORT:-18080}"
   default_git_name="${detected_git_name:-Almanac Backup}"
-  if [[ -n "$detected_git_email" && "$detected_user" == "$ALMANAC_USER" ]]; then
+  if [[ -n "$detected_git_email" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
     default_git_email="$detected_git_email"
   else
     default_git_email="$ALMANAC_USER@localhost"
@@ -1591,7 +1697,7 @@ collect_install_answers() {
   POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${MARIADB_PASSWORD:-$(random_secret)}}"
   NEXTCLOUD_ADMIN_USER="$(ask "Nextcloud admin user" "$default_nextcloud_admin_user")"
   if [[ -n "${NEXTCLOUD_ADMIN_PASSWORD:-}" ]]; then
-    nextcloud_admin_password_input="$(ask_secret "Nextcloud admin password (leave blank to keep current)")"
+    nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
     NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
   else
     nextcloud_admin_password_input="$(ask_secret "Nextcloud admin password (leave blank to auto-generate)")"
@@ -1843,6 +1949,60 @@ run_service_user_cmd() {
   sudo -iu "$ALMANAC_USER" env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
 }
 
+repair_active_agent_runtime_access() {
+  local agent_id="" unix_user=""
+
+  if [[ ! -f "$ALMANAC_DB_PATH" ]]; then
+    return 0
+  fi
+
+  while IFS=$'\t' read -r agent_id unix_user; do
+    [[ -n "$agent_id" && -n "$unix_user" ]] || continue
+    if ! getent passwd "$unix_user" >/dev/null 2>&1; then
+      echo "Skipping shared-runtime ACL repair for $agent_id: unix user '$unix_user' is missing."
+      continue
+    fi
+    echo "Repairing shared-runtime access for $agent_id ($unix_user)..."
+    run_root_env_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
+  done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+conn.row_factory = sqlite3.Row
+try:
+    rows = conn.execute(
+        """
+        SELECT agent_id, unix_user
+        FROM agents
+        WHERE role = 'user' AND status = 'active'
+        ORDER BY unix_user
+        """
+    ).fetchall()
+except sqlite3.Error:
+    rows = []
+for row in rows:
+    print(f"{row['agent_id']}\t{row['unix_user']}")
+PY
+  )
+}
+
+chown_managed_paths() {
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR"
+
+  if [[ ! -d "$ALMANAC_PRIV_DIR" ]]; then
+    return 0
+  fi
+
+  if [[ "$ENABLE_NEXTCLOUD" == "1" && -n "${NEXTCLOUD_STATE_DIR:-}" && -d "$NEXTCLOUD_STATE_DIR" ]]; then
+    chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+    find "$ALMANAC_PRIV_DIR" -path "$NEXTCLOUD_STATE_DIR" -prune -o -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +
+    return 0
+  fi
+
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+}
+
 enrollment_snapshot_json() {
   local target_unix_user="$1"
 
@@ -1995,7 +2155,7 @@ run_root_install() {
   sync_public_repo
   seed_private_repo "$ALMANAC_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+  chown_managed_paths
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   wipe_nextcloud_state_if_requested
 
@@ -2006,6 +2166,7 @@ run_root_install() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  repair_active_agent_runtime_access
 
   local uid=""
   restart_shared_user_services_root
@@ -2101,7 +2262,7 @@ run_root_upgrade() {
   sync_public_repo_from_source "$checkout_dir" "$ALMANAC_REPO_DIR"
   seed_private_repo "$ALMANAC_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+  chown_managed_paths
 
   "$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
@@ -2110,6 +2271,7 @@ run_root_upgrade() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  repair_active_agent_runtime_access
 
   restart_shared_user_services_root
   uid="$(id -u "$ALMANAC_USER")"
@@ -2960,6 +3122,7 @@ run_enrollment_align() {
     uid="$(id -u "$unix_user")"
     user_home="$(getent passwd "$unix_user" | cut -d: -f6)"
     activation_path="$STATE_DIR/activation-triggers/$agent_id.json"
+    run_root_env_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null 2>&1 || true
     if [[ -n "$bot_label" ]]; then
       run_root_env_cmd env \
         ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \

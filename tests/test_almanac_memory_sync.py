@@ -156,6 +156,13 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect(managed_payload["agent_id"] == "agent-test", managed_payload)
             expect("vault-topology" in managed_payload, managed_payload)
             expect("Projects" in managed_payload["vault-topology"], managed_payload["vault-topology"])
+            expect("Dedicated agent name: Test User" in managed_payload["vault-ref"], managed_payload["vault-ref"])
+            expect(
+                "All vaults remain retrievable through Almanac/qmd" in managed_payload["almanac-skill-ref"],
+                managed_payload["almanac-skill-ref"],
+            )
+            expect("almanac-ssot" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
+            expect("Use almanac-ssot" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
 
             trigger_payload = json.loads(trigger_path.read_text(encoding="utf-8"))
             expect(trigger_payload["agent_id"] == "agent-test", trigger_payload)

@@ -106,7 +106,9 @@ normalize_nextcloud_permissions() {
   apply_vault_acls_for_nextcloud
 
   podman unshare sh -eu <<EOF
-mkdir -p "$NEXTCLOUD_HTML_DIR" "$NEXTCLOUD_DATA_DIR"
+mkdir -p "$NEXTCLOUD_DB_DIR" "$NEXTCLOUD_REDIS_DIR" "$NEXTCLOUD_HTML_DIR" "$NEXTCLOUD_DATA_DIR"
+chown -R 70:70 "$NEXTCLOUD_DB_DIR"
+chown -R 999:999 "$NEXTCLOUD_REDIS_DIR"
 chown -R 33:33 "$NEXTCLOUD_HTML_DIR" "$NEXTCLOUD_DATA_DIR"
 
 find "$NEXTCLOUD_HTML_DIR" -type d -exec chmod 755 {} +

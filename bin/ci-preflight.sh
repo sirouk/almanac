@@ -97,6 +97,13 @@ EOF
   chmod +x "$fakebin/pdftoppm"
 }
 
+setup_fake_runtime_python() {
+  local runtime_dir="$1"
+  local bin_dir="$runtime_dir/hermes-venv/bin"
+  mkdir -p "$bin_dir"
+  ln -sf "$(command -v python3)" "$bin_dir/python3"
+}
+
 start_fake_vision_server() {
   local request_log="$1"
   local port_file="$2"
@@ -174,8 +181,11 @@ run_shell_lint() {
 }
 
 run_python_checks() {
-  log "python compile check for pdf-ingest.py"
-  PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile "$ROOT_DIR/bin/pdf-ingest.py"
+  log "python compile check for control-plane and PDF ingest modules"
+  PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile \
+    "$ROOT_DIR/bin/pdf-ingest.py" \
+    "$ROOT_DIR/python/almanac_control.py" \
+    "$ROOT_DIR/python/almanac_ctl.py"
 }
 
 run_systemd_verify() {
@@ -204,12 +214,14 @@ run_pdf_ingest_preflight() {
   local priv_dir="$repo_dir/almanac-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
+  local runtime_dir="$state_dir/runtime"
   local pdf_path="$vault_dir/Inbox/chutes-mesh-preflight.pdf"
   local generated_md="$state_dir/pdf-ingest/markdown/Inbox/chutes-mesh-preflight-pdf.md"
   local status_json="$state_dir/pdf-ingest/status.json"
 
   mkdir -p "$repo_dir"
   setup_fake_pdftotext "$fakebin"
+  setup_fake_runtime_python "$runtime_dir"
   write_test_pdf "$pdf_path"
 
   log "exercising pdf-ingest create/update/delete flow"
@@ -291,6 +303,7 @@ run_pdf_ingest_vision_preflight() {
   local priv_dir="$repo_dir/almanac-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
+  local runtime_dir="$state_dir/runtime"
   local pdf_path="$vault_dir/Inbox/chutes-mesh-vision.pdf"
   local generated_md="$state_dir/pdf-ingest/markdown/Inbox/chutes-mesh-vision-pdf.md"
   local status_json="$state_dir/pdf-ingest/status.json"
@@ -303,6 +316,7 @@ run_pdf_ingest_vision_preflight() {
   mkdir -p "$repo_dir"
   setup_fake_pdftotext "$fakebin"
   setup_fake_pdftoppm "$fakebin"
+  setup_fake_runtime_python "$runtime_dir"
   write_test_pdf "$pdf_path"
 
   log "exercising pdf-ingest vision caption flow"
@@ -477,11 +491,214 @@ EOF
 
   env ALMANAC_CONFIG_FILE="$config_file" bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/watch.log" 2>&1 &
   watcher_pid=$!
+  sleep 1
 
   write_test_pdf "$vault_dir/Inbox/chutes-mesh-watch.pdf"
   wait_for_path_state "$generated_md" present 40 0.25
   rm -f "$vault_dir/Inbox/chutes-mesh-watch.pdf"
   wait_for_path_state "$generated_md" absent 40 0.25
+
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+}
+
+run_vault_notification_preflight() {
+  local fakebin="$TMP_ROOT/notify-fakebin"
+  local repo_dir="$TMP_ROOT/notify-repo"
+  local bin_dir="$repo_dir/bin"
+  local config_dir="$repo_dir/config"
+  local priv_dir="$repo_dir/almanac-priv"
+  local vault_dir="$priv_dir/vault"
+  local state_dir="$priv_dir/state"
+  local runtime_dir="$state_dir/runtime"
+  local config_file="$config_dir/almanac.env"
+  local generated_md="$state_dir/pdf-ingest/markdown/Projects/notify-me-pdf.md"
+  local trigger_default="$state_dir/activation-triggers/agent-default.json"
+  local trigger_optin="$state_dir/activation-triggers/agent-optin.json"
+  local trigger_optout="$state_dir/activation-triggers/agent-optout.json"
+  local watcher_pid=""
+
+  mkdir -p "$bin_dir" "$config_dir" "$vault_dir/Projects" "$vault_dir/Teams"
+  setup_fake_pdftotext "$fakebin"
+  cp "$ROOT_DIR/bin/common.sh" "$bin_dir/common.sh"
+  cp "$ROOT_DIR/bin/vault-watch.sh" "$bin_dir/vault-watch.sh"
+  cp "$ROOT_DIR/bin/pdf-ingest.sh" "$bin_dir/pdf-ingest.sh"
+  cp "$ROOT_DIR/bin/pdf-ingest.py" "$bin_dir/pdf-ingest.py"
+  ln -s "$ROOT_DIR/python" "$repo_dir/python"
+  setup_fake_runtime_python "$runtime_dir"
+
+  cat >"$bin_dir/qmd-refresh.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+EOF
+  chmod +x "$bin_dir/qmd-refresh.sh"
+
+  cat >"$bin_dir/almanac-ctl" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+REPO_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
+export ALMANAC_CONFIG_FILE="$config_file"
+export PYTHONPATH="\$REPO_DIR/python\${PYTHONPATH:+:\$PYTHONPATH}"
+exec python3 "\$REPO_DIR/python/almanac_ctl.py" "\$@"
+EOF
+  chmod +x "$bin_dir/almanac-ctl"
+
+
+  cat >"$config_file" <<EOF
+ALMANAC_REPO_DIR=$repo_dir
+ALMANAC_PRIV_DIR=$priv_dir
+ALMANAC_PRIV_CONFIG_DIR=$priv_dir/config
+VAULT_DIR=$vault_dir
+STATE_DIR=$state_dir
+ALMANAC_DB_PATH=$state_dir/almanac-control.sqlite3
+ALMANAC_AGENTS_STATE_DIR=$state_dir/agents
+ALMANAC_CURATOR_DIR=$state_dir/curator
+ALMANAC_CURATOR_MANIFEST=$state_dir/curator/manifest.json
+ALMANAC_CURATOR_HERMES_HOME=$state_dir/curator/hermes-home
+ALMANAC_ARCHIVED_AGENTS_DIR=$state_dir/archived-agents
+ALMANAC_RELEASE_STATE_FILE=$state_dir/almanac-release.json
+ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
+ALMANAC_MCP_HOST=127.0.0.1
+ALMANAC_MCP_PORT=8282
+ALMANAC_MODEL_PRESET_CODEX=openai:codex
+ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus
+ALMANAC_MODEL_PRESET_CHUTES=chutes:auto-failover
+OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
+OPERATOR_NOTIFY_CHANNEL_ID=operator
+PDF_INGEST_ENABLED=1
+PDF_INGEST_EXTRACTOR=auto
+PDF_INGEST_TRIGGER_QMD_REFRESH=0
+VAULT_WATCH_DEBOUNCE_SECONDS=1
+EOF
+
+  cat >"$vault_dir/Projects/.vault" <<'EOF'
+name: Projects
+description: Active project workspaces
+owner: operator
+default_subscribed: true
+category: workspace
+EOF
+  cat >"$vault_dir/Teams/.vault" <<'EOF'
+name: Teams
+description: Team space that requires an explicit opt-in
+owner: operator
+default_subscribed: false
+category: workspace
+EOF
+
+  python3 - "$config_file" "$ROOT_DIR" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+config_file, repo_root = sys.argv[1:3]
+os.environ["ALMANAC_CONFIG_FILE"] = config_file
+sys.path.insert(0, str(Path(repo_root) / "python"))
+
+import almanac_control as mod
+
+cfg = mod.Config.from_env()
+conn = mod.connect_db(cfg)
+mod.reload_vault_definitions(conn, cfg)
+
+now = mod.utc_now_iso()
+root = cfg.state_dir.parent
+
+agents = [
+    ("agent-default", "defaultuser", "Default User"),
+    ("agent-optout", "optoutuser", "Opt-Out User"),
+    ("agent-optin", "optinuser", "Opt-In User"),
+]
+for agent_id, unix_user, display_name in agents:
+    conn.execute(
+        """
+        INSERT INTO agents (
+          agent_id, role, unix_user, display_name, status, hermes_home, manifest_path,
+          archived_state_path, model_preset, model_string, channels_json,
+          allowed_mcps_json, home_channel_json, operator_notify_channel_json,
+          notes, created_at, last_enrolled_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            agent_id,
+            "user",
+            unix_user,
+            display_name,
+            "active",
+            str(root / f"home-{unix_user}" / ".local" / "share" / "almanac-agent" / "hermes-home"),
+            str(cfg.state_dir / "agents" / agent_id / "manifest.json"),
+            None,
+            "codex",
+            "openai:codex",
+            json.dumps(["tui-only"]),
+            json.dumps([]),
+            json.dumps({"platform": "tui", "channel_id": ""}),
+            json.dumps({}),
+            "",
+            now,
+            now,
+        ),
+    )
+conn.commit()
+
+for agent_id, _, _ in agents:
+    mod.ensure_default_subscriptions(conn, agent_id)
+mod.set_vault_subscription(conn, agent_id="agent-optout", vault_name="Projects", subscribed=False, source="user")
+mod.set_vault_subscription(conn, agent_id="agent-optin", vault_name="Projects", subscribed=False, source="user")
+mod.set_vault_subscription(conn, agent_id="agent-optin", vault_name="Teams", subscribed=True, source="user")
+PY
+
+  log "exercising watcher-driven PDF conversion + subscriber notification routing"
+
+  env \
+    PATH="$fakebin:$PATH" \
+    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ALMANAC_CONFIG_FILE="$config_file" \
+    bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/notify-watch.log" 2>&1 &
+  watcher_pid=$!
+  sleep 1
+
+  write_test_pdf "$vault_dir/Projects/notify-me.pdf"
+  printf 'opt-in team note\n' >"$vault_dir/Teams/opt-in.md"
+
+  wait_for_path_state "$generated_md" present 40 0.25
+  wait_for_path_state "$trigger_default" present 40 0.25
+  wait_for_path_state "$trigger_optin" present 40 0.25
+
+  python3 - "$config_file" "$ROOT_DIR" "$generated_md" "$trigger_default" "$trigger_optin" "$trigger_optout" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+config_file, repo_root, generated_md, trigger_default, trigger_optin, trigger_optout = sys.argv[1:7]
+os.environ["ALMANAC_CONFIG_FILE"] = config_file
+sys.path.insert(0, str(Path(repo_root) / "python"))
+
+import almanac_control as mod
+
+cfg = mod.Config.from_env()
+conn = mod.connect_db(cfg)
+
+assert Path(generated_md).is_file(), generated_md
+assert Path(trigger_default).is_file(), trigger_default
+assert Path(trigger_optin).is_file(), trigger_optin
+assert not Path(trigger_optout).exists(), trigger_optout
+
+default_notifications = mod.consume_agent_notifications(conn, agent_id="agent-default")
+optout_notifications = mod.consume_agent_notifications(conn, agent_id="agent-optout")
+optin_notifications = mod.consume_agent_notifications(conn, agent_id="agent-optin")
+
+assert len(default_notifications) == 1, default_notifications
+assert default_notifications[0]["channel_kind"] == "vault-change", default_notifications
+assert "Projects" in default_notifications[0]["message"], default_notifications
+assert optout_notifications == [], optout_notifications
+assert len(optin_notifications) == 1, optin_notifications
+assert optin_notifications[0]["channel_kind"] == "vault-change", optin_notifications
+assert "Teams" in optin_notifications[0]["message"], optin_notifications
+PY
 
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
@@ -495,6 +712,7 @@ main() {
   run_pdf_ingest_preflight
   run_pdf_ingest_vision_preflight
   run_vault_watch_preflight
+  run_vault_notification_preflight
   log "preflight checks passed"
 }
 

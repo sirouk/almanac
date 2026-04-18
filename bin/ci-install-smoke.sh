@@ -686,6 +686,8 @@ assert_almanac_control_plane_roundtrip() {
 
   mkdir -p "$smoke_home/secrets"
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$smoke_home"
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh' '$ALMANAC_REPO_DIR' '$smoke_home'" >/dev/null
 
   status_json="$(
     run_almanac_shell \
@@ -1279,7 +1281,11 @@ PY
 assert_ssot_rails() {
   # Use the already-enrolled smoke agent's token (still revoked above — create
   # a fresh one via the CLI path so we have an active token).
-  local req_json="" req_id="" tok_json="" token=""
+  local req_json="" req_id="" tok_json="" token="" ssot_home="/tmp/almanac-smoke-ssot-home"
+  mkdir -p "$ssot_home/secrets"
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ssot_home"
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh' '$ALMANAC_REPO_DIR' '$ssot_home'" >/dev/null
   req_json="$(run_almanac_shell \
     "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"ssot-bot\",\"unix_user\":\"ssotbot\",\"source_ip\":\"127.0.0.1\"}'")"
   req_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$req_json")"
@@ -1289,7 +1295,9 @@ assert_ssot_rails() {
     "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$req_id\"}'")"
   token="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['raw_token'])" "$tok_json")"
   run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'agents.register' --json-args '{\"token\":\"$token\",\"unix_user\":\"ssotbot\",\"display_name\":\"SSOT Bot\",\"role\":\"user\",\"hermes_home\":\"/tmp/almanac-smoke-ssot-home\",\"model_preset\":\"codex\",\"model_string\":\"openai:codex\",\"channels\":[\"tui-only\"]}'" >/dev/null
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'agents.register' --json-args '{\"token\":\"$token\",\"unix_user\":\"ssotbot\",\"display_name\":\"SSOT Bot\",\"role\":\"user\",\"hermes_home\":\"$ssot_home\",\"model_preset\":\"codex\",\"model_string\":\"openai:codex\",\"channels\":[\"tui-only\"]}'" >/dev/null
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'vaults.refresh' --json-args '{\"token\":\"$token\"}'" >/dev/null
 
   local err_file=""
   err_file="$(mktemp)"
@@ -1341,17 +1349,26 @@ assert_notion_webhook_flow() {
   local verify_token="smoke-verify-$(date +%s)"
 
   # 1) POST a verification_token (no signature) -> server stores it and returns 202.
-  run_almanac_shell \
-    "curl --max-time 5 -sS -o /tmp/almanac-notion-verify.out -w '%{http_code}\n' -H 'Content-Type: application/json' -X POST '$webhook_url' --data '{\"verification_token\":\"$verify_token\"}'" \
-    | grep -Eq '^(202|200)$' || { echo "verification_token POST should be accepted"; exit 1; }
+  local body="" signature="" resp=""
+  resp=""
+  if ! resp="$(run_almanac_shell \
+    "curl --max-time 5 -sS -o /tmp/almanac-notion-verify.out -w '%{http_code}\n' -H 'Content-Type: application/json' -X POST '$webhook_url' --data '{\"verification_token\":\"$verify_token\"}'")"; then
+    :
+  fi
+  if [[ "$resp" != "202" && "$resp" != "200" ]]; then
+    echo "verification_token POST should be accepted (got $resp)" >&2
+    cat /tmp/almanac-notion-verify.out >&2 || true
+    exit 1
+  fi
 
   # 2) POST a signed event; expect 202 and persisted row.
-  local body="" signature="" resp=""
   body='{"id":"evt-smoke-001","type":"page.created","created_by":{"name":"smokebot"},"properties":{}}'
   signature="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$verify_token" -hex | awk '{print $2}')"
-  resp="$(run_almanac_shell \
-    "curl --max-time 5 -sS -o /tmp/almanac-notion-signed.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: $signature' -X POST '$webhook_url' --data '$body'" \
-    | tail -n1)"
+  resp=""
+  if ! resp="$(run_almanac_shell \
+    "curl --max-time 5 -sS -o /tmp/almanac-notion-signed.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: $signature' -X POST '$webhook_url' --data '$body'")"; then
+    :
+  fi
   if [[ "$resp" != "202" ]]; then
     echo "Expected signed webhook POST to return 202, got $resp" >&2
     cat /tmp/almanac-notion-signed.out >&2
@@ -1359,9 +1376,11 @@ assert_notion_webhook_flow() {
   fi
 
   # 3) POST with a BAD signature; expect 403.
-  resp="$(run_almanac_shell \
-    "curl --max-time 5 -sS -o /tmp/almanac-notion-bad.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: sha256=00deadbeef' -X POST '$webhook_url' --data '$body'" \
-    | tail -n1)"
+  resp=""
+  if ! resp="$(run_almanac_shell \
+    "curl --max-time 5 -sS -o /tmp/almanac-notion-bad.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: sha256=00deadbeef' -X POST '$webhook_url' --data '$body'")"; then
+    :
+  fi
   if [[ "$resp" != "403" ]]; then
     echo "Expected bad signature to return 403, got $resp" >&2
     cat /tmp/almanac-notion-bad.out >&2
@@ -1921,8 +1940,6 @@ echo "Installing Almanac with default smoke-test answers..."
 ALMANAC_ALLOW_NO_USER_BUS=1 \
 ALMANAC_CURATOR_SKIP_HERMES_SETUP=1 \
 ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=1 \
-ALMANAC_CURATOR_NOTIFY_PLATFORM=tui-only \
-ALMANAC_CURATOR_NOTIFY_CHANNEL_ID= \
 ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" \
   "$DEPLOY_BIN" --apply-install
 INSTALLED=1

@@ -301,7 +301,7 @@ ask_secret() {
   local answer=""
 
   read -r -s -p "$prompt: " answer
-  echo
+  printf '\n' >&2
   printf '%s' "$answer"
 }
 
@@ -345,7 +345,7 @@ ask_secret_with_default() {
   else
     read -r -s -p "$prompt: " answer
   fi
-  echo
+  printf '\n' >&2
 
   if [[ -z "$answer" ]]; then
     answer="$default"
@@ -366,7 +366,7 @@ ask_secret_keep_default() {
   else
     read -r -s -p "$prompt: " answer
   fi
-  echo
+  printf '\n' >&2
 
   if [[ -z "$answer" ]]; then
     answer="$default"

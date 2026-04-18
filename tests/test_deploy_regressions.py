@@ -313,6 +313,33 @@ printf 'ALMANAC_PRIV_DIR=%s\\n' "$ALMANAC_PRIV_DIR"
     print("PASS test_collect_install_answers_defaults_to_detected_service_user")
 
 
+def test_secret_prompt_helpers_do_not_prefix_newlines() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "ask_secret() {", "choose_mode() {")
+    script = f"""
+{snippet}
+ask_result="$(ask_secret 'Secret' <<< 'hunter2')"
+with_default_result="$(ask_secret_with_default 'Secret' 'keep-me' <<< '')"
+keep_default_result="$(ask_secret_keep_default 'Secret' 'keep-me' <<< '')"
+printf 'ASK=%q\\n' "$ask_result"
+printf 'WITH_DEFAULT=%q\\n' "$with_default_result"
+printf 'KEEP_DEFAULT=%q\\n' "$keep_default_result"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"secret prompt helper case failed: {result.stderr}")
+    expect("ASK=hunter2" in result.stdout, f"expected ask_secret to return plain value, got: {result.stdout!r}")
+    expect(
+        "WITH_DEFAULT=keep-me" in result.stdout,
+        f"expected ask_secret_with_default to keep plain default, got: {result.stdout!r}",
+    )
+    expect(
+        "KEEP_DEFAULT=keep-me" in result.stdout,
+        f"expected ask_secret_keep_default to keep plain default, got: {result.stdout!r}",
+    )
+    expect("$'\\n" not in result.stdout, f"expected no quoted leading newline escapes, got: {result.stdout!r}")
+    print("PASS test_secret_prompt_helpers_do_not_prefix_newlines")
+
+
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
@@ -386,6 +413,7 @@ def main() -> int:
         test_write_operator_artifact_falls_back_to_discovered_config,
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,
+        test_secret_prompt_helpers_do_not_prefix_newlines,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
     ]

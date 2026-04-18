@@ -190,6 +190,44 @@ def test_install_does_not_reexec_for_readable_breadcrumb_config() -> None:
     print("PASS test_install_does_not_reexec_for_readable_breadcrumb_config")
 
 
+def test_write_operator_artifact_falls_back_to_discovered_config() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "probe_path_status() {", "run_as_user() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        config_path = tmp_path / "deployed" / "almanac.env"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("ALMANAC_USER=operator-svc\n", encoding="utf-8")
+        artifact_path = tmp_path / ".almanac-operator.env"
+
+        script = f"""
+BOOTSTRAP_DIR={shlex.quote(str(tmp_path))}
+ALMANAC_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
+DISCOVERED_CONFIG={shlex.quote(str(config_path))}
+CONFIG_TARGET=""
+ALMANAC_USER=operator-svc
+ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+{snippet}
+write_operator_checkout_artifact
+printf 'ARTIFACT_BEGIN\\n'
+cat {shlex.quote(str(artifact_path))}
+printf 'ARTIFACT_END\\n'
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"artifact fallback case failed: {result.stderr}")
+        artifact = result.stdout.split("ARTIFACT_BEGIN\n", 1)[1].split("\nARTIFACT_END", 1)[0]
+        expect(
+            f"ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE={config_path}" in artifact,
+            f"expected artifact to record discovered config path, got: {artifact!r}",
+        )
+        expect(
+            "ALMANAC_OPERATOR_DEPLOYED_USER=operator-svc" in artifact,
+            f"expected artifact to record service user, got: {artifact!r}",
+        )
+    print("PASS test_write_operator_artifact_falls_back_to_discovered_config")
+
+
 def test_discover_existing_config_uses_artifact_priv_dir_hint() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "probe_path_status() {", "load_detected_config() {")
@@ -345,6 +383,7 @@ def main() -> int:
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
         test_install_reexecs_for_unreadable_breadcrumb_config,
         test_install_does_not_reexec_for_readable_breadcrumb_config,
+        test_write_operator_artifact_falls_back_to_discovered_config,
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,
         test_deploy_reapplies_runtime_access_after_repo_sync,

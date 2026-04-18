@@ -1043,6 +1043,7 @@ checkout_upstream_release() {
 
 write_operator_checkout_artifact() {
   local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local config_target="${CONFIG_TARGET:-${DISCOVERED_CONFIG:-}}"
   local status=""
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
@@ -1054,7 +1055,7 @@ write_operator_checkout_artifact() {
   if [[ ! -d "$BOOTSTRAP_DIR" || ! -w "$BOOTSTRAP_DIR" ]]; then
     return 0
   fi
-  status="$(probe_path_status "${CONFIG_TARGET:-}")"
+  status="$(probe_path_status "$config_target")"
   if [[ "$status" != "exists" && "$status" != "exists-unreadable" ]]; then
     return 0
   fi
@@ -1065,7 +1066,7 @@ write_operator_checkout_artifact() {
     printf 'ALMANAC_OPERATOR_DEPLOYED_USER=%q\n' "${ALMANAC_USER:-}"
     printf 'ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=%q\n' "${ALMANAC_REPO_DIR:-}"
     printf 'ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=%q\n' "${ALMANAC_PRIV_DIR:-}"
-    printf 'ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=%q\n' "${CONFIG_TARGET:-}"
+    printf 'ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=%q\n' "$config_target"
   } >"$artifact"
 }
 
@@ -1925,6 +1926,7 @@ maybe_reexec_install_for_config_defaults() {
     return 1
   fi
 
+  CONFIG_TARGET="$DISCOVERED_CONFIG"
   echo "Switching to sudo before prompting so existing defaults can be loaded from $DISCOVERED_CONFIG ..."
   if ! sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" "$requested_mode"; then
     return 1

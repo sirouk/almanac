@@ -35,6 +35,45 @@ warn_or_fail() {
   fi
 }
 
+trim_secret_marker() {
+  local value="${1:-}"
+
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+is_placeholder_secret() {
+  local value=""
+
+  value="$(trim_secret_marker "${1:-}")"
+  case "${value,,}" in
+    change-me|changeme|generated-at-deploy)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+check_placeholder_secrets() {
+  if [[ "$ENABLE_NEXTCLOUD" != "1" ]]; then
+    return 0
+  fi
+
+  if is_placeholder_secret "${POSTGRES_PASSWORD:-}"; then
+    warn "POSTGRES_PASSWORD still uses a placeholder secret; rotate it deliberately for the live Nextcloud database"
+  else
+    pass "POSTGRES_PASSWORD is not a placeholder secret"
+  fi
+
+  if is_placeholder_secret "${NEXTCLOUD_ADMIN_PASSWORD:-}"; then
+    warn "NEXTCLOUD_ADMIN_PASSWORD still uses a placeholder secret; rotate the live Nextcloud admin credential"
+  else
+    pass "NEXTCLOUD_ADMIN_PASSWORD is not a placeholder secret"
+  fi
+}
+
 check_curator_gateway_runtime() {
   local output=""
   local status=0
@@ -750,7 +789,11 @@ job = conn.execute(
 last_seen_sha_row = conn.execute(
     "SELECT value FROM settings WHERE key = 'almanac_upgrade_last_seen_sha'"
 ).fetchone()
+relation_row = conn.execute(
+    "SELECT value FROM settings WHERE key = 'almanac_upgrade_relation'"
+).fetchone()
 last_seen_sha = str(last_seen_sha_row["value"]) if last_seen_sha_row else ""
+relation = str(relation_row["value"] or "") if relation_row else ""
 
 if job is None or not job["last_run_at"]:
     print(
@@ -773,11 +816,32 @@ if age_seconds > 2 * 3600 + 900:
     )
     raise SystemExit(2)
 
-if last_seen_sha and last_seen_sha != deployed_commit:
+if relation == "behind" and last_seen_sha and last_seen_sha != deployed_commit:
     print(
         f"WARN Almanac upstream ahead of deployed: deployed {deployed_short} -> "
         f"upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
         "run ./deploy.sh upgrade"
+    )
+    raise SystemExit(1)
+if relation == "ahead" and last_seen_sha and last_seen_sha != deployed_commit:
+    print(
+        f"WARN Almanac deployed release is ahead of tracked upstream: deployed {deployed_short} "
+        f"vs upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
+        "review local commits before running ./deploy.sh upgrade"
+    )
+    raise SystemExit(1)
+if relation in {"diverged", "different"} and last_seen_sha and last_seen_sha != deployed_commit:
+    print(
+        f"WARN Almanac deployed release differs from tracked upstream: deployed {deployed_short} "
+        f"vs upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
+        "review repo state before upgrading"
+    )
+    raise SystemExit(1)
+if last_seen_sha and last_seen_sha != deployed_commit and not relation:
+    print(
+        f"WARN Almanac deployed release differs from tracked upstream: deployed {deployed_short} "
+        f"vs upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
+        "run ./bin/almanac-ctl upgrade check to refresh relation state"
     )
     raise SystemExit(1)
 
@@ -1179,6 +1243,8 @@ if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
 else
   warn "BACKUP_GIT_REMOTE is empty"
 fi
+
+check_placeholder_secrets
 
 if have_compose_runtime; then
   pass "compose runtime available: $(compose_runtime_label)"

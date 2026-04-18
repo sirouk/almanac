@@ -463,6 +463,71 @@ def _query_upstream_head(repo_url: str, branch: str) -> str:
     raise RuntimeError(f"branch {branch!r} was not found at {repo_url}")
 
 
+def _git_run(repo_dir: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo_dir), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+def _git_commit_exists(repo_dir: Path, commit: str) -> bool:
+    if not commit:
+        return False
+    result = _git_run(repo_dir, "cat-file", "-e", f"{commit}^{{commit}}")
+    return result.returncode == 0
+
+
+def _git_is_ancestor(repo_dir: Path, older: str, newer: str) -> bool | None:
+    if not older or not newer:
+        return None
+    result = _git_run(repo_dir, "merge-base", "--is-ancestor", older, newer)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _classify_upstream_relation(
+    repo_dir: Path,
+    repo_url: str,
+    branch: str,
+    deployed_commit: str,
+    upstream_commit: str,
+) -> str:
+    if not deployed_commit or not upstream_commit:
+        return "unknown"
+    if deployed_commit == upstream_commit:
+        return "equal"
+    if shutil.which("git") is None or not (repo_dir / ".git").is_dir():
+        return "different"
+
+    fetch_result = _git_run(repo_dir, "fetch", "--quiet", "--depth", "1", repo_url, branch, timeout=60)
+    if fetch_result.returncode != 0:
+        return "different"
+
+    fetch_head = _git_run(repo_dir, "rev-parse", "FETCH_HEAD")
+    fetched_commit = fetch_head.stdout.strip() if fetch_head.returncode == 0 else ""
+    compare_target = fetched_commit or upstream_commit
+
+    if not _git_commit_exists(repo_dir, deployed_commit) or not _git_commit_exists(repo_dir, compare_target):
+        return "different"
+
+    deployed_is_ancestor = _git_is_ancestor(repo_dir, deployed_commit, compare_target)
+    upstream_is_ancestor = _git_is_ancestor(repo_dir, compare_target, deployed_commit)
+
+    if deployed_is_ancestor is True:
+        return "behind"
+    if upstream_is_ancestor is True:
+        return "ahead"
+    if deployed_is_ancestor is False and upstream_is_ancestor is False:
+        return "diverged"
+    return "different"
+
+
 def upgrade_check(
     conn,
     cfg: Config,
@@ -490,6 +555,7 @@ def upgrade_check(
         "tracked_upstream_repo_url": upstream_repo_url,
         "tracked_upstream_branch": upstream_branch,
         "notification_sent": False,
+        "relation": "unknown",
     }
 
     try:
@@ -517,17 +583,42 @@ def upgrade_check(
         )
         return result
 
-    update_available = bool(deployed_commit and deployed_commit != upstream_commit)
+    relation = _classify_upstream_relation(
+        cfg.repo_dir,
+        upstream_repo_url,
+        upstream_branch,
+        deployed_commit,
+        upstream_commit,
+    )
+    update_available = relation == "behind"
     if not deployed_commit:
         status = "warn"
         note = (
             f"upstream {_short_sha(upstream_commit)} known, but deployed release state is missing or incomplete"
         )
-    elif update_available:
+    elif relation == "behind":
         status = "warn"
         note = (
             f"update available: {_short_sha(deployed_commit)} -> {_short_sha(upstream_commit)} "
             f"from {upstream_repo_url}#{upstream_branch}"
+        )
+    elif relation == "ahead":
+        status = "warn"
+        note = (
+            f"deployed release is ahead of tracked upstream: {_short_sha(deployed_commit)} "
+            f"vs {_short_sha(upstream_commit)} from {upstream_repo_url}#{upstream_branch}"
+        )
+    elif relation == "diverged":
+        status = "warn"
+        note = (
+            f"deployed release diverges from tracked upstream: {_short_sha(deployed_commit)} "
+            f"vs {_short_sha(upstream_commit)} from {upstream_repo_url}#{upstream_branch}"
+        )
+    elif relation == "different":
+        status = "warn"
+        note = (
+            f"deployed release differs from tracked upstream: {_short_sha(deployed_commit)} "
+            f"vs {_short_sha(upstream_commit)} from {upstream_repo_url}#{upstream_branch}"
         )
     else:
         status = "ok"
@@ -540,10 +631,12 @@ def upgrade_check(
             "upstream_commit": upstream_commit,
             "upstream_commit_short": _short_sha(upstream_commit),
             "note": note,
+            "relation": relation,
         }
     )
 
     upsert_setting(conn, "almanac_upgrade_last_seen_sha", upstream_commit)
+    upsert_setting(conn, "almanac_upgrade_relation", relation)
 
     if notify and update_available:
         last_notified_sha = get_setting(conn, "almanac_upgrade_last_notified_sha", "")

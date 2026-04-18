@@ -326,20 +326,26 @@ if match is None:
     print("mount_id=''")
     print("mount_point=''")
     print("mount_datadir=''")
+    print("mount_readonly=''")
+    print("mount_enable_sharing=''")
     print("users_count=0")
     print("groups_count=0")
 else:
     config = match.get("configuration") or {}
+    options = match.get("options") or {}
     print(f"mount_id={shlex.quote(str(match.get('mount_id', '')))}")
     print(f"mount_point={shlex.quote(str(match.get('mount_point', '')))}")
     print(f"mount_datadir={shlex.quote(str(config.get('datadir', '')))}")
+    print(f"mount_readonly={shlex.quote(str(options.get('readonly', '')))}")
+    print(f"mount_enable_sharing={shlex.quote(str(options.get('enable_sharing', '')))}")
     print(f"users_count={len(match.get('applicable_users') or [])}")
     print(f"groups_count={len(match.get('applicable_groups') or [])}")
 PY
 }
 
 ensure_nextcloud_vault_mount() {
-  local mount_json="" mount_id="" mount_point="" mount_datadir="" users_count=0 groups_count=0
+  local mount_json="" mount_id="" mount_point="" mount_datadir="" mount_readonly="" mount_enable_sharing=""
+  local users_count=0 groups_count=0
   local parsed_state=""
 
   nextcloud_occ app:enable files_external >/dev/null
@@ -374,8 +380,12 @@ ensure_nextcloud_vault_mount() {
     nextcloud_occ files_external:applicable "$mount_id" --remove-all >/dev/null
   fi
 
-  nextcloud_occ files_external:option "$mount_id" readonly false >/dev/null || true
-  nextcloud_occ files_external:option "$mount_id" enable_sharing true >/dev/null || true
+  if [[ "${mount_readonly,,}" != "false" ]]; then
+    nextcloud_occ files_external:option "$mount_id" readonly false >/dev/null || true
+  fi
+  if [[ "${mount_enable_sharing,,}" != "true" ]]; then
+    nextcloud_occ files_external:option "$mount_id" enable_sharing true >/dev/null || true
+  fi
 
   if ! nextcloud_exec_www_data "test -w '$NEXTCLOUD_VAULT_CONTAINER_PATH'"; then
     echo "Nextcloud can see the shared vault mount but cannot write to $NEXTCLOUD_VAULT_CONTAINER_PATH." >&2

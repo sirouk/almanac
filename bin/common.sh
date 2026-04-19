@@ -206,8 +206,8 @@ QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ALMANAC_PRIV_DIR/quarto}"
 QUARTO_OUTPUT_DIR="${QUARTO_OUTPUT_DIR:-$PUBLISHED_DIR}"
 BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
-BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$ALMANAC_PRIV_CONFIG_DIR/keys/almanac-backup-ed25519}"
-BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$ALMANAC_PRIV_CONFIG_DIR/ssh/known_hosts}"
+BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$ALMANAC_HOME/.ssh/almanac-backup-ed25519}"
+BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$ALMANAC_HOME/.ssh/almanac-backup-known_hosts}"
 
 resolve_runtime_python() {
   local python_bin="${RUNTIME_DIR:-}/hermes-venv/bin/python3"
@@ -928,6 +928,38 @@ ensure_backup_git_origin_remote() {
   else
     git -C "$repo_dir" remote add origin "$remote"
   fi
+}
+
+path_is_within_dir() {
+  local path="$1"
+  local parent="$2"
+
+  python3 - "$path" "$parent" <<'PY'
+import os
+import sys
+
+path = os.path.realpath(sys.argv[1])
+parent = os.path.realpath(sys.argv[2])
+try:
+    common = os.path.commonpath([path, parent])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if common == parent else 1)
+PY
+}
+
+path_relative_to_dir() {
+  local path="$1"
+  local parent="$2"
+
+  python3 - "$path" "$parent" <<'PY'
+import os
+import sys
+
+path = os.path.realpath(sys.argv[1])
+parent = os.path.realpath(sys.argv[2])
+print(os.path.relpath(path, parent))
+PY
 }
 
 run_compose() {

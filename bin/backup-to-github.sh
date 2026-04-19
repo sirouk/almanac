@@ -12,7 +12,33 @@ if [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then
   git -C "$ALMANAC_PRIV_DIR" init -b "$BACKUP_GIT_BRANCH"
 fi
 
-git -C "$ALMANAC_PRIV_DIR" add -A
+exclude_paths=()
+candidate_paths=()
+if [[ -n "${BACKUP_GIT_DEPLOY_KEY_PATH:-}" ]]; then
+  candidate_paths+=("$BACKUP_GIT_DEPLOY_KEY_PATH" "${BACKUP_GIT_DEPLOY_KEY_PATH}.pub")
+fi
+if [[ -n "${BACKUP_GIT_KNOWN_HOSTS_FILE:-}" ]]; then
+  candidate_paths+=("$BACKUP_GIT_KNOWN_HOSTS_FILE")
+fi
+
+for candidate in "${candidate_paths[@]}"; do
+  [[ -n "$candidate" ]] || continue
+  if path_is_within_dir "$candidate" "$ALMANAC_PRIV_DIR"; then
+    rel_path="$(path_relative_to_dir "$candidate" "$ALMANAC_PRIV_DIR")"
+    exclude_paths+=("$rel_path")
+    git -C "$ALMANAC_PRIV_DIR" rm --cached --ignore-unmatch "$rel_path" >/dev/null 2>&1 || true
+  fi
+done
+
+if (( ${#exclude_paths[@]} > 0 )); then
+  add_cmd=(git -C "$ALMANAC_PRIV_DIR" add -A -- .)
+  for rel_path in "${exclude_paths[@]}"; do
+    add_cmd+=(":(exclude)$rel_path")
+  done
+  "${add_cmd[@]}"
+else
+  git -C "$ALMANAC_PRIV_DIR" add -A
+fi
 
 if [[ -n "$(git -C "$ALMANAC_PRIV_DIR" status --porcelain)" ]]; then
   GIT_AUTHOR_NAME="$BACKUP_GIT_AUTHOR_NAME" \

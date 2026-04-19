@@ -3,6 +3,8 @@ published/
 *.log
 .DS_Store
 Thumbs.db
+/config/keys/
+/config/ssh/
 vault/.obsidian/cache/
 vault/.obsidian/workspace.json
 vault/.obsidian/workspaces.json

@@ -1642,11 +1642,11 @@ backup_github_repo_page_from_remote() {
 }
 
 default_backup_git_deploy_key_path() {
-  printf '%s' "${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/keys/almanac-backup-ed25519"
+  printf '%s' "${ALMANAC_HOME:-/home/$ALMANAC_USER}/.ssh/almanac-backup-ed25519"
 }
 
 default_backup_git_known_hosts_file() {
-  printf '%s' "${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/ssh/known_hosts"
+  printf '%s' "${ALMANAC_HOME:-/home/$ALMANAC_USER}/.ssh/almanac-backup-known_hosts"
 }
 
 collect_backup_git_answers() {
@@ -1702,6 +1702,7 @@ ensure_backup_git_deploy_key_material_root() {
 
   run_as_user "$ALMANAC_USER" "
     mkdir -p $(printf '%q' "$key_dir")
+    chmod 700 $(printf '%q' "$key_dir")
     if [[ ! -f $quoted_key ]]; then
       ssh-keygen -q -t ed25519 -N '' -C $(printf '%q' "$key_comment") -f $quoted_key
     elif [[ ! -f $quoted_pub ]]; then

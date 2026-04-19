@@ -514,11 +514,11 @@ printf 'BACKUP_GIT_KNOWN_HOSTS_FILE=%s\\n' "$BACKUP_GIT_KNOWN_HOSTS_FILE"
         f"expected GitHub SSH backup remote, got: {result.stdout!r}",
     )
     expect(
-        "BACKUP_GIT_DEPLOY_KEY_PATH=/srv/operator-svc/almanac-priv/config/keys/almanac-backup-ed25519" in result.stdout,
+        "BACKUP_GIT_DEPLOY_KEY_PATH=/srv/operator-svc/.ssh/almanac-backup-ed25519" in result.stdout,
         f"expected default backup deploy key path, got: {result.stdout!r}",
     )
     expect(
-        "BACKUP_GIT_KNOWN_HOSTS_FILE=/srv/operator-svc/almanac-priv/config/ssh/known_hosts" in result.stdout,
+        "BACKUP_GIT_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/almanac-backup-known_hosts" in result.stdout,
         f"expected default backup known_hosts path, got: {result.stdout!r}",
     )
     print("PASS test_collect_install_answers_guides_backup_remote_setup")

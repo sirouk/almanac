@@ -2382,6 +2382,12 @@ def ensure_unix_user_ready(unix_user: str) -> dict[str, str]:
 def activation_trigger_dir(cfg: Config) -> Path:
     path = cfg.state_dir / "activation-triggers"
     path.mkdir(parents=True, exist_ok=True)
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        try:
+            owner = pwd.getpwnam(cfg.almanac_user)
+            os.chown(path, owner.pw_uid, owner.pw_gid)
+        except (KeyError, OSError):
+            pass
     try:
         path.chmod(0o755)
     except OSError:

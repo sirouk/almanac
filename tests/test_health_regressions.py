@@ -58,9 +58,42 @@ check_placeholder_secrets
     print("PASS test_placeholder_secret_detection_and_reporting")
 
 
+def test_activation_trigger_write_probe_reports_writable_and_unwritable_states() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_almanac_mcp_status() {", "check_vault_definition_health() {")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+STATE_DIR="$(mktemp -d)"
+mkdir -p "$STATE_DIR/activation-triggers"
+{snippet}
+check_activation_trigger_write_access
+chmod 0555 "$STATE_DIR/activation-triggers"
+check_activation_trigger_write_access
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"activation-trigger probe case failed: {result.stderr}")
+    expect(
+        "PASS:activation trigger directory is writable:" in result.stdout,
+        f"expected writable activation-trigger pass, got: {result.stdout!r}",
+    )
+    expect(
+        "WARN:activation trigger directory is not writable:" in result.stdout,
+        f"expected unwritable activation-trigger warning, got: {result.stdout!r}",
+    )
+    print("PASS test_activation_trigger_write_probe_reports_writable_and_unwritable_states")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
-    print("PASS all 1 health regression tests")
+    test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
+    print("PASS all 2 health regression tests")
     return 0
 
 

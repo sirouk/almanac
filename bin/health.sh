@@ -304,6 +304,23 @@ PY
   fi
 }
 
+check_activation_trigger_write_access() {
+  local trigger_dir="$STATE_DIR/activation-triggers"
+  local probe_path=""
+
+  if ! mkdir -p "$trigger_dir" 2>/dev/null; then
+    warn_or_fail "activation trigger directory is not writable: $trigger_dir"
+    return 0
+  fi
+
+  if probe_path="$(mktemp "$trigger_dir/.almanac-health-trigger-XXXXXX" 2>/dev/null)"; then
+    rm -f "$probe_path"
+    pass "activation trigger directory is writable: $trigger_dir"
+  else
+    warn_or_fail "activation trigger directory is not writable: $trigger_dir"
+  fi
+}
+
 check_vault_definition_health() {
   local output=""
   local status=0
@@ -1315,6 +1332,7 @@ fi
 check_port_listening "$ALMANAC_MCP_PORT"
 check_http_json_health "http://127.0.0.1:$ALMANAC_MCP_PORT/health" "almanac-mcp health"
 check_almanac_mcp_status
+check_activation_trigger_write_access
 check_port_listening "$ALMANAC_NOTION_WEBHOOK_PORT"
 check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "almanac-notion-webhook health"
 check_vault_definition_health

@@ -50,6 +50,7 @@ WantedBy=timers.target
 EOF
 
 if [[ -n "$ACTIVATION_TRIGGER_PATH" ]]; then
+  ACTIVATION_TRIGGER_DIR="$(dirname "$ACTIVATION_TRIGGER_PATH")"
   cat >"$TARGET_DIR/almanac-user-agent-activate.path" <<EOF
 [Unit]
 Description=Watch for Almanac activation events for $AGENT_ID
@@ -57,6 +58,8 @@ Description=Watch for Almanac activation events for $AGENT_ID
 [Path]
 PathChanged=$ACTIVATION_TRIGGER_PATH
 PathModified=$ACTIVATION_TRIGGER_PATH
+PathChanged=$ACTIVATION_TRIGGER_DIR
+PathModified=$ACTIVATION_TRIGGER_DIR
 Unit=almanac-user-agent-refresh.service
 
 [Install]

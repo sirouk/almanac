@@ -64,13 +64,7 @@ initialize_private_git_repo() {
     git -C "$ALMANAC_PRIV_DIR" init -b "$BACKUP_GIT_BRANCH"
   fi
 
-  if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
-    if git -C "$ALMANAC_PRIV_DIR" remote get-url origin >/dev/null 2>&1; then
-      git -C "$ALMANAC_PRIV_DIR" remote set-url origin "$BACKUP_GIT_REMOTE"
-    else
-      git -C "$ALMANAC_PRIV_DIR" remote add origin "$BACKUP_GIT_REMOTE"
-    fi
-  fi
+  ensure_backup_git_origin_remote "$ALMANAC_PRIV_DIR"
 }
 
 seed_private_repo_layout

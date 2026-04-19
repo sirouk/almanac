@@ -206,6 +206,8 @@ QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ALMANAC_PRIV_DIR/quarto}"
 QUARTO_OUTPUT_DIR="${QUARTO_OUTPUT_DIR:-$PUBLISHED_DIR}"
 BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
+BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$ALMANAC_PRIV_CONFIG_DIR/keys/almanac-backup-ed25519}"
+BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$ALMANAC_PRIV_CONFIG_DIR/ssh/known_hosts}"
 
 resolve_runtime_python() {
   local python_bin="${RUNTIME_DIR:-}/hermes-venv/bin/python3"
@@ -814,6 +816,118 @@ compose_runtime_label() {
   fi
 
   return 1
+}
+
+backup_git_remote_uses_ssh() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+
+  case "$remote" in
+    git@*:*|ssh://*)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+backup_git_remote_host() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+  local host=""
+
+  case "$remote" in
+    git@*:* )
+      host="${remote#git@}"
+      host="${host%%:*}"
+      ;;
+    ssh://* )
+      host="${remote#ssh://}"
+      host="${host#*@}"
+      host="${host%%/*}"
+      host="${host%%:*}"
+      ;;
+    * )
+      return 1
+      ;;
+  esac
+
+  if [[ -z "$host" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$host"
+}
+
+ensure_backup_git_known_hosts() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+  local host=""
+
+  if ! backup_git_remote_uses_ssh "$remote"; then
+    return 0
+  fi
+
+  host="$(backup_git_remote_host "$remote" || true)"
+  if [[ -z "$host" ]]; then
+    echo "Could not determine the SSH host for BACKUP_GIT_REMOTE=$remote" >&2
+    return 1
+  fi
+
+  if ! command -v ssh-keyscan >/dev/null 2>&1; then
+    echo "ssh-keyscan is required to prepare backup Git SSH host keys." >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$BACKUP_GIT_KNOWN_HOSTS_FILE")"
+  touch "$BACKUP_GIT_KNOWN_HOSTS_FILE"
+  chmod 600 "$BACKUP_GIT_KNOWN_HOSTS_FILE"
+
+  if command -v ssh-keygen >/dev/null 2>&1 && \
+    ssh-keygen -F "$host" -f "$BACKUP_GIT_KNOWN_HOSTS_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  ssh-keyscan -H "$host" >>"$BACKUP_GIT_KNOWN_HOSTS_FILE" 2>/dev/null
+}
+
+prepare_backup_git_transport() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+
+  unset GIT_SSH_COMMAND
+
+  if [[ -z "$remote" ]]; then
+    return 0
+  fi
+
+  if ! backup_git_remote_uses_ssh "$remote"; then
+    return 0
+  fi
+
+  if [[ ! -f "$BACKUP_GIT_DEPLOY_KEY_PATH" ]]; then
+    echo "Backup deploy key missing at $BACKUP_GIT_DEPLOY_KEY_PATH. Run ./deploy.sh install or upgrade again to regenerate it." >&2
+    return 1
+  fi
+
+  ensure_backup_git_known_hosts "$remote"
+  chmod 600 "$BACKUP_GIT_DEPLOY_KEY_PATH" >/dev/null 2>&1 || true
+  if [[ -f "${BACKUP_GIT_DEPLOY_KEY_PATH}.pub" ]]; then
+    chmod 644 "${BACKUP_GIT_DEPLOY_KEY_PATH}.pub" >/dev/null 2>&1 || true
+  fi
+
+  export GIT_SSH_COMMAND="ssh -i \"$BACKUP_GIT_DEPLOY_KEY_PATH\" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"$BACKUP_GIT_KNOWN_HOSTS_FILE\""
+}
+
+ensure_backup_git_origin_remote() {
+  local repo_dir="$1"
+  local remote="${2:-$BACKUP_GIT_REMOTE}"
+
+  if [[ -z "$remote" ]]; then
+    return 0
+  fi
+
+  if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo_dir" remote set-url origin "$remote"
+  else
+    git -C "$repo_dir" remote add origin "$remote"
+  fi
 }
 
 run_compose() {

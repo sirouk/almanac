@@ -1240,6 +1240,13 @@ fi
 
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
   pass "backup remote configured: $BACKUP_GIT_REMOTE"
+  if backup_git_remote_uses_ssh "$BACKUP_GIT_REMOTE"; then
+    if [[ -f "$BACKUP_GIT_DEPLOY_KEY_PATH" ]]; then
+      pass "backup deploy key exists at $BACKUP_GIT_DEPLOY_KEY_PATH"
+    else
+      warn_or_fail "backup deploy key missing at $BACKUP_GIT_DEPLOY_KEY_PATH"
+    fi
+  fi
 else
   warn "BACKUP_GIT_REMOTE is empty"
 fi

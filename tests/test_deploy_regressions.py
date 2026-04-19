@@ -286,6 +286,11 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
 load_detected_config() {{
   ALMANAC_USER=operator-svc
   ALMANAC_HOME=/srv/operator-svc
@@ -361,6 +366,11 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
 load_detected_config() {{
   ALMANAC_USER=operator-svc
   ALMANAC_HOME=/srv/operator-svc
@@ -417,6 +427,11 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 0; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
 load_detected_config() {{
   ALMANAC_USER=operator-svc
   ALMANAC_HOME=/srv/operator-svc
@@ -448,6 +463,65 @@ printf 'NEXTCLOUD_ADMIN_PASSWORD=%s\\n' "$NEXTCLOUD_ADMIN_PASSWORD"
         f"expected no random rotation during stateful repair, got: {result.stdout!r}",
     )
     print("PASS test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair")
+
+
+def test_collect_install_answers_guides_backup_remote_setup() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "backup_github_owner_repo_from_remote() {", "collect_install_answers() {")
+    collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    script = f"""
+{helpers}
+{collect}
+ask() {{
+  case "$1" in
+    GitHub\\ owner/repo\\ for\\ almanac-priv\\ backup*) printf '%s' 'acme/almanac-priv' ;;
+    *) printf '%s' "${{2:-}}" ;;
+  esac
+}}
+ask_yes_no() {{ printf '%s' "${{2:-0}}"; }}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+random_secret() {{ printf '%s' "generated-secret"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  return 0
+}}
+MODE=write-config
+collect_install_answers
+printf 'BACKUP_GIT_REMOTE=%s\\n' "$BACKUP_GIT_REMOTE"
+printf 'BACKUP_GIT_DEPLOY_KEY_PATH=%s\\n' "$BACKUP_GIT_DEPLOY_KEY_PATH"
+printf 'BACKUP_GIT_KNOWN_HOSTS_FILE=%s\\n' "$BACKUP_GIT_KNOWN_HOSTS_FILE"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"backup-guidance collect_install_answers case failed: {result.stderr}")
+    expect(
+        "BACKUP_GIT_REMOTE=git@github.com:acme/almanac-priv.git" in result.stdout,
+        f"expected GitHub SSH backup remote, got: {result.stdout!r}",
+    )
+    expect(
+        "BACKUP_GIT_DEPLOY_KEY_PATH=/srv/operator-svc/almanac-priv/config/keys/almanac-backup-ed25519" in result.stdout,
+        f"expected default backup deploy key path, got: {result.stdout!r}",
+    )
+    expect(
+        "BACKUP_GIT_KNOWN_HOSTS_FILE=/srv/operator-svc/almanac-priv/config/ssh/known_hosts" in result.stdout,
+        f"expected default backup known_hosts path, got: {result.stdout!r}",
+    )
+    print("PASS test_collect_install_answers_guides_backup_remote_setup")
 
 
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
@@ -526,6 +600,7 @@ def main() -> int:
         test_secret_prompt_helpers_do_not_prefix_newlines,
         test_collect_install_answers_randomizes_placeholder_passwords,
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
+        test_collect_install_answers_guides_backup_remote_setup,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
     ]

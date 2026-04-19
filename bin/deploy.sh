@@ -34,6 +34,8 @@ ENABLE_PRIVATE_GIT="${ENABLE_PRIVATE_GIT:-1}"
 ENABLE_QUARTO="${ENABLE_QUARTO:-1}"
 SEED_SAMPLE_VAULT="${SEED_SAMPLE_VAULT:-1}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
+BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-}"
+BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-}"
 ALMANAC_MCP_HOST="${ALMANAC_MCP_HOST:-127.0.0.1}"
 ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
@@ -911,6 +913,8 @@ emit_runtime_config() {
     write_kv VAULT_WATCH_RUN_EMBED "${VAULT_WATCH_RUN_EMBED:-auto}"
     write_kv BACKUP_GIT_BRANCH "$BACKUP_GIT_BRANCH"
     write_kv BACKUP_GIT_REMOTE "$BACKUP_GIT_REMOTE"
+    write_kv BACKUP_GIT_DEPLOY_KEY_PATH "${BACKUP_GIT_DEPLOY_KEY_PATH:-}"
+    write_kv BACKUP_GIT_KNOWN_HOSTS_FILE "${BACKUP_GIT_KNOWN_HOSTS_FILE:-}"
     write_kv BACKUP_GIT_AUTHOR_NAME "$BACKUP_GIT_AUTHOR_NAME"
     write_kv BACKUP_GIT_AUTHOR_EMAIL "$BACKUP_GIT_AUTHOR_EMAIL"
     write_kv NEXTCLOUD_PORT "$NEXTCLOUD_PORT"
@@ -1349,13 +1353,36 @@ print_post_install_guide() {
   echo "  Private repo:"
   echo "    $ALMANAC_PRIV_DIR"
   if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
+    local backup_repo_page="" backup_pub_key_path="" backup_pub_key=""
+    backup_repo_page="$(backup_github_repo_page_from_remote "$BACKUP_GIT_REMOTE")"
+    backup_pub_key_path="${BACKUP_GIT_DEPLOY_KEY_PATH:-$(default_backup_git_deploy_key_path)}.pub"
+    if [[ -f "$backup_pub_key_path" ]]; then
+      backup_pub_key="$(<"$backup_pub_key_path")"
+    fi
     echo "  Backup remote:"
     echo "    $BACKUP_GIT_REMOTE"
+    if [[ -n "$backup_repo_page" ]]; then
+      echo "  Create or reuse this private GitHub repo:"
+      echo "    $backup_repo_page"
+      echo "  If it does not exist yet, create it as a new empty private repository."
+      echo "  Then add a deploy key with write access here:"
+      echo "    $backup_repo_page/settings/keys"
+    fi
+    echo "  Deploy key public file:"
+    echo "    $backup_pub_key_path"
+    if [[ -n "$backup_pub_key" ]]; then
+      echo "  Public key to paste into GitHub:"
+      printf '    %s\n' "$backup_pub_key"
+    fi
+    echo "  Backup smoke test:"
+    echo "    sudo -iu $ALMANAC_USER env ALMANAC_CONFIG_FILE=\"$CONFIG_TARGET\" \"$ALMANAC_REPO_DIR/bin/backup-to-github.sh\""
   else
-    echo "  Set BACKUP_GIT_REMOTE in:"
+    echo "  Configure it on the next deploy run:"
+    echo "    GitHub owner/repo for almanac-priv backup"
+    echo "  Or set these values in:"
     echo "    $CONFIG_TARGET"
-    echo "  Then run:"
-    echo "    $ALMANAC_REPO_DIR/bin/backup-to-github.sh"
+    echo "    BACKUP_GIT_REMOTE=git@github.com:owner/repo.git"
+    echo "    BACKUP_GIT_DEPLOY_KEY_PATH=$(default_backup_git_deploy_key_path)"
   fi
   echo
 
@@ -1582,6 +1609,109 @@ wipe_nextcloud_state_if_requested() {
   install -d -m 0750 -o "$ALMANAC_USER" -g "$ALMANAC_USER" "$NEXTCLOUD_STATE_DIR"
 }
 
+backup_github_owner_repo_from_remote() {
+  local remote="${1:-}"
+  local owner_repo=""
+
+  case "$remote" in
+    https://github.com/*)
+      owner_repo="${remote#https://github.com/}"
+      ;;
+    git@github.com:*)
+      owner_repo="${remote#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      owner_repo="${remote#ssh://git@github.com/}"
+      ;;
+    *)
+      owner_repo=""
+      ;;
+  esac
+
+  owner_repo="${owner_repo%.git}"
+  printf '%s' "$owner_repo"
+}
+
+backup_github_repo_page_from_remote() {
+  local owner_repo=""
+
+  owner_repo="$(backup_github_owner_repo_from_remote "${1:-}")"
+  if [[ -n "$owner_repo" ]]; then
+    printf 'https://github.com/%s' "$owner_repo"
+  fi
+}
+
+default_backup_git_deploy_key_path() {
+  printf '%s' "${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/keys/almanac-backup-ed25519"
+}
+
+default_backup_git_known_hosts_file() {
+  printf '%s' "${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/ssh/known_hosts"
+}
+
+collect_backup_git_answers() {
+  local default_owner_repo="" owner_repo="" repo_page=""
+
+  default_owner_repo="$(backup_github_owner_repo_from_remote "${BACKUP_GIT_REMOTE:-}")"
+
+  echo
+  echo "GitHub backup for almanac-priv"
+  echo "  Almanac can push the private repo to a private GitHub repository using a deploy-only SSH key."
+  echo "  Deploy will generate that key on this host and print the public key for you to paste into GitHub."
+
+  while true; do
+    owner_repo="$(ask "GitHub owner/repo for almanac-priv backup (blank to skip)" "$default_owner_repo")"
+    owner_repo="${owner_repo#/}"
+    owner_repo="${owner_repo%/}"
+
+    if [[ -z "$owner_repo" ]]; then
+      BACKUP_GIT_REMOTE=""
+      BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$(default_backup_git_deploy_key_path)}"
+      BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$(default_backup_git_known_hosts_file)}"
+      return 0
+    fi
+
+    if [[ "$owner_repo" == */* && "$owner_repo" != */ && "$owner_repo" != /* ]]; then
+      BACKUP_GIT_REMOTE="git@github.com:${owner_repo}.git"
+      BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$(default_backup_git_deploy_key_path)}"
+      BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$(default_backup_git_known_hosts_file)}"
+      repo_page="$(backup_github_repo_page_from_remote "$BACKUP_GIT_REMOTE")"
+      echo "  Repo to create or reuse:"
+      echo "    $repo_page"
+      return 0
+    fi
+
+    echo "Please enter GitHub owner/repo, for example acme/almanac-priv, or leave it blank to skip."
+  done
+}
+
+ensure_backup_git_deploy_key_material_root() {
+  local key_path="" pub_path="" key_dir="" pub_contents="" key_comment="" quoted_key="" quoted_pub=""
+
+  if [[ -z "${BACKUP_GIT_REMOTE:-}" ]] || ! backup_git_remote_uses_ssh "$BACKUP_GIT_REMOTE"; then
+    return 0
+  fi
+
+  key_path="${BACKUP_GIT_DEPLOY_KEY_PATH:-$(default_backup_git_deploy_key_path)}"
+  pub_path="${key_path}.pub"
+  key_dir="$(dirname "$key_path")"
+  key_comment="almanac-backup@$(hostname -f 2>/dev/null || hostname)"
+
+  printf -v quoted_key '%q' "$key_path"
+  printf -v quoted_pub '%q' "$pub_path"
+
+  run_as_user "$ALMANAC_USER" "
+    mkdir -p $(printf '%q' "$key_dir")
+    if [[ ! -f $quoted_key ]]; then
+      ssh-keygen -q -t ed25519 -N '' -C $(printf '%q' "$key_comment") -f $quoted_key
+    elif [[ ! -f $quoted_pub ]]; then
+      ssh-keygen -y -f $quoted_key > $quoted_pub
+    fi
+    chmod 600 $quoted_key
+    chmod 644 $quoted_pub
+  "
+}
+
 collect_install_answers() {
   local -a artifact_hints=()
   local default_user="" default_home="" default_domain="" default_repo="" default_priv=""
@@ -1710,7 +1840,7 @@ collect_install_answers() {
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   ALMANAC_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
-  BACKUP_GIT_REMOTE="$(ask "Private GitHub remote for almanac-priv (blank to skip)" "${BACKUP_GIT_REMOTE:-}")"
+  collect_backup_git_answers
   BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
   BACKUP_GIT_AUTHOR_EMAIL="$(ask "Git author email" "$default_git_email")"
   NEXTCLOUD_PORT="$(ask "Nextcloud local port" "$default_nextcloud_port")"
@@ -2186,7 +2316,7 @@ run_root_install() {
   export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
   export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
   export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
-  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE
+  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE BACKUP_GIT_DEPLOY_KEY_PATH BACKUP_GIT_KNOWN_HOSTS_FILE
   export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
   export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
   export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
@@ -2217,6 +2347,7 @@ run_root_install() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
 
   local uid=""
@@ -2280,7 +2411,7 @@ run_root_upgrade() {
   export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
   export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
   export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
-  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE
+  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE BACKUP_GIT_DEPLOY_KEY_PATH BACKUP_GIT_KNOWN_HOSTS_FILE
   export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
   export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
   export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
@@ -2322,6 +2453,7 @@ run_root_upgrade() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
 
   restart_shared_user_services_root

@@ -1,9 +1,0 @@
-name: Inbox
-description: Unsorted notes that have not been triaged yet; scratch pad for new captures.
-owner: operator
-default_subscribed: true
-category: workspace
-tags:
-  - triage
-  - scratch
-brief_template: Unsorted capture surface; items here are in-flight and unstable.

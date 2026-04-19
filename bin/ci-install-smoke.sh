@@ -617,6 +617,45 @@ assert_agent_payload() {
   fi
 }
 
+assert_default_vault_bootstrap_layout() {
+  python3 - "$ALMANAC_REPO_DIR" "$VAULT_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+repo_dir = Path(sys.argv[1])
+vault_dir = Path(sys.argv[2])
+required_dirs = ["Research", "Skills", "Projects", "Repos"]
+for name in required_dirs:
+    target = vault_dir / name
+    if not target.is_dir():
+        raise SystemExit(f"expected default vault directory to exist: {target}")
+    for rel in (".vault", "README.md"):
+        path = target / rel
+        if not path.is_file():
+            raise SystemExit(f"expected default vault file to exist: {path}")
+
+for legacy in ("Inbox", "People", "Teams"):
+    if (vault_dir / legacy).exists():
+        raise SystemExit(f"expected legacy default vault to be absent after bootstrap: {vault_dir / legacy}")
+
+repo_note = vault_dir / "Repos" / "almanac.md"
+if not repo_note.is_file():
+    raise SystemExit(f"expected repo starter note: {repo_note}")
+project_note = vault_dir / "Projects" / "almanac.md"
+if not project_note.is_file():
+    raise SystemExit(f"expected project starter note: {project_note}")
+
+skills_dir = repo_dir / "skills"
+missing = []
+for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()):
+    note = vault_dir / "Skills" / f"{skill_dir.name}.md"
+    if not note.is_file():
+        missing.append(note.name)
+if missing:
+    raise SystemExit(f"expected shipped skill starter notes, missing: {', '.join(missing)}")
+PY
+}
+
 assert_vault_definition_reload() {
   local docs_dir="$VAULT_DIR/TeamDocs"
   local nested_dir="$docs_dir/Compliance"
@@ -1946,10 +1985,13 @@ INSTALLED=1
 
 wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 120 1
 wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 120 1
-
 echo
+
 echo "Checking agent payload..."
 assert_agent_payload
+
+echo "Checking default vault bootstrap layout..."
+assert_default_vault_bootstrap_layout
 
 echo "Checking .vault discovery and reload-defs..."
 assert_vault_definition_reload

@@ -12,6 +12,10 @@ seed_private_repo_layout() {
     rsync -a --ignore-existing "$ALMANAC_PRIV_TEMPLATE_DIR/" "$ALMANAC_PRIV_DIR/"
   fi
 
+  python3 "$SCRIPT_DIR/reconcile-vault-layout.py" \
+    --repo-dir "$BOOTSTRAP_DIR" \
+    --vault-dir "$VAULT_DIR"
+
   if [[ ! -f "$ALMANAC_PRIV_CONFIG_DIR/almanac.env" ]]; then
     cp "$BOOTSTRAP_DIR/config/almanac.env.example" "$ALMANAC_PRIV_CONFIG_DIR/almanac.env"
   fi

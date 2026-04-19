@@ -1,8 +1,0 @@
-name: People
-description: Profiles and reference notes about individuals the organization interacts with.
-owner: operator
-default_subscribed: true
-category: directory
-tags:
-  - people
-  - contacts

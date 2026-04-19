@@ -1,3 +1,10 @@
+<!-- managed: almanac-default-vault -->
 # Projects
 
-Create one folder per project and keep durable notes close to the work.
+Create one note or subfolder per real organizational initiative.
+
+What belongs here:
+- project briefs
+- decisions and milestones
+- cross-functional coordination notes
+- delivery and operational context worth retaining

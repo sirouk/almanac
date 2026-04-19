@@ -150,6 +150,74 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
             os.environ.update(old_env)
 
 
+def test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_upgrade_different_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_upgrade_different_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state_dir = root / "state"
+        release_state_file = state_dir / "almanac-release.json"
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(state_dir),
+                "RUNTIME_DIR": str(state_dir / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(state_dir / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(state_dir / "agents"),
+                "ALMANAC_CURATOR_DIR": str(state_dir / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(state_dir / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(state_dir / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(state_dir / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(release_state_file),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "1994645819",
+            },
+        )
+        release_state_file.parent.mkdir(parents=True, exist_ok=True)
+        release_state_file.write_text(
+            json.dumps(
+                {
+                    "deployed_commit": "0000000000000000000000000000000000000000",
+                    "tracked_upstream_repo_url": "https://github.com/example/almanac.git",
+                    "tracked_upstream_branch": "main",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            ctl._query_upstream_head = lambda repo_url, branch: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._classify_upstream_relation = lambda *args, **kwargs: "different"
+            result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
+
+            expect(result["update_available"] is True, result)
+            expect(result["notification_sent"] is True, result)
+            expect(result["relation"] == "different", result)
+
+            outbox_count = conn.execute("SELECT COUNT(*) AS count FROM notification_outbox").fetchone()["count"]
+            expect(outbox_count == 1, f"expected one queued notification for differing deployed commit, found {outbox_count}")
+            print("PASS test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -221,8 +289,9 @@ def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
 
 def main() -> int:
     test_upgrade_check_notifies_operator_and_user_agents_once_per_sha()
+    test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs()
     test_upgrade_check_does_not_notify_when_deployed_is_ahead()
-    print("PASS all 2 upgrade notification regression tests")
+    print("PASS all 3 upgrade notification regression tests")
     return 0
 
 

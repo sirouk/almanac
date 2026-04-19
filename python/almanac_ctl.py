@@ -590,7 +590,7 @@ def upgrade_check(
         deployed_commit,
         upstream_commit,
     )
-    update_available = relation == "behind"
+    update_available = relation in {"behind", "diverged", "different"}
     if not deployed_commit:
         status = "warn"
         note = (

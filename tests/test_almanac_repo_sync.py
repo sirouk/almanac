@@ -41,6 +41,11 @@ def init_git_repo(path: Path) -> None:
     subprocess.run(["git", "-C", str(path), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
 
 
+def init_bare_git_repo(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--bare", str(path)], check=True, capture_output=True, text=True)
+
+
 def commit_all(path: Path, message: str) -> None:
     subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, capture_output=True, text=True)
     subprocess.run(["git", "-C", str(path), "commit", "-m", message], check=True, capture_output=True, text=True)
@@ -123,11 +128,44 @@ def test_discover_vault_repo_sources_skips_managed_mirror_content() -> None:
             source = discovered[0]
             expect(source["canonical_url"] == "https://github.com/example/almanac", str(source))
             expect(source["source_paths"] == [str(human_note)], str(source))
+            expect(source["local_repo_paths"] == [], str(source))
         finally:
             os.environ.clear()
             os.environ.update(old_env)
 
         print("PASS test_discover_vault_repo_sources_skips_managed_mirror_content")
+
+
+def test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_repo_local_discovery_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = make_config(root)
+        write_repos_vault(root)
+        local_repo = root / "vault" / "Projects" / "roadmap" / "demo-repo"
+        init_git_repo(local_repo)
+        subprocess.run(
+            ["git", "-C", str(local_repo), "remote", "add", "origin", "https://github.com/example/demo-repo.git"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            discovered = mod.discover_vault_repo_sources(cfg)
+            expect(len(discovered) == 1, f"expected one discovered repo source, got {discovered}")
+            source = discovered[0]
+            expect(source["canonical_url"] == "https://github.com/example/demo-repo", str(source))
+            expect(source["source_paths"] == [], str(source))
+            expect(source["local_repo_paths"] == [str(local_repo)], str(source))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        print("PASS test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault")
 
 
 def test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes() -> None:
@@ -166,6 +204,7 @@ def test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes() -> None:
                         "canonical_url": "https://github.com/example/almanac",
                         "remote_url": str(source_repo),
                         "source_paths": [str(repo_note)],
+                        "local_repo_paths": [],
                     }
                 ],
             )
@@ -191,6 +230,7 @@ def test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes() -> None:
                         "canonical_url": "https://github.com/example/almanac",
                         "remote_url": str(source_repo),
                         "source_paths": [str(repo_note)],
+                        "local_repo_paths": [],
                     }
                 ],
             )
@@ -211,10 +251,66 @@ def test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes() -> None:
         print("PASS test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes")
 
 
+def test_sync_vault_repo_mirrors_pulls_local_repo_in_place() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_local_repo_sync_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = make_config(root)
+        write_repos_vault(root)
+        local_repo = root / "vault" / "Projects" / "roadmap" / "demo-repo"
+        remote_bare = root / "remote.git"
+        source_repo = root / "source-repo"
+        init_bare_git_repo(remote_bare)
+        init_git_repo(source_repo)
+        subprocess.run(["git", "-C", str(source_repo), "remote", "add", "origin", str(remote_bare)], check=True, capture_output=True, text=True)
+        (source_repo / "README.md").write_text("first local sync\n", encoding="utf-8")
+        commit_all(source_repo, "initial")
+        subprocess.run(["git", "-C", str(source_repo), "push", "-u", "origin", "main"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "clone", "-b", "main", str(remote_bare), str(local_repo)], check=True, capture_output=True, text=True)
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.reload_vault_definitions(conn, cfg)
+
+            (source_repo / "README.md").write_text("second local sync\n", encoding="utf-8")
+            commit_all(source_repo, "update local repo")
+            subprocess.run(["git", "-C", str(source_repo), "push", "origin", "main"], check=True, capture_output=True, text=True)
+
+            result = mod.sync_vault_repo_mirrors(
+                conn,
+                cfg,
+                repo_sources=[
+                    {
+                        "canonical_url": "https://github.com/example/demo-repo",
+                        "remote_url": str(remote_bare),
+                        "source_paths": [],
+                        "local_repo_paths": [str(local_repo)],
+                    }
+                ],
+            )
+            expect((local_repo / "README.md").read_text(encoding="utf-8") == "second local sync\n", "expected in-place repo pull to update README")
+            expect((root / "vault" / "Repos" / "_mirrors" / "example-demo-repo").exists() is False, "did not expect mirror dir for in-place repo sync")
+            expect(any(path.endswith("Projects/roadmap/demo-repo/README.md") for path in result["changed_paths"]), str(result))
+            expect(result["repos_total"] == 1, str(result))
+            expect(result["repos_failed"] == [], str(result))
+            status = result["repo_statuses"][0]
+            expect(status["mode"] == "in-place", str(status))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        print("PASS test_sync_vault_repo_mirrors_pulls_local_repo_in_place")
+
+
 def main() -> int:
     test_discover_vault_repo_sources_skips_managed_mirror_content()
+    test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault()
     test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes()
-    print("PASS all 2 repo sync regression tests")
+    test_sync_vault_repo_mirrors_pulls_local_repo_in_place()
+    print("PASS all 4 repo sync regression tests")
     return 0
 
 

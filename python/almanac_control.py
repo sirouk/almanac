@@ -1872,6 +1872,30 @@ def _repo_sync_read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _repo_sync_github_remote(remote_value: str) -> tuple[str, str] | None:
+    remote = str(remote_value or "").strip()
+    if not remote:
+        return None
+    match = REPO_SYNC_GITHUB_PATTERN.search(remote)
+    if match is None:
+        return None
+    owner = match.group("owner")
+    repo = match.group("repo")
+    canonical_url = f"https://github.com/{owner}/{repo}"
+    remote_url = _repo_sync_remote_url(remote, owner, repo)
+    return canonical_url, remote_url
+
+
+def _repo_sync_local_repo_remote(root_path: Path) -> tuple[str, str] | None:
+    if not (root_path / ".git").exists():
+        return None
+    try:
+        remote = _repo_sync_git("remote", "get-url", "origin", cwd=root_path).stdout.strip()
+    except RuntimeError:
+        return None
+    return _repo_sync_github_remote(remote)
+
+
 def discover_vault_repo_sources(cfg: Config) -> list[dict[str, Any]]:
     discovered: dict[str, dict[str, Any]] = {}
     vault_root = cfg.vault_dir
@@ -1887,6 +1911,26 @@ def discover_vault_repo_sources(cfg: Config) -> list[dict[str, Any]]:
         if rel_parts[:2] == ("Repos", "_mirrors"):
             dirs[:] = []
             continue
+
+        local_repo = _repo_sync_local_repo_remote(root_path)
+        if local_repo is not None:
+            canonical_url, remote_url = local_repo
+            entry = discovered.setdefault(
+                canonical_url,
+                {
+                    "slug": _repo_sync_slug_from_url(canonical_url),
+                    "canonical_url": canonical_url,
+                    "remote_url": remote_url,
+                    "source_paths": set(),
+                    "local_repo_paths": set(),
+                },
+            )
+            if _repo_sync_remote_priority(remote_url) > _repo_sync_remote_priority(str(entry.get("remote_url") or "")):
+                entry["remote_url"] = remote_url
+            local_paths = entry.setdefault("local_repo_paths", set())
+            if isinstance(local_paths, set):
+                local_paths.add(str(root_path))
+
         dirs[:] = [
             name
             for name in dirs
@@ -1916,6 +1960,7 @@ def discover_vault_repo_sources(cfg: Config) -> list[dict[str, Any]]:
                         "canonical_url": canonical_url,
                         "remote_url": remote_url,
                         "source_paths": set(),
+                        "local_repo_paths": set(),
                     },
                 )
                 if _repo_sync_remote_priority(remote_url) > _repo_sync_remote_priority(str(entry.get("remote_url") or "")):
@@ -1933,6 +1978,7 @@ def discover_vault_repo_sources(cfg: Config) -> list[dict[str, Any]]:
                 "canonical_url": str(entry["canonical_url"]),
                 "remote_url": str(entry["remote_url"]),
                 "source_paths": sorted(str(p) for p in entry.get("source_paths", set())),
+                "local_repo_paths": sorted(str(p) for p in entry.get("local_repo_paths", set())),
             }
         )
     return results
@@ -1964,6 +2010,29 @@ def _repo_sync_current_branch(checkout_dir: Path) -> str:
     except RuntimeError:
         return ""
     return origin_head.rsplit("/", 1)[-1].strip()
+
+
+def _repo_sync_pull_local_repo(repo_dir: Path, remote_url: str) -> dict[str, Any]:
+    status = _repo_sync_git("status", "--porcelain", cwd=repo_dir).stdout.strip()
+    if status:
+        raise RuntimeError(f"local repo has uncommitted changes at {repo_dir}")
+    branch = _repo_sync_current_branch(repo_dir)
+    if not branch:
+        raise RuntimeError(f"local repo has no active branch at {repo_dir}")
+    before_commit = _repo_sync_git("rev-parse", "HEAD", cwd=repo_dir).stdout.strip()
+    _repo_sync_git("fetch", "--prune", remote_url, branch, cwd=repo_dir, timeout=300)
+    diff_output = _repo_sync_git("diff", "--name-only", "HEAD..FETCH_HEAD", cwd=repo_dir, timeout=300).stdout
+    changed_rel_paths = [line.strip() for line in diff_output.splitlines() if line.strip()]
+    if changed_rel_paths:
+        _repo_sync_git("merge", "--ff-only", "FETCH_HEAD", cwd=repo_dir, timeout=300)
+    after_commit = _repo_sync_git("rev-parse", "HEAD", cwd=repo_dir).stdout.strip()
+    return {
+        "branch": branch,
+        "before_commit": before_commit,
+        "commit": after_commit,
+        "changed_paths": [str((repo_dir / rel_path).resolve(strict=False)) for rel_path in changed_rel_paths],
+        "changed_count": len(changed_rel_paths),
+    }
 
 
 def _repo_sync_checkout(checkout_dir: Path, remote_url: str) -> dict[str, str]:
@@ -2139,6 +2208,11 @@ def sync_vault_repo_mirrors(
             for path in raw_source.get("source_paths") or []
             if str(path).strip()
         }
+        local_repo_paths = {
+            str(path).strip()
+            for path in raw_source.get("local_repo_paths") or []
+            if str(path).strip()
+        }
         entry = merged_sources.setdefault(
             canonical_url,
             {
@@ -2146,6 +2220,7 @@ def sync_vault_repo_mirrors(
                 "canonical_url": canonical_url,
                 "remote_url": remote_url,
                 "source_paths": set(),
+                "local_repo_paths": set(),
             },
         )
         if _repo_sync_remote_priority(remote_url) > _repo_sync_remote_priority(str(entry.get("remote_url") or "")):
@@ -2153,6 +2228,9 @@ def sync_vault_repo_mirrors(
         cast_source_paths = entry.setdefault("source_paths", set())
         if isinstance(cast_source_paths, set):
             cast_source_paths.update(source_paths)
+        cast_local_repo_paths = entry.setdefault("local_repo_paths", set())
+        if isinstance(cast_local_repo_paths, set):
+            cast_local_repo_paths.update(local_repo_paths)
 
     state_dir = _repo_sync_state_dir(cfg)
     checkout_root = _repo_sync_checkout_root(cfg)
@@ -2166,6 +2244,7 @@ def sync_vault_repo_mirrors(
             "canonical_url": canonical_url,
             "remote_url": str(entry["remote_url"]),
             "source_paths": sorted(str(path) for path in entry.get("source_paths", set())),
+            "local_repo_paths": sorted(str(path) for path in entry.get("local_repo_paths", set())),
         }
         for canonical_url, entry in sorted(merged_sources.items())
     ]
@@ -2179,7 +2258,8 @@ def sync_vault_repo_mirrors(
     }
 
     repos_vault_dir = cfg.vault_dir / "Repos"
-    if normalized_sources and not (repos_vault_dir / ".vault").is_file():
+    requires_mirror_vault = any(not source.get("local_repo_paths") for source in normalized_sources)
+    if requires_mirror_vault and not (repos_vault_dir / ".vault").is_file():
         summary["repos_failed"].append("Repos vault is missing .vault metadata; refusing to create managed mirrors")
         note_refresh_job(
             conn,
@@ -2193,13 +2273,33 @@ def sync_vault_repo_mirrors(
         return summary
 
     mirror_root.mkdir(parents=True, exist_ok=True)
-    active_slugs = {str(source["slug"]) for source in normalized_sources}
+    active_slugs = {str(source["slug"]) for source in normalized_sources if not source.get("local_repo_paths")}
 
     for source in normalized_sources:
         slug = str(source["slug"])
         checkout_dir = checkout_root / slug
         mirror_dir = mirror_root / slug
         try:
+            if source.get("local_repo_paths"):
+                local_results = []
+                for repo_path in source["local_repo_paths"]:
+                    local_result = _repo_sync_pull_local_repo(Path(repo_path), str(source["remote_url"]))
+                    local_results.append({"path": repo_path, **local_result})
+                    summary["changed_paths"].extend(local_result["changed_paths"])
+                summary["repos_synced"].append(slug)
+                summary["repo_statuses"].append(
+                    {
+                        "slug": slug,
+                        "canonical_url": str(source["canonical_url"]),
+                        "remote_url": str(source["remote_url"]),
+                        "source_paths": list(source["source_paths"]),
+                        "local_repo_paths": list(source["local_repo_paths"]),
+                        "mode": "in-place",
+                        "syncs": local_results,
+                    }
+                )
+                continue
+
             checkout = _repo_sync_checkout(checkout_dir, str(source["remote_url"]))
             desired_files = _repo_sync_collect_export_files(checkout_dir)
             desired_files[REPO_SYNC_STATUS_FILENAME] = _repo_sync_status_note(
@@ -2221,6 +2321,8 @@ def sync_vault_repo_mirrors(
                     "branch": str(checkout.get("branch") or ""),
                     "commit": str(checkout.get("commit") or ""),
                     "source_paths": list(source["source_paths"]),
+                    "local_repo_paths": list(source["local_repo_paths"]),
+                    "mode": "mirror",
                     "created": int(applied["created"]),
                     "updated": int(applied["updated"]),
                     "removed": int(applied["removed"]),
@@ -2234,6 +2336,7 @@ def sync_vault_repo_mirrors(
                     "canonical_url": str(source["canonical_url"]),
                     "remote_url": str(source["remote_url"]),
                     "source_paths": list(source["source_paths"]),
+                    "local_repo_paths": list(source["local_repo_paths"]),
                     "error": str(exc),
                 }
             )

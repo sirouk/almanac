@@ -713,13 +713,13 @@ run_repo_sync_preflight() {
   local state_dir="$priv_dir/state"
   local config_file="$config_dir/almanac.env"
   local source_repo="$TMP_ROOT/repo-sync-source"
-  local mirror_readme="$vault_dir/Repos/_mirrors/example-almanac/README.md"
-  local mirror_doc="$vault_dir/Repos/_mirrors/example-almanac/docs/architecture.md"
+  local remote_bare="$TMP_ROOT/repo-sync-remote.git"
+  local local_repo="$vault_dir/Projects/demo-repo"
   local trigger_default="$state_dir/activation-triggers/agent-default.json"
   local trigger_optout="$state_dir/activation-triggers/agent-optout.json"
   local watcher_pid=""
 
-  mkdir -p "$bin_dir" "$config_dir" "$vault_dir/Repos" "$source_repo"
+  mkdir -p "$bin_dir" "$config_dir" "$vault_dir/Projects" "$source_repo"
   cp "$ROOT_DIR/bin/common.sh" "$bin_dir/common.sh"
   cp "$ROOT_DIR/bin/vault-watch.sh" "$bin_dir/vault-watch.sh"
   ln -s "$ROOT_DIR/python" "$repo_dir/python"
@@ -768,28 +768,26 @@ VAULT_WATCH_DEBOUNCE_SECONDS=1
 VAULT_WATCH_RUN_EMBED=0
 EOF
 
-  cat >"$vault_dir/Repos/.vault" <<'EOF'
-name: Repos
-description: Repository inventory
+  cat >"$vault_dir/Projects/.vault" <<'EOF'
+name: Projects
+description: Active project workspaces
 owner: organization
 default_subscribed: true
-category: inventory
-EOF
-  cat >"$vault_dir/Repos/almanac.md" <<'EOF'
-# Almanac
-
-Repository URL: https://github.com/example/almanac
+category: workspace
 EOF
 
+  git init --bare "$remote_bare" >/dev/null
   git init -b main "$source_repo" >/dev/null
   git -C "$source_repo" config user.name 'Almanac Preflight'
   git -C "$source_repo" config user.email 'almanac-preflight@example.com'
-  printf 'repo readme v1\n' >"$source_repo/README.md"
-  mkdir -p "$source_repo/docs" "$source_repo/src"
-  printf 'architecture v1\n' >"$source_repo/docs/architecture.md"
-  printf 'print("ignored")\n' >"$source_repo/src/main.py"
+  git -C "$source_repo" remote add origin "$remote_bare"
+  mkdir -p "$source_repo/src"
+  printf 'print("v1")\n' >"$source_repo/src/main.py"
   git -C "$source_repo" add -A
-  git -C "$source_repo" commit -m 'initial repo sync fixture' >/dev/null
+  git -C "$source_repo" commit -m 'initial local repo fixture' >/dev/null
+  git -C "$source_repo" push -u origin main >/dev/null
+  git clone -b main "$remote_bare" "$local_repo" >/dev/null
+  git -C "$local_repo" remote set-url origin https://github.com/example/demo-repo.git
 
   python3 - "$config_file" "$ROOT_DIR" <<'PY'
 import json
@@ -846,10 +844,10 @@ for agent_id, unix_user, display_name in agents:
 conn.commit()
 for agent_id, _, _ in agents:
     mod.ensure_default_subscriptions(conn, agent_id)
-mod.set_vault_subscription(conn, agent_id="agent-optout", vault_name="Repos", subscribed=False, source="user")
+mod.set_vault_subscription(conn, agent_id="agent-optout", vault_name="Projects", subscribed=False, source="user")
 PY
 
-  log "exercising watcher-driven GitHub repo sync mirroring + notification routing"
+  log "exercising watcher-driven in-vault git repo sync + notification routing"
 
   env \
     ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
@@ -858,12 +856,17 @@ PY
   watcher_pid=$!
   sleep 1
 
-  python3 - "$config_file" "$ROOT_DIR" "$source_repo" <<'PY'
+  printf 'print("v2")\n' >"$source_repo/src/main.py"
+  git -C "$source_repo" add -A
+  git -C "$source_repo" commit -m 'update tracked code file' >/dev/null
+  git -C "$source_repo" push origin main >/dev/null
+
+  python3 - "$config_file" "$ROOT_DIR" "$remote_bare" <<'PY'
 import os
 import sys
 from pathlib import Path
 
-config_file, repo_root, source_repo = sys.argv[1:4]
+config_file, repo_root, remote_bare = sys.argv[1:4]
 os.environ["ALMANAC_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
@@ -873,22 +876,24 @@ cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
 discovered = mod.discover_vault_repo_sources(cfg)
 assert len(discovered) == 1, discovered
-discovered[0]["remote_url"] = source_repo
-result = mod.sync_vault_repo_mirrors(conn, cfg, repo_sources=discovered)
+assert discovered[0]["local_repo_paths"], discovered
+assert discovered[0]["canonical_url"] == "https://github.com/example/demo-repo", discovered
+found = dict(discovered[0])
+found["remote_url"] = remote_bare
+result = mod.sync_vault_repo_mirrors(conn, cfg, repo_sources=[found])
 assert result["repos_total"] == 1, result
 assert result["repos_failed"] == [], result
+assert any(path.endswith("Projects/demo-repo/src/main.py") for path in result["changed_paths"]), result
 PY
 
-  wait_for_path_state "$mirror_readme" present 40 0.25
-  wait_for_path_state "$mirror_doc" present 40 0.25
   wait_for_path_state "$trigger_default" present 40 0.25
 
-  python3 - "$config_file" "$ROOT_DIR" "$mirror_readme" "$mirror_doc" "$trigger_default" "$trigger_optout" <<'PY'
+  python3 - "$config_file" "$ROOT_DIR" "$local_repo" "$trigger_default" "$trigger_optout" <<'PY'
 import os
 import sys
 from pathlib import Path
 
-config_file, repo_root, mirror_readme, mirror_doc, trigger_default, trigger_optout = sys.argv[1:7]
+config_file, repo_root, local_repo, trigger_default, trigger_optout = sys.argv[1:6]
 os.environ["ALMANAC_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
@@ -897,9 +902,7 @@ import almanac_control as mod
 cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
 
-assert Path(mirror_readme).is_file(), mirror_readme
-assert Path(mirror_doc).is_file(), mirror_doc
-assert not (Path(mirror_readme).parent / "src" / "main.py").exists(), "unexpected source mirror"
+assert (Path(local_repo) / "src" / "main.py").read_text(encoding="utf-8") == 'print("v2")\n'
 assert Path(trigger_default).is_file(), trigger_default
 assert not Path(trigger_optout).exists(), trigger_optout
 
@@ -908,7 +911,7 @@ optout_notifications = mod.consume_agent_notifications(conn, agent_id="agent-opt
 
 assert len(default_notifications) == 1, default_notifications
 assert default_notifications[0]["channel_kind"] == "vault-change", default_notifications
-assert "Repos" in default_notifications[0]["message"], default_notifications
+assert "Projects" in default_notifications[0]["message"], default_notifications
 assert optout_notifications == [], optout_notifications
 PY
 

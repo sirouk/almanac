@@ -29,6 +29,32 @@ is_direct_vault_text_path() {
   [[ "$lower_path" == *.md || "$lower_path" == *.markdown || "$lower_path" == *.mdx || "$lower_path" == *.txt || "$lower_path" == *.text ]]
 }
 
+is_git_metadata_path() {
+  local event_path="$1"
+  [[ "$event_path" == */.git || "$event_path" == */.git/* ]]
+}
+
+is_path_under_vault_git_repo() {
+  local event_path="$1"
+  local candidate=""
+
+  if is_git_metadata_path "$event_path"; then
+    return 1
+  fi
+
+  candidate="$(dirname "$event_path")"
+  while [[ -n "$candidate" && "$candidate" != "/" ]]; do
+    if [[ -e "$candidate/.git" ]]; then
+      return 0
+    fi
+    if [[ "$candidate" == "$VAULT_DIR" ]]; then
+      break
+    fi
+    candidate="$(dirname "$candidate")"
+  done
+  return 1
+}
+
 pdf_status_needs_qmd_refresh() {
   python3 - "$PDF_INGEST_STATUS_FILE" <<'PY'
 import json
@@ -191,6 +217,12 @@ fold_event_into_flags() {
       vault_watch_need_qmd=1
       vault_watch_notify_paths+=("$event_path")
     fi
+    return 0
+  fi
+
+  if is_path_under_vault_git_repo "$event_path"; then
+    vault_watch_need_qmd=1
+    vault_watch_notify_paths+=("$event_path")
     return 0
   fi
 

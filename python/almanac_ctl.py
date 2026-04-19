@@ -52,6 +52,7 @@ from almanac_control import (
     approve_onboarding_session,
     signal_agent_refresh_from_curator,
     subscriptions_for_agent,
+    sync_vault_repo_mirrors,
     utc_now_iso,
     upsert_setting,
 )
@@ -154,6 +155,7 @@ def parse_args() -> argparse.Namespace:
 
     internal_refresh = internal_sub.add_parser("curator-refresh")
     internal_refresh.add_argument("--actor", default="curator-refresh")
+    internal_sub.add_parser("vault-repo-sync")
 
     notion = subparsers.add_parser("notion")
     notion_sub = notion.add_subparsers(dest="action", required=True)
@@ -1099,6 +1101,7 @@ def main() -> None:
         if args.domain == "internal" and args.action == "curator-refresh":
             from almanac_control import consume_curator_brief_fanout
 
+            repo_sync = sync_vault_repo_mirrors(conn, cfg)
             scan = reload_vault_definitions(conn, cfg)
             fanout = consume_curator_brief_fanout(conn, cfg)
             upgrade = upgrade_check(conn, cfg, actor=args.actor, notify=True)
@@ -1108,13 +1111,17 @@ def main() -> None:
                 job_kind="curator-refresh",
                 target_id="curator",
                 schedule="every 1h",
-                status="ok",
+                status="ok" if not repo_sync.get("repos_failed") else "warn",
                 note=(
+                    f"repo sync changed {len(repo_sync.get('changed_paths', []))} path(s); "
                     f"vault warnings: {len(scan['warnings'])}; "
                     f"published {len(fanout.get('published_agents', []))} central stub(s)"
                 ),
             )
-            dump_output(args, {"scan": scan, "fanout": fanout, "upgrade": upgrade})
+            dump_output(args, {"repo_sync": repo_sync, "scan": scan, "fanout": fanout, "upgrade": upgrade})
+            return
+        if args.domain == "internal" and args.action == "vault-repo-sync":
+            dump_output(args, sync_vault_repo_mirrors(conn, cfg))
             return
 
         if args.domain == "notion" and args.action == "process-pending":

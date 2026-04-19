@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -293,7 +294,11 @@ def main() -> int:
     args = parse_args()
     repo_dir = Path(args.repo_dir).resolve()
     vault_dir = Path(args.vault_dir).resolve()
-    repo_url = normalize_repo_url(args.repo_url) or discover_repo_url(repo_dir)
+    repo_url = (
+        normalize_repo_url(args.repo_url)
+        or normalize_repo_url(os.environ.get("ALMANAC_UPSTREAM_REPO_URL", ""))
+        or discover_repo_url(repo_dir)
+    )
 
     vault_dir.mkdir(parents=True, exist_ok=True)
 

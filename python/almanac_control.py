@@ -68,6 +68,29 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+REPO_SYNC_MANAGED_MARKER = "<!-- managed: almanac-repo-sync -->"
+REPO_SYNC_STATUS_FILENAME = "REPO-SYNC.md"
+REPO_SYNC_SOURCE_SUFFIXES = {".md", ".markdown", ".mdx", ".txt", ".text"}
+REPO_SYNC_EXCLUDED_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    "venv",
+}
+REPO_SYNC_GITHUB_PATTERN = re.compile(
+    r"(?P<raw>(?P<prefix>https?://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?)(?=[/?#\s)\]\}\"'`]|$)"
+)
+
+
 def _python_repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -1801,6 +1824,445 @@ def queue_vault_content_notifications(
         "activation_triggers": activation_triggers,
         "brief_fanout_queued": brief_fanout_queued,
     }
+
+
+def _repo_sync_state_dir(cfg: Config) -> Path:
+    return cfg.state_dir / "repo-sync"
+
+
+def _repo_sync_checkout_root(cfg: Config) -> Path:
+    return _repo_sync_state_dir(cfg) / "checkouts"
+
+
+def _repo_sync_mirror_root(cfg: Config) -> Path:
+    return cfg.vault_dir / "Repos" / "_mirrors"
+
+
+def _repo_sync_remote_priority(remote_url: str) -> int:
+    if remote_url.startswith("git@github.com:"):
+        return 3
+    if remote_url.startswith("ssh://git@github.com/"):
+        return 2
+    if remote_url.startswith("https://github.com/"):
+        return 1
+    return 0
+
+
+def _repo_sync_slug_from_url(canonical_url: str) -> str:
+    suffix = canonical_url.split("github.com/", 1)[-1].strip("/")
+    if "/" in suffix:
+        owner, repo = suffix.split("/", 1)
+        return safe_slug(f"{owner}-{repo}", fallback="repo-sync")
+    return safe_slug(suffix, fallback="repo-sync")
+
+
+def _repo_sync_remote_url(raw_value: str, owner: str, repo: str) -> str:
+    raw = str(raw_value or "").strip()
+    if raw.startswith("git@github.com:"):
+        return f"git@github.com:{owner}/{repo}.git"
+    if raw.startswith("ssh://git@github.com/"):
+        return f"ssh://git@github.com/{owner}/{repo}.git"
+    return f"https://github.com/{owner}/{repo}.git"
+
+
+def _repo_sync_read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8", errors="replace")
+
+
+def discover_vault_repo_sources(cfg: Config) -> list[dict[str, Any]]:
+    discovered: dict[str, dict[str, Any]] = {}
+    vault_root = cfg.vault_dir
+    if not vault_root.exists():
+        return []
+
+    for root, dirs, files in os.walk(vault_root, topdown=True, followlinks=False):
+        root_path = Path(root)
+        try:
+            rel_parts = root_path.relative_to(vault_root).parts
+        except ValueError:
+            rel_parts = ()
+        if rel_parts[:2] == ("Repos", "_mirrors"):
+            dirs[:] = []
+            continue
+        dirs[:] = [
+            name
+            for name in dirs
+            if not name.startswith(".") and not (root_path / name).is_symlink()
+        ]
+        for name in files:
+            if name == ".vault" or name.startswith("."):
+                continue
+            path = root_path / name
+            if path.suffix.lower() not in REPO_SYNC_SOURCE_SUFFIXES:
+                continue
+            try:
+                text = _repo_sync_read_text(path)
+            except OSError:
+                continue
+            if REPO_SYNC_MANAGED_MARKER in "\n".join(text.splitlines()[:3]):
+                continue
+            for match in REPO_SYNC_GITHUB_PATTERN.finditer(text):
+                owner = match.group("owner")
+                repo = match.group("repo")
+                canonical_url = f"https://github.com/{owner}/{repo}"
+                remote_url = _repo_sync_remote_url(match.group("raw") or canonical_url, owner, repo)
+                entry = discovered.setdefault(
+                    canonical_url,
+                    {
+                        "slug": _repo_sync_slug_from_url(canonical_url),
+                        "canonical_url": canonical_url,
+                        "remote_url": remote_url,
+                        "source_paths": set(),
+                    },
+                )
+                if _repo_sync_remote_priority(remote_url) > _repo_sync_remote_priority(str(entry.get("remote_url") or "")):
+                    entry["remote_url"] = remote_url
+                cast_source_paths = entry.setdefault("source_paths", set())
+                if isinstance(cast_source_paths, set):
+                    cast_source_paths.add(str(path))
+
+    results: list[dict[str, Any]] = []
+    for canonical_url in sorted(discovered):
+        entry = discovered[canonical_url]
+        results.append(
+            {
+                "slug": str(entry["slug"]),
+                "canonical_url": str(entry["canonical_url"]),
+                "remote_url": str(entry["remote_url"]),
+                "source_paths": sorted(str(p) for p in entry.get("source_paths", set())),
+            }
+        )
+    return results
+
+
+def _repo_sync_git(*args: str, cwd: Path | None = None, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    if shutil.which("git") is None:
+        raise RuntimeError("git is not installed")
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd) if cwd is not None else None,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(detail or f"git {' '.join(args)} exited {result.returncode}")
+    return result
+
+
+def _repo_sync_current_branch(checkout_dir: Path) -> str:
+    branch = _repo_sync_git("rev-parse", "--abbrev-ref", "HEAD", cwd=checkout_dir).stdout.strip()
+    if branch and branch != "HEAD":
+        return branch
+    try:
+        origin_head = _repo_sync_git("symbolic-ref", "refs/remotes/origin/HEAD", cwd=checkout_dir).stdout.strip()
+    except RuntimeError:
+        return ""
+    return origin_head.rsplit("/", 1)[-1].strip()
+
+
+def _repo_sync_checkout(checkout_dir: Path, remote_url: str) -> dict[str, str]:
+    checkout_dir.parent.mkdir(parents=True, exist_ok=True)
+    if (checkout_dir / ".git").is_dir():
+        current_remote = ""
+        try:
+            current_remote = _repo_sync_git("remote", "get-url", "origin", cwd=checkout_dir).stdout.strip()
+        except RuntimeError:
+            current_remote = ""
+        if current_remote != remote_url:
+            _repo_sync_git("remote", "remove", "origin", cwd=checkout_dir)
+            _repo_sync_git("remote", "add", "origin", remote_url, cwd=checkout_dir)
+        _repo_sync_git("fetch", "--prune", "origin", cwd=checkout_dir, timeout=300)
+        branch = _repo_sync_current_branch(checkout_dir)
+        if branch:
+            _repo_sync_git("checkout", "-B", branch, f"origin/{branch}", cwd=checkout_dir, timeout=300)
+        else:
+            _repo_sync_git("reset", "--hard", "FETCH_HEAD", cwd=checkout_dir, timeout=300)
+        _repo_sync_git("clean", "-fd", cwd=checkout_dir, timeout=300)
+    else:
+        if checkout_dir.exists():
+            shutil.rmtree(checkout_dir)
+        _repo_sync_git("clone", "--depth", "1", remote_url, str(checkout_dir), timeout=300)
+    branch = _repo_sync_current_branch(checkout_dir)
+    commit = _repo_sync_git("rev-parse", "HEAD", cwd=checkout_dir).stdout.strip()
+    return {"branch": branch, "commit": commit}
+
+
+def _repo_sync_collect_export_files(checkout_dir: Path) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    for root, dirs, files in os.walk(checkout_dir, topdown=True, followlinks=False):
+        root_path = Path(root)
+        dirs[:] = [
+            name
+            for name in dirs
+            if name not in REPO_SYNC_EXCLUDED_DIR_NAMES and not name.startswith(".")
+        ]
+        for name in files:
+            if name.startswith("."):
+                continue
+            path = root_path / name
+            if path.suffix.lower() not in REPO_SYNC_SOURCE_SUFFIXES:
+                continue
+            try:
+                if path.stat().st_size > 1024 * 1024:
+                    continue
+            except OSError:
+                continue
+            rel_path = path.relative_to(checkout_dir).as_posix()
+            try:
+                exported[rel_path] = _repo_sync_read_text(path)
+            except OSError:
+                continue
+    return exported
+
+
+def _repo_sync_status_note(
+    *,
+    canonical_url: str,
+    remote_url: str,
+    branch: str,
+    commit: str,
+    source_paths: Sequence[str],
+    exported_file_count: int,
+) -> str:
+    lines = [
+        REPO_SYNC_MANAGED_MARKER,
+        "# Repo sync status",
+        "",
+        f"Repository URL: {canonical_url}",
+        f"Remote URL: {remote_url}",
+        f"Branch: {branch or '(detached)'}",
+        f"Commit: `{commit}`",
+        f"Exported text files: {exported_file_count}",
+        f"Last synced at: {utc_now_iso()}",
+        "",
+        "This directory is managed by Almanac's GitHub repo sync rail.",
+        "Human-owned source note(s):",
+    ]
+    for source_path in source_paths:
+        lines.append(f"- `{source_path}`")
+    lines.extend(
+        [
+            "",
+            "Only markdown/text files are mirrored here so qmd can index them through the existing vault-watch rail.",
+            "Do not hand-edit files in this mirror; the next sync overwrites managed content.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _repo_sync_apply_tree(target_dir: Path, desired_files: dict[str, str]) -> dict[str, Any]:
+    changed_paths: list[str] = []
+    created = 0
+    updated = 0
+    removed = 0
+    existing_files: dict[str, Path] = {}
+    if target_dir.exists():
+        for path in sorted(target_dir.rglob("*")):
+            if path.is_file():
+                existing_files[path.relative_to(target_dir).as_posix()] = path
+
+    for rel_path, content in sorted(desired_files.items()):
+        path = target_dir / rel_path
+        existing_path = existing_files.get(rel_path)
+        current = None
+        if existing_path is not None and existing_path.is_file():
+            try:
+                current = _repo_sync_read_text(existing_path)
+            except OSError:
+                current = None
+        if current == content:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        changed_paths.append(str(path))
+        if existing_path is None:
+            created += 1
+        else:
+            updated += 1
+
+    for rel_path, path in sorted(existing_files.items()):
+        if rel_path in desired_files:
+            continue
+        try:
+            path.unlink()
+            changed_paths.append(str(path))
+            removed += 1
+        except FileNotFoundError:
+            continue
+
+    if target_dir.exists():
+        for path in sorted(target_dir.rglob("*"), reverse=True):
+            if path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    continue
+    return {
+        "changed_paths": changed_paths,
+        "created": created,
+        "updated": updated,
+        "removed": removed,
+    }
+
+
+def _repo_sync_remove_tree(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    changed_paths = [str(file_path) for file_path in sorted(path.rglob("*")) if file_path.is_file()]
+    shutil.rmtree(path)
+    return changed_paths
+
+
+def sync_vault_repo_mirrors(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    repo_sources: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    raw_sources = discover_vault_repo_sources(cfg) if repo_sources is None else list(repo_sources)
+    merged_sources: dict[str, dict[str, Any]] = {}
+    for raw_source in raw_sources:
+        canonical_url = str(raw_source.get("canonical_url") or "").strip()
+        if not canonical_url:
+            continue
+        slug = str(raw_source.get("slug") or _repo_sync_slug_from_url(canonical_url)).strip() or _repo_sync_slug_from_url(canonical_url)
+        remote_url = str(raw_source.get("remote_url") or f"{canonical_url}.git").strip()
+        source_paths = {
+            str(path).strip()
+            for path in raw_source.get("source_paths") or []
+            if str(path).strip()
+        }
+        entry = merged_sources.setdefault(
+            canonical_url,
+            {
+                "slug": slug,
+                "canonical_url": canonical_url,
+                "remote_url": remote_url,
+                "source_paths": set(),
+            },
+        )
+        if _repo_sync_remote_priority(remote_url) > _repo_sync_remote_priority(str(entry.get("remote_url") or "")):
+            entry["remote_url"] = remote_url
+        cast_source_paths = entry.setdefault("source_paths", set())
+        if isinstance(cast_source_paths, set):
+            cast_source_paths.update(source_paths)
+
+    state_dir = _repo_sync_state_dir(cfg)
+    checkout_root = _repo_sync_checkout_root(cfg)
+    mirror_root = _repo_sync_mirror_root(cfg)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    checkout_root.mkdir(parents=True, exist_ok=True)
+
+    normalized_sources = [
+        {
+            "slug": str(entry["slug"]),
+            "canonical_url": canonical_url,
+            "remote_url": str(entry["remote_url"]),
+            "source_paths": sorted(str(path) for path in entry.get("source_paths", set())),
+        }
+        for canonical_url, entry in sorted(merged_sources.items())
+    ]
+
+    summary: dict[str, Any] = {
+        "repos_total": len(normalized_sources),
+        "repos_synced": [],
+        "repos_failed": [],
+        "changed_paths": [],
+        "repo_statuses": [],
+    }
+
+    repos_vault_dir = cfg.vault_dir / "Repos"
+    if normalized_sources and not (repos_vault_dir / ".vault").is_file():
+        summary["repos_failed"].append("Repos vault is missing .vault metadata; refusing to create managed mirrors")
+        note_refresh_job(
+            conn,
+            job_name="vault-github-sync",
+            job_kind="vault-github-sync",
+            target_id="Repos",
+            schedule="every 1h via curator-refresh",
+            status="warn",
+            note="repos=0 synced=0 changed_paths=0 failures=1 (Repos vault missing .vault)",
+        )
+        return summary
+
+    mirror_root.mkdir(parents=True, exist_ok=True)
+    active_slugs = {str(source["slug"]) for source in normalized_sources}
+
+    for source in normalized_sources:
+        slug = str(source["slug"])
+        checkout_dir = checkout_root / slug
+        mirror_dir = mirror_root / slug
+        try:
+            checkout = _repo_sync_checkout(checkout_dir, str(source["remote_url"]))
+            desired_files = _repo_sync_collect_export_files(checkout_dir)
+            desired_files[REPO_SYNC_STATUS_FILENAME] = _repo_sync_status_note(
+                canonical_url=str(source["canonical_url"]),
+                remote_url=str(source["remote_url"]),
+                branch=str(checkout.get("branch") or ""),
+                commit=str(checkout.get("commit") or ""),
+                source_paths=source["source_paths"],
+                exported_file_count=len(desired_files),
+            )
+            applied = _repo_sync_apply_tree(mirror_dir, desired_files)
+            summary["changed_paths"].extend(applied["changed_paths"])
+            summary["repos_synced"].append(slug)
+            summary["repo_statuses"].append(
+                {
+                    "slug": slug,
+                    "canonical_url": str(source["canonical_url"]),
+                    "remote_url": str(source["remote_url"]),
+                    "branch": str(checkout.get("branch") or ""),
+                    "commit": str(checkout.get("commit") or ""),
+                    "source_paths": list(source["source_paths"]),
+                    "created": int(applied["created"]),
+                    "updated": int(applied["updated"]),
+                    "removed": int(applied["removed"]),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            summary["repos_failed"].append(f"{slug}:{exc}")
+            summary["repo_statuses"].append(
+                {
+                    "slug": slug,
+                    "canonical_url": str(source["canonical_url"]),
+                    "remote_url": str(source["remote_url"]),
+                    "source_paths": list(source["source_paths"]),
+                    "error": str(exc),
+                }
+            )
+
+    if mirror_root.exists():
+        for stale_dir in sorted(path for path in mirror_root.iterdir() if path.is_dir() and path.name not in active_slugs):
+            summary["changed_paths"].extend(_repo_sync_remove_tree(stale_dir))
+    if checkout_root.exists():
+        for stale_dir in sorted(path for path in checkout_root.iterdir() if path.is_dir() and path.name not in active_slugs):
+            shutil.rmtree(stale_dir, ignore_errors=True)
+
+    summary["changed_paths"] = sorted(set(str(path) for path in summary["changed_paths"]))
+    (state_dir / "status.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    note_refresh_job(
+        conn,
+        job_name="vault-github-sync",
+        job_kind="vault-github-sync",
+        target_id="Repos",
+        schedule="every 1h via curator-refresh",
+        status="warn" if summary["repos_failed"] else "ok",
+        note=(
+            f"repos={summary['repos_total']} synced={len(summary['repos_synced'])} "
+            f"changed_paths={len(summary['changed_paths'])} failures={len(summary['repos_failed'])}"
+        ),
+    )
+    return summary
 
 
 def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) -> None:

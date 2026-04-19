@@ -130,9 +130,41 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
         print("PASS test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legacy_defaults")
 
 
+def test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo_dir = root / "repo-copy"
+        vault_dir = root / "vault"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        vault_dir.mkdir(parents=True, exist_ok=True)
+
+        (repo_dir / "templates").symlink_to(REPO / "templates", target_is_directory=True)
+        (repo_dir / "skills").symlink_to(REPO / "skills", target_is_directory=True)
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--repo-dir",
+                str(repo_dir),
+                "--vault-dir",
+                str(vault_dir),
+            ],
+            env={**os.environ, "ALMANAC_UPSTREAM_REPO_URL": "https://github.com/sirouk/almanac.git"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected reconcile-vault-layout env fallback to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        repos_note = (vault_dir / "Repos" / "almanac.md").read_text(encoding="utf-8")
+        expect("https://github.com/sirouk/almanac" in repos_note, repos_note)
+        print("PASS test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git")
+
+
 def main() -> int:
     test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legacy_defaults()
-    print("PASS all 1 vault bootstrap layout regression tests")
+    test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git()
+    print("PASS all 2 vault bootstrap layout regression tests")
     return 0
 
 

@@ -14,7 +14,8 @@ seed_private_repo_layout() {
 
   python3 "$SCRIPT_DIR/reconcile-vault-layout.py" \
     --repo-dir "$BOOTSTRAP_DIR" \
-    --vault-dir "$VAULT_DIR"
+    --vault-dir "$VAULT_DIR" \
+    --repo-url "${ALMANAC_UPSTREAM_REPO_URL:-}"
 
   if [[ ! -f "$ALMANAC_PRIV_CONFIG_DIR/almanac.env" ]]; then
     cp "$BOOTSTRAP_DIR/config/almanac.env.example" "$ALMANAC_PRIV_CONFIG_DIR/almanac.env"

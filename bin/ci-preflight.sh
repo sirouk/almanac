@@ -704,6 +704,218 @@ PY
   wait "$watcher_pid" 2>/dev/null || true
 }
 
+run_repo_sync_preflight() {
+  local repo_dir="$TMP_ROOT/repo-sync-repo"
+  local bin_dir="$repo_dir/bin"
+  local config_dir="$repo_dir/config"
+  local priv_dir="$repo_dir/almanac-priv"
+  local vault_dir="$priv_dir/vault"
+  local state_dir="$priv_dir/state"
+  local config_file="$config_dir/almanac.env"
+  local source_repo="$TMP_ROOT/repo-sync-source"
+  local mirror_readme="$vault_dir/Repos/_mirrors/example-almanac/README.md"
+  local mirror_doc="$vault_dir/Repos/_mirrors/example-almanac/docs/architecture.md"
+  local trigger_default="$state_dir/activation-triggers/agent-default.json"
+  local trigger_optout="$state_dir/activation-triggers/agent-optout.json"
+  local watcher_pid=""
+
+  mkdir -p "$bin_dir" "$config_dir" "$vault_dir/Repos" "$source_repo"
+  cp "$ROOT_DIR/bin/common.sh" "$bin_dir/common.sh"
+  cp "$ROOT_DIR/bin/vault-watch.sh" "$bin_dir/vault-watch.sh"
+  ln -s "$ROOT_DIR/python" "$repo_dir/python"
+
+  cat >"$bin_dir/qmd-refresh.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+EOF
+  chmod +x "$bin_dir/qmd-refresh.sh"
+
+  cat >"$bin_dir/almanac-ctl" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+REPO_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
+export ALMANAC_CONFIG_FILE="$config_file"
+export PYTHONPATH="\$REPO_DIR/python\${PYTHONPATH:+:\$PYTHONPATH}"
+exec python3 "\$REPO_DIR/python/almanac_ctl.py" "\$@"
+EOF
+  chmod +x "$bin_dir/almanac-ctl"
+
+  cat >"$config_file" <<EOF
+ALMANAC_REPO_DIR=$repo_dir
+ALMANAC_PRIV_DIR=$priv_dir
+ALMANAC_PRIV_CONFIG_DIR=$priv_dir/config
+VAULT_DIR=$vault_dir
+STATE_DIR=$state_dir
+ALMANAC_DB_PATH=$state_dir/almanac-control.sqlite3
+ALMANAC_AGENTS_STATE_DIR=$state_dir/agents
+ALMANAC_CURATOR_DIR=$state_dir/curator
+ALMANAC_CURATOR_MANIFEST=$state_dir/curator/manifest.json
+ALMANAC_CURATOR_HERMES_HOME=$state_dir/curator/hermes-home
+ALMANAC_ARCHIVED_AGENTS_DIR=$state_dir/archived-agents
+ALMANAC_RELEASE_STATE_FILE=$state_dir/almanac-release.json
+ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
+ALMANAC_MCP_HOST=127.0.0.1
+ALMANAC_MCP_PORT=8282
+ALMANAC_MODEL_PRESET_CODEX=openai:codex
+ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus
+ALMANAC_MODEL_PRESET_CHUTES=chutes:auto-failover
+OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
+OPERATOR_NOTIFY_CHANNEL_ID=operator
+PDF_INGEST_ENABLED=0
+VAULT_WATCH_DEBOUNCE_SECONDS=1
+VAULT_WATCH_RUN_EMBED=0
+EOF
+
+  cat >"$vault_dir/Repos/.vault" <<'EOF'
+name: Repos
+description: Repository inventory
+owner: organization
+default_subscribed: true
+category: inventory
+EOF
+  cat >"$vault_dir/Repos/almanac.md" <<'EOF'
+# Almanac
+
+Repository URL: https://github.com/example/almanac
+EOF
+
+  git init -b main "$source_repo" >/dev/null
+  git -C "$source_repo" config user.name 'Almanac Preflight'
+  git -C "$source_repo" config user.email 'almanac-preflight@example.com'
+  printf 'repo readme v1\n' >"$source_repo/README.md"
+  mkdir -p "$source_repo/docs" "$source_repo/src"
+  printf 'architecture v1\n' >"$source_repo/docs/architecture.md"
+  printf 'print("ignored")\n' >"$source_repo/src/main.py"
+  git -C "$source_repo" add -A
+  git -C "$source_repo" commit -m 'initial repo sync fixture' >/dev/null
+
+  python3 - "$config_file" "$ROOT_DIR" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+config_file, repo_root = sys.argv[1:3]
+os.environ["ALMANAC_CONFIG_FILE"] = config_file
+sys.path.insert(0, str(Path(repo_root) / "python"))
+
+import almanac_control as mod
+
+cfg = mod.Config.from_env()
+conn = mod.connect_db(cfg)
+mod.reload_vault_definitions(conn, cfg)
+now = mod.utc_now_iso()
+root = cfg.state_dir.parent
+
+agents = [
+    ("agent-default", "defaultuser", "Default User"),
+    ("agent-optout", "optoutuser", "Opt-Out User"),
+]
+for agent_id, unix_user, display_name in agents:
+    conn.execute(
+        """
+        INSERT INTO agents (
+          agent_id, role, unix_user, display_name, status, hermes_home, manifest_path,
+          archived_state_path, model_preset, model_string, channels_json,
+          allowed_mcps_json, home_channel_json, operator_notify_channel_json,
+          notes, created_at, last_enrolled_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            agent_id,
+            "user",
+            unix_user,
+            display_name,
+            "active",
+            str(root / f"home-{unix_user}" / ".local" / "share" / "almanac-agent" / "hermes-home"),
+            str(cfg.state_dir / "agents" / agent_id / "manifest.json"),
+            None,
+            "codex",
+            "openai:codex",
+            json.dumps(["tui-only"]),
+            json.dumps([]),
+            json.dumps({"platform": "tui", "channel_id": ""}),
+            json.dumps({}),
+            "",
+            now,
+            now,
+        ),
+    )
+conn.commit()
+for agent_id, _, _ in agents:
+    mod.ensure_default_subscriptions(conn, agent_id)
+mod.set_vault_subscription(conn, agent_id="agent-optout", vault_name="Repos", subscribed=False, source="user")
+PY
+
+  log "exercising watcher-driven GitHub repo sync mirroring + notification routing"
+
+  env \
+    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ALMANAC_CONFIG_FILE="$config_file" \
+    bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/repo-sync-watch.log" 2>&1 &
+  watcher_pid=$!
+  sleep 1
+
+  python3 - "$config_file" "$ROOT_DIR" "$source_repo" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+config_file, repo_root, source_repo = sys.argv[1:4]
+os.environ["ALMANAC_CONFIG_FILE"] = config_file
+sys.path.insert(0, str(Path(repo_root) / "python"))
+
+import almanac_control as mod
+
+cfg = mod.Config.from_env()
+conn = mod.connect_db(cfg)
+discovered = mod.discover_vault_repo_sources(cfg)
+assert len(discovered) == 1, discovered
+discovered[0]["remote_url"] = source_repo
+result = mod.sync_vault_repo_mirrors(conn, cfg, repo_sources=discovered)
+assert result["repos_total"] == 1, result
+assert result["repos_failed"] == [], result
+PY
+
+  wait_for_path_state "$mirror_readme" present 40 0.25
+  wait_for_path_state "$mirror_doc" present 40 0.25
+  wait_for_path_state "$trigger_default" present 40 0.25
+
+  python3 - "$config_file" "$ROOT_DIR" "$mirror_readme" "$mirror_doc" "$trigger_default" "$trigger_optout" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+config_file, repo_root, mirror_readme, mirror_doc, trigger_default, trigger_optout = sys.argv[1:7]
+os.environ["ALMANAC_CONFIG_FILE"] = config_file
+sys.path.insert(0, str(Path(repo_root) / "python"))
+
+import almanac_control as mod
+
+cfg = mod.Config.from_env()
+conn = mod.connect_db(cfg)
+
+assert Path(mirror_readme).is_file(), mirror_readme
+assert Path(mirror_doc).is_file(), mirror_doc
+assert not (Path(mirror_readme).parent / "src" / "main.py").exists(), "unexpected source mirror"
+assert Path(trigger_default).is_file(), trigger_default
+assert not Path(trigger_optout).exists(), trigger_optout
+
+default_notifications = mod.consume_agent_notifications(conn, agent_id="agent-default")
+optout_notifications = mod.consume_agent_notifications(conn, agent_id="agent-optout")
+
+assert len(default_notifications) == 1, default_notifications
+assert default_notifications[0]["channel_kind"] == "vault-change", default_notifications
+assert "Repos" in default_notifications[0]["message"], default_notifications
+assert optout_notifications == [], optout_notifications
+PY
+
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+}
+
 main() {
   log "running Almanac preflight checks"
   run_shell_lint
@@ -713,6 +925,7 @@ main() {
   run_pdf_ingest_vision_preflight
   run_vault_watch_preflight
   run_vault_notification_preflight
+  run_repo_sync_preflight
   log "preflight checks passed"
 }
 

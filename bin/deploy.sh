@@ -1015,9 +1015,9 @@ PY
 
   mkdir -p "$target_dir"
   rsync -a --delete \
-    --exclude '.git/' \
-    --exclude 'almanac-priv/' \
-    --exclude '.almanac-operator.env' \
+    --exclude '/.git/' \
+    --exclude '/almanac-priv/' \
+    --exclude '/.almanac-operator.env' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
     --exclude '.DS_Store' \

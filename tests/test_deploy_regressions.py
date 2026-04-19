@@ -588,6 +588,40 @@ def test_control_py_discovers_artifact_priv_dir_config() -> None:
     print("PASS test_control_py_discovers_artifact_priv_dir_config")
 
 
+def test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "sync_public_repo_from_source() {", "git_head_commit() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        source_dir = tmp_path / "source"
+        target_dir = tmp_path / "target"
+        (source_dir / "almanac-priv").mkdir(parents=True)
+        (source_dir / "almanac-priv" / "secret.txt").write_text("should-not-copy\n", encoding="utf-8")
+        (source_dir / "templates" / "almanac-priv" / "vault" / "Research").mkdir(parents=True)
+        (source_dir / "templates" / "almanac-priv" / "vault" / "Research" / ".vault").write_text("name: Research\n", encoding="utf-8")
+        (source_dir / "bin").mkdir(parents=True)
+        (source_dir / "bin" / "bootstrap-userland.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        script = f"""
+{snippet}
+sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
+if [[ -e {shlex.quote(str(target_dir / 'almanac-priv'))} ]]; then
+  echo 'TOP_LEVEL_PRIVATE_PRESENT=1'
+else
+  echo 'TOP_LEVEL_PRIVATE_PRESENT=0'
+fi
+if [[ -f {shlex.quote(str(target_dir / 'templates' / 'almanac-priv' / 'vault' / 'Research' / '.vault'))} ]]; then
+  echo 'TEMPLATE_PRIVATE_PRESENT=1'
+else
+  echo 'TEMPLATE_PRIVATE_PRESENT=0'
+fi
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"sync_public_repo_from_source case failed: {result.stderr}")
+        expect("TOP_LEVEL_PRIVATE_PRESENT=0" in result.stdout, result.stdout)
+        expect("TEMPLATE_PRIVATE_PRESENT=1" in result.stdout, result.stdout)
+    print("PASS test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
@@ -603,6 +637,7 @@ def main() -> int:
         test_collect_install_answers_guides_backup_remote_setup,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
+        test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,
     ]
     for test in tests:
         test()

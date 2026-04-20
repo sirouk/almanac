@@ -266,13 +266,47 @@ def test_delete_nextcloud_user_access_deletes_existing_user() -> None:
             os.environ.update(old_env)
 
 
+def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_nextcloud_occ_cwd_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_occ_cwd_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "home-almanac").mkdir(parents=True, exist_ok=True)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root, enable_nextcloud="1"))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            captured: dict[str, object] = {}
+
+            nextcloud_access._runtime_exec_base = lambda cfg_arg, extra_env=None: ["runuser", "-u", cfg_arg.almanac_user, "--", "podman", "exec", "app"]
+
+            def fake_run(cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["cwd"] = kwargs.get("cwd")
+                return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+            nextcloud_access.subprocess.run = fake_run
+            nextcloud_access._nextcloud_occ(cfg, "status", "--output=json")
+
+            expect(captured["cwd"] == str(root / "home-almanac"), str(captured))
+            print("PASS test_nextcloud_occ_uses_service_user_safe_cwd")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_nextcloud_user_access_skips_when_disabled()
     test_sync_nextcloud_user_access_creates_missing_user()
     test_sync_nextcloud_user_access_resets_existing_user_password()
     test_delete_nextcloud_user_access_skips_when_disabled()
     test_delete_nextcloud_user_access_deletes_existing_user()
-    print("PASS all 5 nextcloud access regression tests")
+    test_nextcloud_occ_uses_service_user_safe_cwd()
+    print("PASS all 6 nextcloud access regression tests")
     return 0
 
 

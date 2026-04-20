@@ -68,6 +68,13 @@ def _result_text(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or result.stdout or "").strip()
 
 
+def _runtime_cwd(cfg: Config) -> Path:
+    for candidate in (cfg.almanac_home, cfg.repo_dir, Path("/")):
+        if candidate.exists():
+            return candidate
+    return Path("/")
+
+
 def _nextcloud_occ(
     cfg: Config,
     *args: str,
@@ -85,6 +92,7 @@ def _nextcloud_occ(
         text=True,
         capture_output=True,
         check=False,
+        cwd=str(_runtime_cwd(cfg)),
     )
     if check and result.returncode != 0:
         detail = _result_text(result) or f"exit {result.returncode}"

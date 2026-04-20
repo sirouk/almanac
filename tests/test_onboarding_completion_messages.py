@@ -181,9 +181,59 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             os.environ.update(old_env)
 
 
+def test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_completion_stored_scrub_test")
+    completion = load_module(COMPLETION_PY, "almanac_onboarding_completion_stored_scrub_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="123456789",
+                sender_id="123456789",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                answers={
+                    "completion_delivery": {
+                        "platform": "discord",
+                        "chat_id": "123456789",
+                        "message_id": "555",
+                        "scrubbed_text": "Shared password: removed after you confirmed you recorded it.",
+                        "password_scrubbed": False,
+                    }
+                },
+            )
+
+            scrubbed_text = completion.completion_scrubbed_text_for_session(conn, cfg, session)
+            expect(
+                scrubbed_text == "Shared password: removed after you confirmed you recorded it.",
+                scrubbed_text,
+            )
+            print("PASS test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_completion_bundle_lists_resources_and_scrubs_password()
-    print("PASS all 1 onboarding completion regression tests")
+    test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails()
+    print("PASS all 2 onboarding completion regression tests")
     return 0
 
 

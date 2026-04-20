@@ -24,7 +24,7 @@ from almanac_control import (
     utc_now_iso,
     upsert_setting,
 )
-from almanac_onboarding_completion import completion_bundle_for_session
+from almanac_onboarding_completion import completion_scrubbed_text_for_session
 from almanac_onboarding_flow import (
     BotIdentity,
     IncomingMessage,
@@ -244,8 +244,8 @@ def _handle_user_completion_callback(
                 show_alert=True,
             )
             return True
-        bundle = completion_bundle_for_session(conn, cfg, session)
-        if bundle is None:
+        scrubbed_text = completion_scrubbed_text_for_session(conn, cfg, session)
+        if not scrubbed_text:
             telegram_answer_callback_query(
                 bot_token=bot_token,
                 callback_query_id=callback_query_id,
@@ -258,7 +258,7 @@ def _handle_user_completion_callback(
                 bot_token=bot_token,
                 chat_id=chat_id,
                 message_id=message_id,
-                text=str(bundle.get("scrubbed_text") or ""),
+                text=scrubbed_text,
                 reply_markup={"inline_keyboard": []},
             )
         except Exception as exc:  # noqa: BLE001
@@ -269,16 +269,21 @@ def _handle_user_completion_callback(
                 show_alert=True,
             )
             return True
+        completion_delivery = dict((session.get("answers") or {}).get("completion_delivery") or {})
+        completion_delivery.update(
+            {
+                "platform": "telegram",
+                "chat_id": chat_id,
+                "message_id": str(message_id),
+                "scrubbed_text": scrubbed_text,
+                "password_scrubbed": True,
+            }
+        )
         save_onboarding_session(
             conn,
             session_id=session_id,
             answers={
-                "completion_delivery": {
-                    "platform": "telegram",
-                    "chat_id": chat_id,
-                    "message_id": str(message_id),
-                    "password_scrubbed": True,
-                },
+                "completion_delivery": completion_delivery,
                 "completion_secret_acknowledged_at": utc_now_iso(),
             },
         )

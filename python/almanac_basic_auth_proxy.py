@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import http.client
 import http.server
 import json
 import secrets
 import socketserver
+from dataclasses import dataclass
+from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -22,6 +25,8 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+SESSION_COOKIE_NAME = "almanac_dash_session"
+SESSION_COOKIE_PURPOSE = "almanac-basic-auth-proxy-v1"
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -33,18 +38,61 @@ def load_access(path: Path) -> tuple[str, str]:
     return str(data.get("username") or ""), str(data.get("password") or "")
 
 
+@dataclass(frozen=True)
+class AuthState:
+    ok: bool
+    set_session_cookie: bool = False
+    forward_authorization: str | None = None
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     access_file: Path
     target: str
     realm: str
 
-    def _authorized(self) -> bool:
+    def _session_cookie_value(self, username: str, password: str) -> str:
+        payload = f"{SESSION_COOKIE_PURPOSE}\0{self.realm}\0{username}\0{password}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _valid_session_cookie(self, username: str, password: str) -> bool:
+        header = self.headers.get("Cookie") or ""
+        if not header:
+            return False
+        cookie = SimpleCookie()
+        cookie.load(header)
+        morsel = cookie.get(SESSION_COOKIE_NAME)
+        if morsel is None:
+            return False
+        expected = self._session_cookie_value(username, password)
+        return secrets.compare_digest(morsel.value, expected)
+
+    def _authorized(self) -> AuthState:
         username, password = load_access(self.access_file)
         header = self.headers.get("Authorization") or ""
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         expected = f"Basic {token}"
-        return secrets.compare_digest(header, expected)
+        if secrets.compare_digest(header, expected):
+            return AuthState(ok=True, set_session_cookie=True)
+        if self._valid_session_cookie(username, password):
+            return AuthState(ok=True, forward_authorization=header or None)
+        return AuthState(ok=False)
+
+    def _proxy_cookie_header(self) -> str | None:
+        header = self.headers.get("Cookie") or ""
+        if not header:
+            return None
+        cookie = SimpleCookie()
+        cookie.load(header)
+        if SESSION_COOKIE_NAME in cookie:
+            del cookie[SESSION_COOKIE_NAME]
+        pairs = [f"{morsel.key}={morsel.value}" for morsel in cookie.values()]
+        return "; ".join(pairs) or None
+
+    def _session_cookie_header(self) -> str:
+        username, password = load_access(self.access_file)
+        value = self._session_cookie_value(username, password)
+        return f"{SESSION_COOKIE_NAME}={value}; HttpOnly; Path=/; SameSite=Lax; Secure"
 
     def _reject(self) -> None:
         body = b"Authentication required\n"
@@ -57,7 +105,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _proxy(self) -> None:
-        if not self._authorized():
+        auth = self._authorized()
+        if not auth.ok:
             self._reject()
             return
 
@@ -70,15 +119,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         content_length = self.headers.get("Content-Length")
         if content_length:
             body = self.rfile.read(int(content_length))
-        headers = {
-            key: value
-            for key, value in self.headers.items()
-            if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "authorization"
-        }
+        headers = {}
+        for key, value in self.headers.items():
+            lowered = key.lower()
+            if lowered in HOP_BY_HOP_HEADERS or lowered in {"authorization", "cookie"}:
+                continue
+            headers[key] = value
+        forwarded_cookie = self._proxy_cookie_header()
+        if forwarded_cookie:
+            headers["Cookie"] = forwarded_cookie
+        if auth.forward_authorization:
+            headers["Authorization"] = auth.forward_authorization
         headers["Host"] = target.netloc
-        connection.request(self.command, path, body=body or None, headers=headers)
-        response = connection.getresponse()
-        payload = response.read()
+        try:
+            connection.request(self.command, path, body=body or None, headers=headers)
+            response = connection.getresponse()
+            payload = response.read()
+        finally:
+            connection.close()
 
         self.send_response(response.status, response.reason)
         for key, value in response.getheaders():
@@ -86,6 +144,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if lowered in HOP_BY_HOP_HEADERS or lowered == "content-length":
                 continue
             self.send_header(key, value)
+        if auth.set_session_cookie:
+            self.send_header("Set-Cookie", self._session_cookie_header())
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         if self.command != "HEAD":

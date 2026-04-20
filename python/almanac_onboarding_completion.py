@@ -40,6 +40,16 @@ def completion_ack_discord_components(session_id: str) -> list[dict[str, Any]]:
     ]
 
 
+def _completion_delivery(session: dict[str, Any]) -> dict[str, Any]:
+    answers = session.get("answers", {})
+    raw = answers.get("completion_delivery") if isinstance(answers, dict) else None
+    return raw if isinstance(raw, dict) else {}
+
+
+def stored_completion_scrubbed_text(session: dict[str, Any]) -> str:
+    return str(_completion_delivery(session).get("scrubbed_text") or "").strip()
+
+
 def _shared_tailnet_host() -> str:
     if config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() != "1":
         return ""
@@ -164,3 +174,17 @@ def completion_bundle_for_session(
         home=home,
         discord_note=(bot_platform == "discord"),
     )
+
+
+def completion_scrubbed_text_for_session(
+    conn,
+    cfg: Config,
+    session: dict[str, Any],
+) -> str:
+    stored = stored_completion_scrubbed_text(session)
+    if stored:
+        return stored
+    bundle = completion_bundle_for_session(conn, cfg, session)
+    if bundle is None:
+        return ""
+    return str(bundle.get("scrubbed_text") or "").strip()

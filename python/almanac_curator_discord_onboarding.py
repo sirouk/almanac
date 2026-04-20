@@ -17,7 +17,7 @@ from almanac_control import (
     utc_now_iso,
 )
 from almanac_discord import discord_get_current_user
-from almanac_onboarding_completion import completion_bundle_for_session
+from almanac_onboarding_completion import completion_scrubbed_text_for_session
 from almanac_onboarding_flow import (
     OutboundMessage,
     BotIdentity,
@@ -358,8 +358,8 @@ async def main() -> None:
             if actual_user != expected_user or actual_chat != expected_chat:
                 await interaction.response.send_message("Only the onboarding recipient can confirm this.", ephemeral=True)
                 return
-            bundle = completion_bundle_for_session(conn, cfg, session)
-            if bundle is None:
+            scrubbed_text = completion_scrubbed_text_for_session(conn, cfg, session)
+            if not scrubbed_text:
                 await interaction.response.send_message(
                     "I couldn't reconstruct the onboarding details to scrub them.",
                     ephemeral=True,
@@ -367,7 +367,7 @@ async def main() -> None:
                 return
         try:
             await interaction.response.edit_message(
-                content=str(bundle.get("scrubbed_text") or ""),
+                content=scrubbed_text,
                 view=None,
             )
         except Exception as exc:  # noqa: BLE001
@@ -378,16 +378,21 @@ async def main() -> None:
                 await interaction.response.send_message(error_text, ephemeral=True)
             return
         with connect_db(cfg) as conn:
+            completion_delivery = dict((session.get("answers") or {}).get("completion_delivery") or {})
+            completion_delivery.update(
+                {
+                    "platform": "discord",
+                    "chat_id": actual_chat,
+                    "message_id": str(getattr(getattr(interaction, "message", None), "id", "") or ""),
+                    "scrubbed_text": scrubbed_text,
+                    "password_scrubbed": True,
+                }
+            )
             save_onboarding_session(
                 conn,
                 session_id=session_id,
                 answers={
-                    "completion_delivery": {
-                        "platform": "discord",
-                        "chat_id": actual_chat,
-                        "message_id": str(getattr(getattr(interaction, "message", None), "id", "") or ""),
-                        "password_scrubbed": True,
-                    },
+                    "completion_delivery": completion_delivery,
                     "completion_secret_acknowledged_at": utc_now_iso(),
                 },
             )

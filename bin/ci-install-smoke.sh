@@ -275,6 +275,47 @@ wait_for_path_absent() {
   return 1
 }
 
+assert_dashboard_proxy_bearer_flow() {
+  local dashboard_url="$1"
+  local username="$2"
+  local password="$3"
+
+  python3 - "$dashboard_url" "$username" "$password" <<'PY'
+import base64
+import re
+import sys
+import urllib.request
+
+dashboard_url, username, password = sys.argv[1:4]
+basic = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+with urllib.request.urlopen(
+    urllib.request.Request(dashboard_url, headers={"Authorization": f"Basic {basic}"}),
+    timeout=10,
+) as response:
+    html = response.read().decode("utf-8", "replace")
+    session_cookie = response.headers.get("Set-Cookie")
+
+match = re.search(r'window\.__HERMES_SESSION_TOKEN__="([^"]+)"', html)
+if not match:
+    raise SystemExit("expected Hermes session token in dashboard index.html")
+if not session_cookie:
+    raise SystemExit("expected dashboard proxy to mint a session cookie")
+
+with urllib.request.urlopen(
+    urllib.request.Request(
+        dashboard_url.rstrip("/") + "/api/sessions?limit=1&offset=0",
+        headers={
+            "Authorization": f"Bearer {match.group(1)}",
+            "Cookie": session_cookie.split(";", 1)[0],
+        },
+    ),
+    timeout=10,
+) as response:
+    if response.status != 200:
+        raise SystemExit(f"expected 200 from protected dashboard API, saw {response.status}")
+PY
+}
+
 run_almanac_shell() {
   local user_cmd="$1"
   local wrapped=""
@@ -467,6 +508,7 @@ PY
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "401" "" "" 90 2
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "200" "$username:$password" "" 90 2
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/api/status" "200" "$username:$password" "" 90 2
+  assert_dashboard_proxy_bearer_flow "http://127.0.0.1:$dashboard_proxy_port/" "$username" "$password"
   wait_for_http_status "http://127.0.0.1:$code_port/" "200,302,303" "" "" 180 2
 
   before_signature="$(

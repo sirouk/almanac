@@ -692,6 +692,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
                     "platform": "telegram",
                     "chat_id": str(updated_session.get("chat_id") or ""),
                     "message_id": str(delivery.get("message_id") or ""),
+                    "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
                     "password_scrubbed": False,
                 }
             },
@@ -820,6 +821,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
                     "platform": "discord",
                     "chat_id": str(updated_session.get("chat_id") or delivery.get("channel_id") or ""),
                     "message_id": str(delivery.get("id") or ""),
+                    "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
                     "password_scrubbed": False,
                 }
             },

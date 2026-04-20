@@ -373,19 +373,19 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     provider_setup = _provider_setup(session)
     browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
-        return "Hi. I’m Curator. What should I call you?"
+        return "Hi. I’m Curator. I’ll guide the setup and keep us on the rails. What should I call you?"
     if state == "awaiting-unix-user":
         return "What Unix username do you want on this host?"
     if state == "awaiting-purpose":
-        return "What do you want this agent to help you do?"
+        return "What should this agent help you practice or get done?"
     if state == "awaiting-bot-platform":
         return "Which bot platform should I wire for your own agent: `telegram` or `discord`?"
     if state == "awaiting-bot-name":
-        return "What name do you want for your own bot? A short plain-English name is enough."
+        return "What name should your own bot carry? A short plain-English name is enough."
     if state == "awaiting-model-preset":
         return f"Which model preset should this agent use? Available presets: `{_model_options(cfg)}`."
     if state == "awaiting-operator-approval":
-        return "Thanks. I’ve asked the operator for approval. I’ll continue here once I hear back."
+        return "Thanks. I’ve sent this to the operator for approval. I’ll keep watch and continue here once I hear back."
     if state == "awaiting-bot-token":
         if bot_platform == "discord":
             return (
@@ -403,18 +403,18 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 "11. Use that link to add the app to one of your servers or use Add App so you can start a DM with it. Discord DMs work once you and the bot share a server or the app has been installed for you.\n"
                 "12. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
                 "13. Paste the bot token back to me here.\n"
-                "Once I have the token, I’ll ask for the model provider credential, wire it to your agent, and then step out."
+                "Once I have the token, I’ll ask for the model provider credential, wire it to your agent, and stay on the handoff until it’s live."
             )
         return (
             "You’re approved. Create your bot with BotFather, give it the name you want, "
-            f"and send me the API token for {preferred_bot_name}. I’ll ask for the model provider credential next, then wire everything and step out."
+            f"and send me the API token for {preferred_bot_name}. I’ll ask for the model provider credential next, then wire everything and stay with it until it’s live."
         )
     if state == "awaiting-provider-credential" and provider_setup is not None:
         return provider_credential_prompt(provider_setup)
     if state == "awaiting-provider-browser-auth" and provider_setup is not None:
         return provider_browser_auth_prompt(provider_setup, browser_auth)
     if state == "provision-pending":
-        return "I’m provisioning your agent and wiring your bot now. This usually lands within a minute."
+        return "I’m provisioning your agent and wiring your bot now. This usually lands within a minute. I’ll ping you as soon as your lane is ready."
     if state == "denied":
         reason = str(session.get("denial_reason") or "").strip()
         return (
@@ -426,17 +426,17 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         bot_username = str(answers.get("bot_username") or session.get("telegram_bot_username") or "").strip()
         if bot_platform == "discord" and bot_username:
             return (
-                f"Your agent is live through the Discord bot `{bot_username}`. "
-                "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
+                f"Your agent lane is live through the Discord bot `{bot_username}`. "
+                "It already has the Almanac skills active by default, plus the shared Vault/qmd wiring. "
                 "Use that bot from here on out. If Discord will not open the DM yet, add the app from the Developer Portal Installation link or place it in a server you both share, then try again."
             )
         if bot_platform == "telegram" and bot_username:
             return (
-                f"Your agent is live at @{bot_username}. "
-                "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
+                f"Your agent lane is live at @{bot_username}. "
+                "It already has the Almanac skills active by default, plus the shared Vault/qmd wiring. "
                 "Talk to it there from now on."
             )
-        return "Your agent is live. It already has the Almanac skills active by default, plus the shared vault/qmd wiring."
+        return "Your agent lane is live. It already has the Almanac skills active by default, plus the shared Vault/qmd wiring."
     return "Send /start when you want to begin onboarding."
 
 
@@ -701,8 +701,8 @@ def process_onboarding_message(
             bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or _preferred_bot_name(updated))
             unix_user = str(updated.get("answers", {}).get("unix_user") or incoming.sender_id)
             if _bot_platform_name(updated) == "discord":
-                return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when it’s ready.")]
-            return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when it’s ready.")]
+                return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when the lane is ready.")]
+            return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when the lane is ready.")]
 
         if state == "awaiting-provider-browser-auth":
             provider_setup = _provider_setup(session)
@@ -750,7 +750,7 @@ def process_onboarding_message(
             bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or _preferred_bot_name(updated))
             unix_user = str(updated.get("answers", {}).get("unix_user") or incoming.sender_id)
             if _bot_platform_name(updated) == "discord":
-                return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when it’s ready.")]
-            return [OutboundMessage(incoming.chat_id, f"Thanks. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when it’s ready.")]
+                return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when the lane is ready.")]
+            return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when the lane is ready.")]
 
         return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]

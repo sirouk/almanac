@@ -154,12 +154,15 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("Shared password: sup3r-secret" not in scrubbed_text, scrubbed_text)
             expect("Shared password: removed after you confirmed you recorded it." in scrubbed_text, scrubbed_text)
             expect(f"Nextcloud login: {unix_user} (same shared password)" in full_text, full_text)
-            expect("Shared resources:" in full_text, full_text)
+            expect("Your lane is ready." in full_text, full_text)
+            expect("Shared Almanac rails:" in full_text, full_text)
             expect("https://kor.tail77f45e.ts.net/" in full_text, full_text)
             expect("https://kor.tail77f45e.ts.net/mcp" in full_text, full_text)
             expect("https://kor.tail77f45e.ts.net/almanac-mcp" in full_text, full_text)
-            expect("Chutes KB MCP: https://chutes.example/mcp" in full_text, full_text)
-            expect("Notion webhook: shared operator-managed service on this host" in full_text, full_text)
+            expect("QMD MCP retrieval rail: https://kor.tail77f45e.ts.net/mcp" in full_text, full_text)
+            expect("Almanac MCP control rail: https://kor.tail77f45e.ts.net/almanac-mcp" in full_text, full_text)
+            expect("Chutes knowledge rail: https://chutes.example/mcp" in full_text, full_text)
+            expect("Notion webhook: shared operator-managed rail on this host" in full_text, full_text)
             expect(str(user_home) in full_text, full_text)
 
             telegram_button = bundle["telegram_reply_markup"]["inline_keyboard"][0][0]

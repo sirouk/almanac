@@ -75,6 +75,24 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             cfg = control.Config.from_env()
             expect(cfg.curator_discord_onboarding_enabled is True, f"expected discord onboarding to default on, got {cfg}")
 
+            opening = onboarding.session_prompt(
+                cfg,
+                {
+                    "state": "awaiting-name",
+                    "answers": {},
+                },
+            )
+            expect("keep us on the rails" in opening, opening)
+
+            purpose_prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "state": "awaiting-purpose",
+                    "answers": {},
+                },
+            )
+            expect("practice or get done" in purpose_prompt, purpose_prompt)
+
             prompt = onboarding.session_prompt(
                 cfg,
                 {

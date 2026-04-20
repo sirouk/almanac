@@ -53,7 +53,7 @@ def _shared_tailnet_host() -> str:
 
 
 def _shared_resource_lines(cfg: Config) -> list[str]:
-    lines = ["Shared resources:"]
+    lines = ["Shared Almanac rails:"]
     host = _shared_tailnet_host()
     nextcloud_enabled = config_env_value("ENABLE_NEXTCLOUD", "1").strip() == "1"
     qmd_path = config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp"
@@ -61,21 +61,21 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
 
     if nextcloud_enabled:
         if host:
-            lines.append(f"- Nextcloud vault: https://{host}/ (shared mount: /Vault)")
+            lines.append(f"- Vault access in Nextcloud: https://{host}/ (shared mount: /Vault)")
         else:
-            lines.append("- Nextcloud vault: shared on this host (mounted as /Vault)")
+            lines.append("- Vault access in Nextcloud: shared on this host (mounted as /Vault)")
 
     if host:
-        lines.append(f"- QMD MCP: https://{host}{qmd_path}")
-        lines.append(f"- Almanac MCP: https://{host}{almanac_mcp_path}")
+        lines.append(f"- QMD MCP retrieval rail: https://{host}{qmd_path}")
+        lines.append(f"- Almanac MCP control rail: https://{host}{almanac_mcp_path}")
     else:
-        lines.append(f"- QMD MCP: {cfg.qmd_url}")
-        lines.append(f"- Almanac MCP: http://{cfg.public_mcp_host}:{cfg.public_mcp_port}/mcp")
+        lines.append(f"- QMD MCP retrieval rail: {cfg.qmd_url}")
+        lines.append(f"- Almanac MCP control rail: http://{cfg.public_mcp_host}:{cfg.public_mcp_port}/mcp")
 
     if cfg.chutes_mcp_url:
-        lines.append(f"- Chutes KB MCP: {cfg.chutes_mcp_url}")
+        lines.append(f"- Chutes knowledge rail: {cfg.chutes_mcp_url}")
 
-    lines.append("- Notion webhook: shared operator-managed service on this host")
+    lines.append("- Notion webhook: shared operator-managed rail on this host")
     return lines
 
 
@@ -90,7 +90,7 @@ def completion_message_bundle(
 ) -> dict[str, Any]:
     nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
     base_lines = [
-        f"Everything is ready. Your own bot is {bot_reference} now.",
+        f"Your lane is ready. Your own bot is {bot_reference} now.",
         f"Unix user: {access.get('unix_user') or access.get('username')}",
         f"Hermes dashboard: {access.get('dashboard_url')}",
         f"Dashboard username: {access.get('username')}",
@@ -98,7 +98,7 @@ def completion_message_bundle(
         f"Code workspace: {access.get('code_url')}",
         f"Workspace root: {home}",
         *_shared_resource_lines(cfg),
-        "The shared MCP endpoints are already wired into your agent by default.",
+        "The shared Vault and control rails are already wired into your agent by default.",
     ]
     base_lines = [line for line in base_lines if line]
     if discord_note:

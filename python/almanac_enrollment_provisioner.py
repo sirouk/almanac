@@ -528,9 +528,15 @@ def _run_pending_onboarding_provider_authorizations(conn, cfg: Config) -> None:
             bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or "your bot")
             unix_user = str(updated.get("answers", {}).get("unix_user") or updated.get("sender_id") or "")
             if str(updated.get("answers", {}).get("bot_platform") or "") == "discord":
-                message = f"I have your OpenAI Codex authorization. I’m provisioning `{unix_user}` now and wiring `{bot_label}`."
+                message = (
+                    f"I have your OpenAI Codex authorization. I’m provisioning `{unix_user}` now "
+                    f"and wiring `{bot_label}`. I’ll tell you when the lane is ready."
+                )
             else:
-                message = f"I have your OpenAI Codex authorization. I’m provisioning `{unix_user}` now and wiring @{bot_label}."
+                message = (
+                    f"I have your OpenAI Codex authorization. I’m provisioning `{unix_user}` now "
+                    f"and wiring @{bot_label}. I’ll tell you when the lane is ready."
+                )
             _notify_user_via_curator(cfg, session=updated, message=message)
         except Exception as exc:  # noqa: BLE001
             save_onboarding_session(

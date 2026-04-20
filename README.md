@@ -1,7 +1,18 @@
 # Almanac
 
 `Almanac` is the public infrastructure repo for a shared-host Hermes agent
-harness.
+harness built around a set of Vaults: durable knowledge spaces for operators
+and agents to train against, retrieve from, and keep in sync.
+
+The tone of the project is intentional:
+
+- the Vaults should feel like a training deck, not a random file dump
+- Curator should feel like a steady guide: knowledgeable, clueful, and mostly
+  on mission
+- human-facing copy should nod at that world lightly without slipping into
+  full roleplay
+- operational instructions should stay concrete even when the framing has a
+  little style
 
 It provisions:
 
@@ -41,8 +52,9 @@ Almanac is shared-host in v1.
 
 - Operator: deploys Almanac, owns the Curator, approves or denies enrollments,
   and retains TUI godmode
-- Curator: Almanac's own Hermes agent; gates onboarding, refreshes vault
-  definitions, manages notifications, and fans out managed-memory updates
+- Curator: Almanac's own Hermes agent; the operator-owned guide who gates
+  onboarding, refreshes vault definitions, manages notifications, and fans out
+  managed-memory updates
 - User agent: one per enrolled user on the same host
 - Enrolled user: starts with the public bootstrap handshake; Almanac provisions
   the host-side Unix user and agent after approval
@@ -50,11 +62,14 @@ Almanac is shared-host in v1.
 ## Component Roles
 
 - Shared vault: the authoritative markdown tree on disk
+- Vaults: the named training rooms inside that shared memory surface, each with
+  its own purpose and subscription behavior
 - Nextcloud: browser access to that same shared vault over Tailscale
 - Vault watcher: watches the shared vault on disk and triggers reconciliation/index refresh in the right order
 - PDF ingestion: converts PDFs found in the shared vault into generated Markdown for qmd before refresh
 - Hermes + qmd: read-oriented retrieval/search surface for agents and shells across authored notes and generated PDF Markdown
-- Curator: operator-owned Hermes agent that gates enrollment, refreshes vault definitions, and owns token lifecycle
+- Curator: operator-owned Hermes agent that keeps people on the rails, handles
+  enrollment, refreshes vault definitions, and owns token lifecycle
 - `almanac-mcp`: bootstrap, enrollment, subscriptions, notification outbox, and shared SQLite state
 - GitHub: backup/history for `almanac-priv`, not live collaboration
 - Quarto: optional human-facing published output, not required for collaboration

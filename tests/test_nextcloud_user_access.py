@@ -199,11 +199,80 @@ def test_sync_nextcloud_user_access_resets_existing_user_password() -> None:
             os.environ.update(old_env)
 
 
+def test_delete_nextcloud_user_access_skips_when_disabled() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_delete_disabled_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_delete_disabled_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root, enable_nextcloud="0"))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+
+            def fail_occ(*args, **kwargs):
+                raise AssertionError("Nextcloud commands should not run while disabled")
+
+            nextcloud_access._nextcloud_occ = fail_occ
+            result = nextcloud_access.delete_nextcloud_user_access(cfg, username="sirouk")
+            expect(result == {"enabled": False, "deleted": False, "skipped": "disabled"}, str(result))
+            print("PASS test_delete_nextcloud_user_access_skips_when_disabled")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_delete_nextcloud_user_access_deletes_existing_user() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_delete_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_delete_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root, enable_nextcloud="1"))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            calls: list[tuple[list[str], dict[str, str] | None, bool]] = []
+
+            def fake_occ(cfg_arg, *args: str, extra_env=None, check=True):
+                calls.append((list(args), extra_env, check))
+                if list(args) == ["status", "--output=json"]:
+                    return subprocess.CompletedProcess(list(args), 0, stdout="{}", stderr="")
+                if list(args) == ["user:info", "sirouk", "--output=json"]:
+                    return subprocess.CompletedProcess(list(args), 0, stdout="{}", stderr="")
+                if list(args) == ["user:delete", "sirouk"]:
+                    return subprocess.CompletedProcess(list(args), 0, stdout="", stderr="")
+                raise AssertionError(f"unexpected occ call: args={args!r} extra_env={extra_env!r}")
+
+            nextcloud_access._nextcloud_occ = fake_occ
+            result = nextcloud_access.delete_nextcloud_user_access(cfg, username="sirouk")
+
+            expect(result["enabled"] is True, str(result))
+            expect(result["deleted"] is True, str(result))
+            expect(result["exists"] is True, str(result))
+            expect(len(calls) == 3, f"expected 3 occ calls, got {calls!r}")
+            delete_args, delete_env, _ = calls[-1]
+            expect(delete_args == ["user:delete", "sirouk"], str(delete_args))
+            expect(delete_env is None, str(delete_env))
+            print("PASS test_delete_nextcloud_user_access_deletes_existing_user")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_nextcloud_user_access_skips_when_disabled()
     test_sync_nextcloud_user_access_creates_missing_user()
     test_sync_nextcloud_user_access_resets_existing_user_password()
-    print("PASS all 3 nextcloud access regression tests")
+    test_delete_nextcloud_user_access_skips_when_disabled()
+    test_delete_nextcloud_user_access_deletes_existing_user()
+    print("PASS all 5 nextcloud access regression tests")
     return 0
 
 

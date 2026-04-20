@@ -3499,8 +3499,9 @@ PY
 
 run_enrollment_reset() {
   local target_unix_user="" remove_unix_user="" purge_rate_limits="" remove_archives="" confirm_text="" extra_subject="" uid=""
+  local forget_history="" remove_nextcloud_user=""
   local snapshot_file="" agent_id="" agent_status=""
-  local -a session_ids=() request_specs=() rate_subjects=()
+  local -a session_ids=() request_specs=() rate_subjects=() purge_cmd=()
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-reset; then
@@ -3552,12 +3553,55 @@ PY
   remove_unix_user="$(ask_yes_no "Remove the Unix user and its home if present" "${ENROLLMENT_RESET_REMOVE_USER:-1}")"
   purge_rate_limits="$(ask_yes_no "Clear related onboarding/bootstrap rate-limit buckets" "${ENROLLMENT_RESET_PURGE_RATE_LIMITS:-1}")"
   remove_archives="$(ask_yes_no "Remove archived agent state for this user" "${ENROLLMENT_RESET_REMOVE_ARCHIVES:-0}")"
+  forget_history="$(ask_yes_no "Forget completed enrollment history and local app accounts so this user can onboard as new" "${ENROLLMENT_RESET_FORGET_HISTORY:-1}")"
+  if [[ "$forget_history" == "1" ]]; then
+    remove_nextcloud_user="$(ask_yes_no "Remove the matching Nextcloud user if present" "${ENROLLMENT_RESET_REMOVE_NEXTCLOUD_USER:-1}")"
+  fi
   extra_subject="$(ask "Extra rate-limit subject to clear (optional, e.g. discord:123456789)" "${ENROLLMENT_RESET_EXTRA_SUBJECT:-}")"
   confirm_text="$(ask "Type RESET to confirm enrollment cleanup" "")"
   if [[ "$confirm_text" != "RESET" ]]; then
     rm -f "$snapshot_file"
     echo "Enrollment reset cancelled."
     exit 1
+  fi
+
+  if [[ "$forget_history" == "1" ]]; then
+    purge_cmd=(
+      env
+      ALMANAC_CONFIG_FILE="$CONFIG_TARGET"
+      "$ALMANAC_REPO_DIR/bin/almanac-ctl"
+      user
+      purge-enrollment
+      "$target_unix_user"
+      --actor
+      deploy-enrollment-reset
+    )
+    if [[ "$remove_unix_user" == "1" ]]; then
+      purge_cmd+=(--remove-unix-user)
+    fi
+    if [[ "$remove_archives" == "1" ]]; then
+      purge_cmd+=(--remove-archives)
+    fi
+    if [[ "$purge_rate_limits" == "1" ]]; then
+      purge_cmd+=(--purge-rate-limits)
+    fi
+    if [[ "$remove_nextcloud_user" == "1" ]]; then
+      purge_cmd+=(--remove-nextcloud-user)
+    fi
+    if [[ -n "$extra_subject" ]]; then
+      purge_cmd+=(--extra-rate-limit-subject "$extra_subject")
+    fi
+    if ! "${purge_cmd[@]}"; then
+      rm -f "$snapshot_file"
+      echo "Enrollment purge failed." >&2
+      exit 1
+    fi
+    systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
+    rm -f "$snapshot_file"
+    echo "Enrollment purge complete for $target_unix_user."
+    echo
+    run_enrollment_status
+    return 0
   fi
 
   mapfile -t session_ids < <(python3 - "$snapshot_file" <<'PY'

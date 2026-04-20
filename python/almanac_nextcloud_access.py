@@ -168,3 +168,39 @@ def sync_nextcloud_user_access(
         "created": not exists,
         "group": NEXTCLOUD_SHARED_GROUP,
     }
+
+
+def delete_nextcloud_user_access(
+    cfg: Config,
+    *,
+    username: str,
+) -> dict[str, Any]:
+    if not _nextcloud_enabled():
+        return {"enabled": False, "deleted": False, "skipped": "disabled"}
+
+    nextcloud_username = _normalized_username(username)
+    _nextcloud_occ(cfg, "status", "--output=json")
+
+    user_info = _nextcloud_occ(
+        cfg,
+        "user:info",
+        nextcloud_username,
+        "--output=json",
+        check=False,
+    )
+    exists = user_info.returncode == 0
+    if not exists:
+        return {
+            "enabled": True,
+            "deleted": False,
+            "exists": False,
+            "username": nextcloud_username,
+        }
+
+    _nextcloud_occ(cfg, "user:delete", nextcloud_username)
+    return {
+        "enabled": True,
+        "deleted": True,
+        "exists": True,
+        "username": nextcloud_username,
+    }

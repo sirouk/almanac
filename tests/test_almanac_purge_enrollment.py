@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+PYTHON_DIR = REPO / "python"
+CONTROL_PY = PYTHON_DIR / "almanac_control.py"
+CTL_PY = PYTHON_DIR / "almanac_ctl.py"
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def expect(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def write_config(path: Path, values: dict[str, str]) -> None:
+    lines = [f"{key}={json.dumps(value)}" for key, value in values.items()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def config_values(root: Path) -> dict[str, str]:
+    state_dir = root / "state"
+    return {
+        "ALMANAC_USER": "almanac",
+        "ALMANAC_HOME": str(root / "home-almanac"),
+        "ALMANAC_REPO_DIR": str(REPO),
+        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "STATE_DIR": str(state_dir),
+        "RUNTIME_DIR": str(state_dir / "runtime"),
+        "VAULT_DIR": str(root / "vault"),
+        "ALMANAC_DB_PATH": str(state_dir / "almanac-control.sqlite3"),
+        "ALMANAC_AGENTS_STATE_DIR": str(state_dir / "agents"),
+        "ALMANAC_CURATOR_DIR": str(state_dir / "curator"),
+        "ALMANAC_CURATOR_MANIFEST": str(state_dir / "curator" / "manifest.json"),
+        "ALMANAC_CURATOR_HERMES_HOME": str(state_dir / "curator" / "hermes-home"),
+        "ALMANAC_ARCHIVED_AGENTS_DIR": str(state_dir / "archived-agents"),
+        "ALMANAC_RELEASE_STATE_FILE": str(state_dir / "almanac-release.json"),
+        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ALMANAC_MCP_HOST": "127.0.0.1",
+        "ALMANAC_MCP_PORT": "8282",
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+        "OPERATOR_NOTIFY_CHANNEL_ID": "1994645819",
+        "ENABLE_NEXTCLOUD": "1",
+        "ALMANAC_NAME": "almanac",
+    }
+
+
+def test_user_purge_enrollment_removes_completed_state_and_files() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_purge_enrollment_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_purge_enrollment_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            now = control.utc_now_iso()
+            agent_id = "agent-sirouk"
+            session_id = "onb_test123"
+            request_id = "req_test123"
+            token_id = "tok_test123"
+            hermes_home = root / "home-sirouk" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            access_state_path = hermes_home / "state" / "almanac-web-access.json"
+            access_state_path.parent.mkdir(parents=True, exist_ok=True)
+            access_state_path.write_text(
+                json.dumps(
+                    {
+                        "agent_id": agent_id,
+                        "code_container_name": "almanac-agent-code-agent-sirouk",
+                        "dashboard_proxy_port": 30011,
+                        "code_port": 40011,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            manifest_path = cfg.agents_state_dir / agent_id / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text("manifest\n", encoding="utf-8")
+            activation_path = cfg.state_dir / "activation-triggers" / f"{agent_id}.json"
+            activation_path.parent.mkdir(parents=True, exist_ok=True)
+            activation_path.write_text("{}\n", encoding="utf-8")
+            archive_root = cfg.archived_agents_dir / agent_id / "20260420T000000Z"
+            archive_root.mkdir(parents=True, exist_ok=True)
+            (archive_root / "placeholder.txt").write_text("archive\n", encoding="utf-8")
+            onboarding_secret_dir = cfg.state_dir / "onboarding-secrets" / session_id
+            onboarding_secret_dir.mkdir(parents=True, exist_ok=True)
+            (onboarding_secret_dir / "secret.txt").write_text("secret\n", encoding="utf-8")
+            auto_provision_log = cfg.state_dir / "auto-provision" / f"{request_id}.log"
+            auto_provision_log.parent.mkdir(parents=True, exist_ok=True)
+            auto_provision_log.write_text("log\n", encoding="utf-8")
+            repo_checkout = cfg.state_dir / "repo-sync" / "checkouts" / "sirouk-almanac"
+            repo_checkout.mkdir(parents=True, exist_ok=True)
+            (repo_checkout / "README.md").write_text("repo\n", encoding="utf-8")
+            repo_mirror = cfg.vault_dir / "Repos" / "_mirrors" / "sirouk-almanac"
+            repo_mirror.mkdir(parents=True, exist_ok=True)
+            (repo_mirror / "README.md").write_text("mirror\n", encoding="utf-8")
+            nextcloud_data = cfg.state_dir / "nextcloud" / "data" / "sirouk"
+            nextcloud_data.mkdir(parents=True, exist_ok=True)
+            (nextcloud_data / "file.txt").write_text("data\n", encoding="utf-8")
+            nextcloud_html_data = cfg.state_dir / "nextcloud" / "html" / "data" / "sirouk"
+            nextcloud_html_data.mkdir(parents=True, exist_ok=True)
+            (nextcloud_html_data / "file.txt").write_text("html\n", encoding="utf-8")
+
+            conn.execute(
+                """
+                INSERT INTO agents (
+                  agent_id, role, unix_user, display_name, status, hermes_home, manifest_path,
+                  archived_state_path, model_preset, model_string, channels_json,
+                  allowed_mcps_json, home_channel_json, operator_notify_channel_json,
+                  notes, created_at, last_enrolled_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent_id,
+                    "user",
+                    "sirouk",
+                    "Chris",
+                    "active",
+                    str(hermes_home),
+                    str(manifest_path),
+                    str(archive_root),
+                    "codex",
+                    "openai:codex",
+                    json.dumps(["tui-only", "discord"]),
+                    json.dumps([]),
+                    json.dumps({"platform": "discord", "channel_id": "547966246486802432"}),
+                    json.dumps({"platform": "telegram", "channel_id": "1994645819"}),
+                    "",
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO agent_vault_subscriptions (agent_id, vault_name, subscribed, source, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (agent_id, "Research", 1, "default", now),
+            )
+            conn.execute(
+                """
+                INSERT INTO onboarding_sessions (
+                  session_id, platform, chat_id, sender_id, sender_username, sender_display_name,
+                  state, answers_json, linked_request_id, linked_agent_id, completed_at,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    "discord",
+                    "547966246486802432",
+                    "547966246486802432",
+                    "sirouk",
+                    "Chris",
+                    "completed",
+                    json.dumps({"unix_user": "sirouk", "bot_platform": "discord"}),
+                    request_id,
+                    agent_id,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO bootstrap_requests (
+                  request_id, requester_identity, unix_user, source_ip, requested_at, expires_at,
+                  status, prior_agent_id, auto_provision, provisioned_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    "Chris",
+                    "sirouk",
+                    "100.120.112.116",
+                    now,
+                    now,
+                    "approved",
+                    agent_id,
+                    1,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO bootstrap_tokens (
+                  token_id, agent_id, token_hash, requester_identity, source_ip,
+                  issued_at, issued_by, activation_request_id, activated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    token_id,
+                    agent_id,
+                    "hashed-token",
+                    "Chris",
+                    "100.120.112.116",
+                    now,
+                    "test",
+                    request_id,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO notification_outbox (
+                  target_kind, target_id, channel_kind, message, extra_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "user-agent",
+                    agent_id,
+                    "discord",
+                    "Lane ready for agent-sirouk",
+                    json.dumps({}),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO notification_outbox (
+                  target_kind, target_id, channel_kind, message, extra_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "operator",
+                    "1994645819",
+                    "telegram",
+                    f"Onboarding complete for {agent_id} from {request_id}",
+                    json.dumps({"request_id": request_id, "session_id": session_id}),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"{agent_id}-refresh", "agent-refresh", agent_id, "manual", now, "ok", ""),
+            )
+            conn.execute(
+                """
+                INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"onboarding-{session_id}", "onboarding", agent_id, "manual", now, "ok", session_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"auto-provision-{request_id}", "auto-provision", agent_id, "manual", now, "ok", request_id),
+            )
+            conn.execute(
+                "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+                ("onboarding-user", "discord:547966246486802432", now),
+            )
+            conn.execute(
+                "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+                ("ip", "100.120.112.116", now),
+            )
+            conn.execute(
+                "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+                ("onboarding-user", "discord:extra-subject", now),
+            )
+            conn.commit()
+
+            cleared_tailscale: list[str] = []
+            nextcloud_deletes: list[str] = []
+            ctl.os.geteuid = lambda: 0
+            ctl.clear_tailscale_https = lambda home: cleared_tailscale.append(str(home))
+            ctl.delete_nextcloud_user_access = (
+                lambda cfg_arg, username: nextcloud_deletes.append(username)
+                or {"enabled": True, "deleted": True, "exists": True, "username": username}
+            )
+
+            result = ctl.user_purge_enrollment(
+                cfg,
+                "sirouk",
+                actor="test",
+                remove_unix_user=False,
+                remove_archives=True,
+                purge_rate_limits=True,
+                extra_rate_limit_subjects=["discord:extra-subject"],
+                remove_nextcloud_user=True,
+            )
+
+            expect(result["agent_ids"] == [agent_id], str(result))
+            expect(result["session_ids"] == [session_id], str(result))
+            expect(result["request_ids"] == [request_id], str(result))
+            expect(result["token_ids"] == [token_id], str(result))
+            expect("100.120.112.116" in result["rate_limit_subjects"], str(result))
+            expect(cleared_tailscale == [str(hermes_home)], str(cleared_tailscale))
+            expect(nextcloud_deletes == ["sirouk"], str(nextcloud_deletes))
+
+            expect(not hermes_home.exists(), f"expected {hermes_home} to be removed")
+            expect(not manifest_path.exists(), f"expected {manifest_path} to be removed")
+            expect(not activation_path.exists(), f"expected {activation_path} to be removed")
+            expect(not onboarding_secret_dir.exists(), f"expected {onboarding_secret_dir} to be removed")
+            expect(not auto_provision_log.exists(), f"expected {auto_provision_log} to be removed")
+            expect(not repo_checkout.exists(), f"expected {repo_checkout} to be removed")
+            expect(not repo_mirror.exists(), f"expected {repo_mirror} to be removed")
+            expect(not archive_root.parent.exists(), f"expected {archive_root.parent} to be removed")
+            expect(not nextcloud_data.exists(), f"expected {nextcloud_data} to be removed")
+            expect(not nextcloud_html_data.exists(), f"expected {nextcloud_html_data} to be removed")
+
+            expect(conn.execute("SELECT COUNT(*) AS count FROM agents").fetchone()["count"] == 0, "agents should be empty")
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM onboarding_sessions").fetchone()["count"] == 0,
+                "onboarding_sessions should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM bootstrap_requests").fetchone()["count"] == 0,
+                "bootstrap_requests should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM bootstrap_tokens").fetchone()["count"] == 0,
+                "bootstrap_tokens should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM notification_outbox").fetchone()["count"] == 0,
+                "notification_outbox should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM refresh_jobs").fetchone()["count"] == 0,
+                "refresh_jobs should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM agent_vault_subscriptions").fetchone()["count"] == 0,
+                "agent_vault_subscriptions should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM rate_limits").fetchone()["count"] == 0,
+                "rate_limits should be empty for the matched subjects",
+            )
+            print("PASS test_user_purge_enrollment_removes_completed_state_and_files")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def main() -> int:
+    test_user_purge_enrollment_removes_completed_state_and_files()
+    print("PASS all 1 purge-enrollment regression tests")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

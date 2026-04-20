@@ -813,6 +813,24 @@ fi
     print("PASS test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo")
 
 
+def test_enrollment_reset_supports_full_forget_purge() -> None:
+    text = DEPLOY_SH.read_text()
+    reset = extract(text, "run_enrollment_reset() {", "run_health_check() {")
+    expect(
+        "Forget completed enrollment history and local app accounts so this user can onboard as new" in reset,
+        "expected enrollment reset flow to offer a full forget-history purge path",
+    )
+    expect(
+        '"$ALMANAC_REPO_DIR/bin/almanac-ctl"' in reset and "purge-enrollment" in reset,
+        "expected enrollment reset flow to call almanac-ctl user purge-enrollment",
+    )
+    expect(
+        "--remove-nextcloud-user" in reset,
+        "expected full purge path to support removing the matching Nextcloud user",
+    )
+    print("PASS test_enrollment_reset_supports_full_forget_purge")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
@@ -834,6 +852,7 @@ def main() -> int:
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,
+        test_enrollment_reset_supports_full_forget_purge,
     ]
     for test in tests:
         test()

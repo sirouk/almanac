@@ -11,8 +11,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-from almanac_agent_access import clear_tailscale_https
+from almanac_agent_access import clear_tailscale_https, load_access_state
+from almanac_nextcloud_access import delete_nextcloud_user_access
 from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
     Config,
@@ -39,6 +41,7 @@ from almanac_control import (
     list_tokens,
     list_vault_warnings,
     list_vaults,
+    make_agent_id,
     mark_agent_deenrolled,
     mark_notification_delivered,
     mark_notification_error,
@@ -135,6 +138,14 @@ def parse_args() -> argparse.Namespace:
     sync_access = user_sub.add_parser("sync-access")
     sync_access.add_argument("unix_user")
     sync_access.add_argument("--agent-id", required=True)
+    purge_enrollment = user_sub.add_parser("purge-enrollment")
+    purge_enrollment.add_argument("unix_user")
+    purge_enrollment.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    purge_enrollment.add_argument("--remove-unix-user", action="store_true")
+    purge_enrollment.add_argument("--remove-archives", action="store_true")
+    purge_enrollment.add_argument("--purge-rate-limits", action="store_true")
+    purge_enrollment.add_argument("--remove-nextcloud-user", action="store_true")
+    purge_enrollment.add_argument("--extra-rate-limit-subject", action="append", default=[])
 
     upgrade = subparsers.add_parser("upgrade")
     upgrade_sub = upgrade.add_subparsers(dest="action", required=True)
@@ -264,6 +275,300 @@ def _user_home(unix_user: str) -> Path:
     return Path(pwd.getpwnam(unix_user).pw_dir)
 
 
+USER_AGENT_UNIT_NAMES = (
+    "almanac-user-agent-code.service",
+    "almanac-user-agent-dashboard-proxy.service",
+    "almanac-user-agent-dashboard.service",
+    "almanac-user-agent-gateway.service",
+    "almanac-user-agent-activate.path",
+    "almanac-user-agent-refresh.timer",
+    "almanac-user-agent-refresh.service",
+)
+
+
+def _json_object(raw_value: Any) -> dict[str, Any]:
+    if isinstance(raw_value, dict):
+        return raw_value
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _user_home_guess(unix_user: str) -> Path:
+    try:
+        return _user_home(unix_user)
+    except KeyError:
+        return Path("/home") / unix_user
+
+
+def _user_uid(unix_user: str) -> int | None:
+    try:
+        return pwd.getpwnam(unix_user).pw_uid
+    except KeyError:
+        return None
+
+
+def _run_quiet(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+
+def _disable_user_agent_units(unix_user: str) -> None:
+    uid = _user_uid(unix_user)
+    if uid is None:
+        return
+    _run_quiet(
+        [
+            "runuser",
+            "-u",
+            unix_user,
+            "--",
+            "env",
+            f"XDG_RUNTIME_DIR=/run/user/{uid}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            "systemctl",
+            "--user",
+            "disable",
+            "--now",
+            *USER_AGENT_UNIT_NAMES,
+        ]
+    )
+
+
+def _reload_user_systemd(unix_user: str) -> None:
+    uid = _user_uid(unix_user)
+    if uid is None:
+        return
+    _run_quiet(
+        [
+            "runuser",
+            "-u",
+            unix_user,
+            "--",
+            "env",
+            f"XDG_RUNTIME_DIR=/run/user/{uid}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            "systemctl",
+            "--user",
+            "daemon-reload",
+        ]
+    )
+
+
+def _candidate_user_homes(unix_user: str, *, agents: list[dict[str, Any]] | None = None) -> list[Path]:
+    homes: list[Path] = []
+    for agent in agents or []:
+        hermes_home_raw = str(agent.get("hermes_home") or "").strip()
+        if not hermes_home_raw:
+            continue
+        hermes_home = Path(hermes_home_raw)
+        try:
+            candidate = hermes_home.parents[3]
+        except IndexError:
+            continue
+        homes.append(candidate)
+    homes.append(_user_home_guess(unix_user))
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for home in homes:
+        key = str(home)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(home)
+    return deduped
+
+
+def _remove_user_agent_unit_files(
+    unix_user: str,
+    *,
+    agents: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    removed: list[str] = []
+    for home in _candidate_user_homes(unix_user, agents=agents):
+        unit_dir = home / ".config" / "systemd" / "user"
+        for name in USER_AGENT_UNIT_NAMES:
+            path = unit_dir / name
+            try:
+                if not path.exists():
+                    continue
+                path.unlink()
+            except OSError:
+                continue
+            removed.append(str(path))
+    return removed
+
+
+def _stop_code_container(unix_user: str, container_name: str) -> bool:
+    uid = _user_uid(unix_user)
+    if uid is None or not container_name or shutil.which("podman") is None:
+        return False
+    result = _run_quiet(
+        ["runuser", "-u", unix_user, "--", "podman", "rm", "-f", container_name]
+    )
+    return result.returncode == 0
+
+
+def _remove_path(path: Path) -> bool:
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+            return True
+        if path.is_dir():
+            shutil.rmtree(path)
+            return True
+    except FileNotFoundError:
+        return False
+    return False
+
+
+def _collect_enrollment_matches(conn, unix_user: str) -> dict[str, Any]:
+    derived_agent_id = make_agent_id(unix_user, "user")
+    agents = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM agents
+            WHERE role = 'user' AND (unix_user = ? OR agent_id = ?)
+            ORDER BY last_enrolled_at DESC
+            """,
+            (unix_user, derived_agent_id),
+        ).fetchall()
+    ]
+    agent_ids = {derived_agent_id}
+    for row in agents:
+        agent_id = str(row.get("agent_id") or "").strip()
+        if agent_id:
+            agent_ids.add(agent_id)
+
+    sessions: list[dict[str, Any]] = []
+    session_ids: set[str] = set()
+    request_ids: set[str] = set()
+    rate_limit_subjects: set[str] = set()
+    for row in conn.execute("SELECT * FROM onboarding_sessions ORDER BY updated_at DESC").fetchall():
+        payload = dict(row)
+        answers = _json_object(payload.get("answers_json"))
+        linked_agent_id = str(payload.get("linked_agent_id") or "").strip()
+        linked_request_id = str(payload.get("linked_request_id") or "").strip()
+        answers_unix_user = str(answers.get("unix_user") or "").strip()
+        if answers_unix_user != unix_user and linked_agent_id not in agent_ids:
+            continue
+        if linked_agent_id:
+            agent_ids.add(linked_agent_id)
+        if linked_request_id:
+            request_ids.add(linked_request_id)
+        session_id = str(payload.get("session_id") or "").strip()
+        if session_id:
+            session_ids.add(session_id)
+        platform = str(payload.get("platform") or "").strip()
+        sender_id = str(payload.get("sender_id") or "").strip()
+        if platform and sender_id:
+            rate_limit_subjects.add(f"{platform}:{sender_id}")
+        sessions.append(payload)
+
+    request_markers = sorted(request_ids)
+    requests_query = (
+        """
+        SELECT *
+        FROM bootstrap_requests
+        WHERE unix_user = ?
+        """
+    )
+    request_params: list[str] = [unix_user]
+    if agent_ids:
+        request_placeholders = ",".join("?" for _ in agent_ids)
+        requests_query += f" OR prior_agent_id IN ({request_placeholders})"
+        request_params.extend(sorted(agent_ids))
+    if request_markers:
+        request_placeholders = ",".join("?" for _ in request_markers)
+        requests_query += f" OR request_id IN ({request_placeholders})"
+        request_params.extend(request_markers)
+    requests = [
+        dict(row)
+        for row in conn.execute(
+            requests_query + " ORDER BY requested_at DESC",
+            tuple(request_params),
+        ).fetchall()
+    ]
+    for row in requests:
+        request_id = str(row.get("request_id") or "").strip()
+        if request_id:
+            request_ids.add(request_id)
+        prior_agent_id = str(row.get("prior_agent_id") or "").strip()
+        if prior_agent_id:
+            agent_ids.add(prior_agent_id)
+        source_ip = str(row.get("source_ip") or "").strip()
+        if source_ip:
+            rate_limit_subjects.add(source_ip)
+
+    token_ids: set[str] = set()
+    tokens: list[dict[str, Any]] = []
+    if agent_ids or request_ids:
+        clauses: list[str] = []
+        params: list[str] = []
+        if agent_ids:
+            placeholders = ",".join("?" for _ in agent_ids)
+            clauses.append(f"agent_id IN ({placeholders})")
+            params.extend(sorted(agent_ids))
+        if request_ids:
+            placeholders = ",".join("?" for _ in request_ids)
+            clauses.append(f"activation_request_id IN ({placeholders})")
+            params.extend(sorted(request_ids))
+        query = "SELECT * FROM bootstrap_tokens WHERE " + " OR ".join(clauses) + " ORDER BY issued_at DESC"
+        tokens = [dict(row) for row in conn.execute(query, tuple(params)).fetchall()]
+    for row in tokens:
+        token_id = str(row.get("token_id") or "").strip()
+        if token_id:
+            token_ids.add(token_id)
+
+    markers = sorted(agent_ids | request_ids | session_ids | token_ids)
+    notification_ids: list[int] = []
+    for row in conn.execute("SELECT id, target_id, message, extra_json FROM notification_outbox ORDER BY id").fetchall():
+        target_id = str(row["target_id"] or "")
+        message = str(row["message"] or "")
+        extra_json = str(row["extra_json"] or "")
+        if target_id in markers or any(marker and (marker in message or marker in extra_json) for marker in markers):
+            notification_ids.append(int(row["id"]))
+
+    refresh_job_names: list[str] = []
+    for row in conn.execute("SELECT job_name, target_id, last_note FROM refresh_jobs ORDER BY job_name").fetchall():
+        job_name = str(row["job_name"] or "")
+        target_id = str(row["target_id"] or "")
+        last_note = str(row["last_note"] or "")
+        if (
+            target_id in markers
+            or job_name in {f"{agent_id}-refresh" for agent_id in agent_ids}
+            or job_name in {f"onboarding-{session_id}" for session_id in session_ids}
+            or job_name in {f"auto-provision-{request_id}" for request_id in request_ids}
+            or any(marker and marker in last_note for marker in markers)
+        ):
+            refresh_job_names.append(job_name)
+
+    return {
+        "unix_user": unix_user,
+        "agent_ids": sorted(agent_ids),
+        "agents": agents,
+        "sessions": sessions,
+        "session_ids": sorted(session_ids),
+        "requests": requests,
+        "request_ids": sorted(request_ids),
+        "tokens": tokens,
+        "token_ids": sorted(token_ids),
+        "rate_limit_subjects": sorted(rate_limit_subjects),
+        "notification_ids": notification_ids,
+        "refresh_job_names": refresh_job_names,
+    }
+
 def user_prepare(cfg: Config, unix_user: str) -> dict:
     require_root("almanac-ctl user prepare must run as root.")
     info = ensure_unix_user_ready(unix_user)
@@ -282,6 +587,271 @@ def user_prepare(cfg: Config, unix_user: str) -> dict:
 def user_sync_access(cfg: Config, unix_user: str, agent_id: str) -> dict:
     require_root("almanac-ctl user sync-access must run as root.")
     return grant_agent_runtime_access(cfg, unix_user=unix_user, agent_id=agent_id)
+
+
+def user_purge_enrollment(
+    cfg: Config,
+    unix_user: str,
+    *,
+    actor: str,
+    remove_unix_user: bool,
+    remove_archives: bool,
+    purge_rate_limits: bool,
+    extra_rate_limit_subjects: list[str] | None = None,
+    remove_nextcloud_user: bool,
+) -> dict[str, Any]:
+    require_root("almanac-ctl user purge-enrollment must run as root.")
+    if unix_user == cfg.almanac_user:
+        raise SystemExit(f"refusing to purge the Almanac service user: {unix_user}")
+
+    extra_subjects = sorted({value.strip() for value in (extra_rate_limit_subjects or []) if value.strip()})
+    with connect_db(cfg) as conn:
+        matches = _collect_enrollment_matches(conn, unix_user)
+        agent_ids = list(matches["agent_ids"])
+        session_ids = list(matches["session_ids"])
+        request_ids = list(matches["request_ids"])
+        token_ids = list(matches["token_ids"])
+
+        removed_paths: list[str] = []
+        removed_unit_files: list[str] = []
+        archives_created: list[str] = []
+        code_containers_removed: list[str] = []
+
+        _disable_user_agent_units(unix_user)
+        for agent in matches["agents"]:
+            if str(agent.get("role") or "") != "user":
+                continue
+            agent_id = str(agent.get("agent_id") or "").strip()
+            hermes_home = Path(str(agent.get("hermes_home") or "").strip()) if str(agent.get("hermes_home") or "").strip() else None
+            if hermes_home is not None:
+                try:
+                    clear_tailscale_https(hermes_home)
+                except Exception:
+                    pass
+                access_state = load_access_state(hermes_home)
+                container_name = str(access_state.get("code_container_name") or "").strip()
+                if container_name and _stop_code_container(unix_user, container_name):
+                    code_containers_removed.append(container_name)
+                if not remove_archives and str(agent.get("status") or "") in {"active", "pending"} and hermes_home.exists():
+                    archive_path = archive_agent_files(
+                        cfg,
+                        agent_id=agent_id,
+                        unix_user=unix_user,
+                        hermes_home=str(hermes_home),
+                    )
+                    archives_created.append(str(archive_path))
+                if _remove_path(hermes_home):
+                    removed_paths.append(str(hermes_home))
+
+            manifest_path = Path(str(agent.get("manifest_path") or "").strip()) if str(agent.get("manifest_path") or "").strip() else None
+            if manifest_path is not None and _remove_path(manifest_path):
+                removed_paths.append(str(manifest_path))
+
+        removed_unit_files.extend(_remove_user_agent_unit_files(unix_user, agents=matches["agents"]))
+        _reload_user_systemd(unix_user)
+
+        for agent_id in agent_ids:
+            for path in (
+                cfg.agents_state_dir / agent_id,
+                cfg.state_dir / "activation-triggers" / f"{agent_id}.json",
+            ):
+                if _remove_path(path):
+                    removed_paths.append(str(path))
+            if remove_archives:
+                archive_root = cfg.archived_agents_dir / agent_id
+                if _remove_path(archive_root):
+                    removed_paths.append(str(archive_root))
+
+        for session_id in session_ids:
+            secret_dir = cfg.state_dir / "onboarding-secrets" / session_id
+            if _remove_path(secret_dir):
+                removed_paths.append(str(secret_dir))
+
+        for request_id in request_ids:
+            log_path = cfg.state_dir / "auto-provision" / f"{request_id}.log"
+            if _remove_path(log_path):
+                removed_paths.append(str(log_path))
+
+        repo_checkout = cfg.state_dir / "repo-sync" / "checkouts" / f"{unix_user}-almanac"
+        if _remove_path(repo_checkout):
+            removed_paths.append(str(repo_checkout))
+        repo_mirror = cfg.vault_dir / "Repos" / "_mirrors" / f"{unix_user}-almanac"
+        if _remove_path(repo_mirror):
+            removed_paths.append(str(repo_mirror))
+
+        nextcloud_result: dict[str, Any] | None = None
+        if remove_nextcloud_user:
+            nextcloud_result = delete_nextcloud_user_access(cfg, username=unix_user)
+            for path in (
+                cfg.state_dir / "nextcloud" / "data" / unix_user,
+                cfg.state_dir / "nextcloud" / "html" / "data" / unix_user,
+            ):
+                if _remove_path(path):
+                    removed_paths.append(str(path))
+
+        delete_counts = {
+            "agent_vault_subscriptions": 0,
+            "notification_outbox": 0,
+            "refresh_jobs": 0,
+            "bootstrap_tokens": 0,
+            "bootstrap_requests": 0,
+            "onboarding_sessions": 0,
+            "agents": 0,
+            "rate_limits": 0,
+        }
+
+        if agent_ids:
+            before = conn.total_changes
+            placeholders = ",".join("?" for _ in agent_ids)
+            conn.execute(
+                f"DELETE FROM agent_vault_subscriptions WHERE agent_id IN ({placeholders})",
+                tuple(agent_ids),
+            )
+            delete_counts["agent_vault_subscriptions"] = conn.total_changes - before
+
+        before = conn.total_changes
+        notification_ids = list(matches["notification_ids"])
+        if notification_ids:
+            placeholders = ",".join("?" for _ in notification_ids)
+            conn.execute(
+                f"DELETE FROM notification_outbox WHERE id IN ({placeholders})",
+                tuple(notification_ids),
+            )
+        delete_counts["notification_outbox"] = conn.total_changes - before
+
+        before = conn.total_changes
+        refresh_job_names = list(matches["refresh_job_names"])
+        if refresh_job_names:
+            placeholders = ",".join("?" for _ in refresh_job_names)
+            conn.execute(
+                f"DELETE FROM refresh_jobs WHERE job_name IN ({placeholders})",
+                tuple(refresh_job_names),
+            )
+        delete_counts["refresh_jobs"] = conn.total_changes - before
+
+        before = conn.total_changes
+        if token_ids:
+            placeholders = ",".join("?" for _ in token_ids)
+            conn.execute(
+                f"DELETE FROM bootstrap_tokens WHERE token_id IN ({placeholders})",
+                tuple(token_ids),
+            )
+        elif agent_ids or request_ids:
+            clauses: list[str] = []
+            params: list[str] = []
+            if agent_ids:
+                placeholders = ",".join("?" for _ in agent_ids)
+                clauses.append(f"agent_id IN ({placeholders})")
+                params.extend(agent_ids)
+            if request_ids:
+                placeholders = ",".join("?" for _ in request_ids)
+                clauses.append(f"activation_request_id IN ({placeholders})")
+                params.extend(request_ids)
+            conn.execute(
+                "DELETE FROM bootstrap_tokens WHERE " + " OR ".join(clauses),
+                tuple(params),
+            )
+        delete_counts["bootstrap_tokens"] = conn.total_changes - before
+
+        before = conn.total_changes
+        request_clauses = ["unix_user = ?"]
+        request_params: list[str] = [unix_user]
+        if request_ids:
+            placeholders = ",".join("?" for _ in request_ids)
+            request_clauses.append(f"request_id IN ({placeholders})")
+            request_params.extend(request_ids)
+        if agent_ids:
+            placeholders = ",".join("?" for _ in agent_ids)
+            request_clauses.append(f"prior_agent_id IN ({placeholders})")
+            request_params.extend(agent_ids)
+        conn.execute(
+            "DELETE FROM bootstrap_requests WHERE " + " OR ".join(request_clauses),
+            tuple(request_params),
+        )
+        delete_counts["bootstrap_requests"] = conn.total_changes - before
+
+        before = conn.total_changes
+        session_clauses = []
+        session_params: list[str] = []
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            session_clauses.append(f"session_id IN ({placeholders})")
+            session_params.extend(session_ids)
+        if request_ids:
+            placeholders = ",".join("?" for _ in request_ids)
+            session_clauses.append(f"linked_request_id IN ({placeholders})")
+            session_params.extend(request_ids)
+        if agent_ids:
+            placeholders = ",".join("?" for _ in agent_ids)
+            session_clauses.append(f"linked_agent_id IN ({placeholders})")
+            session_params.extend(agent_ids)
+        if session_clauses:
+            conn.execute(
+                "DELETE FROM onboarding_sessions WHERE " + " OR ".join(session_clauses),
+                tuple(session_params),
+            )
+        delete_counts["onboarding_sessions"] = conn.total_changes - before
+
+        before = conn.total_changes
+        agent_clauses = ["unix_user = ?"]
+        agent_params: list[str] = [unix_user]
+        if agent_ids:
+            placeholders = ",".join("?" for _ in agent_ids)
+            agent_clauses.append(f"agent_id IN ({placeholders})")
+            agent_params.extend(agent_ids)
+        conn.execute(
+            "DELETE FROM agents WHERE " + " OR ".join(agent_clauses),
+            tuple(agent_params),
+        )
+        delete_counts["agents"] = conn.total_changes - before
+
+        rate_subjects = sorted(set(matches["rate_limit_subjects"]) | set(extra_subjects))
+        if purge_rate_limits and rate_subjects:
+            before = conn.total_changes
+            placeholders = ",".join("?" for _ in rate_subjects)
+            conn.execute(
+                f"DELETE FROM rate_limits WHERE subject IN ({placeholders})",
+                tuple(rate_subjects),
+            )
+            delete_counts["rate_limits"] = conn.total_changes - before
+
+        conn.commit()
+
+    unix_user_removed = False
+    if remove_unix_user and _user_uid(unix_user) is not None:
+        uid = _user_uid(unix_user)
+        if uid is not None:
+            _run_quiet(["loginctl", "disable-linger", unix_user])
+            _run_quiet(["loginctl", "kill-user", unix_user])
+            _run_quiet(["loginctl", "terminate-user", unix_user])
+            _run_quiet(["systemctl", "stop", f"user@{uid}.service"])
+        _run_quiet(["pkill", "-u", unix_user])
+        result = _run_quiet(["userdel", "-r", unix_user])
+        if result.returncode != 0:
+            _run_quiet(["userdel", unix_user])
+            _remove_path(_user_home_guess(unix_user))
+        unix_user_removed = _user_uid(unix_user) is None
+
+    return {
+        "unix_user": unix_user,
+        "actor": actor,
+        "removed_unix_user": unix_user_removed,
+        "remove_unix_user_requested": remove_unix_user,
+        "remove_archives_requested": remove_archives,
+        "remove_nextcloud_user_requested": remove_nextcloud_user,
+        "purge_rate_limits_requested": purge_rate_limits,
+        "agent_ids": agent_ids,
+        "session_ids": session_ids,
+        "request_ids": request_ids,
+        "token_ids": token_ids,
+        "rate_limit_subjects": rate_subjects if purge_rate_limits else [],
+        "deleted_rows": delete_counts,
+        "archives_created": archives_created,
+        "removed_unit_files": removed_unit_files,
+        "removed_code_containers": code_containers_removed,
+        "removed_paths": sorted(dict.fromkeys(removed_paths)),
+        "nextcloud": nextcloud_result,
+    }
 
 
 def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
@@ -738,6 +1308,21 @@ def main() -> None:
         return
     if args.domain == "user" and args.action == "sync-access":
         dump_output(args, user_sync_access(cfg, args.unix_user, args.agent_id))
+        return
+    if args.domain == "user" and args.action == "purge-enrollment":
+        dump_output(
+            args,
+            user_purge_enrollment(
+                cfg,
+                args.unix_user,
+                actor=args.actor,
+                remove_unix_user=args.remove_unix_user,
+                remove_archives=args.remove_archives,
+                purge_rate_limits=args.purge_rate_limits,
+                extra_rate_limit_subjects=args.extra_rate_limit_subject,
+                remove_nextcloud_user=args.remove_nextcloud_user,
+            ),
+        )
         return
 
     if args.domain == "agent" and args.action == "deenroll":

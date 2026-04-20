@@ -1124,6 +1124,69 @@ def save_onboarding_session(
     return get_onboarding_session(conn, session_id) or {}
 
 
+def onboarding_session_has_started_provisioning(session: dict[str, Any]) -> bool:
+    state = str(session.get("state") or "").strip().lower()
+    if state == "provision-pending":
+        return True
+    if str(session.get("linked_request_id") or "").strip():
+        return True
+    if str(session.get("linked_agent_id") or "").strip():
+        return True
+    return False
+
+
+def delete_onboarding_session_secrets(cfg: Config, session_id: str) -> None:
+    path = onboarding_secret_dir(cfg) / session_id
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def cancel_onboarding_session(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    session_id: str,
+) -> dict[str, Any]:
+    session = get_onboarding_session(conn, session_id, redact_secrets=False)
+    if session is None:
+        raise ValueError(f"unknown onboarding session: {session_id}")
+    if onboarding_session_has_started_provisioning(session):
+        raise ValueError(f"onboarding session has already started provisioning: {session_id}")
+
+    delete_onboarding_session_secrets(cfg, session_id)
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE onboarding_sessions
+        SET state = 'cancelled',
+            answers_json = '{}',
+            operator_notified_at = '',
+            approved_at = '',
+            approved_by_actor = '',
+            denied_at = '',
+            denied_by_actor = '',
+            denial_reason = '',
+            linked_request_id = '',
+            linked_agent_id = '',
+            telegram_bot_id = '',
+            telegram_bot_username = '',
+            pending_bot_token = '',
+            pending_bot_token_path = '',
+            provision_error = '',
+            completed_at = ?,
+            updated_at = ?
+        WHERE session_id = ?
+        """,
+        (now_iso, now_iso, session_id),
+    )
+    conn.commit()
+    return get_onboarding_session(conn, session_id) or {}
+
+
 def approve_onboarding_session(
     conn: sqlite3.Connection,
     *,

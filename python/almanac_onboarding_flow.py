@@ -11,10 +11,11 @@ from almanac_control import (
     Config,
     RateLimitError,
     approve_request,
+    cancel_onboarding_session,
     config_env_value,
     connect_db,
-    delete_onboarding_secret,
     find_active_onboarding_session,
+    onboarding_session_has_started_provisioning,
     operator_telegram_action_extra,
     queue_notification,
     request_bootstrap,
@@ -288,12 +289,6 @@ def _provider_auth_state(session: dict[str, Any]) -> dict[str, Any]:
     raw = answers.get("provider_browser_auth")
     return raw if isinstance(raw, dict) else {}
 
-
-def _provider_secret_path(session: dict[str, Any]) -> str:
-    answers = session.get("answers", {})
-    return str(answers.get("pending_provider_secret_path") or "").strip()
-
-
 def _codex_browser_auth_error_state(message: str) -> dict[str, Any]:
     compact = message.strip() or "unknown OpenAI Codex auth error"
     return {
@@ -460,15 +455,28 @@ def _status_or_cancel(
     if normalized in STATUS_COMMANDS:
         return session, [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
     if normalized in CANCEL_COMMANDS:
-        delete_onboarding_secret(str(session.get("pending_bot_token_path") or ""))
-        delete_onboarding_secret(_provider_secret_path(session))
-        updated = save_onboarding_session(
-            conn,
-            session_id=str(session["session_id"]),
-            state="cancelled",
-            completed_at=utc_now_iso(),
-        )
-        return updated, [OutboundMessage(incoming.chat_id, f"Cancelled {updated['session_id']}. Send /start when you want to try again.")]
+        if onboarding_session_has_started_provisioning(session):
+            request_id = str(session.get("linked_request_id") or "").strip()
+            detail = (
+                f" Ask an operator to cancel request `{request_id}` if provisioning has not started yet, "
+                "or purge the enrollment after the lane is live."
+                if request_id
+                else " Ask an operator to use the enrollment purge flow if you still want this removed."
+            )
+            return session, [
+                OutboundMessage(
+                    incoming.chat_id,
+                    "I have already started provisioning your lane, so I cannot wipe this clean from chat anymore."
+                    + detail,
+                )
+            ]
+        updated = cancel_onboarding_session(conn, cfg, session_id=str(session["session_id"]))
+        return updated, [
+            OutboundMessage(
+                incoming.chat_id,
+                f"Cancelled {updated['session_id']}. I wiped the staged onboarding state. Send /start when you want to try again.",
+            )
+        ]
     return None, None
 
 

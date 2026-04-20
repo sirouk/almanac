@@ -52,7 +52,15 @@ def test_bool_env_blank_uses_default() -> None:
     print("PASS test_bool_env_blank_uses_default")
 
 
-def render_runtime_config(channels: str, notify_platform: str, tg_flag: str = "", dc_flag: str = "") -> str:
+def render_runtime_config(
+    channels: str,
+    notify_platform: str,
+    tg_flag: str = "",
+    dc_flag: str = "",
+    *,
+    enable_tailscale_serve: str = "0",
+    agent_enable_tailscale_serve: str = "",
+) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
     script = f"""
@@ -79,7 +87,7 @@ POSTGRES_PASSWORD=dbpass
 NEXTCLOUD_ADMIN_USER=admin
 NEXTCLOUD_ADMIN_PASSWORD=adminpass
 ENABLE_NEXTCLOUD=0
-ENABLE_TAILSCALE_SERVE=0
+ENABLE_TAILSCALE_SERVE={shlex.quote(enable_tailscale_serve)}
 ENABLE_PRIVATE_GIT=1
 ENABLE_QUARTO=1
 SEED_SAMPLE_VAULT=1
@@ -89,6 +97,7 @@ ALMANAC_CURATOR_CHANNELS={shlex.quote(channels)}
 OPERATOR_NOTIFY_CHANNEL_PLATFORM={shlex.quote(notify_platform)}
 ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED={shlex.quote(tg_flag)}
 ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED={shlex.quote(dc_flag)}
+ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE={shlex.quote(agent_enable_tailscale_serve)}
 emit_runtime_config
 """
     result = bash(script)
@@ -122,6 +131,18 @@ def test_emit_runtime_config_normalizes_curator_onboarding_flags() -> None:
     expect(tg == "0", f"expected telegram onboarding flag to normalize to 0, got {tg!r}")
     expect(dc == "0", f"expected discord onboarding flag to normalize to 0, got {dc!r}")
     print("PASS test_emit_runtime_config_normalizes_curator_onboarding_flags")
+
+
+def test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag() -> None:
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        enable_tailscale_serve="1",
+        agent_enable_tailscale_serve="0",
+    )
+    agent_flag = source_value(config, "ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE")
+    expect(agent_flag == "1", f"expected agent tailscale serve flag to follow global enable, got {agent_flag!r}")
+    print("PASS test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag")
 
 
 def test_describe_operator_channel_summary_avoids_tui_only_duplication() -> None:
@@ -796,6 +817,7 @@ def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
+        test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag,
         test_describe_operator_channel_summary_avoids_tui_only_duplication,
         test_install_reexecs_for_unreadable_breadcrumb_config,
         test_install_does_not_reexec_for_readable_breadcrumb_config,

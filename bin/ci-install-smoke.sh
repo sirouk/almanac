@@ -414,7 +414,7 @@ assert_agent_access_surfaces() {
   local agent_id="$2"
   local hermes_home="$3"
   local access_file="$hermes_home/state/almanac-web-access.json"
-  local username="" password="" dashboard_backend_port="" dashboard_proxy_port="" code_port="" dashboard_url="" code_url="" code_container_name="" code_server_image=""
+  local username="" password="" dashboard_backend_port="" dashboard_proxy_port="" code_port="" dashboard_url="" code_url="" dashboard_label="" code_label="" code_container_name="" code_server_image=""
   local before_signature="" after_signature="" home_dir="" uid=""
   local podman_bin=""
 
@@ -435,6 +435,8 @@ for key in (
     "code_port",
     "dashboard_url",
     "code_url",
+    "dashboard_label",
+    "code_label",
     "code_container_name",
     "code_server_image",
 ):
@@ -536,14 +538,18 @@ for marker in ("--auth", "password", "/workspace"):
 PY
 
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
+    python3 - "$dashboard_url" "$code_url" "$dashboard_label" "$code_label" <<'PY'
 import sys
 
-dashboard_url, code_url, dashboard_port, code_port = sys.argv[1:5]
-for url, port in ((dashboard_url, dashboard_port), (code_url, code_port)):
-    if not url.startswith("https://") or f":{port}/" not in url:
-        raise SystemExit(f"expected tailscale https URL for port {port}, saw {url!r}")
+dashboard_url, code_url, dashboard_label, code_label = sys.argv[1:5]
+for url, label in ((dashboard_url, dashboard_label), (code_url, code_label)):
+    if not url.startswith("https://") or f"/{label}/" not in url:
+        raise SystemExit(f"expected tailscale https URL for path label {label!r}, saw {url!r}")
 PY
+    wait_for_http_status "$dashboard_url" "401" "" "" 90 2
+    wait_for_http_status "$dashboard_url" "200" "$username:$password" "" 90 2
+    wait_for_http_status "${dashboard_url}api/status" "200" "$username:$password" "" 90 2
+    wait_for_http_status "$code_url" "200,302,303" "" "" 180 2
   else
     python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
 import sys

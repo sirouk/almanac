@@ -176,10 +176,121 @@ def test_access_state_avoids_ports_reserved_by_other_agents() -> None:
             os.environ.update(old_env)
 
 
+def test_access_state_uses_tailscale_path_urls_when_enabled() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_tailscale_paths")
+    access_mod = load_module(ACCESS_PY, "almanac_agent_access_tailscale_paths")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        values = config_values(root)
+        values["ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE"] = "1"
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            hermes_home = root / "home-current" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True, exist_ok=True)
+            insert_agent(control, conn, agent_id="agent-current", unix_user="current", hermes_home=hermes_home)
+            access_mod.detect_tailscale_dns_name = lambda: "kor.tail77f45e.ts.net"
+
+            state = access_mod.ensure_access_state(
+                conn,
+                cfg,
+                agent_id="agent-current",
+                unix_user="current",
+                hermes_home=hermes_home,
+                uid=77,
+            )
+
+            expect(state["dashboard_label"] == "agent-current-dash", state)
+            expect(state["code_label"] == "agent-current-code", state)
+            expect(state["dashboard_url"] == "https://kor.tail77f45e.ts.net/agent-current-dash/", state)
+            expect(state["code_url"] == "https://kor.tail77f45e.ts.net/agent-current-code/", state)
+            print("PASS test_access_state_uses_tailscale_path_urls_when_enabled")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_publish_tailscale_https_uses_shared_443_paths() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    access_mod = load_module(ACCESS_PY, "almanac_agent_access_publish_paths")
+    calls: list[tuple[str, ...]] = []
+    access_mod._run_tailscale_serve = lambda *args: calls.append(tuple(args))
+    access_mod.detect_tailscale_dns_name = lambda: "kor.tail77f45e.ts.net"
+    access = {
+        "dashboard_proxy_port": 30011,
+        "code_port": 40011,
+        "dashboard_label": "agent-sirouk-dash",
+        "code_label": "agent-sirouk-code",
+    }
+
+    updated = access_mod.publish_tailscale_https(dict(access))
+
+    expect(
+        ("--bg", "--yes", "--https=443", "--set-path=/agent-sirouk-dash", "http://127.0.0.1:30011") in calls,
+        f"expected shared-path publish for dashboard, saw {calls!r}",
+    )
+    expect(
+        ("--bg", "--yes", "--https=443", "--set-path=/agent-sirouk-code", "http://127.0.0.1:40011") in calls,
+        f"expected shared-path publish for code, saw {calls!r}",
+    )
+    expect(updated["dashboard_url"] == "https://kor.tail77f45e.ts.net/agent-sirouk-dash/", updated)
+    expect(updated["code_url"] == "https://kor.tail77f45e.ts.net/agent-sirouk-code/", updated)
+    print("PASS test_publish_tailscale_https_uses_shared_443_paths")
+
+
+def test_clear_tailscale_https_removes_shared_paths_and_legacy_ports() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    access_mod = load_module(ACCESS_PY, "almanac_agent_access_clear_paths")
+    calls: list[tuple[str, ...]] = []
+    access_mod._run_tailscale_serve = lambda *args: calls.append(tuple(args))
+    access_mod.shutil_which = lambda program: "/usr/bin/tailscale" if program == "tailscale" else ""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp)
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-web-access.json").write_text(
+            json.dumps(
+                {
+                    "dashboard_label": "agent-sirouk-dash",
+                    "code_label": "agent-sirouk-code",
+                    "dashboard_proxy_port": 30011,
+                    "code_port": 40011,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        access_mod.clear_tailscale_https(hermes_home)
+
+    expect(
+        ("--https=443", "--set-path=/agent-sirouk-dash", "off") in calls,
+        f"expected shared dashboard path cleanup, saw {calls!r}",
+    )
+    expect(
+        ("--https=443", "--set-path=/agent-sirouk-code", "off") in calls,
+        f"expected shared code path cleanup, saw {calls!r}",
+    )
+    expect(("--https=30011", "off") in calls, f"expected legacy dashboard port cleanup, saw {calls!r}")
+    expect(("--https=40011", "off") in calls, f"expected legacy code port cleanup, saw {calls!r}")
+    print("PASS test_clear_tailscale_https_removes_shared_paths_and_legacy_ports")
+
+
 def main() -> int:
     test_access_state_persists_password_and_ports()
     test_access_state_avoids_ports_reserved_by_other_agents()
-    print("PASS all 2 agent-access regression tests")
+    test_access_state_uses_tailscale_path_urls_when_enabled()
+    test_publish_tailscale_https_uses_shared_443_paths()
+    test_clear_tailscale_https_removes_shared_paths_and_legacy_ports()
+    print("PASS all 5 agent-access regression tests")
     return 0
 
 

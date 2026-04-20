@@ -632,6 +632,10 @@ printf 'BACKUP_GIT_KNOWN_HOSTS_FILE=%s\\n' "$BACKUP_GIT_KNOWN_HOSTS_FILE"
         "BACKUP_GIT_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/almanac-backup-known_hosts" in result.stdout,
         f"expected default backup known_hosts path, got: {result.stdout!r}",
     )
+    expect(
+        "Allow write access" in result.stdout,
+        f"expected backup guidance to mention Allow write access, got: {result.stdout!r}",
+    )
     print("PASS test_collect_install_answers_guides_backup_remote_setup")
 
 

@@ -1398,7 +1398,7 @@ print_post_install_guide() {
     echo "  Deploy key public file:"
     echo "    $backup_pub_key_path"
     if [[ -n "$backup_pub_key" ]]; then
-      echo "  Public key to paste into GitHub:"
+      echo "  Public key to paste into GitHub (enable Allow write access):"
       printf '    %s\n' "$backup_pub_key"
     fi
     echo "  Backup smoke test:"
@@ -1722,6 +1722,7 @@ collect_backup_git_answers() {
   echo "GitHub backup for almanac-priv"
   echo "  Almanac can push the private repo to a private GitHub repository using a deploy-only SSH key."
   echo "  Deploy will generate that key on this host and print the public key for you to paste into GitHub."
+  echo "  In GitHub deploy key settings, enable: Allow write access."
 
   while true; do
     owner_repo="$(ask "GitHub owner/repo for almanac-priv backup (blank to skip)" "$default_owner_repo")"

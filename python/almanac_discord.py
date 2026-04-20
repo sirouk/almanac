@@ -42,11 +42,42 @@ def discord_get_current_user(*, bot_token: str) -> dict[str, Any]:
     return _request_json("/users/@me", bot_token=bot_token, timeout=20)
 
 
-def discord_send_message(*, bot_token: str, channel_id: str, text: str) -> dict[str, Any]:
+def discord_send_message(
+    *,
+    bot_token: str,
+    channel_id: str,
+    text: str,
+    components: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"content": text if len(text) <= 1900 else text[:1897] + "..."}
+    if components is not None:
+        payload["components"] = components
     return _request_json(
         f"/channels/{channel_id}/messages",
         bot_token=bot_token,
         method="POST",
-        payload={"content": text if len(text) <= 1900 else text[:1897] + "..."},
+        payload=payload,
+        timeout=20,
+    )
+
+
+def discord_edit_message(
+    *,
+    bot_token: str,
+    channel_id: str,
+    message_id: str,
+    text: str | None = None,
+    components: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if text is not None:
+        payload["content"] = text if len(text) <= 1900 else text[:1897] + "..."
+    if components is not None:
+        payload["components"] = components
+    return _request_json(
+        f"/channels/{channel_id}/messages/{message_id}",
+        bot_token=bot_token,
+        method="PATCH",
+        payload=payload,
         timeout=20,
     )

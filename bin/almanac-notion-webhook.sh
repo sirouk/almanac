@@ -10,4 +10,21 @@ ensure_layout
 
 export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
 PYTHON_BIN="$(require_runtime_python)"
+
+have_host_arg() {
+  local arg=""
+  for arg in "$@"; do
+    case "$arg" in
+      --host|--host=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+if ! have_host_arg "$@"; then
+  set -- --host 127.0.0.1 "$@"
+fi
+
 exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/almanac_notion_webhook.py" "$@"

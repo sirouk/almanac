@@ -538,13 +538,19 @@ for marker in ("--auth", "password", "/workspace"):
 PY
 
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    python3 - "$dashboard_url" "$code_url" "$dashboard_label" "$code_label" <<'PY'
+    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
 import sys
+from urllib.parse import urlparse
 
-dashboard_url, code_url, dashboard_label, code_label = sys.argv[1:5]
-for url, label in ((dashboard_url, dashboard_label), (code_url, code_label)):
-    if not url.startswith("https://") or f"/{label}/" not in url:
-        raise SystemExit(f"expected tailscale https URL for path label {label!r}, saw {url!r}")
+dashboard_url, code_url, dashboard_port, code_port = sys.argv[1:5]
+expected = (
+    (dashboard_url, dashboard_port),
+    (code_url, code_port),
+)
+for url, port in expected:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.port != int(port) or parsed.path != "/":
+        raise SystemExit(f"expected tailscale https URL on port {port!r}, saw {url!r}")
 PY
     wait_for_http_status "$dashboard_url" "401" "" "" 90 2
     wait_for_http_status "$dashboard_url" "200" "$username:$password" "" 90 2

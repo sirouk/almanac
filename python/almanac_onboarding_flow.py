@@ -111,26 +111,44 @@ def resolve_curator_discord_bot_token(cfg: Config) -> str:
     return read_env_file_value(cfg.curator_hermes_home / ".env", "DISCORD_BOT_TOKEN").strip()
 
 
-def send_session_message(cfg: Config, session: dict[str, Any], text: str) -> None:
+def send_session_message(
+    cfg: Config,
+    session: dict[str, Any],
+    text: str,
+    *,
+    telegram_reply_markup: dict[str, Any] | None = None,
+    discord_components: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     platform = str(session.get("platform") or "").strip().lower()
     chat_id = str(session.get("chat_id") or "").strip()
     if not platform or not chat_id or not text:
-        return
+        return None
     if platform == "telegram":
         token = resolve_curator_telegram_bot_token(cfg)
         if token:
             try:
-                telegram_send_message(bot_token=token, chat_id=chat_id, text=text)
+                return telegram_send_message(
+                    bot_token=token,
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=telegram_reply_markup,
+                )
             except Exception:
-                return
-        return
+                return None
+        return None
     if platform == "discord":
         token = resolve_curator_discord_bot_token(cfg)
         if token:
             try:
-                discord_send_message(bot_token=token, channel_id=chat_id, text=text)
+                return discord_send_message(
+                    bot_token=token,
+                    channel_id=chat_id,
+                    text=text,
+                    components=discord_components,
+                )
             except Exception:
-                return
+                return None
+    return None
 
 
 def notify_session_state(cfg: Config, session: dict[str, Any]) -> None:

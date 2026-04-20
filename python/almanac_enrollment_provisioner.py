@@ -45,6 +45,8 @@ from almanac_control import (
     write_onboarding_secret,
 )
 from almanac_onboarding_flow import begin_onboarding_provisioning, send_session_message, session_prompt
+from almanac_onboarding_completion import completion_bundle_for_session
+from almanac_nextcloud_access import sync_nextcloud_user_access
 from almanac_onboarding_provider_auth import (
     poll_codex_device_authorization,
     provider_browser_auth_prompt,
@@ -129,11 +131,24 @@ def _write_env_values(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _notify_user_via_curator(cfg: Config, *, session: dict, message: str) -> None:
+def _notify_user_via_curator(
+    cfg: Config,
+    *,
+    session: dict,
+    message: str,
+    telegram_reply_markup: dict[str, Any] | None = None,
+    discord_components: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     try:
-        send_session_message(cfg, session, message)
+        return send_session_message(
+            cfg,
+            session,
+            message,
+            telegram_reply_markup=telegram_reply_markup,
+            discord_components=discord_components,
+        )
     except Exception:
-        return
+        return None
 
 
 def _session_bot_label(session: dict[str, Any]) -> str:
@@ -214,6 +229,7 @@ def _provision_user_access_surfaces(
     hermes_home: Path,
     uid: int,
     channels: list[str],
+    display_name: str = "",
 ) -> dict[str, Any]:
     ensure_web_runtime(cfg)
     access = ensure_access_state(
@@ -275,31 +291,16 @@ def _provision_user_access_surfaces(
     if cfg.agent_enable_tailscale_serve:
         access = publish_tailscale_https(access)
         save_access_state(hermes_home, access, unix_user=unix_user)
+    nextcloud_access = sync_nextcloud_user_access(
+        cfg,
+        username=str(access["username"]),
+        password=str(access["password"]),
+        display_name=display_name or unix_user,
+    )
+    if nextcloud_access.get("enabled"):
+        access["nextcloud_username"] = str(nextcloud_access.get("username") or access.get("username") or "")
+        save_access_state(hermes_home, access, unix_user=unix_user)
     return access
-
-
-def _onboarding_completion_message(
-    *,
-    bot_reference: str,
-    access: dict[str, Any],
-    home: Path,
-    discord_note: bool = False,
-) -> str:
-    lines = [
-        f"Everything is ready. Your own bot is {bot_reference} now.",
-        f"Unix user: {access.get('unix_user') or access.get('username')}",
-        f"Hermes dashboard: {access.get('dashboard_url')}",
-        f"Dashboard username: {access.get('username')}",
-        f"Shared password: {access.get('password')}",
-        f"Code workspace: {access.get('code_url')}",
-        f"Workspace root: {home}",
-        "It already has the Almanac skills active by default, plus the shared vault/qmd wiring.",
-    ]
-    if discord_note:
-        lines.append(
-            "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
-        )
-    return "\n".join(lines)
 
 
 def _operator_completion_message(
@@ -309,11 +310,16 @@ def _operator_completion_message(
     bot_line: str,
     access: dict[str, Any],
 ) -> str:
+    nextcloud_line = ""
+    nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
+    if nextcloud_username:
+        nextcloud_line = f"Nextcloud: shared login username={nextcloud_username}"
     return "\n".join(
         [
             f"Onboarding complete for {agent_id} ({unix_user}); {bot_line}",
             f"Dashboard: {access.get('dashboard_url')} username={access.get('username')}",
             f"Code: {access.get('code_url')}",
+            *([nextcloud_line] if nextcloud_line else []),
             f"Shared password: {access.get('password')}",
         ]
     )
@@ -634,10 +640,11 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         hermes_home=hermes_home,
         uid=uid,
         channels=["tui-only", "telegram"],
+        display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
     )
     _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
 
-    save_onboarding_session(
+    updated_session = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
         state="completed",
@@ -660,6 +667,29 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             f"(provider={provider_runtime.get('provider') or 'unknown'} model={provider_runtime.get('model') or 'unknown'})"
         ),
     )
+    completion_bundle = completion_bundle_for_session(conn, cfg, updated_session)
+    delivery = None
+    if completion_bundle is not None:
+        delivery = _notify_user_via_curator(
+            cfg,
+            session=updated_session,
+            message=str(completion_bundle.get("full_text") or ""),
+            telegram_reply_markup=completion_bundle.get("telegram_reply_markup"),
+            discord_components=completion_bundle.get("discord_components"),
+        )
+    if isinstance(delivery, dict):
+        save_onboarding_session(
+            conn,
+            session_id=str(session["session_id"]),
+            answers={
+                "completion_delivery": {
+                    "platform": "telegram",
+                    "chat_id": str(updated_session.get("chat_id") or ""),
+                    "message_id": str(delivery.get("message_id") or ""),
+                    "password_scrubbed": False,
+                }
+            },
+        )
     _queue_operator_message(
         conn,
         cfg,
@@ -668,15 +698,6 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             unix_user=unix_user,
             bot_line=f"Telegram bot @{bot_username or 'unknown'} is live.",
             access=access,
-        ),
-    )
-    _notify_user_via_curator(
-        cfg,
-        session=session,
-        message=_onboarding_completion_message(
-            bot_reference=f"@{bot_username or 'your bot'}",
-            access=access,
-            home=home,
         ),
     )
 
@@ -747,10 +768,11 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         hermes_home=hermes_home,
         uid=uid,
         channels=["tui-only", "discord"],
+        display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
     )
     _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
 
-    save_onboarding_session(
+    updated_session = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
         state="completed",
@@ -773,6 +795,29 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             f"(provider={provider_runtime.get('provider') or 'unknown'} model={provider_runtime.get('model') or 'unknown'})"
         ),
     )
+    completion_bundle = completion_bundle_for_session(conn, cfg, updated_session)
+    delivery = None
+    if completion_bundle is not None:
+        delivery = _notify_user_via_curator(
+            cfg,
+            session=updated_session,
+            message=str(completion_bundle.get("full_text") or ""),
+            telegram_reply_markup=completion_bundle.get("telegram_reply_markup"),
+            discord_components=completion_bundle.get("discord_components"),
+        )
+    if isinstance(delivery, dict):
+        save_onboarding_session(
+            conn,
+            session_id=str(session["session_id"]),
+            answers={
+                "completion_delivery": {
+                    "platform": "discord",
+                    "chat_id": str(updated_session.get("chat_id") or delivery.get("channel_id") or ""),
+                    "message_id": str(delivery.get("id") or ""),
+                    "password_scrubbed": False,
+                }
+            },
+        )
     _queue_operator_message(
         conn,
         cfg,
@@ -781,16 +826,6 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             unix_user=unix_user,
             bot_line=f"Discord bot {bot_username or 'unknown'} is live.",
             access=access,
-        ),
-    )
-    _notify_user_via_curator(
-        cfg,
-        session=session,
-        message=_onboarding_completion_message(
-            bot_reference=f"`{bot_username or 'your bot'}`",
-            access=access,
-            home=home,
-            discord_note=True,
         ),
     )
 
@@ -975,6 +1010,7 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
             hermes_home=hermes_home,
             uid=uid,
             channels=channels,
+            display_name=requester_identity or unix_user,
         )
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip().replace("\n", " ")[:500] or "unknown auto-provision error"
@@ -1009,6 +1045,11 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
                 f"Auto-provisioned {agent_id} for {requester_identity} ({unix_user}).",
                 f"Dashboard: {access.get('dashboard_url')} username={access.get('username')}",
                 f"Code: {access.get('code_url')}",
+                *(
+                    [f"Nextcloud: shared login username={access.get('nextcloud_username') or access.get('username')}"]
+                    if (access.get("nextcloud_username") or access.get("username"))
+                    else []
+                ),
                 f"Shared password: {access.get('password')}",
             ]
         ),

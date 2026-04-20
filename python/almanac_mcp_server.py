@@ -61,6 +61,10 @@ TOOLS = {
 }
 
 
+def backend_client_allowed(remote_ip: str) -> bool:
+    return is_loopback_ip(str(remote_ip or "").strip())
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Almanac control-plane HTTP server.")
     parser.add_argument("--host", default=None)
@@ -77,6 +81,18 @@ class AlmanacServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server: AlmanacServer
+
+    def _require_loopback_transport(self, *, request_id: int | str | None = None) -> bool:
+        remote_ip = str(self.client_address[0] or "").strip()
+        if backend_client_allowed(remote_ip):
+            return True
+        self._rpc_error(
+            "backend only accepts loopback connections",
+            request_id,
+            code=-32001,
+            status=403,
+        )
+        return False
 
     def _send_json(self, payload: dict, status: int = HTTPStatus.OK, session_id: str | None = None) -> None:
         raw = json.dumps(payload).encode("utf-8")
@@ -118,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._require_loopback_transport():
+            return
         if self.path != "/health":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -133,6 +151,8 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._require_loopback_transport():
+            return
         if self.path != "/mcp":
             self.send_error(HTTPStatus.NOT_FOUND)
             return

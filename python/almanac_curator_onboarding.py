@@ -20,8 +20,11 @@ from almanac_control import (
     get_setting,
     mark_onboarding_update_skipped,
     record_onboarding_update_failure,
+    save_onboarding_session,
+    utc_now_iso,
     upsert_setting,
 )
+from almanac_onboarding_completion import completion_bundle_for_session
 from almanac_onboarding_flow import (
     BotIdentity,
     IncomingMessage,
@@ -31,6 +34,7 @@ from almanac_onboarding_flow import (
 )
 from almanac_telegram import (
     telegram_answer_callback_query,
+    telegram_edit_message_text,
     telegram_edit_message_reply_markup,
     telegram_get_me,
     telegram_get_updates,
@@ -197,6 +201,96 @@ def _clear_operator_callback_buttons(bot_token: str, callback_query: dict[str, A
         return
 
 
+def _handle_user_completion_callback(
+    *,
+    cfg: Config,
+    bot_token: str,
+    callback_query: dict[str, Any],
+) -> bool:
+    callback_query_id = str(callback_query.get("id") or "")
+    data = str(callback_query.get("data") or "").strip()
+    message = callback_query.get("message") or {}
+    chat = message.get("chat") or {}
+    sender = callback_query.get("from") or {}
+    chat_id = str(chat.get("id") or "")
+    sender_id = str(sender.get("id") or "")
+    message_id = message.get("message_id")
+    if not callback_query_id or not data.startswith("almanac:onboarding-complete:ack:"):
+        return False
+    session_id = data.rsplit(":", 1)[-1].strip()
+    if not session_id or not chat_id or not isinstance(message_id, int):
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text="That onboarding receipt is malformed.",
+            show_alert=True,
+        )
+        return True
+    with connect_db(cfg) as conn:
+        session = get_onboarding_session(conn, session_id, redact_secrets=False)
+        if session is None or str(session.get("state") or "") != "completed":
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="That onboarding receipt is no longer active.",
+                show_alert=True,
+            )
+            return True
+        if sender_id != str(session.get("sender_id") or "") or chat_id != str(session.get("chat_id") or ""):
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="Only the onboarding recipient can confirm this.",
+                show_alert=True,
+            )
+            return True
+        bundle = completion_bundle_for_session(conn, cfg, session)
+        if bundle is None:
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="I couldn't reconstruct the onboarding details to scrub them.",
+                show_alert=True,
+            )
+            return True
+        try:
+            telegram_edit_message_text(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=str(bundle.get("scrubbed_text") or ""),
+                reply_markup={"inline_keyboard": []},
+            )
+        except Exception as exc:  # noqa: BLE001
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text=(str(exc).strip() or "Failed to scrub the password.")[:200],
+                show_alert=True,
+            )
+            return True
+        save_onboarding_session(
+            conn,
+            session_id=session_id,
+            answers={
+                "completion_delivery": {
+                    "platform": "telegram",
+                    "chat_id": chat_id,
+                    "message_id": str(message_id),
+                    "password_scrubbed": True,
+                },
+                "completion_secret_acknowledged_at": utc_now_iso(),
+            },
+        )
+    telegram_answer_callback_query(
+        bot_token=bot_token,
+        callback_query_id=callback_query_id,
+        text="Password removed from the message.",
+        show_alert=False,
+    )
+    return True
+
+
 def _handle_operator_callback(
     *,
     cfg: Config,
@@ -346,6 +440,8 @@ def _handle_user_message(
 def process_update(*, cfg: Config, bot_token: str, curator_bot_id: str, update: dict[str, Any]) -> None:
     callback_query = update.get("callback_query")
     if isinstance(callback_query, dict):
+        if _handle_user_completion_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query):
+            return
         _handle_operator_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query)
         return
     message = update.get("message")

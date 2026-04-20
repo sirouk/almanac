@@ -107,6 +107,29 @@ def telegram_edit_message_reply_markup(
     )
 
 
+def telegram_edit_message_text(
+    *,
+    bot_token: str,
+    chat_id: str,
+    message_id: int,
+    text: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": int(message_id),
+        "text": text if len(text) <= 4000 else text[:3997] + "...",
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    return _request_json(
+        _telegram_url(bot_token, "editMessageText"),
+        method="POST",
+        payload=payload,
+        timeout=20,
+    )
+
+
 def telegram_get_me(*, bot_token: str) -> dict[str, Any]:
     return _request_json(_telegram_url(bot_token, "getMe"), timeout=20)
 

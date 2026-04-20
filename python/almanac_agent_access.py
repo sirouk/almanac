@@ -220,15 +220,6 @@ def detect_tailscale_dns_name() -> str:
     return str((data.get("Self") or {}).get("DNSName") or "").rstrip(".")
 
 
-def _tailscale_path(label: str) -> str:
-    cleaned = safe_slug(label, fallback="agent")
-    return f"/{cleaned}"
-
-
-def _tailscale_url(host: str, label: str) -> str:
-    return f"https://{host}{_tailscale_path(label)}/"
-
-
 def _run_tailscale_serve(*args: str) -> None:
     last_error = ""
     for _ in range(5):
@@ -255,32 +246,35 @@ def publish_tailscale_https(access: dict[str, Any]) -> dict[str, Any]:
     code_port = int(access["code_port"])
     dashboard_label = str(access.get("dashboard_label") or "agent-dashboard")
     code_label = str(access.get("code_label") or "agent-code")
-    access["dashboard_path"] = f"{_tailscale_path(dashboard_label)}/"
-    access["code_path"] = f"{_tailscale_path(code_label)}/"
+    for label in (dashboard_label, code_label):
+        try:
+            _run_tailscale_serve("--https=443", f"--set-path=/{safe_slug(label, fallback='agent')}", "off")
+        except Exception:
+            pass
     for port in (dashboard_port, code_port):
         try:
             _run_tailscale_serve(f"--https={port}", "off")
         except Exception:
             pass
+    # Hermes dashboard assumes it owns "/" for static assets, routes, and API
+    # calls, so publish each access surface on its own HTTPS port.
     _run_tailscale_serve(
         "--bg",
         "--yes",
-        "--https=443",
-        f"--set-path={_tailscale_path(dashboard_label)}",
+        f"--https={dashboard_port}",
         f"http://127.0.0.1:{dashboard_port}",
     )
     _run_tailscale_serve(
         "--bg",
         "--yes",
-        "--https=443",
-        f"--set-path={_tailscale_path(code_label)}",
+        f"--https={code_port}",
         f"http://127.0.0.1:{code_port}",
     )
     dns_name = detect_tailscale_dns_name()
     if dns_name:
         access["tailscale_host"] = dns_name
-        access["dashboard_url"] = _tailscale_url(dns_name, dashboard_label)
-        access["code_url"] = _tailscale_url(dns_name, code_label)
+        access["dashboard_url"] = f"https://{dns_name}:{dashboard_port}/"
+        access["code_url"] = f"https://{dns_name}:{code_port}/"
     return access
 
 
@@ -289,11 +283,11 @@ def clear_tailscale_https(hermes_home: Path) -> None:
     if not state or not shutil_which("tailscale"):
         return
     for key in ("dashboard_label", "code_label"):
-        label = str(state.get(key) or "").strip()
+        label = safe_slug(str(state.get(key) or "").strip(), fallback="")
         if not label:
             continue
         try:
-            _run_tailscale_serve("--https=443", f"--set-path={_tailscale_path(label)}", "off")
+            _run_tailscale_serve("--https=443", f"--set-path=/{label}", "off")
         except Exception:
             continue
     for key in ("dashboard_proxy_port", "code_port"):
@@ -365,8 +359,6 @@ def ensure_access_state(
     url_slug = str(existing.get("url_slug") or access_url_slug(unix_user))
     dashboard_label = str(existing.get("dashboard_label") or f"agent-{url_slug}-dash")
     code_label = str(existing.get("code_label") or f"agent-{url_slug}-code")
-    dashboard_path = f"{_tailscale_path(dashboard_label)}/"
-    code_path = f"{_tailscale_path(code_label)}/"
     password = str(existing.get("password") or secrets.token_urlsafe(18))
     dashboard_backend_port = _preserve_or_allocate_port(
         existing=existing.get("dashboard_backend_port"),
@@ -409,15 +401,13 @@ def ensure_access_state(
         "tailscale_host": tailscale_host,
         "dashboard_label": dashboard_label,
         "code_label": code_label,
-        "dashboard_path": dashboard_path,
-        "code_path": code_path,
         "code_container_name": f"almanac-agent-code-{safe_slug(agent_id, fallback='agent')}",
         "code_server_image": cfg.agent_code_server_image,
         "updated_at": utc_now_iso(),
     }
     if cfg.agent_enable_tailscale_serve and tailscale_host:
-        payload["dashboard_url"] = _tailscale_url(tailscale_host, dashboard_label)
-        payload["code_url"] = _tailscale_url(tailscale_host, code_label)
+        payload["dashboard_url"] = f"https://{tailscale_host}:{dashboard_proxy_port}/"
+        payload["code_url"] = f"https://{tailscale_host}:{code_port}/"
     _write_access_state(state_path, payload, uid=owner_uid, gid=owner_gid)
     return payload
 

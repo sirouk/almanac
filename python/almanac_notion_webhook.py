@@ -6,7 +6,11 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from almanac_control import Config, connect_db, get_setting, notion_verify_signature, store_notion_event, upsert_setting
+from almanac_control import Config, connect_db, get_setting, is_loopback_ip, notion_verify_signature, store_notion_event, upsert_setting
+
+
+def backend_client_allowed(remote_ip: str) -> bool:
+    return is_loopback_ip(str(remote_ip or "").strip())
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,6 +29,12 @@ class Server(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     server: Server
 
+    def _require_loopback_transport(self) -> bool:
+        if backend_client_allowed(str(self.client_address[0] or "").strip()):
+            return True
+        self._send_json({"error": "backend only accepts loopback connections"}, status=HTTPStatus.FORBIDDEN)
+        return False
+
     def _send_json(self, payload: dict, status: int = HTTPStatus.OK) -> None:
         raw = json.dumps(payload).encode("utf-8")
         self.send_response(status)
@@ -34,12 +44,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._require_loopback_transport():
+            return
         if self.path != "/health":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         self._send_json({"ok": True, "service": "almanac-notion-webhook"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._require_loopback_transport():
+            return
         if self.path != "/notion/webhook":
             self.send_error(HTTPStatus.NOT_FOUND)
             return

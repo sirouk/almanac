@@ -90,10 +90,57 @@ check_activation_trigger_write_access
     print("PASS test_activation_trigger_write_probe_reports_writable_and_unwritable_states")
 
 
+def test_loopback_bind_probe_reports_safe_and_unsafe_listeners() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_port_listening() {", "check_http_json_health() {")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/ss" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${{ALMANAC_SS_FIXTURE:-safe}}" == "safe" ]]; then
+  cat <<'SAFE'
+LISTEN 0 4096 127.0.0.1:8282 0.0.0.0:*
+LISTEN 0 4096 [::1]:8282 [::]:*
+SAFE
+else
+  cat <<'UNSAFE'
+LISTEN 0 4096 0.0.0.0:8282 0.0.0.0:*
+UNSAFE
+fi
+EOF
+chmod +x "$FAKEBIN/ss"
+PATH="$FAKEBIN:$PATH"
+{snippet}
+check_port_loopback_only 8282 "almanac-mcp backend port 8282"
+export ALMANAC_SS_FIXTURE=unsafe
+check_port_loopback_only 8282 "almanac-mcp backend port 8282"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"loopback-bind probe case failed: {result.stderr}")
+    expect(
+        "PASS:almanac-mcp backend port 8282 only accepts loopback connections (127.0.0.1, ::1)" in result.stdout,
+        f"expected safe loopback pass, got: {result.stdout!r}",
+    )
+    expect(
+        "WARN:almanac-mcp backend port 8282 is exposed on non-loopback listener(s): 0.0.0.0" in result.stdout,
+        f"expected unsafe loopback warning, got: {result.stdout!r}",
+    )
+    print("PASS test_loopback_bind_probe_reports_safe_and_unsafe_listeners")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
-    print("PASS all 2 health regression tests")
+    test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
+    print("PASS all 3 health regression tests")
     return 0
 
 

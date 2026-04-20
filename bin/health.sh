@@ -234,6 +234,85 @@ check_port_listening() {
   fi
 }
 
+check_port_loopback_only() {
+  local port="$1"
+  local label="${2:-port $port}"
+  local output=""
+  local status=0
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 is unavailable; skipping $label loopback-bind probe"
+    return 0
+  fi
+
+  if output="$(ss -ltnH 2>/dev/null | python3 -c '
+import ipaddress
+import sys
+
+port = str(sys.argv[1])
+label = sys.argv[2]
+matches: list[str] = []
+unsafe: list[str] = []
+
+for raw_line in sys.stdin:
+    parts = raw_line.split()
+    if len(parts) < 4:
+        continue
+    local_address = parts[3]
+    host = ""
+    actual_port = ""
+    if local_address.startswith("["):
+        end = local_address.rfind("]")
+        if end == -1 or end + 1 >= len(local_address) or local_address[end + 1] != ":":
+            continue
+        host = local_address[1:end]
+        actual_port = local_address[end + 2 :]
+    else:
+        if ":" not in local_address:
+            continue
+        host, actual_port = local_address.rsplit(":", 1)
+    if actual_port != port:
+        continue
+    if host not in matches:
+        matches.append(host)
+    normalized = host.strip()
+    if normalized.lower() == "localhost":
+        continue
+    try:
+        if ipaddress.ip_address(normalized).is_loopback:
+            continue
+    except ValueError:
+        pass
+    if host not in unsafe:
+        unsafe.append(host)
+
+if not matches:
+    print(f"{label} has no listening sockets")
+    raise SystemExit(2)
+if unsafe:
+    print(label + " is exposed on non-loopback listener(s): " + ", ".join(unsafe))
+    raise SystemExit(1)
+
+print(label + " only accepts loopback connections (" + ", ".join(matches) + ")")
+' "$port" "$label")"; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && pass "$line"
+    done <<<"$output"
+  else
+    status=$?
+    case "$status" in
+      1|2)
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && warn_or_fail "$line"
+        done <<<"$output"
+        ;;
+      *)
+        warn_or_fail "could not verify $label loopback binding"
+        ;;
+    esac
+  fi
+}
+
 check_http_json_health() {
   local url="$1"
   local label="$2"
@@ -1330,10 +1409,12 @@ else
 fi
 
 check_port_listening "$ALMANAC_MCP_PORT"
+check_port_loopback_only "$ALMANAC_MCP_PORT" "almanac-mcp backend port $ALMANAC_MCP_PORT"
 check_http_json_health "http://127.0.0.1:$ALMANAC_MCP_PORT/health" "almanac-mcp health"
 check_almanac_mcp_status
 check_activation_trigger_write_access
 check_port_listening "$ALMANAC_NOTION_WEBHOOK_PORT"
+check_port_loopback_only "$ALMANAC_NOTION_WEBHOOK_PORT" "almanac-notion-webhook backend port $ALMANAC_NOTION_WEBHOOK_PORT"
 check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "almanac-notion-webhook health"
 check_vault_definition_health
 check_curator_state
@@ -1344,6 +1425,7 @@ check_notification_delivery_state
 check_upgrade_state
 
 check_port_listening "$QMD_MCP_PORT"
+check_port_loopback_only "$QMD_MCP_PORT" "qmd MCP backend port $QMD_MCP_PORT"
 check_qmd_mcp_status
 
 if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
@@ -1352,6 +1434,7 @@ if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
   else
     warn_or_fail "Nextcloud port $NEXTCLOUD_PORT is not listening"
   fi
+  check_port_loopback_only "$NEXTCLOUD_PORT" "Nextcloud backend port $NEXTCLOUD_PORT"
 
   if command -v curl >/dev/null 2>&1; then
     if curl --max-time 5 -fsS -H "Host: $NEXTCLOUD_TRUSTED_DOMAIN" "http://127.0.0.1:$NEXTCLOUD_PORT/status.php" >/dev/null 2>&1; then

@@ -13,8 +13,11 @@ from almanac_control import (
     deny_onboarding_session,
     deny_request,
     get_onboarding_session,
+    save_onboarding_session,
+    utc_now_iso,
 )
 from almanac_discord import discord_get_current_user
+from almanac_onboarding_completion import completion_bundle_for_session
 from almanac_onboarding_flow import (
     OutboundMessage,
     BotIdentity,
@@ -329,6 +332,65 @@ async def main() -> None:
             text=content,
         )
         await _send_replies(replies=replies, origin_chat_id=str(message.channel.id))
+
+    @client.event
+    async def on_interaction(interaction) -> None:  # type: ignore[no-untyped-def]
+        if interaction.type != discord.InteractionType.component:
+            return
+        data = getattr(interaction, "data", {}) or {}
+        custom_id = str(data.get("custom_id") or "").strip()
+        prefix = "almanac:onboarding-complete:ack:"
+        if not custom_id.startswith(prefix):
+            return
+        session_id = custom_id[len(prefix):].strip()
+        if not session_id:
+            await interaction.response.send_message("That onboarding receipt is malformed.", ephemeral=True)
+            return
+        with connect_db(cfg) as conn:
+            session = get_onboarding_session(conn, session_id, redact_secrets=False)
+            if session is None or str(session.get("state") or "") != "completed":
+                await interaction.response.send_message("That onboarding receipt is no longer active.", ephemeral=True)
+                return
+            expected_user = str(session.get("sender_id") or "")
+            expected_chat = str(session.get("chat_id") or "")
+            actual_user = str(getattr(interaction.user, "id", "") or "")
+            actual_chat = str(getattr(interaction.channel, "id", "") or "")
+            if actual_user != expected_user or actual_chat != expected_chat:
+                await interaction.response.send_message("Only the onboarding recipient can confirm this.", ephemeral=True)
+                return
+            bundle = completion_bundle_for_session(conn, cfg, session)
+            if bundle is None:
+                await interaction.response.send_message(
+                    "I couldn't reconstruct the onboarding details to scrub them.",
+                    ephemeral=True,
+                )
+                return
+        try:
+            await interaction.response.edit_message(
+                content=str(bundle.get("scrubbed_text") or ""),
+                view=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_text = str(exc).strip() or "Failed to scrub the password."
+            if interaction.response.is_done():
+                await interaction.followup.send(error_text, ephemeral=True)
+            else:
+                await interaction.response.send_message(error_text, ephemeral=True)
+            return
+        with connect_db(cfg) as conn:
+            save_onboarding_session(
+                conn,
+                session_id=session_id,
+                answers={
+                    "completion_delivery": {
+                        "platform": "discord",
+                        "chat_id": actual_chat,
+                        "message_id": str(getattr(getattr(interaction, "message", None), "id", "") or ""),
+                        "password_scrubbed": True,
+                    },
+                    "completion_secret_acknowledged_at": utc_now_iso(),
+                },
+            )
 
     await client.start(bot_token)
 

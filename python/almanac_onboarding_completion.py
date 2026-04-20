@@ -7,6 +7,7 @@ from typing import Any
 
 from almanac_agent_access import load_access_state
 from almanac_control import Config, config_env_value, get_agent
+from almanac_resource_map import shared_resource_lines, shared_tailnet_host
 
 
 def completion_ack_callback_data(session_id: str) -> str:
@@ -51,42 +52,26 @@ def stored_completion_scrubbed_text(session: dict[str, Any]) -> str:
 
 
 def _shared_tailnet_host() -> str:
-    if config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() != "1":
-        return ""
-    for raw in (
-        config_env_value("TAILSCALE_DNS_NAME", "").strip(),
-        config_env_value("NEXTCLOUD_TRUSTED_DOMAIN", "").strip(),
-    ):
-        if raw:
-            return raw
-    return ""
+    return shared_tailnet_host(
+        tailscale_serve_enabled=(config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() == "1"),
+        tailscale_dns_name=config_env_value("TAILSCALE_DNS_NAME", "").strip(),
+        nextcloud_trusted_domain=config_env_value("NEXTCLOUD_TRUSTED_DOMAIN", "").strip(),
+    )
 
 
 def _shared_resource_lines(cfg: Config) -> list[str]:
-    lines = ["Shared Almanac rails:"]
     host = _shared_tailnet_host()
-    nextcloud_enabled = config_env_value("ENABLE_NEXTCLOUD", "1").strip() == "1"
-    qmd_path = config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp"
-    almanac_mcp_path = config_env_value("TAILSCALE_ALMANAC_MCP_PATH", "/almanac-mcp").strip() or "/almanac-mcp"
-
-    if nextcloud_enabled:
-        if host:
-            lines.append(f"- Vault access in Nextcloud: https://{host}/ (shared mount: /Vault)")
-        else:
-            lines.append("- Vault access in Nextcloud: shared on this host (mounted as /Vault)")
-
-    if host:
-        lines.append(f"- QMD MCP retrieval rail: https://{host}{qmd_path}")
-        lines.append(f"- Almanac MCP control rail: https://{host}{almanac_mcp_path}")
-    else:
-        lines.append(f"- QMD MCP retrieval rail: {cfg.qmd_url}")
-        lines.append(f"- Almanac MCP control rail: http://{cfg.public_mcp_host}:{cfg.public_mcp_port}/mcp")
-
-    if cfg.chutes_mcp_url:
-        lines.append(f"- Chutes knowledge rail: {cfg.chutes_mcp_url}")
-
-    lines.append("- Notion webhook: shared operator-managed rail on this host")
-    return lines
+    shared_lines = shared_resource_lines(
+        host=host,
+        nextcloud_enabled=(config_env_value("ENABLE_NEXTCLOUD", "1").strip() == "1"),
+        qmd_url=cfg.qmd_url,
+        public_mcp_host=cfg.public_mcp_host,
+        public_mcp_port=cfg.public_mcp_port,
+        qmd_path=config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp",
+        almanac_mcp_path=config_env_value("TAILSCALE_ALMANAC_MCP_PATH", "/almanac-mcp").strip() or "/almanac-mcp",
+        chutes_mcp_url=cfg.chutes_mcp_url,
+    )
+    return ["Shared Almanac rails:", *[f"- {line}" for line in shared_lines]]
 
 
 def completion_message_bundle(

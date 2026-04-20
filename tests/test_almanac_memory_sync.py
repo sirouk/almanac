@@ -133,6 +133,22 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
                 "INSERT INTO agent_vault_subscriptions (agent_id, vault_name, subscribed, source, updated_at) VALUES (?, ?, ?, ?, ?)",
                 ("agent-test", "Projects", 1, "default", now),
             )
+            hermes_home = root / "home-test" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            (hermes_home / "state").mkdir(parents=True, exist_ok=True)
+            (hermes_home / "state" / "almanac-web-access.json").write_text(
+                json.dumps(
+                    {
+                        "dashboard_url": "https://kor.tail77f45e.ts.net:30042/",
+                        "code_url": "https://kor.tail77f45e.ts.net:40042/",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conn.execute(
+                "UPDATE agents SET hermes_home = ? WHERE agent_id = ?",
+                (str(hermes_home), "agent-test"),
+            )
             conn.commit()
 
             mod.queue_notification(
@@ -157,6 +173,10 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("vault-topology" in managed_payload, managed_payload)
             expect("Projects" in managed_payload["vault-topology"], managed_payload["vault-topology"])
             expect("Dedicated agent name: Test User" in managed_payload["vault-ref"], managed_payload["vault-ref"])
+            expect("resource-ref" in managed_payload, managed_payload)
+            expect("Hermes dashboard: https://kor.tail77f45e.ts.net:30042/" in managed_payload["resource-ref"], managed_payload["resource-ref"])
+            expect("Code workspace: https://kor.tail77f45e.ts.net:40042/" in managed_payload["resource-ref"], managed_payload["resource-ref"])
+            expect("Credentials are intentionally omitted from managed memory." in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect(
                 "All vaults remain retrievable through Almanac/qmd" in managed_payload["almanac-skill-ref"],
                 managed_payload["almanac-skill-ref"],

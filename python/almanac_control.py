@@ -15,10 +15,17 @@ import shutil
 import sqlite3
 import string
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_PYTHON_DIR = Path(__file__).resolve().parent
+if str(_PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(_PYTHON_DIR))
+
+from almanac_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host
 
 
 def utc_now() -> dt.datetime:
@@ -4519,6 +4526,7 @@ def build_managed_memory_payload(
     The skill contract is:
       [managed:almanac-skill-ref] default Almanac skill routing hints
       [managed:vault-ref]      active vault path and role
+      [managed:resource-ref]   user-specific access rails + shared host rails
       [managed:qmd-ref]        how to query qmd for retrieval
       [managed:vault-topology] compact summary of subscribed vaults + briefs
     """
@@ -4546,6 +4554,25 @@ def build_managed_memory_payload(
     display_name = str(agent["display_name"] or "").strip()
     agent_role = str(agent["role"] or "").strip() or "user"
     agent_unix_user = str(agent["unix_user"] or "").strip()
+    hermes_home = Path(str(agent["hermes_home"] or "")).expanduser()
+    access_state_path = hermes_home / "state" / "almanac-web-access.json"
+    try:
+        access_state_raw = access_state_path.read_text(encoding="utf-8") if access_state_path.is_file() else ""
+    except OSError:
+        access_state_raw = ""
+    access_state = json_loads(access_state_raw, {})
+    try:
+        workspace_root = Path(pwd.getpwnam(agent_unix_user).pw_dir)
+    except KeyError:
+        try:
+            workspace_root = hermes_home.parents[3]
+        except IndexError:
+            workspace_root = Path("/home") / agent_unix_user if agent_unix_user else hermes_home
+    shared_host = shared_tailnet_host(
+        tailscale_serve_enabled=(config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() == "1"),
+        tailscale_dns_name=config_env_value("TAILSCALE_DNS_NAME", "").strip(),
+        nextcloud_trusted_domain=config_env_value("NEXTCLOUD_TRUSTED_DOMAIN", "").strip(),
+    )
     vault_ref = (
         f"Vault root: {vault_root}\n"
         f"Shared deployment root: {cfg.repo_dir}\n"
@@ -4584,6 +4611,20 @@ def build_managed_memory_payload(
         "site context. Do not read central deployment secrets such as\n"
         "almanac.env or source common.sh from a user-agent session."
     )
+    resource_ref = managed_resource_ref(
+        access=access_state,
+        workspace_root=workspace_root,
+        shared_lines=shared_resource_lines(
+            host=shared_host,
+            nextcloud_enabled=(config_env_value("ENABLE_NEXTCLOUD", "1").strip() == "1"),
+            qmd_url=cfg.qmd_url,
+            public_mcp_host=cfg.public_mcp_host,
+            public_mcp_port=cfg.public_mcp_port,
+            qmd_path=config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp",
+            almanac_mcp_path=config_env_value("TAILSCALE_ALMANAC_MCP_PATH", "/almanac-mcp").strip() or "/almanac-mcp",
+            chutes_mcp_url=cfg.chutes_mcp_url,
+        ),
+    )
     topology = "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n" + "\n".join(
         topology_lines
     )
@@ -4592,6 +4633,7 @@ def build_managed_memory_payload(
         "agent_id": agent_id,
         "almanac-skill-ref": skill_ref,
         "vault-ref": vault_ref,
+        "resource-ref": resource_ref,
         "qmd-ref": qmd_ref,
         "vault-topology": topology,
         "catalog": catalog,
@@ -4600,7 +4642,7 @@ def build_managed_memory_payload(
 
 
 _MEMORY_ENTRY_DELIMITER = "\n§\n"
-_MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "qmd-ref", "vault-topology")
+_MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "resource-ref", "qmd-ref", "vault-topology")
 _MANAGED_MEMORY_PREFIXES = tuple(f"[managed:{key}]" for key in _MANAGED_MEMORY_KEYS)
 
 
@@ -4680,6 +4722,12 @@ def write_managed_memory_stubs(
         " may live under /home/almanac/almanac; treat that as read-only shared"
         " infrastructure, not another enrolled user's workspace.",
     )
+    payload.setdefault(
+        "resource-ref",
+        "Canonical user access rails and shared Almanac addresses:\n"
+        "- Credentials are intentionally omitted from managed memory.\n"
+        "- Ask Curator or the operator to reissue access if the user loses those credentials.",
+    )
     state_dir = hermes_home / "state"
     memories_dir = hermes_home / "memories"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -4693,6 +4741,7 @@ def write_managed_memory_stubs(
                 "agent_id": payload["agent_id"],
                 "almanac-skill-ref": payload["almanac-skill-ref"],
                 "vault-ref": payload["vault-ref"],
+                "resource-ref": payload["resource-ref"],
                 "qmd-ref": payload["qmd-ref"],
                 "vault-topology": payload["vault-topology"],
                 "catalog": payload["catalog"],
@@ -4713,6 +4762,7 @@ def write_managed_memory_stubs(
         "hand-edit; changes are overwritten on next refresh.\n\n"
         f"## [managed:almanac-skill-ref]\n\n{payload['almanac-skill-ref']}\n\n"
         f"## [managed:vault-ref]\n\n{payload['vault-ref']}\n\n"
+        f"## [managed:resource-ref]\n\n{payload['resource-ref']}\n\n"
         f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
         f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
         f"_updated_at: {now}_\n"

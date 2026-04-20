@@ -11,6 +11,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_SCRIPT = REPO / "bin" / "user-agent-refresh.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
+RESOURCE_MAP_PY = REPO / "python" / "almanac_resource_map.py"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -43,6 +44,7 @@ def write_fake_rpc_client(path: Path) -> None:
         "        'agent_id': 'agent-jeef',\n"
         "        'almanac-skill-ref': 'Use almanac-qmd-mcp for retrieval and almanac-vault-reconciler for drift repair.',\n"
         "        'vault-ref': 'Vault root: /srv/almanac/vault\\nDedicated agent name: Jeef',\n"
+        "        'resource-ref': 'Canonical user access rails and shared Almanac addresses:\\n- Hermes dashboard: https://kor.tail77f45e.ts.net:30011/\\n- Code workspace: https://kor.tail77f45e.ts.net:40011/\\n- Credentials are intentionally omitted from managed memory.',\n"
         "        'qmd-ref': 'qmd MCP (deep retrieval): https://kor.tail77f45e.ts.net/mcp',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
         "        'catalog': [\n"
@@ -84,6 +86,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         shutil.copy2(SOURCE_SCRIPT, bin_dir / "user-agent-refresh.sh")
         (bin_dir / "user-agent-refresh.sh").chmod(0o755)
         shutil.copy2(CONTROL_PY, python_dir / "almanac_control.py")
+        shutil.copy2(RESOURCE_MAP_PY, python_dir / "almanac_resource_map.py")
         write_fake_rpc_client(python_dir / "almanac_rpc_client.py")
 
         token_file = hermes_home / "secrets" / "almanac-bootstrap-token"
@@ -160,11 +163,14 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         managed_prefixes = [
             "[managed:almanac-skill-ref]",
             "[managed:vault-ref]",
+            "[managed:resource-ref]",
             "[managed:qmd-ref]",
             "[managed:vault-topology]",
         ]
         for prefix in managed_prefixes:
             expect(any(entry.startswith(prefix) for entry in memory_entries), f"missing {prefix} in {memory_entries}")
+        expect(any("Hermes dashboard: https://kor.tail77f45e.ts.net:30011/" in entry for entry in memory_entries), memory_entries)
+        expect(any("Code workspace: https://kor.tail77f45e.ts.net:40011/" in entry for entry in memory_entries), memory_entries)
 
         events_payload = json.loads(recent_events_path.read_text(encoding="utf-8"))
         expect(events_payload["agent_id"] == "agent-jeef", events_payload)

@@ -186,6 +186,7 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             row = control.list_pending_auto_provision_requests(conn, cfg)[0]
 
             calls: list[dict[str, object]] = []
+            memory_refresh_calls: list[dict[str, object]] = []
 
             def fake_run(cmd, **kwargs):
                 calls.append({"cmd": cmd, **kwargs})
@@ -197,6 +198,7 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             provisioner.issue_auto_provision_token = lambda conn, request_id: {"raw_token": "tok_test"}
             provisioner.get_agent = lambda conn, agent_id: {"hermes_home": str(root / "home" / "user" / ".local" / "share" / "almanac-agent" / "hermes-home")}
             provisioner._provision_user_access_surfaces = lambda *args, **kwargs: {"dashboard_url": "", "code_url": "", "username": "tester", "password": "secret"}
+            provisioner._refresh_user_agent_memory = lambda *args, **kwargs: memory_refresh_calls.append(kwargs)
             provisioner.subprocess.run = fake_run
 
             provisioner._run_one(conn, cfg, row)
@@ -204,6 +206,8 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             expect(calls, "expected _run_one to invoke subprocess.run for init.sh")
             last = calls[-1]
             expect(last.get("stdin") is subprocess.DEVNULL, f"expected headless init to use DEVNULL stdin, got {last}")
+            expect(len(memory_refresh_calls) == 1, f"expected one managed-memory refresh call, got {memory_refresh_calls}")
+            expect(memory_refresh_calls[0]["agent_id"] == "agent-autoprovbot", memory_refresh_calls)
             print("PASS test_run_one_uses_devnull_stdin_for_headless_init")
         finally:
             os.environ.clear()

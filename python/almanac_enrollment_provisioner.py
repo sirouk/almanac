@@ -21,6 +21,7 @@ from almanac_control import (
     Config,
     activation_trigger_path,
     auto_provision_retry_delay_seconds,
+    build_managed_memory_payload,
     connect_db,
     delete_onboarding_bot_token_secret,
     delete_onboarding_secret,
@@ -468,6 +469,46 @@ def _assert_user_gateway_active(*, unix_user: str, home: Path, hermes_home: Path
     )
 
 
+def _refresh_user_agent_memory(
+    conn,
+    cfg: Config,
+    *,
+    agent_id: str,
+    unix_user: str,
+    home: Path,
+    hermes_home: Path,
+    uid: int,
+) -> None:
+    managed_payload = build_managed_memory_payload(conn, cfg, agent_id=agent_id)
+    expected_entry = "[managed:resource-ref]"
+    if not str(managed_payload.get("resource-ref") or "").strip():
+        raise RuntimeError(f"managed resource map is blank for {agent_id}")
+
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=["systemctl", "--user", "start", "almanac-user-agent-refresh.service"],
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "managed-memory refresh failed").strip()
+        raise RuntimeError(f"user-agent refresh failed for {agent_id}: {detail}")
+
+    stub_path = hermes_home / "memories" / "almanac-managed-stubs.md"
+    memory_path = hermes_home / "memories" / "MEMORY.md"
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        stub_text = stub_path.read_text(encoding="utf-8") if stub_path.is_file() else ""
+        memory_text = memory_path.read_text(encoding="utf-8") if memory_path.is_file() else ""
+        if expected_entry in stub_text and expected_entry in memory_text:
+            return
+        time.sleep(1)
+    raise RuntimeError(
+        f"user-agent refresh completed without persisting {expected_entry} for {agent_id}"
+    )
+
+
 def _run_pending_onboarding_provider_authorizations(conn, cfg: Config) -> None:
     for session in list_onboarding_sessions(conn, redact_secrets=False):
         if str(session.get("state") or "") != "awaiting-provider-browser-auth":
@@ -649,6 +690,15 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
     )
     _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
+    _refresh_user_agent_memory(
+        conn,
+        cfg,
+        agent_id=agent_id,
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
 
     updated_session = save_onboarding_session(
         conn,
@@ -778,6 +828,15 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
     )
     _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
+    _refresh_user_agent_memory(
+        conn,
+        cfg,
+        agent_id=agent_id,
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
 
     updated_session = save_onboarding_session(
         conn,
@@ -1019,6 +1078,15 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
             uid=uid,
             channels=channels,
             display_name=requester_identity or unix_user,
+        )
+        _refresh_user_agent_memory(
+            conn,
+            cfg,
+            agent_id=agent_id,
+            unix_user=unix_user,
+            home=home,
+            hermes_home=hermes_home,
+            uid=uid,
         )
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip().replace("\n", " ")[:500] or "unknown auto-provision error"

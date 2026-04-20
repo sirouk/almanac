@@ -74,6 +74,83 @@ Almanac is shared-host in v1.
 - GitHub: backup/history for `almanac-priv`, not live collaboration
 - Quarto: optional human-facing published output, not required for collaboration
 
+## System UML
+
+### Structure
+
+```mermaid
+classDiagram
+direction LR
+
+class Operator
+class EnrolledUser
+class Curator
+class EnrollmentProvisioner
+class UserAgent
+class AlmanacPriv
+class SharedVault
+class Vaults
+class Nextcloud
+class VaultWatcher
+class PdfIngest
+class QmdMcp
+class AlmanacMcp
+class NotionWebhook
+class SSOTBatcher
+class TailscaleServe
+class GitHubBackup
+class Quarto
+
+Operator --> Curator : owns, deploys, repairs
+Operator --> TailscaleServe : publishes tailnet surfaces
+EnrolledUser --> Curator : private onboarding DM
+Curator --> AlmanacMcp : approvals, notifications, subscriptions
+Curator --> EnrollmentProvisioner : approve host provisioning
+EnrollmentProvisioner --> UserAgent : create unix user and services
+UserAgent --> QmdMcp : retrieve Vault knowledge
+UserAgent --> AlmanacMcp : control plane actions
+AlmanacPriv --> SharedVault : contains vault, config, state
+SharedVault --> Vaults : contains named training rooms
+Nextcloud --> SharedVault : browser read and write
+VaultWatcher --> SharedVault : watch disk changes
+VaultWatcher --> PdfIngest : schedule PDF extraction
+PdfIngest --> SharedVault : write markdown sidecars
+VaultWatcher --> QmdMcp : trigger refresh
+NotionWebhook --> SSOTBatcher : queue inbound SSOT work
+AlmanacMcp --> SSOTBatcher : queue SSOT and notifications
+Quarto --> SharedVault : render published output
+GitHubBackup --> AlmanacPriv : backup and history
+TailscaleServe --> Nextcloud : tailnet HTTPS
+TailscaleServe --> QmdMcp : publish /mcp
+TailscaleServe --> AlmanacMcp : publish /almanac-mcp
+```
+
+### Primary Flow
+
+```mermaid
+sequenceDiagram
+    actor User as Enrolled User
+    actor Operator
+    participant Curator
+    participant MCP as Almanac MCP
+    participant Provisioner as Enrollment Provisioner
+    participant Agent as User Agent
+    participant QMD as qmd MCP
+    participant Vault as Shared Vault
+
+    User->>Curator: Start private onboarding
+    Curator->>MCP: Open session and bootstrap request
+    Curator-->>Operator: Send approval review
+    Operator->>Curator: Approve onboarding
+    Curator->>Provisioner: Mark request approved
+    Provisioner->>Agent: Create unix account, HERMES_HOME, services
+    Provisioner-->>User: Deliver bot, dashboard, code workspace, password
+    Agent->>QMD: Retrieve Vault context
+    Agent->>MCP: Use subscriptions, notifications, SSOT tools
+    QMD->>Vault: Read notes and PDF-derived markdown
+    MCP-->>Curator: Feed notifications and refresh signals
+```
+
 ## Repo Split
 
 The intended deployment shape is a nested private repo:

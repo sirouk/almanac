@@ -92,6 +92,46 @@ choose_channels_csv() {
   printf '%s\n' "$channels"
 }
 
+default_notify_platform_for_channels() {
+  local channels_csv="$1"
+  local channel="" chosen=""
+  local channels=()
+
+  IFS=',' read -r -a channels <<<"$channels_csv"
+  for channel in "${channels[@]}"; do
+    channel="${channel//[[:space:]]/}"
+    case "$channel" in
+      ""|tui-only) ;;
+      discord|telegram)
+        if [[ -n "$chosen" && "$chosen" != "$channel" ]]; then
+          printf '\n'
+          return 0
+        fi
+        chosen="$channel"
+        ;;
+    esac
+  done
+
+  printf '%s\n' "$chosen"
+}
+
+describe_operator_channel() {
+  local platform="${1:-tui-only}"
+  local channel_id="${2:-}"
+
+  if [[ -z "$platform" || "$platform" == "tui-only" ]]; then
+    printf '%s\n' "tui-only"
+    return 0
+  fi
+
+  if [[ -n "$channel_id" ]]; then
+    printf '%s\n' "$platform $channel_id"
+    return 0
+  fi
+
+  printf '%s\n' "$platform (channel unset)"
+}
+
 print_gateway_setup_guidance() {
   local channels_csv="$1"
 
@@ -232,6 +272,7 @@ should_rerun_setup() {
 }
 
 resolve_notify_channel() {
+  local channels_csv="${1:-${ALMANAC_CURATOR_CHANNELS:-tui-only}}"
   local existing_platform="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
   local existing_channel_id="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
   local platform="${ALMANAC_CURATOR_NOTIFY_PLATFORM:-}"
@@ -239,6 +280,9 @@ resolve_notify_channel() {
   local reuse_existing="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
   local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
   local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
+  local meaningful_existing="0"
+  local existing_label=""
+  local inferred_platform=""
 
   # Upgrades and headless repair flows already know the operator channel from
   # the deployed config. Reuse it silently instead of prompting just because
@@ -248,14 +292,28 @@ resolve_notify_channel() {
     return 0
   fi
 
-  if [[ "$reuse_existing" != "1" && -n "$existing_platform" && -z "$platform" && -z "$channel_id" ]]; then
-    if [[ ! -t 0 ]] || confirm_default "Reuse existing operator notification channel ($existing_platform ${existing_channel_id:-"(tui-only)"})?" "yes"; then
+  if [[ "$existing_platform" != "tui-only" || -n "$existing_channel_id" ]]; then
+    meaningful_existing="1"
+  fi
+
+  existing_label="$(describe_operator_channel "$existing_platform" "$existing_channel_id")"
+  if [[ "$reuse_existing" != "1" && "$meaningful_existing" == "1" && -z "$platform" && -z "$channel_id" ]]; then
+    if [[ ! -t 0 ]] || confirm_default "Reuse existing operator notification channel ($existing_label)?" "yes"; then
       printf '%s\n%s\n' "$existing_platform" "$existing_channel_id"
       return 0
     fi
   fi
 
-  platform="${platform:-$existing_platform}"
+  inferred_platform="$(default_notify_platform_for_channels "$channels_csv")"
+  if [[ -z "$platform" ]]; then
+    if [[ "$meaningful_existing" == "1" ]]; then
+      platform="$existing_platform"
+    elif [[ -n "$inferred_platform" ]]; then
+      platform="$inferred_platform"
+    else
+      platform="${existing_platform:-tui-only}"
+    fi
+  fi
   if [[ -t 0 ]]; then
     platform="$(ask_default "Operator notification channel platform (discord/telegram/tui-only)" "${platform:-tui-only}")"
   fi
@@ -282,6 +340,166 @@ from almanac_control import ensure_config_file_update
 
 path = Path(sys.argv[1])
 ensure_config_file_update(path, {sys.argv[2]: sys.argv[3]})
+PY
+}
+
+ensure_hermes_agent_defaults() {
+  local hermes_home="$1"
+  local hermes_python="${2:-$RUNTIME_DIR/hermes-venv/bin/python3}"
+
+  HERMES_HOME="$hermes_home" "$hermes_python" <<'PY'
+from __future__ import annotations
+
+import os
+import shlex
+from pathlib import Path
+
+import yaml
+
+
+def read_env_map(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in raw_line:
+            continue
+        key, raw_value = raw_line.split("=", 1)
+        key = key.strip()
+        try:
+            parsed = shlex.split(raw_value, posix=True)
+        except ValueError:
+            parsed = []
+        values[key] = parsed[0] if parsed else raw_value.strip().strip("'\"")
+    return values
+
+
+def write_env_value(path: Path, key: str, value: str) -> bool:
+    lines: list[str] = []
+    updated = False
+    try:
+        existing = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        existing = []
+    for raw_line in existing:
+        stripped = raw_line.strip()
+        if stripped and not stripped.startswith("#") and "=" in raw_line:
+            name = raw_line.split("=", 1)[0].strip()
+            if name == key:
+                lines.append(f"{key}={value}")
+                updated = True
+                continue
+        lines.append(raw_line)
+    if not updated:
+        lines.append(f"{key}={value}")
+    payload = "\n".join(lines).rstrip()
+    if payload:
+        payload += "\n"
+    old_payload = ""
+    try:
+        old_payload = path.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    if payload == old_payload:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload, encoding="utf-8")
+    path.chmod(0o600)
+    return True
+
+
+home = Path(os.environ["HERMES_HOME"])
+config_path = home / "config.yaml"
+home.mkdir(parents=True, exist_ok=True)
+try:
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+except Exception:
+    config = {}
+if not isinstance(config, dict):
+    config = {}
+
+notes: list[str] = []
+config_changed = False
+
+agent = config.setdefault("agent", {})
+if not isinstance(agent, dict):
+    agent = {}
+    config["agent"] = agent
+if agent.get("max_turns") is None:
+    agent["max_turns"] = 90
+    notes.append("Max iterations: 90")
+    config_changed = True
+
+display = config.setdefault("display", {})
+if not isinstance(display, dict):
+    display = {}
+    config["display"] = display
+if display.get("tool_progress") in (None, ""):
+    display["tool_progress"] = "all"
+    notes.append("Tool progress: all")
+    config_changed = True
+
+compression = config.setdefault("compression", {})
+if not isinstance(compression, dict):
+    compression = {}
+    config["compression"] = compression
+compression_note = False
+if compression.get("enabled") is None:
+    compression["enabled"] = True
+    config_changed = True
+    compression_note = True
+if compression.get("threshold") is None:
+    compression["threshold"] = 0.50
+    config_changed = True
+    compression_note = True
+if compression_note:
+    notes.append("Compression threshold: 0.50")
+
+session_reset = config.setdefault("session_reset", {})
+if not isinstance(session_reset, dict):
+    session_reset = {}
+    config["session_reset"] = session_reset
+session_reset_changed = False
+if session_reset.get("mode") in (None, ""):
+    session_reset["mode"] = "both"
+    config_changed = True
+    session_reset_changed = True
+if session_reset.get("idle_minutes") is None:
+    session_reset["idle_minutes"] = 1440
+    config_changed = True
+    session_reset_changed = True
+if session_reset.get("at_hour") is None:
+    session_reset["at_hour"] = 4
+    config_changed = True
+    session_reset_changed = True
+if session_reset_changed:
+    notes.append("Session reset: inactivity (1440 min) + daily (4:00)")
+
+terminal = config.setdefault("terminal", {})
+if not isinstance(terminal, dict):
+    terminal = {}
+    config["terminal"] = terminal
+if terminal.get("backend") in (None, ""):
+    terminal["backend"] = "local"
+    config_changed = True
+
+if config_changed:
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+env_values = read_env_map(home / ".env")
+max_iterations = str(agent.get("max_turns") or 90)
+env_changed = False
+if not env_values.get("HERMES_MAX_ITERATIONS", "").strip():
+    env_changed = write_env_value(home / ".env", "HERMES_MAX_ITERATIONS", max_iterations)
+
+if notes or env_changed:
+    print("Applied Hermes recommended defaults for missing agent settings:")
+    for note in notes:
+        print(f"  {note}")
+    print("  Run `hermes setup agent` later to customize.")
 PY
 }
 
@@ -314,6 +532,8 @@ main() {
   local notify_values=()
   local reuse_note=""
   local hermes_state_file=""
+  local ran_model_setup="0"
+  local ran_gateway_setup="0"
 
   model_preset="$(choose_model_preset)"
   case "$model_preset" in
@@ -335,7 +555,7 @@ print(json.dumps(channels))
 PY
   )"
 
-  mapfile -t notify_values < <(resolve_notify_channel)
+  mapfile -t notify_values < <(resolve_notify_channel "$channels_csv")
   notify_platform="${notify_values[0]:-tui-only}"
   notify_channel_id="${notify_values[1]:-}"
   if [[ "$notify_platform" == "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" && "$notify_channel_id" == "${OPERATOR_NOTIFY_CHANNEL_ID:-}" ]]; then
@@ -347,9 +567,11 @@ PY
 
   mkdir -p "$ALMANAC_CURATOR_HERMES_HOME"
 
-  if [[ "$skip_setup" != "1" && -t 0 ]] && should_rerun_setup "Hermes setup" "$force_setup"; then
-    echo "Running curator Hermes setup in $ALMANAC_CURATOR_HERMES_HOME ..."
-    HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" setup
+  if [[ "$skip_setup" != "1" && -t 0 ]] && should_rerun_setup "Hermes model/provider setup" "$force_setup"; then
+    echo "Running curator Hermes model/provider setup in $ALMANAC_CURATOR_HERMES_HOME ..."
+    HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" setup model
+    ran_model_setup="1"
+    ensure_hermes_agent_defaults "$ALMANAC_CURATOR_HERMES_HOME" "$RUNTIME_DIR/hermes-venv/bin/python3"
   fi
 
   if [[ "$skip_gateway_setup" != "1" && -t 0 ]] && [[ "$channels_csv" == *discord* || "$channels_csv" == *telegram* ]] && should_rerun_setup "Hermes gateway setup" "$force_gateway_setup"; then
@@ -357,6 +579,8 @@ PY
     echo "Running curator Hermes gateway setup ..."
     if ! HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" gateway setup; then
       echo "Hermes gateway setup returned non-zero; Almanac will continue and restart the configured gateway itself." >&2
+    else
+      ran_gateway_setup="1"
     fi
   fi
 
@@ -378,9 +602,13 @@ import json, sys
 print((json.load(open(sys.argv[1]))).get("channels_csv", ""))
 PY
 )"
-    [[ -n "$detected_model_preset" ]] && model_preset="$detected_model_preset"
-    [[ -n "$detected_model_string" ]] && model_string="$detected_model_string"
-    [[ -n "$detected_channels_csv" ]] && channels_csv="$detected_channels_csv"
+    if [[ "$ran_model_setup" == "1" ]]; then
+      [[ -n "$detected_model_preset" ]] && model_preset="$detected_model_preset"
+      [[ -n "$detected_model_string" ]] && model_string="$detected_model_string"
+    fi
+    if [[ "$ran_gateway_setup" == "1" ]]; then
+      [[ -n "$detected_channels_csv" ]] && channels_csv="$detected_channels_csv"
+    fi
   fi
   channels_json="$(
     python3 - "$channels_csv" <<'PY'
@@ -474,7 +702,7 @@ Model preset:
 Channels:
   $channels_csv
 Operator notification:
-  $notify_platform ${notify_channel_id:-"(tui-only)"}$reuse_note
+  $(describe_operator_channel "$notify_platform" "$notify_channel_id")$reuse_note
 
 Recovery path:
   HERMES_HOME=$ALMANAC_CURATOR_HERMES_HOME $hermes_bin

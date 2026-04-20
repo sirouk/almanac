@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -67,9 +68,80 @@ def test_generated_activate_path_watches_trigger_file_and_parent_directory() -> 
         print("PASS test_generated_activate_path_watches_trigger_file_and_parent_directory")
 
 
+def test_generated_web_service_units_follow_access_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+
+        hermes_bin = root / "hermes"
+        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        hermes_bin.chmod(0o755)
+
+        home = root / "home"
+        hermes_home = home / ".local" / "share" / "almanac-agent" / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-web-access.json").write_text(
+            json.dumps(
+                {
+                    "dashboard_backend_port": 19021,
+                    "dashboard_proxy_port": 29021,
+                    "code_port": 39021,
+                    "code_container_name": "almanac-agent-code-agent-test",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                str(SCRIPT),
+                "agent-test",
+                str(REPO),
+                str(hermes_home),
+                '["tui-only"]',
+                "",
+                str(hermes_bin),
+            ],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"install-agent-user-services failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+
+        dashboard_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-dashboard.service"
+        proxy_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-dashboard-proxy.service"
+        code_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-code.service"
+        expect(dashboard_unit.is_file(), f"expected dashboard unit: {dashboard_unit}")
+        expect(proxy_unit.is_file(), f"expected dashboard proxy unit: {proxy_unit}")
+        expect(code_unit.is_file(), f"expected code unit: {code_unit}")
+
+        dashboard_text = dashboard_unit.read_text(encoding="utf-8")
+        proxy_text = proxy_unit.read_text(encoding="utf-8")
+        code_text = code_unit.read_text(encoding="utf-8")
+        expect("--port 19021" in dashboard_text, dashboard_text)
+        expect("--listen-port 29021" in proxy_text, proxy_text)
+        expect("run-agent-code-server.sh" in code_text, code_text)
+        expect("almanac-agent-code-agent-test" in code_text, code_text)
+        print("PASS test_generated_web_service_units_follow_access_state")
+
+
 def main() -> int:
     test_generated_activate_path_watches_trigger_file_and_parent_directory()
-    print("PASS all 1 agent-user-services regression tests")
+    test_generated_web_service_units_follow_access_state()
+    print("PASS all 2 agent-user-services regression tests")
     return 0
 
 

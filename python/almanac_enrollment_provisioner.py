@@ -10,6 +10,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from almanac_agent_access import (
+    ensure_access_state,
+    ensure_web_runtime,
+    publish_tailscale_https,
+    save_access_state,
+    wait_for_http,
+)
 from almanac_control import (
     Config,
     activation_trigger_path,
@@ -175,6 +182,141 @@ def _resolve_user_gateway_bin(cfg: Config) -> Path:
 
 def _grant_auto_provision_access(cfg: Config, *, unix_user: str, agent_id: str) -> None:
     grant_agent_runtime_access(cfg, unix_user=unix_user, agent_id=agent_id)
+
+
+def _assert_user_unit_active(
+    *,
+    unix_user: str,
+    home: Path,
+    hermes_home: Path,
+    uid: int,
+    unit_name: str,
+) -> None:
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=["systemctl", "--user", "is-active", unit_name],
+    )
+    if result.returncode != 0 or result.stdout.strip() != "active":
+        detail = (result.stderr or result.stdout or "inactive").strip()
+        raise RuntimeError(f"{unit_name} is not active for {unix_user}: {detail}")
+
+
+def _provision_user_access_surfaces(
+    conn,
+    cfg: Config,
+    *,
+    agent_id: str,
+    unix_user: str,
+    home: Path,
+    hermes_home: Path,
+    uid: int,
+    channels: list[str],
+) -> dict[str, Any]:
+    ensure_web_runtime(cfg)
+    access = ensure_access_state(
+        conn,
+        cfg,
+        agent_id=agent_id,
+        unix_user=unix_user,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=[
+            str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
+            agent_id,
+            str(cfg.repo_dir),
+            str(hermes_home),
+            json.dumps(channels),
+            str(activation_trigger_path(cfg, agent_id)),
+            str(_resolve_user_gateway_bin(cfg)),
+        ],
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
+    _assert_user_unit_active(
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+        unit_name="almanac-user-agent-dashboard.service",
+    )
+    _assert_user_unit_active(
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+        unit_name="almanac-user-agent-dashboard-proxy.service",
+    )
+    _assert_user_unit_active(
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+        unit_name="almanac-user-agent-code.service",
+    )
+    wait_for_http(
+        str(access["dashboard_local_url"]),
+        expected_statuses={200},
+        username=str(access["username"]),
+        password=str(access["password"]),
+    )
+    wait_for_http(
+        str(access["code_local_url"]),
+        expected_statuses={200, 302},
+    )
+    if cfg.agent_enable_tailscale_serve:
+        access = publish_tailscale_https(access)
+        save_access_state(hermes_home, access, unix_user=unix_user)
+    return access
+
+
+def _onboarding_completion_message(
+    *,
+    bot_reference: str,
+    access: dict[str, Any],
+    home: Path,
+    discord_note: bool = False,
+) -> str:
+    lines = [
+        f"Everything is ready. Your own bot is {bot_reference} now.",
+        f"Unix user: {access.get('unix_user') or access.get('username')}",
+        f"Hermes dashboard: {access.get('dashboard_url')}",
+        f"Dashboard username: {access.get('username')}",
+        f"Shared password: {access.get('password')}",
+        f"Code workspace: {access.get('code_url')}",
+        f"Workspace root: {home}",
+        "It already has the Almanac skills active by default, plus the shared vault/qmd wiring.",
+    ]
+    if discord_note:
+        lines.append(
+            "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
+        )
+    return "\n".join(lines)
+
+
+def _operator_completion_message(
+    *,
+    agent_id: str,
+    unix_user: str,
+    bot_line: str,
+    access: dict[str, Any],
+) -> str:
+    return "\n".join(
+        [
+            f"Onboarding complete for {agent_id} ({unix_user}); {bot_line}",
+            f"Dashboard: {access.get('dashboard_url')} username={access.get('username')}",
+            f"Code: {access.get('code_url')}",
+            f"Shared password: {access.get('password')}",
+        ]
+    )
 
 
 def _stage_provider_secret_for_user(
@@ -483,23 +625,16 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         display_name=_session_bot_label(session),
     )
 
-    result = _run_as_user(
+    access = _provision_user_access_surfaces(
+        conn,
+        cfg,
+        agent_id=agent_id,
         unix_user=unix_user,
         home=home,
-        uid=uid,
         hermes_home=hermes_home,
-        cmd=[
-            str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
-            agent_id,
-            str(cfg.repo_dir),
-            str(hermes_home),
-            json.dumps(["tui-only", "telegram"]),
-            str(activation_trigger_path(cfg, agent_id)),
-            str(_resolve_user_gateway_bin(cfg)),
-        ],
+        uid=uid,
+        channels=["tui-only", "telegram"],
     )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
     _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
 
     save_onboarding_session(
@@ -528,15 +663,20 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     _queue_operator_message(
         conn,
         cfg,
-        f"Onboarding complete for {agent_id} ({unix_user}); Telegram bot @{bot_username or 'unknown'} is live.",
+        _operator_completion_message(
+            agent_id=agent_id,
+            unix_user=unix_user,
+            bot_line=f"Telegram bot @{bot_username or 'unknown'} is live.",
+            access=access,
+        ),
     )
     _notify_user_via_curator(
         cfg,
         session=session,
-        message=(
-            f"Everything is ready. Your own bot is @{bot_username or 'your bot'} now. "
-            "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
-            "Talk to it directly from here on out."
+        message=_onboarding_completion_message(
+            bot_reference=f"@{bot_username or 'your bot'}",
+            access=access,
+            home=home,
         ),
     )
 
@@ -598,23 +738,16 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         display_name=_session_bot_label(session),
     )
 
-    result = _run_as_user(
+    access = _provision_user_access_surfaces(
+        conn,
+        cfg,
+        agent_id=agent_id,
         unix_user=unix_user,
         home=home,
-        uid=uid,
         hermes_home=hermes_home,
-        cmd=[
-            str(cfg.repo_dir / "bin" / "install-agent-user-services.sh"),
-            agent_id,
-            str(cfg.repo_dir),
-            str(hermes_home),
-            json.dumps(["tui-only", "discord"]),
-            str(activation_trigger_path(cfg, agent_id)),
-            str(_resolve_user_gateway_bin(cfg)),
-        ],
+        uid=uid,
+        channels=["tui-only", "discord"],
     )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())
     _assert_user_gateway_active(unix_user=unix_user, home=home, hermes_home=hermes_home, uid=uid)
 
     save_onboarding_session(
@@ -643,15 +776,21 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
     _queue_operator_message(
         conn,
         cfg,
-        f"Onboarding complete for {agent_id} ({unix_user}); Discord bot {bot_username or 'unknown'} is live.",
+        _operator_completion_message(
+            agent_id=agent_id,
+            unix_user=unix_user,
+            bot_line=f"Discord bot {bot_username or 'unknown'} is live.",
+            access=access,
+        ),
     )
     _notify_user_via_curator(
         cfg,
         session=session,
-        message=(
-            f"Everything is ready. Your own bot is `{bot_username or 'your bot'}` now. "
-            "It already has the Almanac skills active by default, plus the shared vault/qmd wiring. "
-            "Start with it from now on. If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
+        message=_onboarding_completion_message(
+            bot_reference=f"`{bot_username or 'your bot'}`",
+            access=access,
+            home=home,
+            discord_note=True,
         ),
     )
 
@@ -763,7 +902,7 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
     try:
         info = ensure_unix_user_ready(unix_user)
         home = Path(info["home"])
-        uid = info["uid"]
+        uid = int(info["uid"])
         _grant_auto_provision_access(cfg, unix_user=unix_user, agent_id=agent_id)
         _wait_for_user_bus(uid)
 
@@ -823,6 +962,20 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
         )
         if result.returncode != 0:
             raise RuntimeError((result.stderr or result.stdout or f"exit {result.returncode}").strip())
+        agent = get_agent(conn, agent_id)
+        if agent is None:
+            raise RuntimeError(f"auto-provision did not register agent {agent_id}")
+        hermes_home = Path(str(agent["hermes_home"]))
+        access = _provision_user_access_surfaces(
+            conn,
+            cfg,
+            agent_id=agent_id,
+            unix_user=unix_user,
+            home=home,
+            hermes_home=hermes_home,
+            uid=uid,
+            channels=channels,
+        )
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip().replace("\n", " ")[:500] or "unknown auto-provision error"
         log_path.write_text(message + "\n", encoding="utf-8")
@@ -851,7 +1004,14 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
     _queue_operator_message(
         conn,
         cfg,
-        f"Auto-provisioned {agent_id} for {requester_identity} ({unix_user}).",
+        "\n".join(
+            [
+                f"Auto-provisioned {agent_id} for {requester_identity} ({unix_user}).",
+                f"Dashboard: {access.get('dashboard_url')} username={access.get('username')}",
+                f"Code: {access.get('code_url')}",
+                f"Shared password: {access.get('password')}",
+            ]
+        ),
     )
 
 

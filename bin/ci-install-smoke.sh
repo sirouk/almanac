@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DEPLOY_BIN="$ROOT_DIR/bin/deploy.sh"
-ALMANAC_NAME="almanac"
-ALMANAC_USER="almanac"
-ALMANAC_HOME="/home/$ALMANAC_USER"
+ALMANAC_NAME="${ALMANAC_SMOKE_NAME:-almanac}"
+ALMANAC_USER="${ALMANAC_SMOKE_USER:-almanac}"
+ALMANAC_HOME="${ALMANAC_SMOKE_HOME:-/home/$ALMANAC_USER}"
 ALMANAC_REPO_DIR="$ALMANAC_HOME/almanac"
 ALMANAC_PRIV_DIR="$ALMANAC_REPO_DIR/almanac-priv"
 ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
@@ -18,16 +18,19 @@ ALMANAC_CURATOR_DIR="$STATE_DIR/curator"
 ALMANAC_CURATOR_MANIFEST="$ALMANAC_CURATOR_DIR/manifest.json"
 ALMANAC_CURATOR_HERMES_HOME="$ALMANAC_CURATOR_DIR/hermes-home"
 ALMANAC_ARCHIVED_AGENTS_DIR="$STATE_DIR/archived-agents"
-QMD_INDEX_NAME="almanac"
-QMD_COLLECTION_NAME="vault"
-NEXTCLOUD_ADMIN_USER="admin"
+QMD_INDEX_NAME="${ALMANAC_SMOKE_QMD_INDEX_NAME:-almanac}"
+QMD_COLLECTION_NAME="${ALMANAC_SMOKE_QMD_COLLECTION_NAME:-vault}"
+NEXTCLOUD_ADMIN_USER="${ALMANAC_SMOKE_NEXTCLOUD_ADMIN_USER:-admin}"
 NEXTCLOUD_VAULT_MOUNT_POINT="/Vault"
 PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
 PDF_INGEST_COLLECTION_NAME="vault-pdf-ingest"
+QMD_MCP_PORT="${ALMANAC_SMOKE_QMD_MCP_PORT:-8181}"
+NEXTCLOUD_PORT="${ALMANAC_SMOKE_NEXTCLOUD_PORT:-18080}"
 ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
 ENABLE_TAILSCALE_SERVE="${ALMANAC_SMOKE_ENABLE_TAILSCALE_SERVE:-0}"
 TAILSCALE_OPERATOR_USER="${ALMANAC_SMOKE_TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
+AUTOPROV_UNIX_USER="${ALMANAC_SMOKE_AUTOPROV_USER:-autoprovbot}"
 ANSWERS_FILE="$(mktemp /tmp/almanac-ci-install.XXXXXX.env)"
 INSTALLED=0
 LAST_QMD_SEARCH_OUTPUT=""
@@ -40,7 +43,7 @@ fi
 
 write_answers() {
   cat >"$ANSWERS_FILE" <<EOF
-ALMANAC_NAME=almanac
+ALMANAC_NAME=$ALMANAC_NAME
 ALMANAC_USER=$ALMANAC_USER
 ALMANAC_HOME=$ALMANAC_HOME
 ALMANAC_REPO_DIR=$ALMANAC_REPO_DIR
@@ -57,12 +60,12 @@ ALMANAC_CURATOR_MANIFEST=$ALMANAC_CURATOR_MANIFEST
 ALMANAC_CURATOR_HERMES_HOME=$ALMANAC_CURATOR_HERMES_HOME
 ALMANAC_ARCHIVED_AGENTS_DIR=$ALMANAC_ARCHIVED_AGENTS_DIR
 PUBLISHED_DIR=$ALMANAC_PRIV_DIR/published
-QMD_INDEX_NAME=almanac
-QMD_COLLECTION_NAME=vault
+QMD_INDEX_NAME=$QMD_INDEX_NAME
+QMD_COLLECTION_NAME=$QMD_COLLECTION_NAME
 VAULT_QMD_COLLECTION_MASK=**/*.{md,markdown,mdx,txt,text}
 PDF_INGEST_COLLECTION_NAME=$PDF_INGEST_COLLECTION_NAME
 QMD_RUN_EMBED=1
-QMD_MCP_PORT=8181
+QMD_MCP_PORT=$QMD_MCP_PORT
 ALMANAC_MCP_HOST=127.0.0.1
 ALMANAC_MCP_PORT=$ALMANAC_MCP_PORT
 ALMANAC_NOTION_WEBHOOK_HOST=127.0.0.1
@@ -83,16 +86,17 @@ BACKUP_GIT_BRANCH=main
 BACKUP_GIT_REMOTE=
 BACKUP_GIT_AUTHOR_NAME=Almanac\ Backup
 BACKUP_GIT_AUTHOR_EMAIL=almanac@localhost
-NEXTCLOUD_PORT=18080
+NEXTCLOUD_PORT=$NEXTCLOUD_PORT
 NEXTCLOUD_TRUSTED_DOMAIN=almanac-ci.local
 POSTGRES_DB=nextcloud
 POSTGRES_USER=nextcloud
 POSTGRES_PASSWORD=almanac-ci-postgres
-NEXTCLOUD_ADMIN_USER=admin
+NEXTCLOUD_ADMIN_USER=$NEXTCLOUD_ADMIN_USER
 NEXTCLOUD_ADMIN_PASSWORD=almanac-ci-admin
 NEXTCLOUD_VAULT_MOUNT_POINT=$NEXTCLOUD_VAULT_MOUNT_POINT
 ENABLE_NEXTCLOUD=1
 ENABLE_TAILSCALE_SERVE=$ENABLE_TAILSCALE_SERVE
+ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE=$ENABLE_TAILSCALE_SERVE
 TAILSCALE_OPERATOR_USER=$TAILSCALE_OPERATOR_USER
 TAILSCALE_QMD_PATH=/mcp
 ENABLE_PRIVATE_GIT=1
@@ -155,6 +159,49 @@ PY
     sleep "$delay"
   done
 
+  return 1
+}
+
+http_status_code() {
+  local url="$1"
+  local auth="${2:-}"
+  local host_header="${3:-}"
+  local curl_args=(
+    --max-time 10
+    -sS
+    -o /dev/null
+    -w '%{http_code}'
+  )
+
+  if [[ -n "$auth" ]]; then
+    curl_args+=(-u "$auth")
+  fi
+  if [[ -n "$host_header" ]]; then
+    curl_args+=(-H "Host: $host_header")
+  fi
+
+  curl "${curl_args[@]}" "$url"
+}
+
+wait_for_http_status() {
+  local url="$1"
+  local expected_csv="$2"
+  local auth="${3:-}"
+  local host_header="${4:-}"
+  local attempts="${5:-120}"
+  local delay="${6:-2}"
+  local i=""
+  local status=""
+
+  for ((i = 1; i <= attempts; i++)); do
+    status="$(http_status_code "$url" "$auth" "$host_header" 2>/dev/null || true)"
+    if [[ ",$expected_csv," == *",$status,"* ]]; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  echo "Expected $url to return one of [$expected_csv], last status was ${status:-<none>}." >&2
   return 1
 }
 
@@ -236,6 +283,40 @@ run_almanac_shell() {
   su - "$ALMANAC_USER" -c "bash -lc $(printf '%q' "$wrapped")"
 }
 
+shell_join() {
+  local joined=""
+  local arg=""
+  for arg in "$@"; do
+    if [[ -n "$joined" ]]; then
+      joined+=" "
+    fi
+    joined+="$(printf '%q' "$arg")"
+  done
+  printf '%s' "$joined"
+}
+
+run_login_user_command() {
+  local unix_user="$1"
+  shift
+  su - "$unix_user" -c "$(shell_join "$@")"
+}
+
+run_login_user_systemctl() {
+  local unix_user="$1"
+  shift
+  local uid=""
+
+  uid="$(id -u "$unix_user")"
+  run_login_user_command \
+    "$unix_user" \
+    env \
+    "XDG_RUNTIME_DIR=/run/user/$uid" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+    systemctl \
+    --user \
+    "$@"
+}
+
 wait_for_qmd_search_match() {
   local query="$1"
   local expected="$2"
@@ -303,6 +384,185 @@ wait_for_qmd_pending_embeddings_zero() {
   done
 
   return 1
+}
+
+wait_for_user_unit_active() {
+  local unix_user="$1"
+  local unit_name="$2"
+  local attempts="${3:-120}"
+  local delay="${4:-2}"
+  local uid=""
+  local i=""
+  local state=""
+
+  uid="$(id -u "$unix_user")"
+  for ((i = 1; i <= attempts; i++)); do
+    state="$(run_login_user_systemctl "$unix_user" is-active "$unit_name" 2>/dev/null || true)"
+    if [[ "$state" == "active" ]]; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  echo "Expected user unit $unit_name for $unix_user to become active, saw ${state:-<none>}." >&2
+  run_login_user_systemctl "$unix_user" status "$unit_name" -n 80 --no-pager >&2 || true
+  return 1
+}
+
+assert_agent_access_surfaces() {
+  local unix_user="$1"
+  local agent_id="$2"
+  local hermes_home="$3"
+  local access_file="$hermes_home/state/almanac-web-access.json"
+  local username="" password="" dashboard_backend_port="" dashboard_proxy_port="" code_port="" dashboard_url="" code_url="" code_container_name="" code_server_image=""
+  local before_signature="" after_signature="" home_dir="" uid=""
+  local podman_bin=""
+
+  wait_for_file "$access_file" 240 2
+  eval "$(
+    python3 - "$access_file" <<'PY'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for key in (
+    "username",
+    "password",
+    "dashboard_backend_port",
+    "dashboard_proxy_port",
+    "code_port",
+    "dashboard_url",
+    "code_url",
+    "code_container_name",
+    "code_server_image",
+):
+    print(f"{key}={shlex.quote(str(state.get(key, '')))}")
+PY
+  )"
+
+  if [[ -z "$username" || -z "$password" ]]; then
+    echo "Expected dashboard/code credentials to be written for $agent_id." >&2
+    return 1
+  fi
+  if [[ "$username" != "$unix_user" ]]; then
+    echo "Expected cleaned access username to match unix user for $agent_id: $username vs $unix_user" >&2
+    return 1
+  fi
+  if [[ ! "$username" =~ ^[a-z0-9_-]+$ ]]; then
+    echo "Expected cleaned access username for $agent_id, saw: $username" >&2
+    return 1
+  fi
+
+  wait_for_port 127.0.0.1 "$dashboard_backend_port" 120 2
+  wait_for_port 127.0.0.1 "$dashboard_proxy_port" 180 2
+  wait_for_port 127.0.0.1 "$code_port" 300 2
+  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard.service" 120 2
+  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard-proxy.service" 120 2
+  wait_for_user_unit_active "$unix_user" "almanac-user-agent-code.service" 180 2
+
+  wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "401" "" "" 90 2
+  wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "200" "$username:$password" "" 90 2
+  wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/api/status" "200" "$username:$password" "" 90 2
+  wait_for_http_status "http://127.0.0.1:$code_port/" "200,302,303" "" "" 180 2
+
+  before_signature="$(
+    python3 - "$access_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print("|".join(str(state.get(key, "")) for key in ("username", "password", "dashboard_backend_port", "dashboard_proxy_port", "code_port")))
+PY
+  )"
+
+  ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
+  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard.service" 120 2
+  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard-proxy.service" 120 2
+  wait_for_user_unit_active "$unix_user" "almanac-user-agent-code.service" 180 2
+
+  after_signature="$(
+    python3 - "$access_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print("|".join(str(state.get(key, "")) for key in ("username", "password", "dashboard_backend_port", "dashboard_proxy_port", "code_port")))
+PY
+  )"
+  if [[ "$before_signature" != "$after_signature" ]]; then
+    echo "Expected agent access state to remain stable across sync-access for $agent_id." >&2
+    echo "before: $before_signature" >&2
+    echo "after:  $after_signature" >&2
+    return 1
+  fi
+
+  home_dir="$(getent passwd "$unix_user" | cut -d: -f6)"
+  uid="$(id -u "$unix_user")"
+  podman_bin="$(command -v podman || true)"
+  if [[ -z "$podman_bin" ]]; then
+    podman_bin="/usr/bin/podman"
+  fi
+  python3 - "$(
+    run_login_user_command "$unix_user" "$podman_bin" inspect "$code_container_name"
+  )" "$home_dir" "$password" "$code_server_image" <<'PY'
+import json
+import sys
+
+inspect_json, home_dir, password, image_name = sys.argv[1:5]
+payload = json.loads(inspect_json)
+if not payload:
+    raise SystemExit("expected podman inspect data for code container")
+container = payload[0]
+state = container.get("State") or {}
+if state.get("Status") != "running":
+    raise SystemExit(f"expected code container running, saw {state.get('Status')!r}")
+mounts = container.get("Mounts") or []
+if not any(mount.get("Destination") == "/workspace" and mount.get("Source") == home_dir for mount in mounts):
+    raise SystemExit(f"expected /workspace bind mount from {home_dir}")
+env = (container.get("Config") or {}).get("Env") or []
+if f"PASSWORD={password}" not in env:
+    raise SystemExit("expected code container PASSWORD env to match shared access password")
+image = container.get("ImageName") or ""
+if image_name and image_name not in image:
+    raise SystemExit(f"expected code container image {image_name!r}, saw {image!r}")
+cmd = " ".join((container.get("Config") or {}).get("Cmd") or [])
+for marker in ("--auth", "password", "/workspace"):
+    if marker not in cmd:
+        raise SystemExit(f"expected code-server command marker {marker!r}, saw {cmd!r}")
+PY
+
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
+import sys
+
+dashboard_url, code_url, dashboard_port, code_port = sys.argv[1:5]
+for url, port in ((dashboard_url, dashboard_port), (code_url, code_port)):
+    if not url.startswith("https://") or f":{port}/" not in url:
+        raise SystemExit(f"expected tailscale https URL for port {port}, saw {url!r}")
+PY
+  else
+    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
+import sys
+
+dashboard_url, code_url, dashboard_port, code_port = sys.argv[1:5]
+expected = (
+    (dashboard_url, dashboard_port),
+    (code_url, code_port),
+)
+for url, port in expected:
+    target = f"http://127.0.0.1:{port}/"
+    if url != target:
+        raise SystemExit(f"expected local URL {target!r}, saw {url!r}")
+PY
+  fi
+
+  run_login_user_systemctl "$unix_user" is-enabled almanac-user-agent-dashboard.service >/dev/null
+  run_login_user_systemctl "$unix_user" is-enabled almanac-user-agent-dashboard-proxy.service >/dev/null
+  run_login_user_systemctl "$unix_user" is-enabled almanac-user-agent-code.service >/dev/null
 }
 
 qmd_mcp_query_files() {
@@ -549,7 +809,7 @@ assert_agent_payload() {
   local payload_len=""
   local payload_file_len=""
 
-  payload="$("$DEPLOY_BIN" agent-payload)"
+  payload="$(ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/deploy.sh" agent-payload)"
   payload_file="$ALMANAC_PRIV_DIR/state/agent-install-payload.txt"
   payload_len="$(printf '%s' "$payload" | wc -c | tr -d ' ')"
 
@@ -980,7 +1240,8 @@ PY
 }
 
 assert_remote_auto_provision_enrollment() {
-  local handshake_json="" duplicate_json="" request_id="" unix_user="autoprovbot"
+  local handshake_json="" duplicate_json="" request_id="" unix_user="$AUTOPROV_UNIX_USER"
+  local home_dir="" hermes_home="" agent_id=""
 
   handshake_json="$(
     run_almanac_shell \
@@ -1018,7 +1279,7 @@ if payload.get("raw_token"):
     raise SystemExit("duplicate auto-provision handshake should not mint a raw token")
 PY
 
-  "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json request approve "$request_id" --surface ctl --actor auto-provision-smoke >/dev/null
+  ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json request approve "$request_id" --surface ctl --actor auto-provision-smoke >/dev/null
   ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-enrollment-provision.sh" >/dev/null
 
   python3 - "$ALMANAC_DB_PATH" "$request_id" "$unix_user" "$ALMANAC_PRIV_DIR" <<'PY'
@@ -1065,6 +1326,11 @@ state = json.loads(state_path.read_text(encoding="utf-8"))
 if state.get("status") != "active":
     raise SystemExit(f"expected host-side enrollment state active for {agent_id}, saw {state.get('status')!r}")
 PY
+
+  agent_id="agent-$unix_user"
+  home_dir="$(getent passwd "$unix_user" | cut -d: -f6)"
+  hermes_home="$home_dir/.local/share/almanac-agent/hermes-home"
+  assert_agent_access_surfaces "$unix_user" "$agent_id" "$hermes_home"
 }
 
 assert_upgrade_check_notification_dedup() {
@@ -1949,12 +2215,21 @@ teardown() {
     ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
     INSTALLED=0
   fi
+  if id -u "$AUTOPROV_UNIX_USER" >/dev/null 2>&1; then
+    loginctl disable-linger "$AUTOPROV_UNIX_USER" >/dev/null 2>&1 || true
+    userdel -r "$AUTOPROV_UNIX_USER" >/dev/null 2>&1 || userdel "$AUTOPROV_UNIX_USER" >/dev/null 2>&1 || true
+  fi
 }
 
 preclean() {
   if id -u "$ALMANAC_USER" >/dev/null 2>&1 || [[ -e "$ALMANAC_HOME" ]]; then
-    echo "Removing existing default Almanac install before smoke test..."
+    echo "Removing existing Almanac smoke target before test..."
     ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
+  fi
+  if id -u "$AUTOPROV_UNIX_USER" >/dev/null 2>&1; then
+    echo "Removing existing smoke auto-provision user '$AUTOPROV_UNIX_USER' before test..."
+    loginctl disable-linger "$AUTOPROV_UNIX_USER" >/dev/null 2>&1 || true
+    userdel -r "$AUTOPROV_UNIX_USER" >/dev/null 2>&1 || userdel "$AUTOPROV_UNIX_USER" >/dev/null 2>&1 || true
   fi
 }
 
@@ -2029,20 +2304,20 @@ assert_notification_delivery_backlog
 echo
 echo "Starting runtime checks..."
 
-if ! wait_for_port 127.0.0.1 8181 10 1; then
+if ! wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 10 1; then
   su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' nohup '$ALMANAC_REPO_DIR/bin/qmd-daemon.sh' > '$RUNTIME_DIR/qmd-daemon.log' 2>&1 &"
 fi
 
-if ! wait_for_port 127.0.0.1 18080 10 1; then
+if ! wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 10 1; then
   su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/nextcloud-up.sh'"
 fi
 
-wait_for_port 127.0.0.1 8181 120 1
-wait_for_port 127.0.0.1 18080 300 2
+wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 120 1
+wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 300 2
 assert_mcp_status_alignment
 
 if ! wait_for_http_success \
-  "http://127.0.0.1:18080/status.php" \
+  "http://127.0.0.1:$NEXTCLOUD_PORT/status.php" \
   "almanac-ci.local" \
   "/tmp/almanac-nextcloud-status.json" \
   180 \

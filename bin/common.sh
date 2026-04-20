@@ -392,6 +392,12 @@ ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
 ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
 ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
+ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
+ALMANAC_AGENT_CODE_PORT_BASE="${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
+ALMANAC_AGENT_PORT_SLOT_SPAN="${ALMANAC_AGENT_PORT_SLOT_SPAN:-5000}"
+ALMANAC_AGENT_CODE_SERVER_IMAGE="${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}"
+ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
 
 qmd_normalize_index_name() {
   local index_name="${1:-index}"
@@ -627,7 +633,73 @@ ensure_shared_hermes_runtime() {
     uv venv "$venv_dir" --python "$seed_python"
   fi
 
-  uv pip install --python "$venv_dir/bin/python3" "$repo_dir[cli,mcp,messaging,cron]"
+  uv pip install --python "$venv_dir/bin/python3" "$repo_dir[cli,mcp,messaging,cron,web]"
+  ensure_hermes_dashboard_assets "$repo_dir"
+  sync_hermes_dashboard_assets_into_runtime "$repo_dir" "$venv_dir/bin/python3"
+}
+
+ensure_hermes_dashboard_assets() {
+  local repo_dir="$1"
+  local web_dir="$repo_dir/web"
+  local dist_dir="$repo_dir/hermes_cli/web_dist"
+  local dist_index="$dist_dir/index.html"
+  local stamp_file="$dist_dir/.almanac-build-stamp"
+  local current_rev=""
+
+  if [[ ! -d "$web_dir" ]]; then
+    echo "Hermes web source is missing at $web_dir" >&2
+    return 1
+  fi
+
+  current_rev="$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -f "$dist_index" && -n "$current_rev" && -f "$stamp_file" && "$(cat "$stamp_file" 2>/dev/null || true)" == "$current_rev" ]]; then
+    return 0
+  fi
+
+  ensure_nvm
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required to build Hermes dashboard assets." >&2
+    return 1
+  fi
+
+  (cd "$web_dir" && npm ci --no-audit --no-fund && npm run build)
+  mkdir -p "$dist_dir"
+  if [[ -n "$current_rev" ]]; then
+    printf '%s\n' "$current_rev" >"$stamp_file"
+  fi
+}
+
+sync_hermes_dashboard_assets_into_runtime() {
+  local repo_dir="$1"
+  local python_bin="$2"
+  local source_dir="$repo_dir/hermes_cli/web_dist"
+  local target_parent=""
+  local target_dir=""
+
+  if [[ ! -d "$source_dir" ]]; then
+    echo "Hermes dashboard assets are missing at $source_dir" >&2
+    return 1
+  fi
+
+  target_parent="$("$python_bin" - <<'PY'
+from pathlib import Path
+import hermes_cli
+
+print(Path(hermes_cli.__file__).resolve().parent)
+PY
+)"
+  if [[ -z "$target_parent" ]]; then
+    echo "Could not resolve installed hermes_cli package path." >&2
+    return 1
+  fi
+
+  target_dir="$target_parent/web_dist"
+  if [[ "$target_dir" == "$source_dir" ]]; then
+    return 0
+  fi
+
+  rm -rf "$target_dir"
+  cp -a "$source_dir" "$target_dir"
 }
 
 ensure_qmd_collection() {

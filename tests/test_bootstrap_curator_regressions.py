@@ -110,10 +110,90 @@ fi
     print("PASS test_existing_channels_reuse_noninteractive_without_prompt")
 
 
+def test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_only() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    helpers = extract(text, "default_notify_platform_for_channels() {", "print_gateway_setup_guidance() {")
+    snippet = extract(text, "resolve_notify_channel() {", "set_config_value() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt_log = tmp_path / "prompt.log"
+        script = f"""
+PROMPT_LOG={shlex.quote(str(prompt_log))}
+OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
+OPERATOR_NOTIFY_CHANNEL_ID=
+ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
+ALMANAC_CURATOR_SKIP_HERMES_SETUP=0
+ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=0
+ALMANAC_CURATOR_NOTIFY_PLATFORM=
+ALMANAC_CURATOR_NOTIFY_CHANNEL_ID=
+ask_default() {{
+  printf '%s\\n' "$1 [$2]" >> "$PROMPT_LOG"
+  printf '%s' "${{2:-}}"
+}}
+confirm_default() {{
+  printf 'confirm:%s\\n' "$1" >> "$PROMPT_LOG"
+  return 0
+}}
+{helpers}
+{snippet}
+mapfile -t result < <(resolve_notify_channel "tui-only,discord")
+printf 'PLATFORM=%s\\n' "${{result[0]:-}}"
+printf 'CHANNEL=%s\\n' "${{result[1]:-}}"
+printf 'PROMPTS_BEGIN\\n'
+cat "$PROMPT_LOG"
+printf 'PROMPTS_END\\n'
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"notify default case failed: {result.stderr}")
+        expect("PLATFORM=discord" in result.stdout, f"expected discord default, got: {result.stdout!r}")
+        prompts = result.stdout.split("PROMPTS_BEGIN\n", 1)[1].split("\nPROMPTS_END", 1)[0]
+        expect(
+            "Reuse existing operator notification channel" not in prompts,
+            f"did not expect tui-only reuse prompt, got: {prompts!r}",
+        )
+    print("PASS test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_only")
+
+
+def test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    snippet = extract(text, '  hermes_state_file="$(mktemp)"', '  channels_json="$(')
+    script = f"""
+test_case() {{
+  model_preset=codex
+  model_string=openai:codex
+  channels_csv=tui-only,discord
+  ran_model_setup=0
+  ran_gateway_setup=0
+  hermes_state_file=
+  ALMANAC_CURATOR_HERMES_HOME=/tmp/hermes-home
+  hermes_bin=/tmp/hermes
+  probe_hermes_state_json() {{
+    printf '%s' '{{"model_preset":"custom","model_string":"stale:model","channels_csv":"tui-only"}}'
+  }}
+{snippet}
+  printf 'CHANNELS=%s\\n' "$channels_csv"
+  printf 'MODEL=%s\\n' "$model_preset"
+  printf 'MODEL_STRING=%s\\n' "$model_string"
+}}
+test_case
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"probe-hermes-state override case failed: {result.stderr}")
+    expect("CHANNELS=tui-only,discord" in result.stdout, f"expected chosen channels to win, got: {result.stdout!r}")
+    expect("MODEL=codex" in result.stdout, f"expected model preset to stay local when setup was skipped, got: {result.stdout!r}")
+    expect(
+        "MODEL_STRING=openai:codex" in result.stdout,
+        f"expected model string to stay local when setup was skipped, got: {result.stdout!r}",
+    )
+    print("PASS test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup")
+
+
 def main() -> int:
     tests = [
         test_fresh_install_prompts_for_channels_even_with_tui_only_default,
         test_existing_channels_reuse_noninteractive_without_prompt,
+        test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_only,
+        test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup,
     ]
     for test in tests:
         test()

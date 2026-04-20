@@ -124,6 +124,23 @@ def test_emit_runtime_config_normalizes_curator_onboarding_flags() -> None:
     print("PASS test_emit_runtime_config_normalizes_curator_onboarding_flags")
 
 
+def test_describe_operator_channel_summary_avoids_tui_only_duplication() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "describe_operator_channel_summary() {", "write_runtime_config() {")
+    script = f"""
+{snippet}
+printf 'A=%s\\n' "$(describe_operator_channel_summary tui-only '')"
+printf 'B=%s\\n' "$(describe_operator_channel_summary discord 12345)"
+printf 'C=%s\\n' "$(describe_operator_channel_summary discord '')"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"describe_operator_channel_summary failed: {result.stderr}")
+    expect("A=tui-only" in result.stdout, f"expected tui-only summary without duplication, got: {result.stdout!r}")
+    expect("B=discord 12345" in result.stdout, f"expected platform+channel summary, got: {result.stdout!r}")
+    expect("C=discord" in result.stdout, f"expected bare platform summary when channel is empty, got: {result.stdout!r}")
+    print("PASS test_describe_operator_channel_summary_avoids_tui_only_duplication")
+
+
 def run_install_reexec_case(config_mode: int) -> tuple[int, str, str]:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "probe_path_status() {", "run_root_env_cmd() {")
@@ -188,6 +205,37 @@ def test_install_does_not_reexec_for_readable_breadcrumb_config() -> None:
     expect("Switching to sudo before prompting" not in output, "readable config should not trigger sudo-before-prompting path")
     expect(sudo_log.strip() == "", f"readable config should not call sudo, got {sudo_log!r}")
     print("PASS test_install_does_not_reexec_for_readable_breadcrumb_config")
+
+
+def test_run_install_flow_stops_after_failed_sudo_reexec() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "run_install_flow() {", "run_remove_flow() {")
+    script = f"""
+MODE=install
+maybe_reexec_install_for_config_defaults() {{ return 42; }}
+collect_install_answers() {{
+  echo "collect_install_answers should not run after failed reexec" >&2
+  return 99
+}}
+seed_private_repo() {{ return 0; }}
+write_runtime_config() {{ return 0; }}
+write_answers_file() {{ return 0; }}
+write_agent_install_payload_file() {{ return 0; }}
+write_operator_checkout_artifact() {{ return 0; }}
+run_root_install() {{ return 0; }}
+{snippet}
+run_install_flow
+status=$?
+printf 'STATUS=%s\\n' "$status"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"run_install_flow reexec-failure case failed: {result.stderr}")
+    expect("STATUS=42" in result.stdout, f"expected sudo reexec failure to propagate, got: {result.stdout!r}")
+    expect(
+        "collect_install_answers should not run after failed reexec" not in result.stderr,
+        f"expected install flow to stop before collecting prompts, got: {result.stderr!r}",
+    )
+    print("PASS test_run_install_flow_stops_after_failed_sudo_reexec")
 
 
 def test_write_operator_artifact_falls_back_to_discovered_config() -> None:
@@ -316,6 +364,69 @@ printf 'ALMANAC_PRIV_DIR=%s\\n' "$ALMANAC_PRIV_DIR"
     expect("ALMANAC_REPO_DIR=/srv/operator-svc/almanac" in result.stdout, f"expected detected repo default, got: {result.stdout!r}")
     expect("ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv" in result.stdout, f"expected detected priv default, got: {result.stdout!r}")
     print("PASS test_collect_install_answers_defaults_to_detected_service_user")
+
+
+def test_collect_install_answers_does_not_prompt_for_telegram_token_up_front() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt_log = tmp_path / "prompts.log"
+        script = f"""
+PROMPT_LOG={shlex.quote(str(prompt_log))}
+{snippet}
+ask() {{ printf '%s' "${{2:-}}"; }}
+ask_yes_no() {{ printf '%s' "${{2:-0}}"; }}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{
+  printf '%s\\n' "$1" >> "$PROMPT_LOG"
+  printf '%s' "${{2:-}}"
+}}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+random_secret() {{ printf '%s' "generated-secret"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  TELEGRAM_BOT_TOKEN='preserve-me'
+  return 0
+}}
+MODE=write-config
+collect_install_answers
+printf 'TELEGRAM_BOT_TOKEN=%s\\n' "$TELEGRAM_BOT_TOKEN"
+printf 'PROMPTS_BEGIN\\n'
+cat "$PROMPT_LOG"
+printf 'PROMPTS_END\\n'
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"telegram prompt suppression case failed: {result.stderr}")
+        expect(
+            "TELEGRAM_BOT_TOKEN=preserve-me" in result.stdout,
+            f"expected existing Telegram token to be preserved, got: {result.stdout!r}",
+        )
+        prompts = result.stdout.split("PROMPTS_BEGIN\n", 1)[1].split("\nPROMPTS_END", 1)[0]
+        expect(
+            "Telegram bot token for operator notifications and delivery" not in prompts,
+            f"did not expect early Telegram token prompt, got: {prompts!r}",
+        )
+    print("PASS test_collect_install_answers_does_not_prompt_for_telegram_token_up_front")
 
 
 def test_secret_prompt_helpers_do_not_prefix_newlines() -> None:
@@ -626,11 +737,14 @@ def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
+        test_describe_operator_channel_summary_avoids_tui_only_duplication,
         test_install_reexecs_for_unreadable_breadcrumb_config,
         test_install_does_not_reexec_for_readable_breadcrumb_config,
+        test_run_install_flow_stops_after_failed_sudo_reexec,
         test_write_operator_artifact_falls_back_to_discovered_config,
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,
+        test_collect_install_answers_does_not_prompt_for_telegram_token_up_front,
         test_secret_prompt_helpers_do_not_prefix_newlines,
         test_collect_install_answers_randomizes_placeholder_passwords,
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,

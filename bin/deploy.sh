@@ -60,6 +60,12 @@ ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
 ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
 ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
+ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
+ALMANAC_AGENT_CODE_PORT_BASE="${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
+ALMANAC_AGENT_PORT_SLOT_SPAN="${ALMANAC_AGENT_PORT_SLOT_SPAN:-5000}"
+ALMANAC_AGENT_CODE_SERVER_IMAGE="${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}"
+ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
 ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-}"
 ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
 NEXTCLOUD_ROTATE_POSTGRES_PASSWORD="${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-}"
@@ -946,6 +952,12 @@ emit_runtime_config() {
     write_kv CHUTES_MCP_URL "${CHUTES_MCP_URL:-}"
     write_kv ALMANAC_UPSTREAM_REPO_URL "${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
     write_kv ALMANAC_UPSTREAM_BRANCH "${ALMANAC_UPSTREAM_BRANCH:-main}"
+    write_kv ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE "${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
+    write_kv ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE "${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
+    write_kv ALMANAC_AGENT_CODE_PORT_BASE "${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
+    write_kv ALMANAC_AGENT_PORT_SLOT_SPAN "${ALMANAC_AGENT_PORT_SLOT_SPAN:-5000}"
+    write_kv ALMANAC_AGENT_CODE_SERVER_IMAGE "${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}"
+    write_kv ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE "${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
     write_kv ALMANAC_RELEASE_STATE_FILE "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
     write_kv ENABLE_NEXTCLOUD "$ENABLE_NEXTCLOUD"
     write_kv ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
@@ -958,6 +970,21 @@ emit_runtime_config() {
     write_kv QUARTO_PROJECT_DIR "$QUARTO_PROJECT_DIR"
     write_kv QUARTO_OUTPUT_DIR "$QUARTO_OUTPUT_DIR"
   }
+}
+
+describe_operator_channel_summary() {
+  local platform="${1:-tui-only}"
+  local channel_id="${2:-}"
+
+  if [[ "$platform" == "tui-only" ]]; then
+    printf '%s\n' 'tui-only'
+    return 0
+  fi
+  if [[ -n "$channel_id" ]]; then
+    printf '%s %s\n' "$platform" "$channel_id"
+    return 0
+  fi
+  printf '%s\n' "$platform"
 }
 
 write_runtime_config() {
@@ -1324,7 +1351,7 @@ print_post_install_guide() {
   echo "  Curator Hermes home:"
   echo "    ${ALMANAC_CURATOR_HERMES_HOME:-$STATE_DIR/curator/hermes-home}"
   echo "  Operator notification channel:"
-  echo "    ${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only} ${OPERATOR_NOTIFY_CHANNEL_ID:-"(tui-only)"}"
+  echo "    $(describe_operator_channel_summary "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" "${OPERATOR_NOTIFY_CHANNEL_ID:-}")"
   echo "  Recovery CLI:"
   echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl"
   echo "  Enrollment maintenance:"
@@ -1728,7 +1755,6 @@ collect_install_answers() {
   local default_pdf_vision_endpoint=""
   local default_pdf_vision_model=""
   local default_pdf_vision_api_key=""
-  local default_telegram_bot_token=""
   local current_postgres_password="" current_nextcloud_admin_password=""
   local nextcloud_state_present="0"
 
@@ -1820,7 +1846,6 @@ collect_install_answers() {
   default_pdf_vision_endpoint="${PDF_VISION_ENDPOINT:-}"
   default_pdf_vision_model="${PDF_VISION_MODEL:-}"
   default_pdf_vision_api_key="${PDF_VISION_API_KEY:-}"
-  default_telegram_bot_token="${TELEGRAM_BOT_TOKEN:-}"
 
   ALMANAC_NAME="almanac"
   ALMANAC_HOME="$(ask "Service home" "$default_home")"
@@ -1910,7 +1935,6 @@ collect_install_answers() {
   PDF_VISION_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible vision endpoint for PDF page captions (base /v1 or full /v1/chat/completions; type none to disable)" "$default_pdf_vision_endpoint")")"
   PDF_VISION_MODEL="$(normalize_optional_answer "$(ask "Vision model name for PDF page captions (type none to disable)" "$default_pdf_vision_model")")"
   PDF_VISION_API_KEY="$(ask_secret_with_default "Vision API key for PDF page captions (ENTER keeps current, type none to clear)" "$default_pdf_vision_api_key")"
-  TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Telegram bot token for operator notifications and delivery (optional; ENTER keeps current, type none to clear)" "$default_telegram_bot_token")"
   PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
 
   if [[ -z "$PDF_VISION_ENDPOINT" && -z "$PDF_VISION_MODEL" && -z "$PDF_VISION_API_KEY" ]]; then
@@ -2108,11 +2132,13 @@ maybe_reexec_install_for_config_defaults() {
 
   CONFIG_TARGET="$DISCOVERED_CONFIG"
   echo "Switching to sudo before prompting so existing defaults can be loaded from $DISCOVERED_CONFIG ..."
-  if ! sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" "$requested_mode"; then
-    return 1
+  if sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" "$requested_mode"; then
+    write_operator_checkout_artifact
+    return 0
+  else
+    local reexec_status="$?"
+    return "$reexec_status"
   fi
-  write_operator_checkout_artifact
-  return 0
 }
 
 run_root_env_cmd() {
@@ -2330,6 +2356,8 @@ run_root_install() {
   export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
   export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
   export ALMANAC_UPSTREAM_REPO_URL ALMANAC_UPSTREAM_BRANCH ALMANAC_RELEASE_STATE_FILE
+  export ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE ALMANAC_AGENT_CODE_PORT_BASE
+  export ALMANAC_AGENT_PORT_SLOT_SPAN ALMANAC_AGENT_CODE_SERVER_IMAGE ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE
   export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
   export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
 
@@ -2425,6 +2453,8 @@ run_root_upgrade() {
   export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
   export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
   export ALMANAC_UPSTREAM_REPO_URL ALMANAC_UPSTREAM_BRANCH ALMANAC_RELEASE_STATE_FILE
+  export ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE ALMANAC_AGENT_CODE_PORT_BASE
+  export ALMANAC_AGENT_PORT_SLOT_SPAN ALMANAC_AGENT_CODE_SERVER_IMAGE ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE
   export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
   export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
 
@@ -3904,8 +3934,15 @@ run_agent_payload() {
 }
 
 run_install_flow() {
+  local reexec_status=""
+
   if maybe_reexec_install_for_config_defaults "$MODE"; then
     return 0
+  else
+    reexec_status="$?"
+    if [[ "$reexec_status" != "1" ]]; then
+      return "$reexec_status"
+    fi
   fi
 
   collect_install_answers

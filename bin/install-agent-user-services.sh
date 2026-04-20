@@ -12,7 +12,10 @@ HERMES_HOME="$3"
 CHANNELS_JSON="${4:-[\"tui-only\"]}"
 ACTIVATION_TRIGGER_PATH="${5:-}"
 HERMES_BIN="${6:-${ALMANAC_HERMES_BIN:-$SHARED_REPO_DIR/bin/hermes-shell.sh}}"
+ACCESS_STATE_FILE="$HERMES_HOME/state/almanac-web-access.json"
 TARGET_DIR="$HOME/.config/systemd/user"
+PYTHON3_BIN="$(command -v python3 || true)"
+PODMAN_BIN="$(command -v podman || true)"
 mkdir -p "$TARGET_DIR"
 
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
@@ -22,6 +25,40 @@ if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
     echo "Hermes binary not found. Expected executable at $HERMES_BIN" >&2
     exit 1
   fi
+fi
+
+if [[ -z "$PYTHON3_BIN" || ! -x "$PYTHON3_BIN" ]]; then
+  echo "python3 is required for agent web services." >&2
+  exit 1
+fi
+if [[ -z "$PODMAN_BIN" ]]; then
+  PODMAN_BIN="/usr/bin/podman"
+fi
+
+enable_access_surfaces="0"
+dashboard_backend_port=""
+dashboard_proxy_port=""
+code_port=""
+
+if [[ -f "$ACCESS_STATE_FILE" ]]; then
+  enable_access_surfaces="1"
+  eval "$(
+    python3 - "$ACCESS_STATE_FILE" <<'PY'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+values = {
+    "dashboard_backend_port": str(state["dashboard_backend_port"]),
+    "dashboard_proxy_port": str(state["dashboard_proxy_port"]),
+    "code_port": str(state["code_port"]),
+}
+for key, value in values.items():
+    print(f"{key}={shlex.quote(value)}")
+PY
+  )"
 fi
 
 cat >"$TARGET_DIR/almanac-user-agent-refresh.service" <<EOF
@@ -98,6 +135,71 @@ else
   rm -f "$TARGET_DIR/almanac-user-agent-gateway.service"
 fi
 
+if [[ "$enable_access_surfaces" == "1" ]]; then
+  cat >"$TARGET_DIR/almanac-user-agent-dashboard.service" <<EOF
+[Unit]
+Description=Almanac Hermes dashboard for $AGENT_ID
+
+[Service]
+Environment=HERMES_HOME=$HERMES_HOME
+WorkingDirectory=$HERMES_HOME
+ExecStart=$HERMES_BIN dashboard --host 127.0.0.1 --port $dashboard_backend_port --no-open
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+  cat >"$TARGET_DIR/almanac-user-agent-dashboard-proxy.service" <<EOF
+[Unit]
+Description=Almanac authenticated Hermes dashboard for $AGENT_ID
+After=almanac-user-agent-dashboard.service
+Requires=almanac-user-agent-dashboard.service
+
+[Service]
+Environment=HERMES_HOME=$HERMES_HOME
+WorkingDirectory=$HERMES_HOME
+ExecStart=$PYTHON3_BIN $SHARED_REPO_DIR/python/almanac_basic_auth_proxy.py --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file $ACCESS_STATE_FILE --realm "Almanac Hermes"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+  cat >"$TARGET_DIR/almanac-user-agent-code.service" <<EOF
+[Unit]
+Description=Almanac agent code workspace for $AGENT_ID
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=HERMES_HOME=$HERMES_HOME
+WorkingDirectory=$HERMES_HOME
+ExecStart=$SHARED_REPO_DIR/bin/run-agent-code-server.sh $ACCESS_STATE_FILE $HOME $HERMES_HOME
+ExecStop=$PODMAN_BIN stop -t 10 $($PYTHON3_BIN - "$ACCESS_STATE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(state.get("code_container_name") or "almanac-agent-code")
+PY
+)
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
+EOF
+else
+  rm -f \
+    "$TARGET_DIR/almanac-user-agent-dashboard.service" \
+    "$TARGET_DIR/almanac-user-agent-dashboard-proxy.service" \
+    "$TARGET_DIR/almanac-user-agent-code.service"
+fi
+
 uid="$(id -u)"
 runtime_dir="/run/user/$uid"
 bus_path="$runtime_dir/bus"
@@ -117,4 +219,17 @@ if [[ -f "$TARGET_DIR/almanac-user-agent-gateway.service" ]]; then
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-gateway.service >/dev/null
 else
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-gateway.service >/dev/null 2>&1 || true
+fi
+
+if [[ -f "$TARGET_DIR/almanac-user-agent-dashboard.service" ]]; then
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-dashboard.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-dashboard.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-dashboard-proxy.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-dashboard-proxy.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-code.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-code.service >/dev/null
+else
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-dashboard-proxy.service >/dev/null 2>&1 || true
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-dashboard.service >/dev/null 2>&1 || true
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-code.service >/dev/null 2>&1 || true
 fi

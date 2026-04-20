@@ -285,6 +285,12 @@ class Config:
     upstream_repo_url: str
     upstream_branch: str
     model_presets: dict[str, str]
+    agent_dashboard_backend_port_base: int
+    agent_dashboard_proxy_port_base: int
+    agent_code_port_base: int
+    agent_port_slot_span: int
+    agent_code_server_image: str
+    agent_enable_tailscale_serve: bool
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -322,6 +328,11 @@ class Config:
             value.strip()
             for value in operator_telegram_user_ids_raw.split(",")
             if value.strip()
+        )
+        agent_enable_tailscale_serve = bool_env(
+            "ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE",
+            default=bool_env("ENABLE_TAILSCALE_SERVE", default=False, env=env),
+            env=env,
         )
 
         return cls(
@@ -379,6 +390,15 @@ class Config:
             upstream_repo_url=env.get("ALMANAC_UPSTREAM_REPO_URL", "https://github.com/sirouk/almanac.git"),
             upstream_branch=env.get("ALMANAC_UPSTREAM_BRANCH", "main"),
             model_presets=model_presets,
+            agent_dashboard_backend_port_base=int(env.get("ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE", "19000")),
+            agent_dashboard_proxy_port_base=int(env.get("ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE", "29000")),
+            agent_code_port_base=int(env.get("ALMANAC_AGENT_CODE_PORT_BASE", "39000")),
+            agent_port_slot_span=int(env.get("ALMANAC_AGENT_PORT_SLOT_SPAN", "5000")),
+            agent_code_server_image=env.get(
+                "ALMANAC_AGENT_CODE_SERVER_IMAGE",
+                "docker.io/codercom/code-server:4.116.0",
+            ),
+            agent_enable_tailscale_serve=agent_enable_tailscale_serve,
         )
 
 

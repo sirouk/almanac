@@ -195,6 +195,8 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             provisioner._grant_auto_provision_access = lambda cfg, *, unix_user, agent_id: None
             provisioner._wait_for_user_bus = lambda uid, timeout_seconds=15: None
             provisioner.issue_auto_provision_token = lambda conn, request_id: {"raw_token": "tok_test"}
+            provisioner.get_agent = lambda conn, agent_id: {"hermes_home": str(root / "home" / "user" / ".local" / "share" / "almanac-agent" / "hermes-home")}
+            provisioner._provision_user_access_surfaces = lambda *args, **kwargs: {"dashboard_url": "", "code_url": "", "username": "tester", "password": "secret"}
             provisioner.subprocess.run = fake_run
 
             provisioner._run_one(conn, cfg, row)

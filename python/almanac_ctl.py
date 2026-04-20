@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from almanac_agent_access import clear_tailscale_https
 from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
     Config,
@@ -237,6 +238,28 @@ def _discord_target_kind(value: str) -> str:
     return ""
 
 
+def _discord_error_suggests_target_retry(error: str, *, target_kind: str = "") -> bool:
+    normalized = error.strip().lower()
+    if not normalized:
+        return False
+    if target_kind == "webhook":
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "unknown channel",
+            "missing access",
+            "missing permissions",
+            "channel_id must be numeric",
+            "channel_id is empty",
+            "discord target is not configured",
+            "discord target does not look like a webhook url",
+            "discord platform requires either a discord channel id or a discord webhook url",
+            "http 404",
+        )
+    )
+
+
 def _user_home(unix_user: str) -> Path:
     return Path(pwd.getpwnam(unix_user).pw_dir)
 
@@ -290,12 +313,17 @@ def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
             "--user",
             "disable",
             "--now",
+            "almanac-user-agent-code.service",
+            "almanac-user-agent-dashboard-proxy.service",
+            "almanac-user-agent-dashboard.service",
             "almanac-user-agent-gateway.service",
             "almanac-user-agent-activate.path",
             "almanac-user-agent-refresh.timer",
             "almanac-user-agent-refresh.service",
         ]
         subprocess.run(systemd_env, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        hermes_home_path = Path(str(agent["hermes_home"]))
+        clear_tailscale_https(hermes_home_path)
         archive_path = archive_agent_files(
             cfg,
             agent_id=str(agent["agent_id"]),
@@ -308,6 +336,9 @@ def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
 
         unit_dir = Path(f"/home/{unix_user}/.config/systemd/user")
         for name in (
+            "almanac-user-agent-code.service",
+            "almanac-user-agent-dashboard-proxy.service",
+            "almanac-user-agent-dashboard.service",
             "almanac-user-agent-gateway.service",
             "almanac-user-agent-activate.path",
             "almanac-user-agent-refresh.service",
@@ -317,7 +348,6 @@ def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
             if path.exists():
                 path.unlink()
 
-        hermes_home_path = Path(str(agent["hermes_home"]))
         if hermes_home_path.exists():
             shutil.rmtree(hermes_home_path)
 
@@ -1000,28 +1030,81 @@ def main() -> None:
                             if not err:
                                 discord_bot_token = candidate_token
                                 break
-                        if err and sys.stdin.isatty():
-                            while True:
+                    if err and sys.stdin.isatty():
+                        while True:
+                            if _discord_error_suggests_target_retry(err, target_kind=discord_target_kind):
                                 print(
-                                    f"Discord test ping failed using the saved token ({err}).",
+                                    f"Discord test ping failed for the current channel target ({err}).",
                                     file=sys.stderr,
                                 )
                                 try:
-                                    candidate_token = getpass.getpass(
-                                        "Discord bot token (leave blank to abort): "
+                                    candidate_target = input(
+                                        "Discord channel ID or webhook URL (leave blank to abort): "
                                     ).strip()
                                 except (EOFError, KeyboardInterrupt):
-                                    candidate_token = ""
-                                if not candidate_token:
+                                    candidate_target = ""
+                                if not candidate_target:
                                     break
-                                err = deliver_discord_channel(
-                                    test_msg,
-                                    bot_token=candidate_token,
-                                    channel_id=channel_id,
-                                ) or ""
+                                channel_id = candidate_target
+                                discord_target_kind = _discord_target_kind(channel_id)
+                                if not discord_target_kind:
+                                    err = (
+                                        "discord platform requires either a Discord channel ID or "
+                                        "a Discord webhook URL in --channel-id"
+                                    )
+                                    continue
+                                if discord_target_kind == "webhook":
+                                    err = deliver_discord(test_msg, webhook_url=channel_id) or ""
+                                    if not err:
+                                        break
+                                    continue
+                                if not discord_candidates:
+                                    try:
+                                        candidate_token = getpass.getpass("Discord bot token: ").strip()
+                                    except (EOFError, KeyboardInterrupt):
+                                        candidate_token = ""
+                                    if not candidate_token:
+                                        err = (
+                                            "discord channel delivery requires DISCORD_BOT_TOKEN; "
+                                            "not persisting configuration"
+                                        )
+                                        break
+                                    discord_candidates = [("prompt", candidate_token)]
+                                err = ""
+                                for source_name, candidate_token in discord_candidates:
+                                    err = deliver_discord_channel(
+                                        test_msg,
+                                        bot_token=candidate_token,
+                                        channel_id=channel_id,
+                                    ) or ""
+                                    if not err:
+                                        discord_bot_token = candidate_token
+                                        break
                                 if not err:
-                                    discord_bot_token = candidate_token
                                     break
+                                continue
+
+                            print(
+                                f"Discord test ping failed using the saved token ({err}).",
+                                file=sys.stderr,
+                            )
+                            try:
+                                candidate_token = getpass.getpass(
+                                    "Discord bot token (leave blank to abort): "
+                                ).strip()
+                            except (EOFError, KeyboardInterrupt):
+                                candidate_token = ""
+                            if not candidate_token:
+                                break
+                            err = deliver_discord_channel(
+                                test_msg,
+                                bot_token=candidate_token,
+                                channel_id=channel_id,
+                            ) or ""
+                            if not err:
+                                discord_bot_token = candidate_token
+                                discord_candidates = [("prompt", candidate_token)]
+                                break
                 else:
                     err = ""
                     for source_name, candidate_token in telegram_candidates:

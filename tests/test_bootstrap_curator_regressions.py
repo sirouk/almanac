@@ -154,6 +154,62 @@ printf 'PROMPTS_END\\n'
     print("PASS test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_only")
 
 
+def test_notify_channel_guidance_clarifies_platform_specific_ids() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    helpers = extract(text, "describe_notify_channel_prompt() {", "describe_operator_channel() {")
+    script = f"""
+{helpers}
+printf 'DISCORD_PROMPT=%s\\n' "$(describe_notify_channel_prompt discord)"
+printf 'TELEGRAM_PROMPT=%s\\n' "$(describe_notify_channel_prompt telegram)"
+printf 'DISCORD_GUIDANCE_BEGIN\\n'
+print_notify_channel_guidance discord
+printf 'DISCORD_GUIDANCE_END\\n'
+printf 'TELEGRAM_GUIDANCE_BEGIN\\n'
+print_notify_channel_guidance telegram
+printf 'TELEGRAM_GUIDANCE_END\\n'
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"notify guidance case failed: {result.stderr}")
+    expect(
+        "DISCORD_PROMPT=Operator notification Discord channel ID or webhook URL" in result.stdout,
+        f"expected Discord-specific prompt label, got: {result.stdout!r}",
+    )
+    expect(
+        "TELEGRAM_PROMPT=Operator notification Telegram chat ID" in result.stdout,
+        f"expected Telegram-specific prompt label, got: {result.stdout!r}",
+    )
+    expect("not a user ID" in result.stdout, f"expected Discord guidance to reject user IDs, got: {result.stdout!r}")
+    expect("message.chat.id" in result.stdout, f"expected Telegram guidance to mention message.chat.id, got: {result.stdout!r}")
+    print("PASS test_notify_channel_guidance_clarifies_platform_specific_ids")
+
+
+def test_ensure_curator_hermes_reuses_healthy_runtime_before_refreshing() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    snippet = extract(text, "ensure_curator_hermes() {", "main() {")
+    script = f"""
+RUNTIME_DIR=/srv/almanac/runtime
+runtime_python_has_pip() {{ return 0; }}
+shared_runtime_python_is_share_safe() {{ return 0; }}
+ensure_shared_hermes_runtime() {{
+  echo "should not refresh"
+  return 99
+}}
+mkdir() {{ command mkdir "$@"; }}
+{snippet}
+mkdir -p /tmp/almanac-bootstrap-curator-test/hermes-venv/bin
+RUNTIME_DIR=/tmp/almanac-bootstrap-curator-test
+touch "$RUNTIME_DIR/hermes-venv/bin/hermes" "$RUNTIME_DIR/hermes-venv/bin/python3"
+chmod +x "$RUNTIME_DIR/hermes-venv/bin/hermes" "$RUNTIME_DIR/hermes-venv/bin/python3"
+ensure_curator_hermes
+printf 'RESULT=ok\\n'
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"ensure_curator_hermes reuse case failed: {result.stderr}")
+    expect("RESULT=ok" in result.stdout, f"expected healthy runtime reuse, got: {result.stdout!r}")
+    expect("should not refresh" not in result.stdout, f"did not expect shared runtime refresh, got: {result.stdout!r}")
+    print("PASS test_ensure_curator_hermes_reuses_healthy_runtime_before_refreshing")
+
+
 def test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup() -> None:
     text = BOOTSTRAP_CURATOR.read_text()
     snippet = extract(text, '  hermes_state_file="$(mktemp)"', '  channels_json="$(')
@@ -285,6 +341,8 @@ def main() -> int:
         test_fresh_install_prompts_for_channels_even_with_tui_only_default,
         test_existing_channels_reuse_noninteractive_without_prompt,
         test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_only,
+        test_notify_channel_guidance_clarifies_platform_specific_ids,
+        test_ensure_curator_hermes_reuses_healthy_runtime_before_refreshing,
         test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup,
         test_run_curator_gateway_setup_treats_root_restart_as_soft_success,
         test_operator_notify_falls_back_to_tui_only_when_target_verification_fails,

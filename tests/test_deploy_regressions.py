@@ -635,6 +635,61 @@ printf 'BACKUP_GIT_KNOWN_HOSTS_FILE=%s\\n' "$BACKUP_GIT_KNOWN_HOSTS_FILE"
     print("PASS test_collect_install_answers_guides_backup_remote_setup")
 
 
+def test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "backup_github_owner_repo_from_remote() {", "collect_install_answers() {")
+    collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        priv_dir = tmp_path / "almanac-priv"
+        priv_dir.mkdir(parents=True, exist_ok=True)
+        run(["git", "init", "-b", "main", str(priv_dir)])
+        run(["git", "-C", str(priv_dir), "remote", "add", "origin", "git@github.com:remembered/almanac-priv.git"])
+        script = f"""
+{helpers}
+{collect}
+ask() {{
+  case "$1" in
+    GitHub\\ owner/repo\\ for\\ almanac-priv\\ backup*) printf '%s' "${{2:-}}" ;;
+    *) printf '%s' "${{2:-}}" ;;
+  esac
+}}
+ask_yes_no() {{ printf '%s' "${{2:-0}}"; }}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+random_secret() {{ printf '%s' "generated-secret"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR={shlex.quote(str(priv_dir))}
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  return 1
+}}
+MODE=write-config
+collect_install_answers
+printf 'BACKUP_GIT_REMOTE=%s\\n' "$BACKUP_GIT_REMOTE"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"backup remote reuse collect_install_answers case failed: {result.stderr}")
+        expect(
+            "BACKUP_GIT_REMOTE=git@github.com:remembered/almanac-priv.git" in result.stdout,
+            f"expected existing private repo backup remote to be reused, got: {result.stdout!r}",
+        )
+    print("PASS test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable")
+
+
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
@@ -749,6 +804,7 @@ def main() -> int:
         test_collect_install_answers_randomizes_placeholder_passwords,
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,
+        test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,

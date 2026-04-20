@@ -115,6 +115,41 @@ default_notify_platform_for_channels() {
   printf '%s\n' "$chosen"
 }
 
+describe_notify_channel_prompt() {
+  local platform="${1:-tui-only}"
+
+  case "$platform" in
+    discord) printf '%s\n' "Operator notification Discord channel ID or webhook URL" ;;
+    telegram) printf '%s\n' "Operator notification Telegram chat ID" ;;
+    *) printf '%s\n' "Operator notification channel/chat ID" ;;
+  esac
+}
+
+print_notify_channel_guidance() {
+  local platform="${1:-tui-only}"
+
+  case "$platform" in
+    discord)
+      cat <<'EOF'
+Discord operator notifications accept a channel ID or webhook URL, not a user ID.
+  - Enable Developer Mode in Discord settings.
+  - Right-click the destination channel and choose Copy Channel ID.
+  - A Discord webhook URL also works for operator-only notifications.
+
+EOF
+      ;;
+    telegram)
+      cat <<'EOF'
+Telegram operator notifications use the numeric chat ID for the destination chat.
+  - Open a DM with the bot and press Start first.
+  - For a 1:1 operator DM, use the numeric ID from that chat.
+  - If you need to discover it, send the bot a message and inspect Bot API getUpdates for message.chat.id.
+
+EOF
+      ;;
+  esac
+}
+
 channels_csv_covers_requested() {
   local actual_csv="$1"
   local expected_csv="$2"
@@ -387,7 +422,11 @@ resolve_notify_channel() {
 
   channel_id="${channel_id:-$existing_channel_id}"
   if [[ "$platform" != "tui-only" && -z "$channel_id" && -t 0 ]]; then
-    channel_id="$(ask_default "Operator notification channel/chat ID" "")"
+    print_notify_channel_guidance "$platform"
+    channel_id="$(ask_default "$(describe_notify_channel_prompt "$platform")" "")"
+  elif [[ "$platform" != "tui-only" && -t 0 ]]; then
+    print_notify_channel_guidance "$platform"
+    channel_id="$(ask_default "$(describe_notify_channel_prompt "$platform")" "$channel_id")"
   fi
 
   printf '%s\n%s\n' "${platform:-tui-only}" "$channel_id"
@@ -571,6 +610,13 @@ PY
 }
 
 ensure_curator_hermes() {
+  local venv_dir="$RUNTIME_DIR/hermes-venv"
+  local hermes_bin="$venv_dir/bin/hermes"
+  local python_bin="$venv_dir/bin/python3"
+
+  if [[ -x "$hermes_bin" ]] && runtime_python_has_pip "$python_bin" && shared_runtime_python_is_share_safe "$venv_dir"; then
+    return 0
+  fi
   if ensure_shared_hermes_runtime; then
     return 0
   fi

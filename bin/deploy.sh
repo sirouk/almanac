@@ -1668,6 +1668,42 @@ backup_github_repo_page_from_remote() {
   fi
 }
 
+backup_git_remote_uses_ssh() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+
+  case "$remote" in
+    git@*|ssh://*)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+backup_private_repo_origin_remote() {
+  local repo_dir="${1:-$ALMANAC_PRIV_DIR}"
+
+  if [[ -z "$repo_dir" || ! -d "$repo_dir/.git" ]]; then
+    return 0
+  fi
+
+  git -C "$repo_dir" remote get-url origin 2>/dev/null || true
+}
+
+resolve_backup_git_remote_default() {
+  local remote="${1:-${BACKUP_GIT_REMOTE:-}}"
+
+  if [[ -n "$remote" ]]; then
+    printf '%s\n' "$remote"
+    return 0
+  fi
+
+  remote="$(backup_private_repo_origin_remote "${ALMANAC_PRIV_DIR:-}")"
+  if [[ -n "$remote" ]]; then
+    printf '%s\n' "$remote"
+  fi
+}
+
 default_backup_git_deploy_key_path() {
   printf '%s' "${ALMANAC_HOME:-/home/$ALMANAC_USER}/.ssh/almanac-backup-ed25519"
 }
@@ -1677,9 +1713,10 @@ default_backup_git_known_hosts_file() {
 }
 
 collect_backup_git_answers() {
-  local default_owner_repo="" owner_repo="" repo_page=""
+  local default_owner_repo="" owner_repo="" repo_page="" default_remote=""
 
-  default_owner_repo="$(backup_github_owner_repo_from_remote "${BACKUP_GIT_REMOTE:-}")"
+  default_remote="$(resolve_backup_git_remote_default "${BACKUP_GIT_REMOTE:-}")"
+  default_owner_repo="$(backup_github_owner_repo_from_remote "$default_remote")"
 
   echo
   echo "GitHub backup for almanac-priv"

@@ -46,7 +46,6 @@ run_serve_cmd() {
   for attempt in 1 2 3 4 5; do
     output="$("$@" 2>&1)" && status=0 || status=$?
     if [[ "$status" -eq 0 ]]; then
-      [[ -n "$output" ]] && printf '%s\n' "$output"
       return 0
     fi
 
@@ -61,6 +60,15 @@ run_serve_cmd() {
 
   printf '%s\n' "$output" >&2
   return 1
+}
+
+print_serve_summary() {
+  local status_text=""
+
+  status_text="$(tailscale serve status 2>/dev/null || true)"
+  if [[ -n "$status_text" ]]; then
+    printf '%s\n' "$status_text"
+  fi
 }
 
 verify_serve_config() {
@@ -137,3 +145,4 @@ run_serve_cmd tailscale serve --bg --yes "http://127.0.0.1:${NEXTCLOUD_PORT}"
 run_serve_cmd tailscale serve --bg --yes --set-path "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp"
 run_serve_cmd tailscale serve --bg --yes --set-path "${TAILSCALE_ALMANAC_MCP_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp"
 verify_serve_config
+print_serve_summary

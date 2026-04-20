@@ -27,19 +27,37 @@ EOF
   exit 1
 fi
 
+enable_user_units() {
+  if [[ $# -gt 0 ]]; then
+    systemctl --user enable "$@"
+  fi
+}
+
+restart_user_units() {
+  if [[ $# -gt 0 ]]; then
+    systemctl --user restart "$@"
+  fi
+}
+
+start_user_units() {
+  if [[ $# -gt 0 ]]; then
+    systemctl --user start "$@"
+  fi
+}
+
 systemctl --user daemon-reload
-systemctl --user enable almanac-mcp.service
-systemctl --user enable almanac-notion-webhook.service
-systemctl --user enable almanac-ssot-batcher.timer
-systemctl --user enable almanac-notification-delivery.timer
-systemctl --user enable almanac-curator-refresh.timer
-systemctl --user enable almanac-qmd-mcp.service
-systemctl --user enable almanac-qmd-update.timer
-systemctl --user enable almanac-vault-watch.service
-systemctl --user enable almanac-github-backup.timer
+enable_user_units almanac-mcp.service
+enable_user_units almanac-notion-webhook.service
+enable_user_units almanac-ssot-batcher.timer
+enable_user_units almanac-notification-delivery.timer
+enable_user_units almanac-curator-refresh.timer
+enable_user_units almanac-qmd-mcp.service
+enable_user_units almanac-qmd-update.timer
+enable_user_units almanac-vault-watch.service
+enable_user_units almanac-github-backup.timer
 
 if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
-  systemctl --user enable almanac-pdf-ingest.timer
+  enable_user_units almanac-pdf-ingest.timer
 else
   systemctl --user disable --now almanac-pdf-ingest.timer >/dev/null 2>&1 || true
 fi
@@ -47,14 +65,14 @@ fi
 systemctl --user disable --now almanac-pdf-ingest-watch.service >/dev/null 2>&1 || true
 
 if [[ "$ENABLE_QUARTO" == "1" ]]; then
-  systemctl --user enable almanac-quarto-render.timer
+  enable_user_units almanac-quarto-render.timer
 else
   systemctl --user disable --now almanac-quarto-render.timer >/dev/null 2>&1 || true
 fi
 
 if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
   if have_compose_runtime; then
-    systemctl --user enable almanac-nextcloud.service
+    enable_user_units almanac-nextcloud.service
   else
     systemctl --user disable --now almanac-nextcloud.service >/dev/null 2>&1 || true
     echo "Nextcloud requested, but no compose runtime is available yet; service not enabled."
@@ -64,19 +82,55 @@ else
 fi
 
 if has_curator_telegram_onboarding; then
-  systemctl --user enable almanac-curator-onboarding.service
+  enable_user_units almanac-curator-onboarding.service
 else
   systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
 fi
 
 if has_curator_discord_onboarding; then
-  systemctl --user enable almanac-curator-discord-onboarding.service
+  enable_user_units almanac-curator-discord-onboarding.service
 else
   systemctl --user disable --now almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
 fi
 
 if has_curator_gateway_channels && { ! has_curator_onboarding || has_curator_non_onboarding_gateway_channels; }; then
-  systemctl --user enable almanac-curator-gateway.service
+  enable_user_units almanac-curator-gateway.service
 else
   systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
+fi
+
+restart_user_units \
+  almanac-mcp.service \
+  almanac-notion-webhook.service \
+  almanac-ssot-batcher.timer \
+  almanac-notification-delivery.timer \
+  almanac-curator-refresh.timer \
+  almanac-qmd-mcp.service \
+  almanac-qmd-update.timer \
+  almanac-vault-watch.service \
+  almanac-github-backup.timer
+start_user_units almanac-curator-refresh.service
+
+if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
+  restart_user_units almanac-pdf-ingest.timer
+fi
+
+if [[ "$ENABLE_QUARTO" == "1" ]]; then
+  restart_user_units almanac-quarto-render.timer
+fi
+
+if [[ "$ENABLE_NEXTCLOUD" == "1" ]] && have_compose_runtime; then
+  restart_user_units almanac-nextcloud.service
+fi
+
+if has_curator_telegram_onboarding; then
+  restart_user_units almanac-curator-onboarding.service
+fi
+
+if has_curator_discord_onboarding; then
+  restart_user_units almanac-curator-discord-onboarding.service
+fi
+
+if has_curator_gateway_channels && { ! has_curator_onboarding || has_curator_non_onboarding_gateway_channels; }; then
+  restart_user_units almanac-curator-gateway.service
 fi

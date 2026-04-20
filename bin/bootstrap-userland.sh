@@ -28,7 +28,10 @@ install_uv_if_missing() {
     curl -LsSf https://astral.sh/uv/install.sh | sh
     ensure_uv
   fi
-  uv python install 3.11
+  uv self update >/dev/null 2>&1 || true
+  if ! uv python install 3.12; then
+    uv python install 3.11
+  fi
 }
 
 install_node_if_missing() {

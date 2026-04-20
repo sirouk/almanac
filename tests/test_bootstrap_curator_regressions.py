@@ -188,12 +188,106 @@ test_case
     print("PASS test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup")
 
 
+def test_run_curator_gateway_setup_treats_root_restart_as_soft_success() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    helpers = extract(text, "channels_csv_covers_requested() {", "resolve_notify_channel() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fake_hermes = tmp_path / "fake-hermes"
+        fake_hermes.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "gateway" && "${2:-}" == "setup" ]]; then
+  exit 1
+fi
+if [[ "${1:-}" == "dump" ]]; then
+  cat <<'EOF'
+model: gpt-5.4
+provider: openai-codex
+platforms: discord
+EOF
+  exit 0
+fi
+exit 1
+""",
+            encoding="utf-8",
+        )
+        fake_hermes.chmod(0o755)
+        script = f"""
+print_gateway_setup_guidance() {{
+  :
+}}
+{helpers}
+if run_curator_gateway_setup "tui-only,discord" {shlex.quote(str(fake_hermes))} /tmp/hermes-home; then
+  echo "RESULT=success"
+else
+  echo "RESULT=failure"
+fi
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"gateway soft-success case failed: {result.stderr}")
+        expect("RESULT=success" in result.stdout, f"expected soft success, got: {result.stdout!r}")
+        expect(
+            "could not restart the service itself without root" in result.stderr,
+            f"expected root-restart soft-success warning, got: {result.stderr!r}",
+        )
+    print("PASS test_run_curator_gateway_setup_treats_root_restart_as_soft_success")
+
+
+def test_operator_notify_falls_back_to_tui_only_when_target_verification_fails() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    helpers = extract(text, "channels_csv_covers_requested() {", "resolve_notify_channel() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        bootstrap_dir = tmp_path / "bootstrap"
+        ctl_path = bootstrap_dir / "bin" / "almanac-ctl"
+        log_path = tmp_path / "almanac-ctl.log"
+        ctl_path.parent.mkdir(parents=True, exist_ok=True)
+        ctl_path.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> {shlex.quote(str(log_path))}
+if [[ "$*" == *"--platform discord"* ]]; then
+  echo "channel test ping failed (discord http 404: {{\\"message\\": \\"Unknown Channel\\", \\"code\\": 10003}})" >&2
+  exit 1
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        ctl_path.chmod(0o755)
+        script = f"""
+BOOTSTRAP_DIR={shlex.quote(str(bootstrap_dir))}
+{helpers}
+mapfile -t configured < <(configure_operator_notify_channel "discord" "555026921809772555")
+printf 'PLATFORM=%s\\n' "${{configured[0]:-}}"
+printf 'CHANNEL=%s\\n' "${{configured[1]:-}}"
+printf 'LOG_BEGIN\\n'
+cat {shlex.quote(str(log_path))}
+printf 'LOG_END\\n'
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"operator notify fallback case failed: {result.stderr}")
+        expect("PLATFORM=tui-only" in result.stdout, f"expected tui-only fallback, got: {result.stdout!r}")
+        expect("CHANNEL=" in result.stdout, f"expected blank channel id after fallback, got: {result.stdout!r}")
+        log = result.stdout.split("LOG_BEGIN\n", 1)[1].split("\nLOG_END", 1)[0]
+        expect("--platform discord --channel-id 555026921809772555" in log, f"expected initial discord verify call, got: {log!r}")
+        expect("--platform tui-only --channel-id " in log, f"expected tui-only fallback call, got: {log!r}")
+        expect(
+            "Operator notification target verification failed" in result.stderr,
+            f"expected operator fallback warning, got: {result.stderr!r}",
+        )
+    print("PASS test_operator_notify_falls_back_to_tui_only_when_target_verification_fails")
+
+
 def main() -> int:
     tests = [
         test_fresh_install_prompts_for_channels_even_with_tui_only_default,
         test_existing_channels_reuse_noninteractive_without_prompt,
         test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_only,
         test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup,
+        test_run_curator_gateway_setup_treats_root_restart_as_soft_success,
+        test_operator_notify_falls_back_to_tui_only_when_target_verification_fails,
     ]
     for test in tests:
         test()

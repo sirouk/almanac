@@ -115,6 +115,26 @@ default_notify_platform_for_channels() {
   printf '%s\n' "$chosen"
 }
 
+channels_csv_covers_requested() {
+  local actual_csv="$1"
+  local expected_csv="$2"
+  local channel=""
+  local expected_channels=()
+
+  IFS=',' read -r -a expected_channels <<<"$expected_csv"
+  for channel in "${expected_channels[@]}"; do
+    channel="${channel//[[:space:]]/}"
+    case "$channel" in
+      ""|tui-only) continue ;;
+    esac
+    if [[ ",${actual_csv}," != *",${channel},"* ]]; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
 describe_operator_channel() {
   local platform="${1:-tui-only}"
   local channel_id="${2:-}"
@@ -250,6 +270,53 @@ print(json.dumps({
 }))
 PY
   rm -f "$dump_file"
+}
+
+run_curator_gateway_setup() {
+  local requested_channels_csv="$1"
+  local hermes_bin="$2"
+  local hermes_home="$3"
+  local detected_channels_csv=""
+  local state_file=""
+
+  print_gateway_setup_guidance "$requested_channels_csv"
+  echo "Running curator Hermes gateway setup ..."
+  if HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup; then
+    return 0
+  fi
+
+  state_file="$(mktemp)"
+  if probe_hermes_state_json "$hermes_home" "$hermes_bin" >"$state_file"; then
+    detected_channels_csv="$(python3 - "$state_file" <<'PY'
+import json
+import sys
+print((json.load(open(sys.argv[1]))).get("channels_csv", ""))
+PY
+)"
+  fi
+  rm -f "$state_file"
+
+  if channels_csv_covers_requested "$detected_channels_csv" "$requested_channels_csv"; then
+    echo "Hermes saved the gateway config but could not restart the service itself without root; Almanac will restart the configured gateway service below." >&2
+    return 0
+  fi
+
+  echo "Hermes gateway setup returned non-zero before Almanac could confirm the saved gateway config. Almanac will keep going and restart the configured gateway itself if present." >&2
+  return 1
+}
+
+configure_operator_notify_channel() {
+  local requested_platform="${1:-tui-only}"
+  local requested_channel_id="${2:-}"
+
+  if "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$requested_platform" --channel-id "$requested_channel_id" >/dev/null; then
+    printf '%s\n%s\n' "$requested_platform" "$requested_channel_id"
+    return 0
+  fi
+
+  echo "Operator notification target verification failed. Curator chat is still configured, but operator notifications will stay on tui-only until you reconfigure a reachable Discord or Telegram target with 'almanac-ctl channel reconfigure operator'." >&2
+  "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "tui-only" --channel-id "" >/dev/null || true
+  printf '%s\n%s\n' "tui-only" ""
 }
 
 should_rerun_setup() {
@@ -575,11 +642,7 @@ PY
   fi
 
   if [[ "$skip_gateway_setup" != "1" && -t 0 ]] && [[ "$channels_csv" == *discord* || "$channels_csv" == *telegram* ]] && should_rerun_setup "Hermes gateway setup" "$force_gateway_setup"; then
-    print_gateway_setup_guidance "$channels_csv"
-    echo "Running curator Hermes gateway setup ..."
-    if ! HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" gateway setup; then
-      echo "Hermes gateway setup returned non-zero; Almanac will continue and restart the configured gateway itself." >&2
-    else
+    if run_curator_gateway_setup "$channels_csv" "$hermes_bin" "$ALMANAC_CURATOR_HERMES_HOME"; then
       ran_gateway_setup="1"
     fi
   fi
@@ -626,7 +689,12 @@ PY
   ALMANAC_CURATOR_CHANNELS="$channels_csv"
   set_config_value "ALMANAC_CURATOR_MODEL_PRESET" "$model_preset"
   set_config_value "ALMANAC_CURATOR_CHANNELS" "$channels_csv"
-  "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$notify_platform" --channel-id "$notify_channel_id" >/dev/null
+  mapfile -t notify_values < <(configure_operator_notify_channel "$notify_platform" "$notify_channel_id")
+  notify_platform="${notify_values[0]:-tui-only}"
+  notify_channel_id="${notify_values[1]:-}"
+  if [[ "$notify_platform" != "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" || "$notify_channel_id" != "${OPERATOR_NOTIFY_CHANNEL_ID:-}" ]]; then
+    reuse_note=""
+  fi
   set_config_value "OPERATOR_GENERAL_CHANNEL_PLATFORM" "$general_platform"
   set_config_value "OPERATOR_GENERAL_CHANNEL_ID" "$general_channel_id"
   if [[ ",${channels_csv}," == *",telegram,"* || "$notify_platform" == "telegram" ]]; then

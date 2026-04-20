@@ -23,6 +23,7 @@ apt-get install -y \
   acl \
   curl \
   dbus-user-session \
+  espeak-ng \
   inotify-tools \
   git \
   python3 \

@@ -281,10 +281,23 @@ raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
 PY
 }
 
+runtime_python_has_pip() {
+  local python_bin="${1:-}"
+  if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
+    return 1
+  fi
+  "$python_bin" -m pip --version >/dev/null 2>&1
+}
+
 resolve_shared_runtime_seed_python() {
   local candidate=""
 
   if command -v uv >/dev/null 2>&1; then
+    candidate="$(uv python find 3.12 2>/dev/null || true)"
+    if python_supports_hermes_runtime "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
     candidate="$(uv python find 3.11 2>/dev/null || true)"
     if python_supports_hermes_runtime "$candidate"; then
       printf '%s\n' "$candidate"
@@ -621,6 +634,9 @@ ensure_shared_hermes_runtime() {
   elif ! shared_runtime_python_is_share_safe "$venv_dir"; then
     rebuild_runtime="1"
     echo "Rebuilding shared Hermes runtime with a system Python so enrolled users can execute it." >&2
+  elif ! runtime_python_has_pip "$venv_dir/bin/python3"; then
+    rebuild_runtime="1"
+    echo "Rebuilding shared Hermes runtime with pip seeded so Hermes setup can install optional dependencies." >&2
   fi
 
   if [[ "$rebuild_runtime" == "1" ]]; then
@@ -630,7 +646,7 @@ ensure_shared_hermes_runtime() {
       return 1
     fi
     rm -rf "$venv_dir"
-    uv venv "$venv_dir" --python "$seed_python"
+    uv venv "$venv_dir" --python "$seed_python" --seed
   fi
 
   uv pip install --python "$venv_dir/bin/python3" "$repo_dir[cli,mcp,messaging,cron,web]"

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from almanac_agent_access import load_access_state
-from almanac_control import Config, config_env_value, get_agent
+from almanac_control import Config, config_env_value, get_agent, get_agent_identity
 from almanac_resource_map import shared_resource_lines, shared_tailnet_host
 
 
@@ -70,6 +70,7 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
         qmd_path=config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp",
         almanac_mcp_path=config_env_value("TAILSCALE_ALMANAC_MCP_PATH", "/almanac-mcp").strip() or "/almanac-mcp",
         chutes_mcp_url=cfg.chutes_mcp_url,
+        notion_space_url=config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip(),
     )
     return ["Shared Almanac rails:", *[f"- {line}" for line in shared_lines]]
 
@@ -81,6 +82,8 @@ def completion_message_bundle(
     bot_reference: str,
     access: dict[str, Any],
     home: Path,
+    notion_status_line: str = "",
+    notion_followup_line: str = "",
     discord_note: bool = False,
 ) -> dict[str, Any]:
     nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
@@ -92,8 +95,10 @@ def completion_message_bundle(
         f"Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
         f"Code workspace: {access.get('code_url')}",
         f"Workspace root: {home}",
+        notion_status_line,
         *_shared_resource_lines(cfg),
         "The shared Vault and control rails are already wired into your agent by default.",
+        notion_followup_line,
     ]
     base_lines = [line for line in base_lines if line]
     if discord_note:
@@ -151,12 +156,30 @@ def completion_bundle_for_session(
     else:
         bot_reference = bot_display
 
+    identity = get_agent_identity(conn, agent_id=agent_id, unix_user=unix_user) or {}
+    verification_status = str(identity.get("verification_status") or "").strip()
+    notion_email = str(identity.get("notion_user_email") or identity.get("claimed_notion_email") or answers.get("notion_claim_email") or "").strip()
+    if verification_status == "verified":
+        notion_status_line = (
+            f"Shared Notion writes: enabled for {notion_email or 'your verified Notion identity'} "
+            "(native Notion history shows the Almanac integration; Changed By is stamped to you on supported rows)"
+        )
+        notion_followup_line = ""
+    elif bool(answers.get("notion_verification_skipped")):
+        notion_status_line = "Shared Notion writes: read-only until you verify your Notion identity with Curator."
+        notion_followup_line = "When you're ready, reply `/verify-notion` here and I'll reopen the verification step."
+    else:
+        notion_status_line = "Shared Notion writes: read-only until your Notion identity is verified."
+        notion_followup_line = "Reply `/verify-notion` here any time you want Curator to resume that step."
+
     return completion_message_bundle(
         cfg,
         session_id=session_id,
         bot_reference=bot_reference,
         access=access,
         home=home,
+        notion_status_line=notion_status_line,
+        notion_followup_line=notion_followup_line,
         discord_note=(bot_platform == "discord"),
     )
 

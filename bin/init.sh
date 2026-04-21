@@ -288,7 +288,9 @@ install_default_skills() {
     almanac-vault-reconciler \
     almanac-first-contact \
     almanac-vaults \
-    almanac-ssot
+    almanac-ssot \
+    almanac-ssot-connect \
+    almanac-notion-mcp
 }
 
 register_default_mcps() {
@@ -362,10 +364,12 @@ run_agent_flow() {
   local preseeded_agent_id="${ALMANAC_BOOTSTRAP_AGENT_ID:-}"
   local preseeded_requester_identity="${ALMANAC_REQUESTER_IDENTITY:-}"
   local preseeded_source_ip="${ALMANAC_BOOTSTRAP_SOURCE_IP:-}"
+  unset ALMANAC_BOOTSTRAP_REQUEST_ID ALMANAC_BOOTSTRAP_RAW_TOKEN ALMANAC_BOOTSTRAP_AGENT_ID
+  unset ALMANAC_REQUESTER_IDENTITY ALMANAC_BOOTSTRAP_SOURCE_IP
 
   export PATH="$HOME/.local/bin:$PATH"
   require_linux_host "enrollment"
-  requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un)}"
+  requester_identity="${preseeded_requester_identity:-$(id -un)}"
   unix_user="$(id -un)"
   source_ip="${preseeded_source_ip:-$(awk '{print $1}' <<<"${SSH_CONNECTION:-${SSH_CLIENT:-127.0.0.1}}")}"
   hermes_home="$HERMES_HOME_DEFAULT"

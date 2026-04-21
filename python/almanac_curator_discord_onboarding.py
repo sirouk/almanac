@@ -17,6 +17,7 @@ from almanac_control import (
     utc_now_iso,
 )
 from almanac_discord import discord_get_current_user
+from almanac_discord import discord_send_message
 from almanac_onboarding_completion import completion_scrubbed_text_for_session
 from almanac_onboarding_flow import (
     OutboundMessage,
@@ -179,14 +180,36 @@ async def main() -> None:
                     else:
                         await interaction.followup.send(reply.text)
                 else:
-                    channel = client.get_channel(int(origin_chat_id))
-                    if channel is None:
+                    if reply.discord_components:
                         try:
-                            channel = await client.fetch_channel(int(origin_chat_id))
+                            discord_send_message(
+                                bot_token=bot_token,
+                                channel_id=str(origin_chat_id),
+                                text=reply.text,
+                                components=reply.discord_components,
+                            )
                         except Exception:
-                            channel = None
-                    if channel is not None:
-                        await channel.send(reply.text)
+                            pass
+                    else:
+                        channel = client.get_channel(int(origin_chat_id))
+                        if channel is None:
+                            try:
+                                channel = await client.fetch_channel(int(origin_chat_id))
+                            except Exception:
+                                channel = None
+                        if channel is not None:
+                            await channel.send(reply.text)
+                continue
+            if reply.discord_components:
+                try:
+                    discord_send_message(
+                        bot_token=bot_token,
+                        channel_id=str(reply.chat_id),
+                        text=reply.text,
+                        components=reply.discord_components,
+                    )
+                except Exception:
+                    continue
                 continue
             try:
                 channel = client.get_channel(int(reply.chat_id))
@@ -263,6 +286,10 @@ async def main() -> None:
     @tree.command(name="restart", description="Restart the current provider authorization step.")
     async def restart_command(interaction) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, "/restart")
+
+    @tree.command(name="verify-notion", description="Resume the shared Notion verification step for your lane.")
+    async def verify_notion_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        await _handle_dm_command(interaction, "/verify-notion")
 
     @tree.command(name="approve", description="Approve an onboarding session or provisioning request.")
     @app_commands.describe(target_id="onb_xxx or req_xxx")

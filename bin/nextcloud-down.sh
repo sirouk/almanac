@@ -15,14 +15,6 @@ cleanup_legacy_compose_cni() {
   fi
 }
 
-export NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
-export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
-export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD
-export NEXTCLOUD_DB_DIR NEXTCLOUD_REDIS_DIR NEXTCLOUD_HTML_DIR NEXTCLOUD_DATA_DIR
-export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ALMANAC_CONFIG_FILE
-export NEXTCLOUD_HOOKS_DIR NEXTCLOUD_PRE_INSTALL_HOOK_DIR NEXTCLOUD_POST_INSTALL_HOOK_DIR NEXTCLOUD_BEFORE_STARTING_HOOK_DIR
-export NEXTCLOUD_PRE_INSTALL_HOOK_FILE NEXTCLOUD_POST_INSTALL_HOOK_FILE NEXTCLOUD_BEFORE_STARTING_HOOK_FILE VAULT_DIR
-
 if command -v podman >/dev/null 2>&1; then
   if podman pod inspect "$(nextcloud_pod_name)" >/dev/null 2>&1; then
     podman pod rm -f "$(nextcloud_pod_name)" >/dev/null 2>&1 || true
@@ -32,7 +24,7 @@ if command -v podman >/dev/null 2>&1; then
 fi
 
 if have_compose_runtime; then
-  run_compose "$COMPOSE_FILE" down
+  with_nextcloud_compose_env run_compose "$COMPOSE_FILE" down
   exit 0
 fi
 

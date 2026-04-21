@@ -19,6 +19,13 @@ free-for-all edit surface.
 - allow read / insert / update
 - do not archive
 - do not delete
+- shared reads are filtered to the current user's owned / assigned records
+- shared writes require a verified Notion identity before they can apply
+- when the shared database exposes `Changed By`, Almanac stamps the verified
+  human there automatically on every shared write
+- Curator's self-serve verification claims live in a shared workspace database,
+  so treat the claim metadata there as operator-visible workspace scaffolding,
+  not as a secret channel
 - if ownership is unclear, require approval before writing
 - treat SSOT awareness as on-by-default for enrolled user agents
 - prefer converging on current organizational state over inventing local shadow state
@@ -39,14 +46,23 @@ free-for-all edit surface.
 
 ## Refresh Model
 
+- Curator pushes a shared Notion digest into managed memory on the normal
+  fanout cycle
 - prefer webhook-driven refreshes
 - tolerate delayed webhook delivery by using the hourly backstop state maintained by Almanac
 - expect Almanac to batch and de-duplicate webhook-driven refresh work
+- treat managed-memory SSOT summaries as ambient orientation and `ssot.read`
+  as the depth rail when the user needs specifics
 
 ## Guardrails
 
+- use the brokered `ssot.read` rail for shared Notion lookups rather than
+  trying to reach the shared workspace directly
 - write only on behalf of the user who owns the agent
 - do not silently cross-edit records owned by another user
+- do not claim that native Notion history will show the human directly; it
+  shows the Almanac integration while the row-level attribution lives in
+  `Changed By` plus Almanac's local audit
 - do not inspect other users' home directories or central deployment config to
   infer ownership; use the SSOT metadata and Almanac rails already exposed to
   this agent

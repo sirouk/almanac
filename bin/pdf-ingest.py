@@ -34,6 +34,9 @@ except ValueError:
 
 VISION_TIMEOUT_SECONDS = 90
 VISION_MAX_TOKENS = 350
+# Deliberately limited to filesystem/locale context for local extraction tools.
+# Do not add API keys or deployment secrets here.
+SAFE_TOOL_ENV_KEYS = ("HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR")
 
 
 def utc_now() -> str:
@@ -120,9 +123,19 @@ def prune_empty_parents(path: Path, stop_at: Path) -> None:
         current = current.parent
 
 
+def tool_subprocess_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in SAFE_TOOL_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
 def extract_with_pdftotext(source_path: Path) -> str:
     result = subprocess.run(
         ["pdftotext", "-enc", "UTF-8", "-nopgbrk", str(source_path), "-"],
+        env=tool_subprocess_env(),
         capture_output=True,
         text=True,
         check=False,
@@ -144,7 +157,13 @@ def extract_with_docling(source_path: Path) -> str:
         if FORCE_DOCLING_OCR:
             command.append("--force-ocr")
         command.append(str(source_path))
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            command,
+            env=tool_subprocess_env(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         if result.returncode != 0:
             error = (result.stderr or result.stdout or "docling failed").strip()
             raise RuntimeError(error)
@@ -320,6 +339,7 @@ def generate_visual_notes(source_path: Path) -> tuple[list[tuple[int, str]], dic
                 str(source_path),
                 str(prefix),
             ],
+            env=tool_subprocess_env(),
             capture_output=True,
             text=True,
             check=False,

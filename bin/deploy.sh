@@ -25,6 +25,8 @@ NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.ne
 NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
 ENABLE_NEXTCLOUD="${ENABLE_NEXTCLOUD:-1}"
 ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
+ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}"
+ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}"
 TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
 TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
@@ -40,6 +42,17 @@ ALMANAC_MCP_HOST="${ALMANAC_MCP_HOST:-127.0.0.1}"
 ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
 ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+ALMANAC_SSOT_NOTION_SPACE_URL="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
+ALMANAC_SSOT_NOTION_SPACE_ID="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+ALMANAC_SSOT_NOTION_SPACE_KIND="${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
+ALMANAC_SSOT_NOTION_API_VERSION="${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
+ALMANAC_SSOT_NOTION_TOKEN="${ALMANAC_SSOT_NOTION_TOKEN:-}"
+ALMANAC_ORG_NAME="${ALMANAC_ORG_NAME:-}"
+ALMANAC_ORG_MISSION="${ALMANAC_ORG_MISSION:-}"
+ALMANAC_ORG_PRIMARY_PROJECT="${ALMANAC_ORG_PRIMARY_PROJECT:-}"
+ALMANAC_ORG_TIMEZONE="${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
+ALMANAC_ORG_QUIET_HOURS="${ALMANAC_ORG_QUIET_HOURS:-}"
 ALMANAC_BOOTSTRAP_WINDOW_SECONDS="${ALMANAC_BOOTSTRAP_WINDOW_SECONDS:-3600}"
 ALMANAC_BOOTSTRAP_PER_IP_LIMIT="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
 ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
@@ -116,8 +129,11 @@ read_operator_artifact_config_file() {
   local -a artifact_hints=()
   local artifact_config=""
   local status=""
+  local line=""
 
-  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  while IFS= read -r line; do
+    artifact_hints+=("$line")
+  done < <(read_operator_artifact_hints || true)
   artifact_config="${artifact_hints[3]:-}"
   if [[ -n "$artifact_config" ]]; then
     status="$(probe_path_status "$artifact_config")"
@@ -151,6 +167,48 @@ read_operator_artifact_hints() {
   )
 }
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+host_uname_s() {
+  uname -s 2>/dev/null || printf '%s\n' "unknown"
+}
+
+host_is_linux() {
+  [[ "$(host_uname_s)" == "Linux" ]]
+}
+
+host_is_macos() {
+  [[ "$(host_uname_s)" == "Darwin" ]]
+}
+
+host_is_wsl() {
+  local marker=""
+
+  if ! host_is_linux; then
+    return 1
+  fi
+
+  marker="$(cat /proc/sys/kernel/osrelease /proc/version 2>/dev/null || true)"
+  [[ "$marker" =~ [Mm]icrosoft|WSL ]]
+}
+
+default_home_for_user() {
+  local user="${1:-}"
+
+  if [[ -z "$user" ]]; then
+    return 1
+  fi
+
+  if host_is_macos; then
+    printf '/Users/%s\n' "$user"
+    return 0
+  fi
+
+  printf '/home/%s\n' "$user"
+}
+
 resolve_user_home() {
   local user="${1:-}"
   local home_dir=""
@@ -159,12 +217,104 @@ resolve_user_home() {
     return 1
   fi
 
-  home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  if command_exists python3; then
+    home_dir="$(
+      python3 - "$user" <<'PY'
+import pwd
+import sys
+
+user = sys.argv[1]
+try:
+    print(pwd.getpwnam(user).pw_dir)
+except KeyError:
+    raise SystemExit(1)
+PY
+    )" || home_dir=""
+  fi
+  if [[ -z "$home_dir" ]] && command_exists dscl; then
+    home_dir="$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk 'NR==1 {print $2}')"
+  fi
+  if [[ -z "$home_dir" ]] && command_exists getent; then
+    home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  fi
   if [[ -z "$home_dir" ]]; then
-    home_dir="/home/$user"
+    home_dir="$(default_home_for_user "$user")"
   fi
 
   printf '%s\n' "$home_dir"
+}
+
+host_supports_full_deploy() {
+  host_is_linux || return 1
+  command_exists apt-get || return 1
+  command_exists systemctl || return 1
+  command_exists loginctl || return 1
+  [[ -d /run/systemd/system ]] || return 1
+}
+
+require_supported_host_mode() {
+  local mode="${1:-$MODE}"
+
+  if [[ "$mode" == "write-config" || "$mode" == "agent-payload" || "$mode" == "menu" ]]; then
+    return 0
+  fi
+
+  if host_supports_full_deploy; then
+    return 0
+  fi
+
+  if host_is_macos; then
+    cat >&2 <<'EOF'
+Native macOS is not a supported Almanac host or runtime environment.
+Helper-only commands like `./deploy.sh write-config` and `./deploy.sh agent-payload`
+may still be useful from an operator checkout, but install, upgrade, remove,
+health, and service management must run on Debian/Ubuntu Linux or WSL2 Ubuntu
+with systemd enabled.
+EOF
+    return 1
+  fi
+
+  if host_is_wsl; then
+    cat >&2 <<'EOF'
+WSL2 was detected, but the Linux guest is not ready for full Almanac deployment yet.
+Almanac needs `apt`, `systemd`, and `loginctl` inside the Ubuntu instance.
+
+If systemd is not enabled yet, add this to /etc/wsl.conf inside Ubuntu:
+  [boot]
+  systemd=true
+
+Then restart WSL from Windows with:
+  wsl --shutdown
+
+Reopen the Ubuntu instance and rerun ./deploy.sh.
+EOF
+    return 1
+  fi
+
+  cat >&2 <<'EOF'
+Full Almanac host deployment currently supports Debian/Ubuntu-style Linux hosts with
+`apt`, `systemd`, and `loginctl` available.
+EOF
+  return 1
+}
+
+collect_host_dependency_answers() {
+  local podman_default="1"
+  local tailscale_default="0"
+
+  ALMANAC_INSTALL_PODMAN="0"
+  ALMANAC_INSTALL_TAILSCALE="0"
+
+  if ! command_exists podman; then
+    ALMANAC_INSTALL_PODMAN="$(ask_yes_no "Podman is not installed. Install it now for Nextcloud and per-agent code workspaces" "$podman_default")"
+  fi
+
+  if ! command_exists tailscale; then
+    if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" == "1" ]]; then
+      tailscale_default="1"
+    fi
+    ALMANAC_INSTALL_TAILSCALE="$(ask_yes_no "Tailscale is not installed. Install it now for tailnet-only access and HTTPS serve" "$tailscale_default")"
+  fi
 }
 
 usage() {
@@ -173,6 +323,7 @@ Usage:
   deploy.sh                # interactive menu
   deploy.sh install
   deploy.sh upgrade
+  deploy.sh notion-ssot
   deploy.sh enrollment-status
   deploy.sh enrollment-trace [--unix-user USER | --session-id onb_xxx | --request-id req_xxx]
   deploy.sh enrollment-align
@@ -185,13 +336,13 @@ Usage:
   deploy.sh health
 
 Compatibility:
-  deploy.sh --write-config-only
+  deploy.sh --write-config-only   # helper-only; not a full host deployment path
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|upgrade|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu)
+    install|upgrade|notion-ssot|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu)
       MODE="$1"
       shift
       ;;
@@ -345,6 +496,52 @@ normalize_optional_answer() {
   esac
 }
 
+validate_org_timezone() {
+  local value="${1:-}"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  python3 - "$value" <<'PY'
+import sys
+from zoneinfo import available_timezones
+
+value = (sys.argv[1] or "").strip()
+raise SystemExit(0 if value in available_timezones() else 1)
+PY
+}
+
+validate_org_quiet_hours() {
+  local value="${1:-}"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  python3 - "$value" <<'PY'
+import re
+import sys
+
+value = (sys.argv[1] or "").strip()
+pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d(?:\s+\S.*)?$")
+raise SystemExit(0 if pattern.fullmatch(value) else 1)
+PY
+}
+
+ask_validated_optional() {
+  local prompt="$1"
+  local default="${2:-}"
+  local validator="$3"
+  local error_message="$4"
+  local answer=""
+
+  while true; do
+    answer="$(normalize_optional_answer "$(ask "$prompt" "$default")")"
+    if "$validator" "$answer"; then
+      printf '%s' "$answer"
+      return 0
+    fi
+    printf '%s\n' "$error_message" >&2
+  done
+}
+
 ask_secret_with_default() {
   local prompt="$1"
   local default="${2:-}"
@@ -387,6 +584,30 @@ ask_secret_keep_default() {
   printf '%s' "$answer"
 }
 
+require_notion_subtree_ack() {
+  local answer=""
+
+  echo
+  echo "Important Notion access model:"
+  echo "  - Almanac cannot press Notion's Manage page access buttons for you via"
+  echo "    a supported API."
+  echo "  - The internal integration only automatically inherits access to child"
+  echo "    pages and databases created under a granted parent/root subtree."
+  echo "  - Anything created outside that granted subtree will need manual page"
+  echo "    access later."
+  echo "  - The sane setup is to grant one stable Teamspace root page or parent"
+  echo "    page, then keep Almanac-managed content under it."
+  echo
+
+  while true; do
+    read -r -p "Type YES to confirm you understand this Notion access model: " answer
+    if [[ "$answer" == "YES" ]]; then
+      return 0
+    fi
+    echo "Please type YES exactly. That guardrail keeps the Teamspace/subtree model explicit."
+  done
+}
+
 choose_mode() {
   local answer=""
 
@@ -396,16 +617,17 @@ Almanac deploy menu
   1) Install / repair from current checkout
   2) Upgrade deployed host from configured upstream
   3) Write config only
-  4) Enrollment status
-  5) Enrollment trace
-  6) Enrollment align / repair
-  7) Enrollment reset / cleanup
-  8) Curator setup / repair
-  9) Rotate Nextcloud secrets
- 10) Print agent payload
- 11) Health check
- 12) Remove / teardown
- 13) Exit
+  4) Notion SSOT setup / test
+  5) Enrollment status
+  6) Enrollment trace
+  7) Enrollment align / repair
+  8) Enrollment reset / cleanup
+  9) Curator setup / repair
+ 10) Rotate Nextcloud secrets
+ 11) Print agent payload
+ 12) Health check
+ 13) Remove / teardown
+ 14) Exit
 EOF
 
   while true; do
@@ -414,17 +636,18 @@ EOF
       1) MODE="install"; return 0 ;;
       2) MODE="upgrade"; return 0 ;;
       3) MODE="write-config"; return 0 ;;
-      4) MODE="enrollment-status"; return 0 ;;
-      5) MODE="enrollment-trace"; return 0 ;;
-      6) MODE="enrollment-align"; return 0 ;;
-      7) MODE="enrollment-reset"; return 0 ;;
-      8) MODE="curator-setup"; return 0 ;;
-      9) MODE="rotate-nextcloud-secrets"; return 0 ;;
-      10) MODE="agent-payload"; return 0 ;;
-      11) MODE="health"; return 0 ;;
-      12) MODE="remove"; return 0 ;;
-      13) exit 0 ;;
-      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, or 13." ;;
+      4) MODE="notion-ssot"; return 0 ;;
+      5) MODE="enrollment-status"; return 0 ;;
+      6) MODE="enrollment-trace"; return 0 ;;
+      7) MODE="enrollment-align"; return 0 ;;
+      8) MODE="enrollment-reset"; return 0 ;;
+      9) MODE="curator-setup"; return 0 ;;
+      10) MODE="rotate-nextcloud-secrets"; return 0 ;;
+      11) MODE="agent-payload"; return 0 ;;
+      12) MODE="health"; return 0 ;;
+      13) MODE="remove"; return 0 ;;
+      14) exit 0 ;;
+      *) echo "Please choose 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, or 14." ;;
     esac
   done
 }
@@ -672,8 +895,11 @@ discover_existing_config() {
   local artifact_config=""
   local artifact_user="" artifact_repo="" artifact_priv="" artifact_home=""
   local status=""
+  local line=""
   explicit_config="${ALMANAC_CONFIG_FILE:-}"
-  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  while IFS= read -r line; do
+    artifact_hints+=("$line")
+  done < <(read_operator_artifact_hints || true)
   artifact_user="${artifact_hints[0]:-}"
   artifact_repo="${artifact_hints[1]:-}"
   artifact_priv="${artifact_hints[2]:-}"
@@ -812,11 +1038,15 @@ trim_secret_marker() {
   printf '%s' "$value"
 }
 
+lowercase() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 is_placeholder_secret() {
   local value=""
 
   value="$(trim_secret_marker "${1:-}")"
-  case "${value,,}" in
+  case "$(lowercase "$value")" in
     change-me|changeme|generated-at-deploy)
       return 0
       ;;
@@ -899,6 +1129,17 @@ emit_runtime_config() {
     write_kv ALMANAC_MCP_PORT "$ALMANAC_MCP_PORT"
     write_kv ALMANAC_NOTION_WEBHOOK_HOST "$ALMANAC_NOTION_WEBHOOK_HOST"
     write_kv ALMANAC_NOTION_WEBHOOK_PORT "$ALMANAC_NOTION_WEBHOOK_PORT"
+    write_kv ALMANAC_NOTION_WEBHOOK_PUBLIC_URL "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+    write_kv ALMANAC_SSOT_NOTION_SPACE_URL "${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
+    write_kv ALMANAC_SSOT_NOTION_SPACE_ID "${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+    write_kv ALMANAC_SSOT_NOTION_SPACE_KIND "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
+    write_kv ALMANAC_SSOT_NOTION_API_VERSION "${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
+    write_kv ALMANAC_SSOT_NOTION_TOKEN "${ALMANAC_SSOT_NOTION_TOKEN:-}"
+    write_kv ALMANAC_ORG_NAME "${ALMANAC_ORG_NAME:-}"
+    write_kv ALMANAC_ORG_MISSION "${ALMANAC_ORG_MISSION:-}"
+    write_kv ALMANAC_ORG_PRIMARY_PROJECT "${ALMANAC_ORG_PRIMARY_PROJECT:-}"
+    write_kv ALMANAC_ORG_TIMEZONE "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
+    write_kv ALMANAC_ORG_QUIET_HOURS "${ALMANAC_ORG_QUIET_HOURS:-}"
     write_kv ALMANAC_BOOTSTRAP_WINDOW_SECONDS "$ALMANAC_BOOTSTRAP_WINDOW_SECONDS"
     write_kv ALMANAC_BOOTSTRAP_PER_IP_LIMIT "$ALMANAC_BOOTSTRAP_PER_IP_LIMIT"
     write_kv ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT "$ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT"
@@ -999,6 +1240,8 @@ write_answers_file() {
   mkdir -p "$(dirname "$target")"
   {
     emit_runtime_config
+    write_kv ALMANAC_INSTALL_PODMAN "${ALMANAC_INSTALL_PODMAN:-auto}"
+    write_kv ALMANAC_INSTALL_TAILSCALE "${ALMANAC_INSTALL_TAILSCALE:-auto}"
     write_kv ALMANAC_INSTALL_PUBLIC_GIT "${ALMANAC_INSTALL_PUBLIC_GIT:-0}"
     write_kv WIPE_NEXTCLOUD_STATE "${WIPE_NEXTCLOUD_STATE:-0}"
     write_kv REMOVE_PUBLIC_REPO "${REMOVE_PUBLIC_REPO:-1}"
@@ -1226,10 +1469,13 @@ PY
 }
 
 print_post_install_guide() {
+  local watch_embed_mode=""
+
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   detect_github_repo
   resolve_agent_qmd_endpoint
   resolve_agent_control_plane_endpoint
+  watch_embed_mode="$(lowercase "${VAULT_WATCH_RUN_EMBED:-}")"
 
   echo
   echo "What to do next"
@@ -1254,20 +1500,20 @@ print_post_install_guide() {
       echo "  PDF vision captions:"
       echo "    disabled"
     fi
-    if [[ "${VAULT_WATCH_RUN_EMBED,,}" == "1" ]]; then
+    if [[ "$watch_embed_mode" == "1" ]]; then
       echo "  Watcher embeddings:"
       echo "    enabled"
-    elif [[ "${VAULT_WATCH_RUN_EMBED,,}" == "auto" ]]; then
+    elif [[ "$watch_embed_mode" == "auto" ]]; then
       echo "  Watcher embeddings:"
       echo "    auto (embed only when qmd reports new pending work)"
     else
       echo "  Watcher embeddings:"
       echo "    deferred to scheduled/manual qmd refresh"
     fi
-  elif [[ "${VAULT_WATCH_RUN_EMBED,,}" == "1" ]]; then
+  elif [[ "$watch_embed_mode" == "1" ]]; then
     echo "  Watcher embeddings:"
     echo "    enabled"
-  elif [[ "${VAULT_WATCH_RUN_EMBED,,}" == "auto" ]]; then
+  elif [[ "$watch_embed_mode" == "auto" ]]; then
     echo "  Watcher embeddings:"
     echo "    auto (embed only when qmd reports new pending work)"
   else
@@ -1346,8 +1592,26 @@ print_post_install_guide() {
       echo "    hostname detected, but current tailscale serve status does not show ${TAILSCALE_ALMANAC_MCP_PATH}"
     fi
   fi
-  echo "  Notion webhook:"
+  echo "  Notion webhook receiver (local):"
   echo "    http://${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}/notion/webhook"
+  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    echo "  Notion webhook URL (public HTTPS):"
+    echo "    ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+  else
+    echo "  Notion webhook URL (public HTTPS):"
+    echo "    not configured; Notion cannot reach 127.0.0.1 without separate public ingress"
+  fi
+  if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+    echo "  Shared Notion SSOT:"
+    echo "    ${ALMANAC_SSOT_NOTION_SPACE_URL}"
+    if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]]; then
+      echo "  Shared Notion target:"
+      echo "    ${ALMANAC_SSOT_NOTION_SPACE_KIND:-object} ${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+    fi
+  else
+    echo "  Shared Notion SSOT:"
+    echo "    not configured yet; run $ALMANAC_REPO_DIR/deploy.sh notion-ssot"
+  fi
   echo "  Curator Hermes home:"
   echo "    ${ALMANAC_CURATOR_HERMES_HOME:-$STATE_DIR/curator/hermes-home}"
   echo "  Operator notification channel:"
@@ -1473,13 +1737,15 @@ render_agent_install_payload_body() {
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-first-contact\""
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-vaults\""
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-ssot\""
+  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-ssot-connect\""
+  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-notion-mcp\""
   echo "  model_presets:"
   echo "    codex: \"$ALMANAC_MODEL_PRESET_CODEX\""
   echo "    opus: \"$ALMANAC_MODEL_PRESET_OPUS\""
   echo "    chutes: \"$ALMANAC_MODEL_PRESET_CHUTES\""
   echo "  actions:"
   echo "    - run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup; keep local TUI available under the user's Unix account"
-  echo "    - install default Almanac skills: qmd MCP, vault reconciler, first-contact, vaults, and ssot"
+  echo "    - install default Almanac skills: qmd MCP, vault reconciler, first-contact, vaults, ssot, ssot-connect, and notion-mcp"
   echo "    - \"hermes mcp add almanac-mcp --url http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp\""
   echo "    - \"hermes mcp add almanac-qmd --url $AGENT_QMD_URL\""
   if [[ -n "${CHUTES_MCP_URL:-}" ]]; then
@@ -1706,11 +1972,11 @@ resolve_backup_git_remote_default() {
 }
 
 default_backup_git_deploy_key_path() {
-  printf '%s' "${ALMANAC_HOME:-/home/$ALMANAC_USER}/.ssh/almanac-backup-ed25519"
+  printf '%s' "${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}/.ssh/almanac-backup-ed25519"
 }
 
 default_backup_git_known_hosts_file() {
-  printf '%s' "${ALMANAC_HOME:-/home/$ALMANAC_USER}/.ssh/almanac-backup-known_hosts"
+  printf '%s' "${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}/.ssh/almanac-backup-known_hosts"
 }
 
 collect_backup_git_answers() {
@@ -1796,6 +2062,7 @@ collect_install_answers() {
   local default_pdf_vision_api_key=""
   local current_postgres_password="" current_nextcloud_admin_password=""
   local nextcloud_state_present="0"
+  local line=""
 
   load_detected_config || true
 
@@ -1808,7 +2075,9 @@ collect_install_answers() {
   detected_priv="${ALMANAC_PRIV_DIR:-}"
   detected_git_name="${BACKUP_GIT_AUTHOR_NAME:-}"
   detected_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-}"
-  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  while IFS= read -r line; do
+    artifact_hints+=("$line")
+  done < <(read_operator_artifact_hints || true)
   artifact_user="${artifact_hints[0]:-}"
   artifact_repo="${artifact_hints[1]:-}"
   artifact_priv="${artifact_hints[2]:-}"
@@ -1846,7 +2115,7 @@ collect_install_answers() {
   if [[ -n "$detected_home" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
     default_home="$detected_home"
   else
-    default_home="/home/$ALMANAC_USER"
+    default_home="$(default_home_for_user "$ALMANAC_USER")"
   fi
 
   if [[ -n "$detected_repo" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
@@ -1890,6 +2159,11 @@ collect_install_answers() {
   ALMANAC_HOME="$(ask "Service home" "$default_home")"
   ALMANAC_REPO_DIR="$(ask "Public repo path" "$default_repo")"
   ALMANAC_PRIV_DIR="$(ask "Private repo path" "$default_priv")"
+  ALMANAC_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ALMANAC_ORG_NAME:-}")")"
+  ALMANAC_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ALMANAC_ORG_MISSION:-}")")"
+  ALMANAC_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ALMANAC_ORG_PRIMARY_PROJECT:-}")")"
+  ALMANAC_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
+  ALMANAC_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ALMANAC_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
   ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
   VAULT_DIR="$ALMANAC_PRIV_DIR/vault"
   STATE_DIR="$ALMANAC_PRIV_DIR/state"
@@ -1942,6 +2216,9 @@ collect_install_answers() {
   else
     ENABLE_TAILSCALE_SERVE="0"
     TAILSCALE_OPERATOR_USER=""
+  fi
+  if [[ "$MODE" != "write-config" ]]; then
+    collect_host_dependency_answers
   fi
   WIPE_NEXTCLOUD_STATE="0"
   if nextcloud_state_has_existing_data; then
@@ -2000,7 +2277,7 @@ collect_remove_answers() {
   echo
 
   default_user="${ALMANAC_USER:-almanac}"
-  default_home="${ALMANAC_HOME:-/home/$default_user}"
+  default_home="${ALMANAC_HOME:-$(default_home_for_user "$default_user")}"
   default_repo="${ALMANAC_REPO_DIR:-$default_home/almanac}"
   default_priv="${ALMANAC_PRIV_DIR:-$default_repo/almanac-priv}"
   default_remove_user="0"
@@ -2081,7 +2358,7 @@ prepare_deployed_context() {
   load_detected_config || true
 
   ALMANAC_USER="${ALMANAC_USER:-almanac}"
-  ALMANAC_HOME="${ALMANAC_HOME:-/home/$ALMANAC_USER}"
+  ALMANAC_HOME="${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}"
   ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$ALMANAC_HOME/almanac}"
   ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
   ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
@@ -2379,28 +2656,23 @@ run_root_install() {
   local source_commit=""
   local source_branch=""
   local source_repo_url=""
-  export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
-  export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
-  export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
-  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE BACKUP_GIT_DEPLOY_KEY_PATH BACKUP_GIT_KNOWN_HOSTS_FILE
-  export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
-  export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
-  export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
-  export QMD_RUN_EMBED QMD_MCP_PORT ALMANAC_MCP_HOST ALMANAC_MCP_PORT ALMANAC_NOTION_WEBHOOK_HOST ALMANAC_NOTION_WEBHOOK_PORT
-  export ALMANAC_BOOTSTRAP_WINDOW_SECONDS ALMANAC_BOOTSTRAP_PER_IP_LIMIT ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS
-  export ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS
-  export BACKUP_GIT_AUTHOR_NAME BACKUP_GIT_AUTHOR_EMAIL NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
-  export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
-  export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD NEXTCLOUD_VAULT_MOUNT_POINT
-  export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
-  export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
-  export ALMANAC_UPSTREAM_REPO_URL ALMANAC_UPSTREAM_BRANCH ALMANAC_RELEASE_STATE_FILE
-  export ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE ALMANAC_AGENT_CODE_PORT_BASE
-  export ALMANAC_AGENT_PORT_SLOT_SPAN ALMANAC_AGENT_CODE_SERVER_IMAGE ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE
-  export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
-  export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
 
-  "$BOOTSTRAP_DIR/bin/bootstrap-system.sh"
+  env \
+    ALMANAC_USER="$ALMANAC_USER" \
+    ALMANAC_HOME="$ALMANAC_HOME" \
+    ALMANAC_REPO_DIR="$ALMANAC_REPO_DIR" \
+    ALMANAC_PRIV_DIR="$ALMANAC_PRIV_DIR" \
+    ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_CONFIG_DIR" \
+    VAULT_DIR="$VAULT_DIR" \
+    STATE_DIR="$STATE_DIR" \
+    NEXTCLOUD_STATE_DIR="$NEXTCLOUD_STATE_DIR" \
+    PUBLISHED_DIR="$PUBLISHED_DIR" \
+    QUARTO_PROJECT_DIR="$QUARTO_PROJECT_DIR" \
+    ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}" \
+    ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}" \
+    ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}" \
+    ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
+    "$BOOTSTRAP_DIR/bin/bootstrap-system.sh"
   sync_public_repo
   seed_private_repo "$ALMANAC_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
@@ -2476,27 +2748,6 @@ run_root_upgrade() {
   local uid=""
   local agent_payload_file=""
 
-  export ALMANAC_NAME ALMANAC_USER ALMANAC_HOME ALMANAC_REPO_DIR ALMANAC_PRIV_DIR
-  export ALMANAC_PRIV_CONFIG_DIR VAULT_DIR STATE_DIR NEXTCLOUD_STATE_DIR RUNTIME_DIR
-  export ALMANAC_DB_PATH ALMANAC_AGENTS_STATE_DIR ALMANAC_CURATOR_DIR ALMANAC_CURATOR_MANIFEST ALMANAC_CURATOR_HERMES_HOME ALMANAC_ARCHIVED_AGENTS_DIR
-  export PUBLISHED_DIR QMD_INDEX_NAME QMD_COLLECTION_NAME VAULT_QMD_COLLECTION_MASK BACKUP_GIT_BRANCH BACKUP_GIT_REMOTE BACKUP_GIT_DEPLOY_KEY_PATH BACKUP_GIT_KNOWN_HOSTS_FILE
-  export PDF_INGEST_COLLECTION_NAME PDF_INGEST_ENABLED PDF_INGEST_EXTRACTOR
-  export PDF_VISION_ENDPOINT PDF_VISION_MODEL PDF_VISION_API_KEY PDF_VISION_MAX_PAGES
-  export VAULT_WATCH_DEBOUNCE_SECONDS VAULT_WATCH_RUN_EMBED
-  export QMD_RUN_EMBED QMD_MCP_PORT ALMANAC_MCP_HOST ALMANAC_MCP_PORT ALMANAC_NOTION_WEBHOOK_HOST ALMANAC_NOTION_WEBHOOK_PORT
-  export ALMANAC_BOOTSTRAP_WINDOW_SECONDS ALMANAC_BOOTSTRAP_PER_IP_LIMIT ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS
-  export ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS
-  export BACKUP_GIT_AUTHOR_NAME BACKUP_GIT_AUTHOR_EMAIL NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
-  export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
-  export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD NEXTCLOUD_VAULT_MOUNT_POINT
-  export OPERATOR_NOTIFY_CHANNEL_PLATFORM OPERATOR_NOTIFY_CHANNEL_ID OPERATOR_GENERAL_CHANNEL_PLATFORM OPERATOR_GENERAL_CHANNEL_ID
-  export ALMANAC_MODEL_PRESET_CODEX ALMANAC_MODEL_PRESET_OPUS ALMANAC_MODEL_PRESET_CHUTES ALMANAC_CURATOR_MODEL_PRESET ALMANAC_CURATOR_CHANNELS CHUTES_MCP_URL
-  export ALMANAC_UPSTREAM_REPO_URL ALMANAC_UPSTREAM_BRANCH ALMANAC_RELEASE_STATE_FILE
-  export ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE ALMANAC_AGENT_CODE_PORT_BASE
-  export ALMANAC_AGENT_PORT_SLOT_SPAN ALMANAC_AGENT_CODE_SERVER_IMAGE ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE
-  export ENABLE_NEXTCLOUD ENABLE_TAILSCALE_SERVE TAILSCALE_OPERATOR_USER TAILSCALE_QMD_PATH TAILSCALE_ALMANAC_MCP_PATH ENABLE_PRIVATE_GIT ENABLE_QUARTO SEED_SAMPLE_VAULT
-  export QUARTO_PROJECT_DIR QUARTO_OUTPUT_DIR
-
   tmp_dir="$(mktemp -d /tmp/almanac-upgrade.XXXXXX)"
   checkout_dir="$tmp_dir/repo"
   trap 'rm -rf "${tmp_dir:-}"' EXIT
@@ -2516,7 +2767,22 @@ run_root_upgrade() {
   write_runtime_config "$CONFIG_TARGET"
   chown_managed_paths
 
-  "$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"
+  env \
+    ALMANAC_USER="$ALMANAC_USER" \
+    ALMANAC_HOME="$ALMANAC_HOME" \
+    ALMANAC_REPO_DIR="$ALMANAC_REPO_DIR" \
+    ALMANAC_PRIV_DIR="$ALMANAC_PRIV_DIR" \
+    ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_CONFIG_DIR" \
+    VAULT_DIR="$VAULT_DIR" \
+    STATE_DIR="$STATE_DIR" \
+    NEXTCLOUD_STATE_DIR="$NEXTCLOUD_STATE_DIR" \
+    PUBLISHED_DIR="$PUBLISHED_DIR" \
+    QUARTO_PROJECT_DIR="$QUARTO_PROJECT_DIR" \
+    ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}" \
+    ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}" \
+    ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}" \
+    ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
+    "$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
@@ -2613,9 +2879,10 @@ run_root_remove() {
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true
   fi
 
-  systemctl disable --now almanac-enrollment-provision.timer >/dev/null 2>&1 || true
-  systemctl stop almanac-enrollment-provision.service >/dev/null 2>&1 || true
+  systemctl disable --now almanac-enrollment-provision.timer almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
+  systemctl stop almanac-enrollment-provision.service almanac-notion-claim-poll.service >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/almanac-enrollment-provision.service /etc/systemd/system/almanac-enrollment-provision.timer
+  rm -f /etc/systemd/system/almanac-notion-claim-poll.service /etc/systemd/system/almanac-notion-claim-poll.timer
   systemctl daemon-reload >/dev/null 2>&1 || true
 
   if [[ "$REMOVE_PUBLIC_REPO" == "1" && "$remove_repo_with_user_home" != "1" ]]; then
@@ -2656,7 +2923,7 @@ run_root_remove() {
 }
 
 run_enrollment_status() {
-  local onboarding_file="" provision_file="" timer_enabled="" timer_active="" service_active=""
+  local onboarding_file="" provision_file="" timer_enabled="" timer_active="" service_active="" claim_timer_enabled="" claim_timer_active="" claim_service_active=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-status; then
@@ -2673,6 +2940,9 @@ run_enrollment_status() {
   timer_enabled="$(systemctl is-enabled almanac-enrollment-provision.timer 2>/dev/null || true)"
   timer_active="$(systemctl is-active almanac-enrollment-provision.timer 2>/dev/null || true)"
   service_active="$(systemctl is-active almanac-enrollment-provision.service 2>/dev/null || true)"
+  claim_timer_enabled="$(systemctl is-enabled almanac-notion-claim-poll.timer 2>/dev/null || true)"
+  claim_timer_active="$(systemctl is-active almanac-notion-claim-poll.timer 2>/dev/null || true)"
+  claim_service_active="$(systemctl is-active almanac-notion-claim-poll.service 2>/dev/null || true)"
 
   echo "Enrollment status"
   echo
@@ -2684,6 +2954,10 @@ run_enrollment_status() {
   echo "  timer enabled: $timer_enabled"
   echo "  timer active:  $timer_active"
   echo "  service:       $service_active"
+  echo "Notion claim poller:"
+  echo "  timer enabled: $claim_timer_enabled"
+  echo "  timer active:  $claim_timer_active"
+  echo "  service:       $claim_service_active"
   echo
 
   python3 - "$onboarding_file" "$provision_file" <<'PY'
@@ -3349,7 +3623,7 @@ PY
 }
 
 run_enrollment_align() {
-  local agent_id="" unix_user="" hermes_home="" channels_json="" bot_label="" uid="" activation_path="" user_home=""
+  local agent_id="" unix_user="" hermes_home="" channels_json="" bot_label="" user_name="" uid="" activation_path="" user_home=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-align; then
@@ -3366,7 +3640,7 @@ run_enrollment_align() {
   echo "Realigning enrollment services..."
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-1}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  while IFS=$'\t' read -r agent_id unix_user hermes_home channels_json bot_label; do
+  while IFS=$'\t' read -r agent_id unix_user hermes_home channels_json bot_label user_name; do
     [[ -n "$agent_id" && -n "$unix_user" && -n "$hermes_home" && -n "$channels_json" ]] || continue
     if ! getent passwd "$unix_user" >/dev/null 2>&1; then
       echo "Skipping $agent_id: unix user '$unix_user' is missing."
@@ -3389,17 +3663,18 @@ cfg = Config.from_env()
 with connect_db(cfg) as conn:
     update_agent_display_name(conn, cfg, agent_id=sys.argv[1], display_name=sys.argv[2])
 PY
-      run_root_env_cmd runuser -u "$unix_user" -- env \
-        HOME="$user_home" \
-        USER="$unix_user" \
-        LOGNAME="$unix_user" \
-        HERMES_HOME="$hermes_home" \
-        "$RUNTIME_DIR/hermes-venv/bin/python3" \
-        "$ALMANAC_REPO_DIR/python/almanac_headless_hermes_setup.py" \
-        --prefill-only \
-        --bot-name "$bot_label" \
-        --unix-user "$unix_user" >/dev/null 2>&1 || true
     fi
+    run_root_env_cmd runuser -u "$unix_user" -- env \
+      HOME="$user_home" \
+      USER="$unix_user" \
+      LOGNAME="$unix_user" \
+      HERMES_HOME="$hermes_home" \
+      "$RUNTIME_DIR/hermes-venv/bin/python3" \
+      "$ALMANAC_REPO_DIR/python/almanac_headless_hermes_setup.py" \
+      --identity-only \
+      --bot-name "$bot_label" \
+      --unix-user "$unix_user" \
+      --user-name "$user_name" >/dev/null 2>&1 || true
     run_root_env_cmd runuser -u "$unix_user" -- env \
       HOME="$user_home" \
       USER="$unix_user" \
@@ -3412,7 +3687,9 @@ PY
       almanac-vault-reconciler \
       almanac-first-contact \
       almanac-vaults \
-      almanac-ssot >/dev/null
+      almanac-ssot \
+      almanac-ssot-connect \
+      almanac-notion-mcp >/dev/null
     echo "Reinstalling user-agent services for $agent_id ($unix_user)..."
     run_root_env_cmd runuser -u "$unix_user" -- env \
       XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -3439,7 +3716,7 @@ conn.row_factory = sqlite3.Row
 
 rows = conn.execute(
     """
-    SELECT agent_id, unix_user, hermes_home, channels_json
+    SELECT agent_id, unix_user, hermes_home, channels_json, display_name
     FROM agents
     WHERE role = 'user' AND status = 'active'
     ORDER BY unix_user
@@ -3448,7 +3725,7 @@ rows = conn.execute(
 
 session_rows = conn.execute(
     """
-    SELECT linked_agent_id, answers_json
+    SELECT linked_agent_id, answers_json, sender_display_name
     FROM onboarding_sessions
     WHERE state = 'completed'
     ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
@@ -3456,22 +3733,32 @@ session_rows = conn.execute(
 ).fetchall()
 
 bot_labels = {}
+user_names = {}
 for row in session_rows:
     agent_id = str(row["linked_agent_id"] or "").strip()
-    if not agent_id or agent_id in bot_labels:
+    if not agent_id:
         continue
     try:
         answers = json.loads(row["answers_json"] or "{}")
     except Exception:
-        continue
-    label = str(
-        answers.get("bot_display_name")
-        or answers.get("bot_username")
-        or answers.get("preferred_bot_name")
-        or ""
-    ).strip()
-    if label:
-        bot_labels[agent_id] = label
+        answers = {}
+    if agent_id not in bot_labels:
+        label = str(
+            answers.get("bot_display_name")
+            or answers.get("bot_username")
+            or answers.get("preferred_bot_name")
+            or ""
+        ).strip()
+        if label:
+            bot_labels[agent_id] = label
+    if agent_id not in user_names:
+        user_name = str(
+            answers.get("full_name")
+            or row["sender_display_name"]
+            or ""
+        ).strip()
+        if user_name:
+            user_names[agent_id] = user_name
 
 for row in rows:
     channels = []
@@ -3484,15 +3771,17 @@ for row in rows:
         str(row["unix_user"] or ""),
         str(row["hermes_home"] or ""),
         json.dumps(channels),
-        bot_labels.get(str(row["agent_id"] or ""), ""),
+        bot_labels.get(str(row["agent_id"] or ""), str(row["display_name"] or "").strip()),
+        user_names.get(str(row["agent_id"] or ""), ""),
     ]))
 PY
 )
   restart_shared_user_services_root || true
-  systemctl reset-failed almanac-enrollment-provision.service almanac-enrollment-provision.timer >/dev/null 2>&1 || true
-  systemctl enable almanac-enrollment-provision.timer >/dev/null
-  systemctl restart almanac-enrollment-provision.timer
+  systemctl reset-failed almanac-enrollment-provision.service almanac-enrollment-provision.timer almanac-notion-claim-poll.service almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
+  systemctl enable almanac-enrollment-provision.timer almanac-notion-claim-poll.timer >/dev/null
+  systemctl restart almanac-enrollment-provision.timer almanac-notion-claim-poll.timer
   systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
+  systemctl start almanac-notion-claim-poll.service >/dev/null 2>&1 || true
   echo "Enrollment provisioner, shared services, and active external user-agent units realigned."
   echo
   run_enrollment_status
@@ -3605,7 +3894,10 @@ PY
     return 0
   fi
 
-  mapfile -t session_ids < <(python3 - "$snapshot_file" <<'PY'
+  session_ids=()
+  while IFS= read -r line; do
+    session_ids+=("$line")
+  done < <(python3 - "$snapshot_file" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
@@ -3615,7 +3907,10 @@ for row in data.get("onboarding") or []:
         print(row.get("session_id", ""))
 PY
 )
-  mapfile -t request_specs < <(python3 - "$snapshot_file" <<'PY'
+  request_specs=()
+  while IFS= read -r line; do
+    request_specs+=("$line")
+  done < <(python3 - "$snapshot_file" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
@@ -3628,7 +3923,10 @@ for row in data.get("requests") or []:
     ]))
 PY
 )
-  mapfile -t rate_subjects < <(python3 - "$snapshot_file" <<'PY'
+  rate_subjects=()
+  while IFS= read -r line; do
+    rate_subjects+=("$line")
+  done < <(python3 - "$snapshot_file" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
@@ -3756,7 +4054,7 @@ run_health_check() {
     ALMANAC_USER="almanac"
   fi
   if [[ -z "${ALMANAC_HOME:-}" ]]; then
-    ALMANAC_HOME="/home/$ALMANAC_USER"
+    ALMANAC_HOME="$(default_home_for_user "$ALMANAC_USER")"
   fi
   if [[ -z "${ALMANAC_REPO_DIR:-}" ]]; then
     ALMANAC_REPO_DIR="$ALMANAC_HOME/almanac"
@@ -3881,6 +4179,200 @@ run_rotate_nextcloud_secrets() {
   echo "Live Nextcloud credentials rotated and persisted to $CONFIG_TARGET."
 }
 
+run_notion_ssot_setup() {
+  local notion_space_url="" notion_token="" notion_api_version="" notion_public_webhook_url="" handshake_file=""
+  local integration_name="" workspace_name="" space_title="" space_id="" space_kind="" target_url=""
+
+  prepare_deployed_context
+  if maybe_reexec_with_sudo_for_config notion-ssot; then
+    return 0
+  fi
+  ensure_deployed_config_exists
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
+    echo "Switching to sudo for Notion SSOT setup..."
+    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" notion-ssot
+    write_operator_checkout_artifact
+    return 0
+  fi
+
+  echo "Almanac deploy: Notion SSOT setup / handshake"
+  echo
+  echo "Make one normal Notion page for Almanac, such as 'The Almanac', then"
+  echo "paste that page URL below."
+  echo "Do not use the workspace Home screen."
+  echo
+  echo "Before you continue in Notion:"
+  echo "  1) Create a normal page for Almanac in the Teamspace you want it to use."
+  echo "  2) Open this page in your browser:"
+  echo "     https://www.notion.so/profile/integrations/internal"
+  echo "  3) If Notion lands you back in the workspace UI, open your workspace"
+  echo "     switcher in the top-left, then go to Settings -> Integrations."
+  echo "  4) Click Create new integration."
+  echo "  5) Name it something like Almanac Curator, optionally upload an icon"
+  echo "     (the Curator Discord avatar in this repo works well), choose the"
+  echo "     associated workspace, and click Create."
+  echo "  6) On the capabilities screen:"
+  echo "     - turn on every checkbox capability Notion offers on that screen"
+  echo "     - for user information, choose Read user information including email addresses"
+  echo "       so Almanac can verify users against their Notion email"
+  echo "     - click Save"
+  echo "  7) If you land on Discover new connections / Show all and see options like"
+  echo "     Notion MCP, GitHub, Slack, Jira, or other partner apps, stop there:"
+  echo "     those are not the right choice for Almanac's shared SSOT setup."
+  echo "  8) Open that internal integration and, near Internal integration secret,"
+  echo "     click Show and then copy the key."
+  echo "  9) In that integration, open Manage page access and grant access to the"
+  echo "     parent page or Teamspace root Almanac should live under."
+  echo "     New child pages and databases under that granted subtree inherit"
+  echo "     access automatically."
+  echo
+  echo "Almanac will use the page you paste below as its shared Notion home and"
+  echo "create its verification scaffolding under it when needed."
+  require_notion_subtree_ack
+  if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+    echo "Current shared Notion target:"
+    echo "  ${ALMANAC_SSOT_NOTION_SPACE_URL}"
+    if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]]; then
+      echo "  ${ALMANAC_SSOT_NOTION_SPACE_KIND:-object} ${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+    fi
+  else
+    echo "No shared Notion SSOT target is configured yet."
+  fi
+  echo
+
+  notion_space_url="$(normalize_optional_answer "$(ask "Shared Notion page URL for Almanac (use a normal page, not the workspace Home screen) (ENTER keeps current, type none to clear)" "${ALMANAC_SSOT_NOTION_SPACE_URL:-}")")"
+  notion_api_version="$(normalize_optional_answer "$(ask "Notion API version" "${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}")")"
+  notion_api_version="${notion_api_version:-2026-03-11}"
+  notion_token="$(ask_secret_with_default "Notion Internal Integration Secret for your Almanac internal integration (start at https://www.notion.so/profile/integrations/internal) (ENTER keeps current, type none to clear)" "${ALMANAC_SSOT_NOTION_TOKEN:-}")"
+  notion_public_webhook_url="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+
+  if [[ -z "$notion_space_url" && -z "$notion_token" ]]; then
+    ALMANAC_SSOT_NOTION_SPACE_URL=""
+    ALMANAC_SSOT_NOTION_SPACE_ID=""
+    ALMANAC_SSOT_NOTION_SPACE_KIND=""
+    ALMANAC_SSOT_NOTION_API_VERSION="$notion_api_version"
+    ALMANAC_SSOT_NOTION_TOKEN=""
+    ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
+    write_runtime_config "$CONFIG_TARGET"
+    if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+      chown "$ALMANAC_USER:$ALMANAC_USER" "$CONFIG_TARGET" >/dev/null 2>&1 || true
+    fi
+    echo
+    echo "Cleared shared Notion SSOT configuration in $CONFIG_TARGET."
+    return 0
+  fi
+
+  if [[ -z "$notion_space_url" || -z "$notion_token" ]]; then
+    echo "Notion SSOT setup needs both a Notion page URL and an integration secret, or neither if you are clearing it." >&2
+    exit 1
+  fi
+
+  handshake_file="$(mktemp)"
+  if ! env \
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion handshake \
+      --space-url "$notion_space_url" \
+      --token "$notion_token" \
+      --api-version "$notion_api_version" >"$handshake_file"; then
+    rm -f "$handshake_file"
+    echo "Notion handshake failed; leaving the current config unchanged." >&2
+    exit 1
+  fi
+
+  space_id="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("space_id") or "").strip())
+PY
+)"
+  space_kind="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("space_kind") or "").strip())
+PY
+)"
+  space_title="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("space_title") or "").strip())
+PY
+)"
+  target_url="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("target_url") or "").strip())
+PY
+)"
+  notion_space_url="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("space_url") or "").strip())
+PY
+)"
+  integration_name="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+integration = data.get("integration") or {}
+print(str(integration.get("name") or "").strip())
+PY
+)"
+  workspace_name="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+integration = data.get("integration") or {}
+print(str(integration.get("workspace_name") or "").strip())
+PY
+)"
+
+  ALMANAC_SSOT_NOTION_SPACE_URL="$notion_space_url"
+  ALMANAC_SSOT_NOTION_SPACE_ID="$space_id"
+  ALMANAC_SSOT_NOTION_SPACE_KIND="$space_kind"
+  ALMANAC_SSOT_NOTION_API_VERSION="$notion_api_version"
+  ALMANAC_SSOT_NOTION_TOKEN="$notion_token"
+  ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="$notion_public_webhook_url"
+  write_runtime_config "$CONFIG_TARGET"
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    chown "$ALMANAC_USER:$ALMANAC_USER" "$CONFIG_TARGET" >/dev/null 2>&1 || true
+  fi
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  echo
+  echo "Notion handshake succeeded."
+  echo "Integration:"
+  echo "  ${integration_name:-Notion integration}"
+  if [[ -n "$workspace_name" ]]; then
+    echo "Workspace:"
+    echo "  $workspace_name"
+  fi
+  echo "Shared SSOT target:"
+  echo "  ${space_kind:-object} ${space_id:-}"
+  if [[ -n "$space_title" ]]; then
+    echo "  $space_title"
+  fi
+  echo "Resolved URL:"
+  echo "  ${target_url:-$notion_space_url}"
+  echo "Config persisted to:"
+  echo "  $CONFIG_TARGET"
+
+  rm -f "$handshake_file"
+}
+
 run_curator_setup_flow() {
   prepare_deployed_context
 
@@ -3949,6 +4441,7 @@ run_curator_setup_flow() {
 }
 
 run_upgrade_flow() {
+  require_supported_host_mode "upgrade"
   prepare_deployed_context
 
   if [[ ${EUID:-$(id -u)} -ne 0 && -n "${CONFIG_TARGET:-}" && ! -r "$CONFIG_TARGET" ]]; then
@@ -3997,7 +4490,7 @@ run_agent_payload() {
   load_detected_config || true
 
   ALMANAC_USER="${ALMANAC_USER:-almanac}"
-  ALMANAC_HOME="${ALMANAC_HOME:-/home/$ALMANAC_USER}"
+  ALMANAC_HOME="${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}"
   ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$BOOTSTRAP_DIR}"
   ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
   ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
@@ -4028,6 +4521,8 @@ run_install_flow() {
     fi
   fi
 
+  require_supported_host_mode "$MODE"
+
   collect_install_answers
 
   if [[ "$MODE" == "write-config" ]]; then
@@ -4057,6 +4552,7 @@ run_install_flow() {
 }
 
 run_remove_flow() {
+  require_supported_host_mode "remove"
   collect_remove_answers
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
@@ -4107,6 +4603,9 @@ case "$MODE" in
     ;;
   upgrade)
     run_upgrade_flow
+    ;;
+  notion-ssot)
+    run_notion_ssot_setup
     ;;
   enrollment-status)
     run_enrollment_status

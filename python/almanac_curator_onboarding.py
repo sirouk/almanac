@@ -54,12 +54,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def send_text(bot_token: str, chat_id: str, text: str, *, reply_to_message_id: int | None = None) -> None:
+def send_text(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    *,
+    reply_to_message_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
+) -> None:
     telegram_send_message(
         bot_token=bot_token,
         chat_id=chat_id,
         text=text,
         reply_to_message_id=reply_to_message_id,
+        reply_markup=reply_markup,
     )
 
 
@@ -439,6 +447,7 @@ def _handle_user_message(
             reply.chat_id,
             reply.text,
             reply_to_message_id=reply.reply_to_message_id,
+            reply_markup=reply.telegram_reply_markup,
         )
 
 

@@ -106,6 +106,30 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             expect("Open Installation and copy the install link" in prompt, prompt)
             expect("share a server" in prompt or "Add App" in prompt, prompt)
 
+            notion_email_prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "state": "awaiting-notion-email",
+                    "answers": {},
+                },
+            )
+            expect("Notion email" in notion_email_prompt or "Notion" in notion_email_prompt, notion_email_prompt)
+            expect("skip" in notion_email_prompt.lower(), notion_email_prompt)
+
+            notion_verify_prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "state": "awaiting-notion-verification",
+                    "answers": {
+                        "notion_claim_email": "chris@example.com",
+                        "notion_claim_url": "https://www.notion.so/claim",
+                        "notion_claim_expires_at": "2026-04-21T00:00:00+00:00",
+                    },
+                },
+            )
+            expect("https://www.notion.so/claim" in notion_verify_prompt, notion_verify_prompt)
+            expect("chris@example.com" in notion_verify_prompt, notion_verify_prompt)
+
             review = onboarding._operator_review_message(  # noqa: SLF001
                 cfg,
                 {

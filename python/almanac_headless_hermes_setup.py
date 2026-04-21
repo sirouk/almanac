@@ -5,7 +5,11 @@ import argparse
 import json
 import os
 from pathlib import Path
+from string import Template
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SOUL_TEMPLATE_PATH = REPO_ROOT / "templates" / "SOUL.md.tmpl"
 
 
 def _load_provider_spec(raw_json: str) -> dict[str, Any]:
@@ -133,7 +137,54 @@ def _seed_api_key_provider(spec: dict[str, Any], secret_path: str) -> None:
     )
 
 
-def _seed_almanac_prefill(bot_name: str, unix_user: str, user_name: str = "") -> str:
+def _config_value(name: str, default: str = "") -> str:
+    try:
+        from almanac_control import config_env_value
+    except Exception:
+        return str(os.environ.get(name, default) or default)
+    return str(config_env_value(name, default) or default)
+
+
+def _identity_value(value: str, default: str) -> str:
+    normalized = value.strip()
+    return normalized or default
+
+
+def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
+    try:
+        template = SOUL_TEMPLATE_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"missing SOUL template at {SOUL_TEMPLATE_PATH}: {exc}") from exc
+    try:
+        return (
+            Template(template).substitute(
+                {
+                    "agent_label": _identity_value(bot_name, "your Almanac agent"),
+                    "unix_user": _identity_value(unix_user, "unknown"),
+                    "user_name": _identity_value(user_name, "your enrolled user"),
+                    "org_name": _identity_value(_config_value("ALMANAC_ORG_NAME"), "the organization you support"),
+                    "org_mission": _identity_value(
+                        _config_value("ALMANAC_ORG_MISSION"),
+                        "Help the organization stay coherent, responsive, and moving.",
+                    ),
+                    "org_primary_project": _identity_value(
+                        _config_value("ALMANAC_ORG_PRIMARY_PROJECT"),
+                        "the work your user puts in front of you",
+                    ),
+                    "org_timezone": _identity_value(_config_value("ALMANAC_ORG_TIMEZONE", "Etc/UTC"), "Etc/UTC"),
+                    "org_quiet_hours": _identity_value(
+                        _config_value("ALMANAC_ORG_QUIET_HOURS"),
+                        "No quiet hours are configured yet; confirm before sending time-sensitive nudges.",
+                    ),
+                }
+            ).strip()
+            + "\n"
+        )
+    except KeyError as exc:
+        raise SystemExit(f"SOUL template placeholder '{exc.args[0]}' is missing from the render context") from exc
+
+
+def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -> dict[str, str]:
     from hermes_cli.config import load_config, save_config
 
     almanac_skill_names = [
@@ -142,6 +193,8 @@ def _seed_almanac_prefill(bot_name: str, unix_user: str, user_name: str = "") ->
         "almanac-first-contact",
         "almanac-vaults",
         "almanac-ssot",
+        "almanac-ssot-connect",
+        "almanac-notion-mcp",
     ]
     label = bot_name.strip() or "your Almanac agent"
     unix_user = unix_user.strip()
@@ -149,7 +202,10 @@ def _seed_almanac_prefill(bot_name: str, unix_user: str, user_name: str = "") ->
     hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
     state_dir = hermes_home / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
+    soul_path = hermes_home / "SOUL.md"
     prefill_path = state_dir / "almanac-prefill-messages.json"
+    # Hermes reads HERMES_HOME/SOUL.md directly at runtime as the durable identity prompt.
+    soul_path.write_text(_render_soul(label, unix_user, user_name), encoding="utf-8")
     prefill_messages = [
         {
             "role": "system",
@@ -162,27 +218,34 @@ def _seed_almanac_prefill(bot_name: str, unix_user: str, user_name: str = "") ->
                 + " You were provisioned from a common Almanac deployment managed by Curator, "
                 "and the organization-wide SSOT is a shared Notion workspace that agents use to "
                 "stay aligned. You already have the Almanac MCP and qmd MCP wired in, plus the "
-                "default Almanac skills for first contact, vault work, vault reconciliation, and "
-                "SSOT coordination. Treat those installed Almanac skills as active defaults, not "
-                "passive extras: use almanac-qmd-mcp for vault retrieval and follow-up questions, "
-                "almanac-vaults for subscription, catalog, and curate-vaults work, "
-                "almanac-vault-reconciler for Almanac memory drift or repair, almanac-ssot for "
-                "organization context and user-scoped SSOT work, and almanac-first-contact for "
-                "Almanac setup diagnostics. All vaults remain retrievable through Almanac/qmd "
-                "even when a vault is unsubscribed; subscriptions only control ambient awareness "
-                "and Curator push behavior. First flight should already have run the initial vault "
-                "discovery and managed-memory stubbing. After that, the intended sync rail is "
-                "curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> "
-                "local managed-memory stubs and recent events. When vaults or shared state shift, "
-                "expect those rails to refresh your stubs; the canonical user/dashboard/code and "
-                "shared host addresses live under [managed:resource-ref] without storing the "
-                "user's credentials there. Use qmd for depth instead of trying to "
-                "memorize the vault. For vault-relevant questions, prefer qmd and Almanac "
-                "resources before the public web. Respect shared-host boundaries and operate only "
-                "within the current user's authorized Hermes home, channels, and Almanac "
-                "resources. The shared deployment may live under /home/almanac/almanac; treat "
-                "that as read-only shared infrastructure, not another enrolled user's workspace. "
-                "Never browse other users' home directories for Almanac context. Do not read "
+                "default Almanac skills for first contact, vault work, vault reconciliation, "
+                "shared SSOT work, and user-owned Notion linking. Treat your rendered SOUL.md "
+                "identity and the installed Almanac "
+                "skills as authoritative defaults, not passive extras. Your durable identity "
+                "lives at HERMES_HOME/SOUL.md, and it should stay aligned with the role Curator "
+                "provisioned for you. Treat those installed Almanac "
+                "skills as active defaults, not passive extras: use almanac-qmd-mcp for vault "
+                "retrieval and follow-up questions, almanac-vaults for subscription, catalog, "
+                "and curate-vaults work, almanac-vault-reconciler for Almanac memory drift or "
+                "repair, almanac-ssot for organization context and user-scoped SSOT work, "
+                "almanac-ssot-connect when the user wants to link their own Notion through the "
+                "official Notion MCP flow, almanac-notion-mcp once that user-owned Notion MCP is "
+                "live, and almanac-first-contact for Almanac setup diagnostics. All vaults remain "
+                "retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions "
+                "only control ambient awareness and Curator push behavior. First flight should "
+                "already have run the initial vault discovery and managed-memory stubbing. After "
+                "that, the intended sync rail is curator fanout -> activation trigger / refresh "
+                "timer -> user-agent-refresh -> local managed-memory stubs and recent events. "
+                "When vaults or shared state shift, expect those rails to refresh your stubs; the "
+                "canonical user/dashboard/code and shared host addresses live under "
+                "[managed:resource-ref] without storing the user's credentials there. Use qmd for "
+                "depth instead of trying to memorize the vault. For vault-relevant questions, "
+                "prefer qmd and Almanac resources before the public web. Respect shared-host "
+                "boundaries and operate only within the current user's authorized Hermes home, "
+                "channels, and Almanac resources. The shared deployment may live under "
+                "/home/almanac/almanac; treat that as read-only shared infrastructure, not "
+                "another enrolled user's workspace. Never browse other users' home directories "
+                "for Almanac context. Do not read "
                 "central deployment secrets such as almanac.env or source bin/common.sh from a "
                 "user-agent session unless the operator explicitly asks for host-level debugging."
             ),
@@ -207,8 +270,16 @@ def _seed_almanac_prefill(bot_name: str, unix_user: str, user_name: str = "") ->
         else:
             skills_cfg.pop("platform_disabled", None)
     config["prefill_messages_file"] = str(prefill_path)
+    agent_cfg = config.get("agent")
+    if not isinstance(agent_cfg, dict):
+        agent_cfg = {}
+    agent_cfg["prefill_messages_file"] = str(prefill_path)
+    config["agent"] = agent_cfg
     save_config(config)
-    return str(prefill_path)
+    return {
+        "prefill_messages_file": str(prefill_path),
+        "soul_file": str(soul_path),
+    }
 
 
 def _validate_runtime(spec: dict[str, Any]) -> dict[str, Any]:
@@ -240,16 +311,31 @@ def main() -> None:
     parser.add_argument("--bot-name", default="", help="Public-facing bot name for Almanac prefill priming.")
     parser.add_argument("--unix-user", default="", help="Unix username being provisioned.")
     parser.add_argument("--user-name", default="", help="Human display name for the user being provisioned.")
-    parser.add_argument("--prefill-only", action="store_true", help="Only refresh the Almanac prefill config.")
+    parser.add_argument(
+        "--identity-only",
+        action="store_true",
+        help="Only refresh the Almanac SOUL.md and prefill config.",
+    )
+    parser.add_argument("--prefill-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    prefill_path = _seed_almanac_prefill(args.bot_name, args.unix_user, args.user_name)
-    if args.prefill_only:
-        print(json.dumps({"prefill_messages_file": prefill_path, "prefill_only": True}, sort_keys=True))
+    identity_paths = _seed_almanac_identity(args.bot_name, args.unix_user, args.user_name)
+    identity_only = bool(args.identity_only or args.prefill_only)
+    if identity_only:
+        print(
+            json.dumps(
+                {
+                    **identity_paths,
+                    "identity_only": True,
+                    "prefill_only": True,
+                },
+                sort_keys=True,
+            )
+        )
         return
 
     if not args.provider_spec_json or not args.secret_path:
-        raise SystemExit("--provider-spec-json and --secret-path are required unless --prefill-only is set")
+        raise SystemExit("--provider-spec-json and --secret-path are required unless --identity-only is set")
 
     spec = _load_provider_spec(args.provider_spec_json)
     provider_id = str(spec.get("provider_id") or "").strip()
@@ -262,7 +348,9 @@ def main() -> None:
     else:
         _seed_api_key_provider(spec, args.secret_path)
 
-    print(json.dumps(_validate_runtime(spec), sort_keys=True))
+    payload = _validate_runtime(spec)
+    payload.update(identity_paths)
+    print(json.dumps(payload, sort_keys=True))
 
 
 if __name__ == "__main__":

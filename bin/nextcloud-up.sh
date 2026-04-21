@@ -380,10 +380,10 @@ ensure_nextcloud_vault_mount() {
     nextcloud_occ files_external:applicable "$mount_id" --remove-all >/dev/null
   fi
 
-  if [[ "${mount_readonly,,}" != "false" ]]; then
+  if [[ "$(lowercase "$mount_readonly")" != "false" ]]; then
     nextcloud_occ files_external:option "$mount_id" readonly false >/dev/null || true
   fi
-  if [[ "${mount_enable_sharing,,}" != "true" ]]; then
+  if [[ "$(lowercase "$mount_enable_sharing")" != "true" ]]; then
     nextcloud_occ files_external:option "$mount_id" enable_sharing true >/dev/null || true
   fi
 
@@ -490,14 +490,6 @@ if [[ "$ENABLE_NEXTCLOUD" != "1" ]]; then
   exit 0
 fi
 
-export NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
-export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
-export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD
-export NEXTCLOUD_DB_DIR NEXTCLOUD_REDIS_DIR NEXTCLOUD_HTML_DIR NEXTCLOUD_DATA_DIR
-export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ALMANAC_CONFIG_FILE
-export NEXTCLOUD_HOOKS_DIR NEXTCLOUD_PRE_INSTALL_HOOK_DIR NEXTCLOUD_POST_INSTALL_HOOK_DIR NEXTCLOUD_BEFORE_STARTING_HOOK_DIR
-export NEXTCLOUD_PRE_INSTALL_HOOK_FILE NEXTCLOUD_POST_INSTALL_HOOK_FILE NEXTCLOUD_BEFORE_STARTING_HOOK_FILE VAULT_DIR
-
 trap dump_nextcloud_diagnostics ERR
 
 if command -v podman >/dev/null 2>&1; then
@@ -509,7 +501,7 @@ if have_compose_runtime; then
   require_real_layout "Nextcloud startup"
   write_nextcloud_custom_config
   write_nextcloud_hook_scripts
-  run_compose "$COMPOSE_FILE" up -d
+  with_nextcloud_compose_env run_compose "$COMPOSE_FILE" up -d
   wait_for_nextcloud_occ 180 2
   ensure_nextcloud_vault_mount
   normalize_nextcloud_permissions

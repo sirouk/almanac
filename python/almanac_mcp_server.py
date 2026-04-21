@@ -26,6 +26,7 @@ from almanac_control import (
     list_vault_warnings,
     note_refresh_job,
     queue_notification,
+    read_ssot,
     refresh_agent_context,
     register_agent,
     reinstate_token,
@@ -57,7 +58,8 @@ TOOLS = {
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
-    "ssot.write": "Queue a Notion SSOT write (insert/update). Archive/delete are rejected.",
+    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering.",
+    "ssot.write": "Apply a Notion SSOT write (insert/update) through the central broker. Archive/delete are rejected.",
 }
 
 
@@ -462,6 +464,20 @@ class Handler(BaseHTTPRequestHandler):
                     undelivered_only=bool(arguments.get("undelivered_only")),
                 )
                 return {"notifications": notifications}
+
+            if tool_name == "ssot.read":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                raw_query = arguments.get("query")
+                query = raw_query if isinstance(raw_query, dict) else {}
+                return read_ssot(
+                    conn,
+                    cfg,
+                    agent_id=str(token_row["agent_id"]),
+                    target_id=str(arguments.get("target_id") or ""),
+                    query=query,
+                    include_markdown=bool(arguments.get("include_markdown")),
+                    requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
+                )
 
             if tool_name == "ssot.write":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))

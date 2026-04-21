@@ -11,6 +11,9 @@ from almanac_control import Config, config_env_value, safe_slug
 
 
 NEXTCLOUD_SHARED_GROUP = "almanac-users"
+# Deliberately limited to host-safe execution context. Do not add secrets here.
+_SAFE_HOST_ENV_KEYS = ("LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR")
+_SAFE_HOST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 def _nextcloud_enabled() -> bool:
@@ -33,6 +36,7 @@ def _compose_command(compose_file: Path) -> list[str] | None:
 
     result = subprocess.run(
         [podman_bin, "compose", "version"],
+        env=_safe_nextcloud_host_env(),
         text=True,
         capture_output=True,
         check=False,
@@ -75,6 +79,19 @@ def _runtime_cwd(cfg: Config) -> Path:
     return Path("/")
 
 
+def _safe_nextcloud_host_env(cfg: Config | None = None) -> dict[str, str]:
+    env: dict[str, str] = {"PATH": _SAFE_HOST_PATH}
+    if cfg is not None:
+        env["HOME"] = str(cfg.almanac_home)
+        env["USER"] = cfg.almanac_user
+        env["LOGNAME"] = cfg.almanac_user
+    for key in _SAFE_HOST_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
 def _nextcloud_occ(
     cfg: Config,
     *args: str,
@@ -88,7 +105,7 @@ def _nextcloud_occ(
             "/var/www/html/occ",
             *args,
         ],
-        env=dict(os.environ),
+        env=_safe_nextcloud_host_env(cfg),
         text=True,
         capture_output=True,
         check=False,

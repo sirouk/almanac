@@ -4,6 +4,33 @@ set -euo pipefail
 BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+host_uname_s() {
+  uname -s 2>/dev/null || printf '%s\n' "unknown"
+}
+
+default_home_for_user() {
+  local user="${1:-}"
+
+  if [[ -z "$user" ]]; then
+    return 1
+  fi
+
+  if [[ "$(host_uname_s)" == "Darwin" ]]; then
+    printf '/Users/%s\n' "$user"
+    return 0
+  fi
+
+  printf '/home/%s\n' "$user"
+}
+
+lowercase() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 read_operator_artifact_hints() {
   local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
 
@@ -32,7 +59,23 @@ resolve_home_dir() {
     return 0
   fi
 
-  home_dir="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+  if command_exists python3; then
+    home_dir="$(
+      python3 - <<'PY'
+import os
+import pwd
+import sys
+
+try:
+    print(pwd.getpwuid(os.getuid()).pw_dir)
+except Exception:
+    raise SystemExit(1)
+PY
+    )" || home_dir=""
+  fi
+  if [[ -z "$home_dir" ]] && command_exists getent; then
+    home_dir="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+  fi
   if [[ -n "$home_dir" ]]; then
     printf '%s\n' "$home_dir"
     return 0
@@ -49,9 +92,28 @@ resolve_user_home() {
     return 1
   fi
 
-  home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  if command_exists python3; then
+    home_dir="$(
+      python3 - "$user" <<'PY'
+import pwd
+import sys
+
+user = sys.argv[1]
+try:
+    print(pwd.getpwnam(user).pw_dir)
+except KeyError:
+    raise SystemExit(1)
+PY
+    )" || home_dir=""
+  fi
+  if [[ -z "$home_dir" ]] && command_exists dscl; then
+    home_dir="$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk 'NR==1 {print $2}')"
+  fi
+  if [[ -z "$home_dir" ]] && command_exists getent; then
+    home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  fi
   if [[ -z "$home_dir" ]]; then
-    home_dir="/home/$user"
+    home_dir="$(default_home_for_user "$user")"
   fi
 
   printf '%s\n' "$home_dir"
@@ -80,6 +142,7 @@ find_config_file() {
   local explicit_config=""
   local artifact_user="" artifact_repo="" artifact_priv="" artifact_config="" artifact_home=""
   local home_dir=""
+  local line=""
   nested_priv="$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
   sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/almanac-priv/config/almanac.env"
   home_dir="$(resolve_home_dir || true)"
@@ -90,7 +153,9 @@ find_config_file() {
     return 0
   fi
 
-  mapfile -t artifact_hints < <(read_operator_artifact_hints || true)
+  while IFS= read -r line; do
+    artifact_hints+=("$line")
+  done < <(read_operator_artifact_hints || true)
   artifact_user="${artifact_hints[0]:-}"
   artifact_repo="${artifact_hints[1]:-}"
   artifact_priv="${artifact_hints[2]:-}"
@@ -184,6 +249,17 @@ ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_MCP_URL="${ALMANAC_MCP_URL:-http://${ALMANAC_MCP_HOST}:${ALMANAC_MCP_PORT}/mcp}"
 ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
 ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+ALMANAC_SSOT_NOTION_SPACE_URL="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
+ALMANAC_SSOT_NOTION_SPACE_ID="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+ALMANAC_SSOT_NOTION_SPACE_KIND="${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
+ALMANAC_SSOT_NOTION_API_VERSION="${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
+ALMANAC_SSOT_NOTION_TOKEN="${ALMANAC_SSOT_NOTION_TOKEN:-}"
+ALMANAC_ORG_NAME="${ALMANAC_ORG_NAME:-}"
+ALMANAC_ORG_MISSION="${ALMANAC_ORG_MISSION:-}"
+ALMANAC_ORG_PRIMARY_PROJECT="${ALMANAC_ORG_PRIMARY_PROJECT:-}"
+ALMANAC_ORG_TIMEZONE="${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
+ALMANAC_ORG_QUIET_HOURS="${ALMANAC_ORG_QUIET_HOURS:-}"
 ALMANAC_BOOTSTRAP_WINDOW_SECONDS="${ALMANAC_BOOTSTRAP_WINDOW_SECONDS:-3600}"
 ALMANAC_BOOTSTRAP_PER_IP_LIMIT="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
 ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
@@ -1073,6 +1149,19 @@ run_compose() {
 
   echo "No compose runtime found. Install podman + podman-compose or docker compose."
   return 1
+}
+
+with_nextcloud_compose_env() {
+  (
+    export NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
+    export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
+    export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD
+    export NEXTCLOUD_DB_DIR NEXTCLOUD_REDIS_DIR NEXTCLOUD_HTML_DIR NEXTCLOUD_DATA_DIR
+    export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ALMANAC_CONFIG_FILE
+    export NEXTCLOUD_HOOKS_DIR NEXTCLOUD_PRE_INSTALL_HOOK_DIR NEXTCLOUD_POST_INSTALL_HOOK_DIR NEXTCLOUD_BEFORE_STARTING_HOOK_DIR
+    export NEXTCLOUD_PRE_INSTALL_HOOK_FILE NEXTCLOUD_POST_INSTALL_HOOK_FILE NEXTCLOUD_BEFORE_STARTING_HOOK_FILE VAULT_DIR
+    "$@"
+  )
 }
 
 ensure_layout() {

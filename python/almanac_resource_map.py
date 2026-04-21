@@ -30,6 +30,7 @@ def shared_resource_lines(
     qmd_path: str = "/mcp",
     almanac_mcp_path: str = "/almanac-mcp",
     chutes_mcp_url: str = "",
+    notion_space_url: str = "",
 ) -> list[str]:
     lines: list[str] = []
 
@@ -49,6 +50,9 @@ def shared_resource_lines(
     if chutes_mcp_url:
         lines.append(f"Chutes knowledge rail: {chutes_mcp_url}")
 
+    notion_space_url = str(notion_space_url or "").strip()
+    if notion_space_url:
+        lines.append(f"Shared Notion SSOT: {notion_space_url}")
     lines.append("Notion webhook: shared operator-managed rail on this host")
     return lines
 

@@ -198,9 +198,10 @@ def provider_browser_auth_prompt(spec: ProviderSetupSpec, auth_state: dict[str, 
 
     if spec.provider_id == "anthropic":
         return (
-            f"Open this link to authorize {spec.display_name}:\n"
+            f"Open this link to authorize {spec.display_name} with your Anthropic account:\n"
             f"{auth_state.get('auth_url') or '(missing auth url)'}\n"
-            "When Claude shows you the authorization code, paste that whole code string back to me here."
+            "When Claude shows you the authorization code, paste that whole code string back to me here.\n"
+            "If you'd rather skip the browser flow, paste an Anthropic API key (`sk-ant-api-...`) or Claude setup-token (`sk-ant-oat-...`) instead."
         )
 
     return f"Finish browser authorization for {spec.display_name} and come back here."

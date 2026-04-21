@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 import os
@@ -22,17 +23,22 @@ from almanac_control import (
     activation_trigger_path,
     auto_provision_retry_delay_seconds,
     build_managed_memory_payload,
+    config_env_value,
     connect_db,
     delete_onboarding_bot_token_secret,
     delete_onboarding_secret,
     ensure_unix_user_ready,
+    expire_stale_notion_identity_claims,
     grant_agent_runtime_access,
     get_agent,
+    get_agent_identity,
+    get_notion_identity_claim,
     issue_auto_provision_token,
     json_loads,
     list_onboarding_sessions,
     list_pending_onboarding_bot_configurations,
     list_pending_auto_provision_requests,
+    mark_notion_identity_claim,
     make_agent_id,
     mark_auto_provision_finished,
     mark_auto_provision_started,
@@ -42,11 +48,14 @@ from almanac_control import (
     read_onboarding_secret,
     save_onboarding_session,
     shell_quote,
+    try_verify_notion_identity_claim,
+    upsert_agent_identity,
     update_agent_channels,
     write_onboarding_secret,
 )
 from almanac_onboarding_flow import begin_onboarding_provisioning, send_session_message, session_prompt
 from almanac_onboarding_completion import completion_bundle_for_session
+from almanac_notion_ssot import retrieve_notion_page
 from almanac_nextcloud_access import sync_nextcloud_user_access
 from almanac_onboarding_provider_auth import (
     poll_codex_device_authorization,
@@ -56,6 +65,21 @@ from almanac_onboarding_provider_auth import (
     resolve_provider_setup,
     start_codex_device_authorization,
 )
+
+
+_DEFAULT_USER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Deliberately limited to locale and terminal quality-of-life values. Do not add secrets here.
+_SAFE_USER_ENV_KEYS = ("LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Provision Almanac enrollments and self-serve claim flow.")
+    parser.add_argument(
+        "--claims-only",
+        action="store_true",
+        help="Poll pending self-serve Notion claims without running the full enrollment provisioner loop.",
+    )
+    return parser.parse_args()
 
 
 def _operator_target(cfg: Config) -> tuple[str, str]:
@@ -169,21 +193,50 @@ def _run_as_user(
     uid: int,
     cmd: list[str],
     hermes_home: Path,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    env = _user_subprocess_env(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        extra=extra_env,
+    )
     return subprocess.run(
         ["runuser", "-u", unix_user, "--", *cmd],
-        env={
-            **os.environ,
-            "HOME": str(home),
-            "USER": unix_user,
-            "LOGNAME": unix_user,
-            "HERMES_HOME": str(hermes_home),
-            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-        },
+        env=env,
         text=True,
         capture_output=True,
     )
+
+
+def _user_subprocess_env(
+    *,
+    unix_user: str,
+    home: Path,
+    uid: int,
+    hermes_home: Path,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    env = {
+        "PATH": _DEFAULT_USER_PATH,
+        "HOME": str(home),
+        "USER": unix_user,
+        "LOGNAME": unix_user,
+        "HERMES_HOME": str(hermes_home),
+        "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+        "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+    }
+    for key in _SAFE_USER_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    if extra:
+        for key, value in extra.items():
+            if value is None:
+                continue
+            env[str(key)] = str(value)
+    return env
 
 
 def _resolve_user_gateway_bin(cfg: Config) -> Path:
@@ -310,6 +363,7 @@ def _operator_completion_message(
     unix_user: str,
     bot_line: str,
     access: dict[str, Any],
+    notion_line: str = "",
 ) -> str:
     nextcloud_line = ""
     nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
@@ -321,9 +375,88 @@ def _operator_completion_message(
             f"Dashboard: {access.get('dashboard_url')} username={access.get('username')}",
             f"Code: {access.get('code_url')}",
             *([nextcloud_line] if nextcloud_line else []),
+            *([notion_line] if notion_line else []),
             f"Shared password: {access.get('password')}",
         ]
     )
+
+
+def _send_completion_bundle(conn, cfg: Config, session: dict[str, Any]) -> None:
+    answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+    if str(answers.get("completion_bundle_sent_at") or "").strip():
+        return
+    completion_bundle = completion_bundle_for_session(conn, cfg, session)
+    delivery = None
+    if completion_bundle is not None:
+        delivery = _notify_user_via_curator(
+            cfg,
+            session=session,
+            message=str(completion_bundle.get("full_text") or ""),
+            telegram_reply_markup=completion_bundle.get("telegram_reply_markup"),
+            discord_components=completion_bundle.get("discord_components"),
+        )
+    if isinstance(delivery, dict):
+        platform = str(session.get("platform") or "").strip().lower()
+        message_id = ""
+        if platform == "telegram":
+            message_id = str(delivery.get("message_id") or "")
+        elif platform == "discord":
+            message_id = str(delivery.get("id") or "")
+        save_onboarding_session(
+            conn,
+            session_id=str(session["session_id"]),
+            answers={
+                "completion_delivery": {
+                    "platform": platform,
+                    "chat_id": str(session.get("chat_id") or delivery.get("channel_id") or ""),
+                    "message_id": message_id,
+                    "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
+                    "password_scrubbed": False,
+                }
+            },
+        )
+        save_onboarding_session(
+            conn,
+            session_id=str(session["session_id"]),
+            answers={"completion_bundle_sent_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()},
+        )
+
+
+def _finalize_completed_onboarding(conn, cfg: Config, session: dict[str, Any]) -> None:
+    updated_session = save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        state="completed",
+        provision_error="",
+        completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+    )
+    _send_completion_bundle(conn, cfg, updated_session)
+
+
+def _shared_notion_self_serve_configured() -> bool:
+    return bool(
+        str(config_env_value("ALMANAC_SSOT_NOTION_TOKEN", "") or "").strip()
+        and str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_ID", "") or "").strip()
+    )
+
+
+def _begin_notion_onboarding_phase(conn, cfg: Config, session: dict[str, Any]) -> None:
+    updated_session = save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        state="awaiting-notion-email",
+        pending_bot_token="",
+        pending_bot_token_path="",
+        provision_error="",
+        answers={
+            "notion_verification_skipped": False,
+            "notion_claim_email": "",
+            "notion_claim_id": "",
+            "notion_claim_url": "",
+            "notion_claim_expires_at": "",
+        },
+    )
+    _notify_user_via_curator(cfg, session=updated_session, message=session_prompt(cfg, updated_session))
 
 
 def _stage_provider_secret_for_user(
@@ -643,6 +776,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     bot_username = str(session.get("telegram_bot_username") or "")
     if not pending_bot_token or not chat_id:
         raise ValueError(f"onboarding session {session['session_id']} is missing Telegram credentials")
+    answers = session.get("answers", {})
 
     uid = pwd.getpwnam(unix_user).pw_uid
     _wait_for_user_bus(str(uid))
@@ -677,6 +811,13 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         home_channel={"platform": "telegram", "channel_id": chat_id},
         display_name=_session_bot_label(session),
     )
+    upsert_agent_identity(
+        conn,
+        agent_id=agent_id,
+        unix_user=unix_user,
+        human_display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
+        agent_name=_session_bot_label(session),
+    )
 
     access = _provision_user_access_surfaces(
         conn,
@@ -703,11 +844,9 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     updated_session = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
-        state="completed",
         pending_bot_token="",
         pending_bot_token_path="",
         provision_error="",
-        completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
     )
     delete_onboarding_bot_token_secret(pending_bot_token_path)
     delete_onboarding_secret(str((session.get("answers") or {}).get("pending_provider_secret_path") or ""))
@@ -723,30 +862,10 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             f"(provider={provider_runtime.get('provider') or 'unknown'} model={provider_runtime.get('model') or 'unknown'})"
         ),
     )
-    completion_bundle = completion_bundle_for_session(conn, cfg, updated_session)
-    delivery = None
-    if completion_bundle is not None:
-        delivery = _notify_user_via_curator(
-            cfg,
-            session=updated_session,
-            message=str(completion_bundle.get("full_text") or ""),
-            telegram_reply_markup=completion_bundle.get("telegram_reply_markup"),
-            discord_components=completion_bundle.get("discord_components"),
-        )
-    if isinstance(delivery, dict):
-        save_onboarding_session(
-            conn,
-            session_id=str(session["session_id"]),
-            answers={
-                "completion_delivery": {
-                    "platform": "telegram",
-                    "chat_id": str(updated_session.get("chat_id") or ""),
-                    "message_id": str(delivery.get("message_id") or ""),
-                    "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
-                    "password_scrubbed": False,
-                }
-            },
-        )
+    if _shared_notion_self_serve_configured():
+        _begin_notion_onboarding_phase(conn, cfg, updated_session)
+    else:
+        _finalize_completed_onboarding(conn, cfg, updated_session)
     _queue_operator_message(
         conn,
         cfg,
@@ -755,6 +874,11 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             unix_user=unix_user,
             bot_line=f"Telegram bot @{bot_username or 'unknown'} is live.",
             access=access,
+            notion_line=(
+                "Shared Notion verification is now waiting on the user's self-serve claim."
+                if _shared_notion_self_serve_configured()
+                else "Shared Notion self-serve verification is not configured on this host."
+            ),
         ),
     )
 
@@ -815,6 +939,13 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         },
         display_name=_session_bot_label(session),
     )
+    upsert_agent_identity(
+        conn,
+        agent_id=agent_id,
+        unix_user=unix_user,
+        human_display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
+        agent_name=_session_bot_label(session),
+    )
 
     access = _provision_user_access_surfaces(
         conn,
@@ -841,11 +972,9 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
     updated_session = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
-        state="completed",
         pending_bot_token="",
         pending_bot_token_path="",
         provision_error="",
-        completed_at=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
     )
     delete_onboarding_bot_token_secret(pending_bot_token_path)
     delete_onboarding_secret(str((session.get("answers") or {}).get("pending_provider_secret_path") or ""))
@@ -861,30 +990,10 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             f"(provider={provider_runtime.get('provider') or 'unknown'} model={provider_runtime.get('model') or 'unknown'})"
         ),
     )
-    completion_bundle = completion_bundle_for_session(conn, cfg, updated_session)
-    delivery = None
-    if completion_bundle is not None:
-        delivery = _notify_user_via_curator(
-            cfg,
-            session=updated_session,
-            message=str(completion_bundle.get("full_text") or ""),
-            telegram_reply_markup=completion_bundle.get("telegram_reply_markup"),
-            discord_components=completion_bundle.get("discord_components"),
-        )
-    if isinstance(delivery, dict):
-        save_onboarding_session(
-            conn,
-            session_id=str(session["session_id"]),
-            answers={
-                "completion_delivery": {
-                    "platform": "discord",
-                    "chat_id": str(updated_session.get("chat_id") or delivery.get("channel_id") or ""),
-                    "message_id": str(delivery.get("id") or ""),
-                    "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
-                    "password_scrubbed": False,
-                }
-            },
-        )
+    if _shared_notion_self_serve_configured():
+        _begin_notion_onboarding_phase(conn, cfg, updated_session)
+    else:
+        _finalize_completed_onboarding(conn, cfg, updated_session)
     _queue_operator_message(
         conn,
         cfg,
@@ -893,6 +1002,11 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             unix_user=unix_user,
             bot_line=f"Discord bot {bot_username or 'unknown'} is live.",
             access=access,
+            notion_line=(
+                "Shared Notion verification is now waiting on the user's self-serve claim."
+                if _shared_notion_self_serve_configured()
+                else "Shared Notion self-serve verification is not configured on this host."
+            ),
         ),
     )
 
@@ -926,6 +1040,112 @@ def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
                 status="warn",
                 note=message,
             )
+
+
+def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
+    expire_stale_notion_identity_claims(conn)
+    for session in list_onboarding_sessions(conn, redact_secrets=False):
+        state = str(session.get("state") or "").strip()
+        if state != "awaiting-notion-verification":
+            continue
+        claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
+        if not claim_id:
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-notion-email",
+                answers={
+                    "notion_claim_email": "",
+                    "notion_claim_id": "",
+                    "notion_claim_url": "",
+                    "notion_claim_expires_at": "",
+                },
+                provision_error="",
+            )
+            _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+            continue
+        claim = get_notion_identity_claim(conn, claim_id=claim_id)
+        if claim is None:
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-notion-email",
+                answers={
+                    "notion_claim_email": "",
+                    "notion_claim_id": "",
+                    "notion_claim_url": "",
+                    "notion_claim_expires_at": "",
+                },
+                provision_error="",
+            )
+            _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+            continue
+        status = str(claim.get("status") or "").strip()
+        if status == "expired":
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-notion-email",
+                answers={
+                    "notion_claim_email": "",
+                    "notion_claim_id": "",
+                    "notion_claim_url": "",
+                    "notion_claim_expires_at": "",
+                },
+                provision_error="",
+            )
+            _notify_user_via_curator(
+                cfg,
+                session=updated,
+                message=(
+                    "That Notion verification claim expired before I saw the edit.\n\n"
+                    + session_prompt(cfg, updated)
+                ),
+            )
+            continue
+        if status == "skipped":
+            _finalize_completed_onboarding(conn, cfg, session)
+            continue
+        if status == "pending":
+            try:
+                page_payload = retrieve_notion_page(page_id=str(claim.get("notion_page_id") or ""), token=str(config_env_value("ALMANAC_SSOT_NOTION_TOKEN", "") or ""), api_version=str(config_env_value("ALMANAC_SSOT_NOTION_API_VERSION", "") or "") or "2026-03-11")
+                verified_claim = try_verify_notion_identity_claim(
+                    conn,
+                    claim=claim,
+                    page_payload=page_payload,
+                    verification_source="notion-poll",
+                )
+                if verified_claim is not None:
+                    claim = verified_claim
+                    status = str(claim.get("status") or "").strip()
+            except Exception:
+                status = "pending"
+        if status != "verified":
+            continue
+        identity = get_agent_identity(
+            conn,
+            agent_id=str(session.get("linked_agent_id") or ""),
+            unix_user=str((session.get("answers") or {}).get("unix_user") or ""),
+        ) or {}
+        updated = save_onboarding_session(
+            conn,
+            session_id=str(session["session_id"]),
+            answers={
+                "notion_claim_email": str(claim.get("claimed_notion_email") or ""),
+                "notion_verified_email": str(identity.get("notion_user_email") or claim.get("verified_notion_email") or ""),
+                "notion_verification_skipped": False,
+            },
+            provision_error="",
+        )
+        _notify_user_via_curator(
+            cfg,
+            session=updated,
+            message=(
+                "Verified. I can now write to shared Notion on your behalf through Almanac's brokered rail, "
+                "and every supported row write will stamp your Notion account in the Changed By field."
+            ),
+        )
+        _finalize_completed_onboarding(conn, cfg, updated)
 
 
 def _schedule_failure(
@@ -1014,9 +1234,12 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
         hermes_home = home / ".local" / "share" / "almanac-agent" / "hermes-home"
         activation_path = activation_trigger_path(cfg, agent_id)
 
-        env = dict(os.environ)
-        env.update(
-            {
+        env = _user_subprocess_env(
+            unix_user=unix_user,
+            home=home,
+            uid=uid,
+            hermes_home=hermes_home,
+            extra={
                 "ALMANAC_REQUESTER_IDENTITY": requester_identity,
                 "ALMANAC_BOOTSTRAP_REQUEST_ID": request_id,
                 "ALMANAC_BOOTSTRAP_RAW_TOKEN": token_payload["raw_token"],
@@ -1029,25 +1252,10 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
                 "ALMANAC_MCP_URL": f"http://127.0.0.1:{cfg.public_mcp_port}/mcp",
                 "ALMANAC_BOOTSTRAP_URL": f"http://127.0.0.1:{cfg.public_mcp_port}/mcp",
                 "ALMANAC_QMD_URL": cfg.qmd_url,
-                "ALMANAC_HOME": str(cfg.almanac_home),
-                "ALMANAC_REPO_DIR": str(cfg.repo_dir),
                 "ALMANAC_SHARED_REPO_DIR": str(cfg.repo_dir),
-                "ALMANAC_PRIV_DIR": str(cfg.private_dir),
-                "ALMANAC_PRIV_CONFIG_DIR": str(cfg.private_dir / "config"),
-                "STATE_DIR": str(cfg.state_dir),
                 "RUNTIME_DIR": str(cfg.runtime_dir),
-                "VAULT_DIR": str(cfg.vault_dir),
-                "ALMANAC_DB_PATH": str(cfg.db_path),
-                "ALMANAC_AGENTS_STATE_DIR": str(cfg.agents_state_dir),
-                "ALMANAC_ARCHIVED_AGENTS_DIR": str(cfg.archived_agents_dir),
                 "ALMANAC_ACTIVATION_TRIGGER_PATH": str(activation_path),
-                "HOME": str(home),
-                "USER": unix_user,
-                "LOGNAME": unix_user,
-                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-                "HERMES_HOME": str(hermes_home),
-            }
+            },
         )
 
         result = subprocess.run(
@@ -1087,6 +1295,12 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
             home=home,
             hermes_home=hermes_home,
             uid=uid,
+        )
+        upsert_agent_identity(
+            conn,
+            agent_id=agent_id,
+            unix_user=unix_user,
+            human_display_name=requester_identity or unix_user,
         )
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip().replace("\n", " ")[:500] or "unknown auto-provision error"
@@ -1133,14 +1347,19 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
 
 
 def main() -> None:
+    args = parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Run this as root.")
     cfg = Config.from_env()
     with connect_db(cfg) as conn:
+        if args.claims_only:
+            _run_pending_onboarding_notion_verifications(conn, cfg)
+            return
         _run_pending_onboarding_provider_authorizations(conn, cfg)
         for row in list_pending_auto_provision_requests(conn, cfg):
             _run_one(conn, cfg, row)
         _run_pending_onboarding_gateway_configs(conn, cfg)
+        _run_pending_onboarding_notion_verifications(conn, cfg)
 
 
 if __name__ == "__main__":

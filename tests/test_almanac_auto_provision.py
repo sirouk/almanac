@@ -206,6 +206,12 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             expect(calls, "expected _run_one to invoke subprocess.run for init.sh")
             last = calls[-1]
             expect(last.get("stdin") is subprocess.DEVNULL, f"expected headless init to use DEVNULL stdin, got {last}")
+            env = last.get("env") or {}
+            expect(env.get("ALMANAC_BOOTSTRAP_REQUEST_ID") == "req_run_one", env)
+            expect(env.get("ALMANAC_INIT_MODEL_PRESET") == "codex", env)
+            expect(env.get("ALMANAC_SHARED_REPO_DIR") == str(REPO), env)
+            expect("ALMANAC_SSOT_NOTION_TOKEN" not in env, env)
+            expect("POSTGRES_PASSWORD" not in env, env)
             expect(len(memory_refresh_calls) == 1, f"expected one managed-memory refresh call, got {memory_refresh_calls}")
             expect(memory_refresh_calls[0]["agent_id"] == "agent-autoprovbot", memory_refresh_calls)
             print("PASS test_run_one_uses_devnull_stdin_for_headless_init")
@@ -214,11 +220,51 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             os.environ.update(old_env)
 
 
+def test_run_as_user_scrubs_ambient_env() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_env_scrub_test")
+    calls: list[dict[str, object]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, **kwargs})
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    old_env = os.environ.copy()
+    os.environ["ALMANAC_SSOT_NOTION_TOKEN"] = "secret-should-not-leak"
+    os.environ["POSTGRES_PASSWORD"] = "postgres-should-not-leak"
+    os.environ["PATH"] = "/tmp/not-the-real-path"
+    os.environ["LANG"] = "en_US.UTF-8"
+    provisioner.subprocess.run = fake_run
+    try:
+        provisioner._run_as_user(
+            unix_user="scrubtest",
+            home=Path("/home/scrubtest"),
+            uid=1234,
+            hermes_home=Path("/home/scrubtest/.local/share/almanac-agent/hermes-home"),
+            cmd=["systemctl", "--user", "is-active", "dummy.service"],
+        )
+        expect(calls, "expected _run_as_user to invoke subprocess.run")
+        env = calls[-1].get("env") or {}
+        expect(env.get("HOME") == "/home/scrubtest", env)
+        expect(env.get("USER") == "scrubtest", env)
+        expect(env.get("HERMES_HOME") == "/home/scrubtest/.local/share/almanac-agent/hermes-home", env)
+        expect(env.get("LANG") == "en_US.UTF-8", env)
+        expect(env.get("PATH") == provisioner._DEFAULT_USER_PATH, env)
+        expect("ALMANAC_SSOT_NOTION_TOKEN" not in env, env)
+        expect("POSTGRES_PASSWORD" not in env, env)
+        print("PASS test_run_as_user_scrubs_ambient_env")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
 def main() -> int:
     test_mark_auto_provision_started_claims_only_once_until_finished()
     test_stale_auto_provision_claims_are_reclaimable()
     test_run_one_uses_devnull_stdin_for_headless_init()
-    print("PASS all 3 auto-provision regression tests")
+    test_run_as_user_scrubs_ambient_env()
+    print("PASS all 4 auto-provision regression tests")
     return 0
 
 

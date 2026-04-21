@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from almanac_agent_access import clear_tailscale_https, load_access_state
+from almanac_notion_ssot import (
+    DEFAULT_NOTION_API_VERSION,
+    handshake_notion_space,
+    retrieve_notion_user,
+)
 from almanac_nextcloud_access import delete_nextcloud_user_access
 from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
@@ -34,10 +39,12 @@ from almanac_control import (
     get_setting,
     hash_token,
     list_agents,
+    list_agent_identities,
     list_notifications,
     list_onboarding_sessions,
     list_auto_provision_requests,
     list_requests,
+    list_ssot_access_audit,
     list_tokens,
     list_vault_warnings,
     list_vaults,
@@ -55,8 +62,13 @@ from almanac_control import (
     revoke_token,
     approve_onboarding_session,
     signal_agent_refresh_from_curator,
+    log_ssot_access_audit,
+    mark_agent_identity_verified,
+    set_agent_identity_claim,
+    suspend_agent_identity,
     subscriptions_for_agent,
     sync_vault_repo_mirrors,
+    unsuspend_agent_identity,
     utc_now_iso,
     upsert_setting,
 )
@@ -172,6 +184,34 @@ def parse_args() -> argparse.Namespace:
     notion = subparsers.add_parser("notion")
     notion_sub = notion.add_subparsers(dest="action", required=True)
     notion_sub.add_parser("process-pending")
+    notion_handshake = notion_sub.add_parser("handshake")
+    notion_handshake.add_argument("--space-url", default="")
+    notion_handshake.add_argument("--token", default="")
+    notion_handshake.add_argument("--api-version", default="")
+    notion_identity_list = notion_sub.add_parser("identity-list")
+    notion_identity_list.add_argument("--show-sensitive", dest="show_sensitive", action="store_true")
+    notion_identity_list.add_argument("--show-emails", dest="show_sensitive", action="store_true", help=argparse.SUPPRESS)
+    notion_claim = notion_sub.add_parser("claim-email")
+    notion_claim.add_argument("target")
+    notion_claim.add_argument("email")
+    notion_claim.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    notion_verify = notion_sub.add_parser("verify-identity")
+    notion_verify.add_argument("target")
+    notion_verify.add_argument("notion_user_id")
+    notion_verify.add_argument("--email", default="")
+    notion_verify.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    notion_suspend = notion_sub.add_parser("suspend")
+    notion_suspend.add_argument("target")
+    notion_suspend.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    notion_suspend.add_argument("--reason", default="identity suspended via almanac-ctl")
+    notion_unsuspend = notion_sub.add_parser("unsuspend")
+    notion_unsuspend.add_argument("target")
+    notion_unsuspend.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    notion_unsuspend.add_argument("--reason", default="identity unsuspended via almanac-ctl")
+    notion_audit = notion_sub.add_parser("audit")
+    notion_audit.add_argument("--agent-id", default="")
+    notion_audit.add_argument("--unix-user", default="")
+    notion_audit.add_argument("--limit", type=int, default=50)
 
     notifications = subparsers.add_parser("notifications")
     notifications_sub = notifications.add_subparsers(dest="action", required=True)
@@ -211,6 +251,64 @@ def dump_output(args: argparse.Namespace, payload: object) -> None:
         print(payload)
         return
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _redacted_email(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    local, sep, domain = normalized.partition("@")
+    if not sep:
+        return "***"
+    lead = local[:1] or "*"
+    return f"{lead}***@{domain}"
+
+
+def _redacted_identifier(value: str) -> str:
+    return "[redacted]" if str(value or "").strip() else ""
+
+
+def _redact_identity_rows(rows: list[dict[str, Any]], *, show_sensitive: bool) -> list[dict[str, Any]]:
+    if show_sensitive:
+        return rows
+    scrubbed: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["claimed_notion_email"] = _redacted_email(item.get("claimed_notion_email", ""))
+        item["notion_user_email"] = _redacted_email(item.get("notion_user_email", ""))
+        item["notion_user_id"] = _redacted_identifier(item.get("notion_user_id", ""))
+        scrubbed.append(item)
+    return scrubbed
+
+
+def _manual_verify_notion_user(user_id: str, *, expected_email: str = "") -> tuple[str, str]:
+    token = str(config_env_value("ALMANAC_SSOT_NOTION_TOKEN", "") or "").strip()
+    if not token:
+        raise SystemExit("shared Notion SSOT integration secret is not configured")
+    api_version = (
+        str(config_env_value("ALMANAC_SSOT_NOTION_API_VERSION", DEFAULT_NOTION_API_VERSION) or "").strip()
+        or DEFAULT_NOTION_API_VERSION
+    )
+    payload = retrieve_notion_user(
+        user_id=user_id,
+        token=token,
+        api_version=api_version,
+    )
+    notion_user_id = str(payload.get("id") or "").strip()
+    if not notion_user_id:
+        raise SystemExit("Notion did not return a stable user id for that account")
+    if str(payload.get("type") or "").strip().lower() != "person":
+        raise SystemExit("manual verification requires a person account from Notion, not a bot or integration account")
+    person = payload.get("person")
+    notion_user_email = str(person.get("email") or "").strip().lower() if isinstance(person, dict) else ""
+    if not notion_user_email:
+        raise SystemExit("Notion did not expose an email for that user account")
+    normalized_expected = str(expected_email or "").strip().lower()
+    if normalized_expected and notion_user_email != normalized_expected:
+        raise SystemExit(
+            f"Notion user email mismatch: expected {normalized_expected}, got {notion_user_email}"
+        )
+    return notion_user_id, notion_user_email
 
 
 def read_env_file_value(path: Path, key: str) -> str:
@@ -1794,6 +1892,110 @@ def main() -> None:
 
         if args.domain == "notion" and args.action == "process-pending":
             dump_output(args, process_pending_notion_events(conn))
+            return
+        if args.domain == "notion" and args.action == "handshake":
+            try:
+                payload = handshake_notion_space(
+                    space_url=args.space_url or config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip(),
+                    token=args.token or config_env_value("ALMANAC_SSOT_NOTION_TOKEN", "").strip(),
+                    api_version=(
+                        args.api_version
+                        or config_env_value("ALMANAC_SSOT_NOTION_API_VERSION", DEFAULT_NOTION_API_VERSION).strip()
+                        or DEFAULT_NOTION_API_VERSION
+                    ),
+                )
+            except RuntimeError as exc:
+                raise SystemExit(str(exc)) from exc
+            dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "identity-list":
+            dump_output(
+                args,
+                {
+                    "identities": _redact_identity_rows(
+                        list_agent_identities(conn),
+                        show_sensitive=args.show_sensitive,
+                    )
+                },
+            )
+            return
+        if args.domain == "notion" and args.action == "claim-email":
+            payload = set_agent_identity_claim(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+                claimed_notion_email=args.email,
+                verification_source=f"claim-email:{args.actor}",
+            )
+            dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "verify-identity":
+            notion_user_id, notion_user_email = _manual_verify_notion_user(
+                args.notion_user_id,
+                expected_email=args.email,
+            )
+            payload = mark_agent_identity_verified(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+                notion_user_id=notion_user_id,
+                notion_user_email=notion_user_email,
+                verification_source=f"notion-live-check:{notion_user_email}",
+            )
+            dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "suspend":
+            payload = suspend_agent_identity(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+            )
+            log_ssot_access_audit(
+                conn,
+                agent_id=str(payload.get("agent_id") or ""),
+                unix_user=str(payload.get("unix_user") or ""),
+                notion_user_id=str(payload.get("notion_user_id") or ""),
+                operation="suspend",
+                target_id=str(payload.get("unix_user") or payload.get("agent_id") or args.target),
+                decision="allow",
+                reason=str(args.reason or "").strip() or "identity suspended",
+                actor=args.actor,
+                request_payload={"target": args.target, "reason": args.reason},
+            )
+            dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "unsuspend":
+            payload = unsuspend_agent_identity(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+            )
+            log_ssot_access_audit(
+                conn,
+                agent_id=str(payload.get("agent_id") or ""),
+                unix_user=str(payload.get("unix_user") or ""),
+                notion_user_id=str(payload.get("notion_user_id") or ""),
+                operation="unsuspend",
+                target_id=str(payload.get("unix_user") or payload.get("agent_id") or args.target),
+                decision="allow",
+                reason=str(args.reason or "").strip() or "identity unsuspended",
+                actor=args.actor,
+                request_payload={"target": args.target, "reason": args.reason},
+            )
+            dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "audit":
+            dump_output(
+                args,
+                {
+                    "audit": list_ssot_access_audit(
+                        conn,
+                        agent_id=args.agent_id,
+                        unix_user=args.unix_user,
+                        limit=args.limit,
+                    )
+                },
+            )
             return
 
     raise SystemExit("unsupported command")

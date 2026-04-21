@@ -266,6 +266,49 @@ def test_delete_nextcloud_user_access_deletes_existing_user() -> None:
             os.environ.update(old_env)
 
 
+def test_nextcloud_occ_scrubs_ambient_env() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_env_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_env_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "home-almanac").mkdir(parents=True, exist_ok=True)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root, enable_nextcloud="1"))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ALMANAC_SSOT_NOTION_TOKEN"] = "sentinel-secret"
+        os.environ["POSTGRES_PASSWORD"] = "db-secret"
+        os.environ["PATH"] = "/tmp/tainted"
+        try:
+            cfg = control.Config.from_env()
+            captured: dict[str, object] = {}
+
+            nextcloud_access._runtime_exec_base = lambda cfg_arg, extra_env=None: ["runuser", "-u", cfg_arg.almanac_user, "--", "podman", "exec", "app"]
+
+            def fake_run(cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["env"] = kwargs.get("env")
+                return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+            nextcloud_access.subprocess.run = fake_run
+            nextcloud_access._nextcloud_occ(cfg, "status", "--output=json")
+
+            env = captured.get("env")
+            expect(isinstance(env, dict), str(captured))
+            env = dict(env)
+            expect(env.get("PATH") == nextcloud_access._SAFE_HOST_PATH, str(env))
+            expect(env.get("HOME") == str(cfg.almanac_home), str(env))
+            expect(env.get("USER") == cfg.almanac_user, str(env))
+            expect("ALMANAC_SSOT_NOTION_TOKEN" not in env, str(env))
+            expect("POSTGRES_PASSWORD" not in env, str(env))
+            print("PASS test_nextcloud_occ_scrubs_ambient_env")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -305,8 +348,9 @@ def main() -> int:
     test_sync_nextcloud_user_access_resets_existing_user_password()
     test_delete_nextcloud_user_access_skips_when_disabled()
     test_delete_nextcloud_user_access_deletes_existing_user()
+    test_nextcloud_occ_scrubs_ambient_env()
     test_nextcloud_occ_uses_service_user_safe_cwd()
-    print("PASS all 6 nextcloud access regression tests")
+    print("PASS all 7 nextcloud access regression tests")
     return 0
 
 

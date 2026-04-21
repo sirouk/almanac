@@ -47,7 +47,7 @@ is_placeholder_secret() {
   local value=""
 
   value="$(trim_secret_marker "${1:-}")"
-  case "${value,,}" in
+  case "$(lowercase "$value")" in
     change-me|changeme|generated-at-deploy)
       return 0
       ;;
@@ -557,6 +557,8 @@ required_skill_names = [
     "almanac-first-contact",
     "almanac-vaults",
     "almanac-ssot",
+    "almanac-ssot-connect",
+    "almanac-notion-mcp",
 ]
 for agent in agents:
     agent_id = agent["agent_id"]
@@ -1416,6 +1418,15 @@ check_activation_trigger_write_access
 check_port_listening "$ALMANAC_NOTION_WEBHOOK_PORT"
 check_port_loopback_only "$ALMANAC_NOTION_WEBHOOK_PORT" "almanac-notion-webhook backend port $ALMANAC_NOTION_WEBHOOK_PORT"
 check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "almanac-notion-webhook health"
+if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    pass "Notion webhook public URL configured: $ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"
+  else
+    warn "Notion webhook public URL is not configured; the local receiver is healthy but Notion cannot reach 127.0.0.1 directly"
+  fi
+else
+  pass "Notion webhook public URL not required because shared Notion SSOT is not configured"
+fi
 check_vault_definition_health
 check_curator_state
 check_curator_gateway_runtime
@@ -1476,6 +1487,7 @@ if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
 fi
 
 check_system_unit_state almanac-enrollment-provision.timer required
+check_system_unit_state almanac-notion-claim-poll.timer required
 
 printf '\nSummary: %s ok, %s warn, %s fail\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 

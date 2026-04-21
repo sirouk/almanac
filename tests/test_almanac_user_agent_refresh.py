@@ -11,6 +11,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_SCRIPT = REPO / "bin" / "user-agent-refresh.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
+NOTION_SSOT_PY = REPO / "python" / "almanac_notion_ssot.py"
 RESOURCE_MAP_PY = REPO / "python" / "almanac_resource_map.py"
 
 
@@ -86,6 +87,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         shutil.copy2(SOURCE_SCRIPT, bin_dir / "user-agent-refresh.sh")
         (bin_dir / "user-agent-refresh.sh").chmod(0o755)
         shutil.copy2(CONTROL_PY, python_dir / "almanac_control.py")
+        shutil.copy2(NOTION_SSOT_PY, python_dir / "almanac_notion_ssot.py")
         shutil.copy2(RESOURCE_MAP_PY, python_dir / "almanac_resource_map.py")
         write_fake_rpc_client(python_dir / "almanac_rpc_client.py")
 
@@ -166,6 +168,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
             "[managed:resource-ref]",
             "[managed:qmd-ref]",
             "[managed:vault-topology]",
+            "[managed:notion-stub]",
         ]
         for prefix in managed_prefixes:
             expect(any(entry.startswith(prefix) for entry in memory_entries), f"missing {prefix} in {memory_entries}")

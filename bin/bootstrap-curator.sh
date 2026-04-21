@@ -26,7 +26,7 @@ confirm_default() {
   [[ "$default" == "no" ]] && hint="y/N"
   read -r -p "$prompt [$hint]: " answer
   answer="${answer:-$default}"
-  [[ "${answer,,}" =~ ^(y|yes|1)$ ]]
+  [[ "$(lowercase "$answer")" =~ ^(y|yes|1)$ ]]
 }
 
 choose_model_preset() {
@@ -83,10 +83,10 @@ choose_channels_csv() {
   local discord="" telegram="" channels="tui-only"
   discord="$(ask_default "Enable Discord for Curator gateway? (yes/no)" "$default_discord")"
   telegram="$(ask_default "Enable Telegram for Curator gateway? (yes/no)" "$default_telegram")"
-  if [[ "${discord,,}" =~ ^(y|yes|1)$ ]]; then
+  if [[ "$(lowercase "$discord")" =~ ^(y|yes|1)$ ]]; then
     channels="$channels,discord"
   fi
-  if [[ "${telegram,,}" =~ ^(y|yes|1)$ ]]; then
+  if [[ "$(lowercase "$telegram")" =~ ^(y|yes|1)$ ]]; then
     channels="$channels,telegram"
   fi
   printf '%s\n' "$channels"
@@ -647,6 +647,7 @@ main() {
   local hermes_state_file=""
   local ran_model_setup="0"
   local ran_gateway_setup="0"
+  local line=""
 
   model_preset="$(choose_model_preset)"
   case "$model_preset" in
@@ -668,7 +669,10 @@ print(json.dumps(channels))
 PY
   )"
 
-  mapfile -t notify_values < <(resolve_notify_channel "$channels_csv")
+  notify_values=()
+  while IFS= read -r line; do
+    notify_values+=("$line")
+  done < <(resolve_notify_channel "$channels_csv")
   notify_platform="${notify_values[0]:-tui-only}"
   notify_channel_id="${notify_values[1]:-}"
   if [[ "$notify_platform" == "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" && "$notify_channel_id" == "${OPERATOR_NOTIFY_CHANNEL_ID:-}" ]]; then
@@ -735,7 +739,10 @@ PY
   ALMANAC_CURATOR_CHANNELS="$channels_csv"
   set_config_value "ALMANAC_CURATOR_MODEL_PRESET" "$model_preset"
   set_config_value "ALMANAC_CURATOR_CHANNELS" "$channels_csv"
-  mapfile -t notify_values < <(configure_operator_notify_channel "$notify_platform" "$notify_channel_id")
+  notify_values=()
+  while IFS= read -r line; do
+    notify_values+=("$line")
+  done < <(configure_operator_notify_channel "$notify_platform" "$notify_channel_id")
   notify_platform="${notify_values[0]:-tui-only}"
   notify_channel_id="${notify_values[1]:-}"
   if [[ "$notify_platform" != "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" || "$notify_channel_id" != "${OPERATOR_NOTIFY_CHANNEL_ID:-}" ]]; then
@@ -775,6 +782,8 @@ PY
     almanac-first-contact \
     almanac-vaults \
     almanac-ssot \
+    almanac-ssot-connect \
+    almanac-notion-mcp \
     almanac-upgrade-orchestrator
 
   if set_user_systemd_bus_env; then

@@ -193,6 +193,7 @@ It opens a small menu with modes for:
 - install or repair from the checkout you are currently running
 - upgrade from the configured upstream repo and branch
 - config-only writes
+- shared Notion SSOT setup plus live credential handshake
 - Curator repair
 - health
 - remove/teardown
@@ -207,9 +208,12 @@ Install or repair from the current checkout asks for:
 - public repo path
 - private repo path
 - whether to initialize the public repo if it isn't already a git repo
+- org name, mission, primary project, timezone, and quiet hours for per-agent `SOUL.md` seeding
 - Tailscale/Nextcloud domain and port, with Tailscale auto-detected when available
 - whether to enable the tailnet-only Tailscale HTTPS proxy for Nextcloud
 - which local user should be allowed to manage Tailscale Serve after install
+- whether to install `podman` now if the host is missing it
+- whether to install `tailscale` now if the host is missing it
 - whether to wipe existing Nextcloud state for a clean reinstall when prior state is detected
 - Nextcloud admin username/password
 - GitHub private remote for `almanac-priv`
@@ -244,6 +248,17 @@ sudo ./bin/almanac-ctl user prepare <unix-user>   # optional manual repair path
 ./bin/almanac-ctl provision list
 ```
 
+Host notes:
+
+- Full shared-host deployment is supported on Debian/Ubuntu-style Linux with
+  `apt`, `systemd`, and `loginctl`.
+- WSL2 Ubuntu works the same way once systemd is enabled inside the guest.
+- Native macOS is not a supported Almanac host or runtime environment. You may
+  still use helper commands like `./deploy.sh write-config` or
+  `./deploy.sh agent-payload` from an operator checkout there, but the actual
+  shared-host stack still needs Debian/Ubuntu Linux, WSL2 Ubuntu with systemd,
+  or an Ubuntu VM.
+
 ## Operator Runbook
 
 ### 1. Deploy the shared host
@@ -257,6 +272,13 @@ Clone the repo onto the host, then run:
 That flow stands up the shared infrastructure, writes `almanac-priv`, installs
 the shared systemd services, records the deployed release state, and then
 launches Curator onboarding.
+
+If you later update the org interview fields in `almanac.env` and want every
+enrolled user agent to pick up the refreshed `SOUL.md` and prefill wiring, run:
+
+```bash
+./deploy.sh enrollment-align
+```
 
 When you run deploy or health commands from a separate operator checkout, that
 checkout also writes a local maintenance pointer at `.almanac-operator.env`.
@@ -565,6 +587,10 @@ the system yet:
 /path/to/almanac/deploy.sh write-config
 ```
 
+Treat that as an operator helper, not as proof that the full Almanac stack is
+supported on the current machine. The live runtime still expects Ubuntu-style
+Linux services.
+
 ## Manual Components
 
 - [bootstrap-system.sh](./bin/bootstrap-system.sh): root/system setup
@@ -634,10 +660,98 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 - when Tailscale Serve is enabled, deploy also prints the tailnet MCP URL for remote agents
 - the matching skill lives at `skills/almanac-qmd-mcp/SKILL.md`
 - the recurring memory-maintenance skill lives at `skills/almanac-vault-reconciler/SKILL.md`
-- user enrollment also installs `almanac-first-contact`, `almanac-vaults`, and `almanac-ssot`
+- user enrollment also installs `almanac-first-contact`, `almanac-vaults`, `almanac-ssot`, `almanac-ssot-connect`, and `almanac-notion-mcp`
 - first contact registers `almanac-mcp`, qmd MCP, and Chutes KB MCP when configured, then resolves default `.vault` subscriptions
 - if `sirouk/almanac` is public, remote host users can bootstrap with the raw `init.sh` URL
 - if `sirouk/almanac` is still private, users should enroll from a local clone on the host
+
+### Notion SSOT + User Notion
+
+- configure the shared organizational Notion target with `./deploy.sh notion-ssot`
+- make one normal Notion page for Almanac, such as `The Almanac`, and paste
+  that page URL when prompted
+- do not use the workspace Home screen itself; use a normal page inside the
+  workspace instead
+- before running that flow in Notion:
+  - create that normal Almanac page in the Teamspace you want to use
+  - start here: `https://www.notion.so/profile/integrations/internal`
+  - if Notion lands you back in the workspace UI, open the workspace switcher
+    in the top-left, then go to `Settings -> Integrations`
+  - click `Create new integration`
+  - name it something like **Almanac Curator**
+  - optionally upload an icon; the Curator Discord avatar in this repo works
+    well for that
+  - choose the associated workspace and click `Create`
+  - on the capabilities screen:
+    - turn on every checkbox capability Notion offers on that screen
+    - for user information, choose `Read user information including email addresses` so Almanac can
+      verify users against their Notion email
+    - click `Save`
+  - if you land on the `Discover new connections` gallery and see entries like
+    `Notion MCP`, `GitHub`, or `Slack`, do **not** pick one of those for the
+    shared SSOT setup
+  - open that internal integration and, near **Internal integration secret**,
+    click `Show` and then copy the key
+  - in that integration, open **Manage page access** and grant access to the
+    parent page or Teamspace root Almanac should live under
+  - new child pages and databases under that granted subtree inherit access
+    automatically; you only need to manage access again for pages outside it
+  - Notion does not expose a supported API for Almanac to press that
+    **Manage page access** UI for you; the workable pattern is to grant one
+    stable root/parent subtree once, then keep Almanac-managed content under it
+- Almanac uses that page as its shared Notion home and creates its verification
+  scaffolding under it when needed
+- that flow stores the shared page URL plus the internal integration secret
+  in `almanac-priv/config/almanac.env`
+- it tests a live handshake against Notion before persisting the target
+- shared SSOT databases should expose `Owner` and/or `Assignee` people
+  properties so Almanac can scope reads to the current verified user
+- if the database also exposes a `Changed By` people property, Almanac stamps
+  the verified human there automatically on every shared write
+- the shared target should live on a page or under a page-owned database so
+  Almanac can create its self-serve verification database nearby
+- the shared organizational lane is brokered through Almanac's own
+  `ssot.read` / `ssot.write` rails backed by the Notion REST API
+- the hosted Notion MCP is only for each user's optional private Notion lane
+- the shared organizational rail is for `almanac-ssot`
+- shared SSOT reads now go through a central brokered `ssot.read` rail and
+  shared SSOT writes apply immediately when the caller has a verified local
+  Notion identity in `verified_limited` mode and the target stays inside that
+  caller's scoped ownership rails
+- shared Notion onboarding is self-serve inside the Curator DM: once the lane
+  is provisioned, Curator asks for the user's Notion email, creates a
+  verification page in the shared workspace, and waits for a human edit before
+  marking that user verified
+- verification claim rows live in a shared verification database inside the
+  workspace; that is a practical Notion limitation today, so treat the claim
+  fields there as operator-visible workspace metadata rather than secrets
+- verification is local-first: Almanac stores the agent/user registry and audit
+  log locally, while Notion is only the proof surface and work surface
+- Notion's native edit history still shows the Almanac integration for brokered
+  writes; the human attribution surface is the local audit log plus the
+  `Changed By` people property on each touched row when that property exists
+- Curator also pushes a shared Notion digest into each user's managed memory:
+  personal scoped counts when verified, plus a team-level aggregate summary
+  that never exposes raw cross-user page contents
+- when a user is verified, that managed-memory digest may also include titles
+  for up to five of their own scoped current-focus rows, so operators should
+  treat those titles as part of the user's local agent memory surface
+- the delivery model is two-pipe: managed-memory stubs are the ambient map,
+  while webhook notifications are the hot event stream that nudges agents to
+  refresh and react
+- operator registry helpers live in:
+  - `./bin/almanac-ctl notion identity-list`
+  - `./bin/almanac-ctl notion claim-email <agent-id|unix-user> <email>`
+  - `./bin/almanac-ctl notion verify-identity <agent-id|unix-user> <notion-user-id> --email <email>`
+  - `./bin/almanac-ctl notion audit --agent-id <agent-id>`
+- user-owned Notion linking uses `almanac-ssot-connect`
+- once a user's own Notion MCP is connected, ongoing work should use
+  `almanac-notion-mcp`
+- Almanac does not use per-user OAuth for the shared organizational rail:
+  OAuth would scope access, but Notion would still attribute the write to the
+  integration in native edit history. The shared rail stays centralized so the
+  audit trail, verification state, and scoped write controls all live in one
+  place.
 
 ## Vault Semantics
 

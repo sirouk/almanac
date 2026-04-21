@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +13,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 DEPLOY_SH = REPO / "bin" / "deploy.sh"
+INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
 
 
@@ -32,6 +35,13 @@ def extract(text: str, start_marker: str, end_marker: str) -> str:
     start = text.index(start_marker)
     end = text.index(end_marker, start)
     return text[start:end]
+
+
+def extract_heredoc(text: str, marker: str) -> str:
+    start = text.index(marker)
+    body_start = text.index("\n", start) + 1
+    body_end = text.index("\nEOF", body_start)
+    return text[body_start:body_end]
 
 
 def bash(script: str) -> subprocess.CompletedProcess[str]:
@@ -60,6 +70,17 @@ def render_runtime_config(
     *,
     enable_tailscale_serve: str = "0",
     agent_enable_tailscale_serve: str = "",
+    notion_space_url: str = "",
+    notion_space_id: str = "",
+    notion_space_kind: str = "",
+    notion_api_version: str = "2026-03-11",
+    notion_token: str = "",
+    notion_public_webhook_url: str = "",
+    org_name: str = "",
+    org_mission: str = "",
+    org_primary_project: str = "",
+    org_timezone: str = "Etc/UTC",
+    org_quiet_hours: str = "",
 ) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
@@ -86,6 +107,17 @@ POSTGRES_USER=nextcloud
 POSTGRES_PASSWORD=dbpass
 NEXTCLOUD_ADMIN_USER=admin
 NEXTCLOUD_ADMIN_PASSWORD=adminpass
+ALMANAC_SSOT_NOTION_SPACE_URL={shlex.quote(notion_space_url)}
+ALMANAC_SSOT_NOTION_SPACE_ID={shlex.quote(notion_space_id)}
+ALMANAC_SSOT_NOTION_SPACE_KIND={shlex.quote(notion_space_kind)}
+ALMANAC_SSOT_NOTION_API_VERSION={shlex.quote(notion_api_version)}
+ALMANAC_SSOT_NOTION_TOKEN={shlex.quote(notion_token)}
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL={shlex.quote(notion_public_webhook_url)}
+ALMANAC_ORG_NAME={shlex.quote(org_name)}
+ALMANAC_ORG_MISSION={shlex.quote(org_mission)}
+ALMANAC_ORG_PRIMARY_PROJECT={shlex.quote(org_primary_project)}
+ALMANAC_ORG_TIMEZONE={shlex.quote(org_timezone)}
+ALMANAC_ORG_QUIET_HOURS={shlex.quote(org_quiet_hours)}
 ENABLE_NEXTCLOUD=0
 ENABLE_TAILSCALE_SERVE={shlex.quote(enable_tailscale_serve)}
 ENABLE_PRIVATE_GIT=1
@@ -143,6 +175,83 @@ def test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag() -> N
     agent_flag = source_value(config, "ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE")
     expect(agent_flag == "1", f"expected agent tailscale serve flag to follow global enable, got {agent_flag!r}")
     print("PASS test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag")
+
+
+def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        notion_space_url="https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
+        notion_space_id="12345678-90ab-cdef-1234-567890abcdef",
+        notion_space_kind="database",
+        notion_api_version="2026-03-11",
+        notion_token="secret_test",
+        notion_public_webhook_url="https://hooks.example.com/notion/webhook",
+    )
+    expect(
+        source_value(config, "ALMANAC_SSOT_NOTION_SPACE_URL") == "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
+        config,
+    )
+    expect(source_value(config, "ALMANAC_SSOT_NOTION_SPACE_ID") == "12345678-90ab-cdef-1234-567890abcdef", config)
+    expect(source_value(config, "ALMANAC_SSOT_NOTION_SPACE_KIND") == "database", config)
+    expect(source_value(config, "ALMANAC_SSOT_NOTION_API_VERSION") == "2026-03-11", config)
+    expect(source_value(config, "ALMANAC_SSOT_NOTION_TOKEN") == "secret_test", config)
+    expect(
+        source_value(config, "ALMANAC_NOTION_WEBHOOK_PUBLIC_URL") == "https://hooks.example.com/notion/webhook",
+        config,
+    )
+    print("PASS test_emit_runtime_config_persists_notion_ssot_fields")
+
+
+def test_emit_runtime_config_persists_org_interview_fields() -> None:
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        org_name="Acme Labs",
+        org_mission="Make serious research more legible and actionable.",
+        org_primary_project="Hermes deployment lane",
+        org_timezone="America/New_York",
+        org_quiet_hours="22:00-08:00 weekdays",
+    )
+    expect(source_value(config, "ALMANAC_ORG_NAME") == "Acme Labs", config)
+    expect(source_value(config, "ALMANAC_ORG_MISSION") == "Make serious research more legible and actionable.", config)
+    expect(source_value(config, "ALMANAC_ORG_PRIMARY_PROJECT") == "Hermes deployment lane", config)
+    expect(source_value(config, "ALMANAC_ORG_TIMEZONE") == "America/New_York", config)
+    expect(source_value(config, "ALMANAC_ORG_QUIET_HOURS") == "22:00-08:00 weekdays", config)
+    print("PASS test_emit_runtime_config_persists_org_interview_fields")
+
+
+def test_org_interview_validators_accept_known_good_values() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "normalize_optional_answer() {", "ask_secret_with_default() {")
+    script = f"""
+{snippet}
+validate_org_timezone America/New_York
+validate_org_quiet_hours '22:00-08:00 weekdays'
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"expected validators to accept known-good values: {result.stderr}")
+    print("PASS test_org_interview_validators_accept_known_good_values")
+
+
+def test_org_interview_validators_reject_bad_values() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "normalize_optional_answer() {", "ask_secret_with_default() {")
+    bad_timezone = bash(
+        f"""
+{snippet}
+validate_org_timezone Mars/Phobos
+"""
+    )
+    expect(bad_timezone.returncode != 0, "expected invalid timezone to be rejected")
+    bad_quiet_hours = bash(
+        f"""
+{snippet}
+validate_org_quiet_hours nighttime
+"""
+    )
+    expect(bad_quiet_hours.returncode != 0, "expected invalid quiet hours to be rejected")
+    print("PASS test_org_interview_validators_reject_bad_values")
 
 
 def test_describe_operator_channel_summary_avoids_tui_only_duplication() -> None:
@@ -715,6 +824,233 @@ printf 'BACKUP_GIT_REMOTE=%s\\n' "$BACKUP_GIT_REMOTE"
     print("PASS test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable")
 
 
+def test_require_supported_host_mode_rejects_native_macos_install() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "require_supported_host_mode() {", "collect_host_dependency_answers() {")
+    script = f"""
+{snippet}
+host_supports_full_deploy() {{ return 1; }}
+host_is_macos() {{ return 0; }}
+host_is_wsl() {{ return 1; }}
+require_supported_host_mode install
+"""
+    result = bash(script)
+    expect(result.returncode != 0, "expected native macOS install preflight to fail closed")
+    expect("Native macOS is not a supported Almanac host or runtime environment." in result.stderr, result.stderr)
+    expect("Helper-only commands like `./deploy.sh write-config`" in result.stderr, result.stderr)
+    print("PASS test_require_supported_host_mode_rejects_native_macos_install")
+
+
+def test_require_supported_host_mode_guides_wsl_without_systemd() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "require_supported_host_mode() {", "collect_host_dependency_answers() {")
+    script = f"""
+{snippet}
+host_supports_full_deploy() {{ return 1; }}
+host_is_macos() {{ return 1; }}
+host_is_wsl() {{ return 0; }}
+require_supported_host_mode install
+"""
+    result = bash(script)
+    expect(result.returncode != 0, "expected WSL install preflight to fail without systemd readiness")
+    expect("systemd=true" in result.stderr, result.stderr)
+    expect("wsl --shutdown" in result.stderr, result.stderr)
+    print("PASS test_require_supported_host_mode_guides_wsl_without_systemd")
+
+
+def test_collect_install_answers_records_missing_host_dependency_choices() -> None:
+    text = DEPLOY_SH.read_text()
+    helper = extract(text, "collect_host_dependency_answers() {", "usage() {")
+    collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        prompt_log = Path(tmp) / "prompts.log"
+        script = f"""
+PROMPT_LOG={shlex.quote(str(prompt_log))}
+{helper}
+{collect}
+default_home_for_user() {{ printf '/home/%s\\n' "$1"; }}
+command_exists() {{
+  case "$1" in
+    podman|tailscale|dscl|getent) return 1 ;;
+    *) command -v "$1" >/dev/null 2>&1 ;;
+  esac
+}}
+ask() {{ printf '%s' "${{2:-}}"; }}
+ask_validated_optional() {{ printf '%s' "${{2:-}}"; }}
+ask_yes_no() {{
+  printf '%s\\n' "$1" >> "$PROMPT_LOG"
+  case "$1" in
+    Podman\\ is\\ not\\ installed.*|Tailscale\\ is\\ not\\ installed.*) printf '%s' 1 ;;
+    *) printf '%s' "${{2:-0}}" ;;
+  esac
+}}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+preserve_or_randomize_secret() {{ printf '%s' "${{1:-generated-secret}}"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  return 0
+}}
+MODE=install
+collect_install_answers
+printf 'ALMANAC_INSTALL_PODMAN=%s\\n' "$ALMANAC_INSTALL_PODMAN"
+printf 'ALMANAC_INSTALL_TAILSCALE=%s\\n' "$ALMANAC_INSTALL_TAILSCALE"
+printf 'PROMPTS_BEGIN\\n'
+cat "$PROMPT_LOG"
+printf 'PROMPTS_END\\n'
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"host dependency prompt case failed: {result.stderr}")
+        expect("ALMANAC_INSTALL_PODMAN=1" in result.stdout, result.stdout)
+        expect("ALMANAC_INSTALL_TAILSCALE=1" in result.stdout, result.stdout)
+        prompts = result.stdout.split("PROMPTS_BEGIN\n", 1)[1].split("\nPROMPTS_END", 1)[0]
+        expect("Podman is not installed." in prompts, prompts)
+        expect("Tailscale is not installed." in prompts, prompts)
+    print("PASS test_collect_install_answers_records_missing_host_dependency_choices")
+
+
+def test_write_answers_file_persists_host_dependency_choices() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "write_answers_file() {", "seed_private_repo() {")
+    expect("write_kv ALMANAC_INSTALL_PODMAN" in snippet, snippet)
+    expect("write_kv ALMANAC_INSTALL_TAILSCALE" in snippet, snippet)
+    print("PASS test_write_answers_file_persists_host_dependency_choices")
+
+
+def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    expect(
+        "https://www.notion.so/profile/integrations/internal" in text,
+        "expected deploy notion-ssot guidance to include the direct Notion internal integrations link",
+    )
+    expect(
+        "Click Create new integration." in text,
+        "expected deploy notion-ssot guidance to include the create-new-integration step",
+    )
+    expect(
+        "Name it something like Almanac Curator" in text,
+        "expected deploy notion-ssot guidance to suggest a concrete internal integration name",
+    )
+    expect(
+        "turn on every checkbox capability Notion offers on that screen" in text,
+        "expected deploy notion-ssot guidance to tell operators to enable all checkbox capabilities",
+    )
+    expect(
+        "for user information, choose Read user information including email addresses" in text,
+        "expected deploy notion-ssot guidance to require user info with email addresses for verification",
+    )
+    expect(
+        "click Show and then copy the key." in text,
+        "expected deploy notion-ssot guidance to tell operators exactly how to reveal and copy the secret",
+    )
+    expect(
+        "open Manage page access and grant access to the" in text,
+        "expected deploy notion-ssot guidance to tell operators to grant page access from the integration itself",
+    )
+    expect(
+        "parent page or Teamspace root Almanac should live under" in text,
+        "expected deploy notion-ssot guidance to explain which parent/root to grant in Manage page access",
+    )
+    expect(
+        "new child pages and databases under" in text,
+        "expected deploy notion-ssot guidance to explain that child pages inherit access from the granted parent page",
+    )
+    expect(
+        "Almanac cannot press Notion's Manage page access buttons for you via" in text,
+        "expected deploy notion-ssot guidance to explain that the Manage page access UI cannot be automated through a supported API",
+    )
+    expect(
+        "Type YES to confirm you understand this Notion access model" in text,
+        "expected deploy notion-ssot setup to require an explicit typed acknowledgment of Notion's subtree access model",
+    )
+    expect(
+        "Shared Notion page URL for Almanac (use a normal page, not the workspace Home screen)" in text,
+        "expected deploy notion-ssot prompt to steer operators toward a normal page and away from the workspace Home screen",
+    )
+    expect(
+        "Make one normal Notion page for Almanac" in text,
+        "expected deploy notion-ssot guidance to tell operators to create a normal Almanac page first",
+    )
+    expect(
+        "Almanac will use the page you paste below as its shared Notion home" in text,
+        "expected deploy notion-ssot guidance to explain the role of the pasted page in simpler language",
+    )
+    expect(
+        "If Notion lands you back in the workspace UI, open your workspace" in text,
+        "expected deploy notion-ssot guidance to describe the workspace fallback path operators actually use",
+    )
+    expect(
+        "start at https://www.notion.so/profile/integrations/internal" in text,
+        "expected deploy notion-ssot secret prompt to include the direct Notion internal integrations link",
+    )
+    expect(
+        "Notion MCP, GitHub, Slack, Jira, or other partner apps, stop there:" in text,
+        "expected deploy notion-ssot guidance to warn operators away from the partner connection gallery",
+    )
+    print("PASS test_notion_ssot_setup_prompt_points_operator_at_shared_home_page")
+
+
+def test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    notion_setup = extract(text, "run_notion_ssot_setup() {", "run_upgrade_flow() {")
+    expect(
+        '"$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion handshake' in notion_setup,
+        "expected notion-ssot setup to use the current checkout's almanac-ctl for handshake",
+    )
+    expect(
+        '"$ALMANAC_REPO_DIR/bin/almanac-ctl" --json notion handshake' not in notion_setup,
+        "expected notion-ssot setup not to depend on an older deployed almanac-ctl during handshake",
+    )
+    expect(
+        '--space-url "$notion_space_url"' in notion_setup,
+        "expected notion-ssot setup to pass the shared Notion URL to handshake explicitly",
+    )
+    expect(
+        '--token "$notion_token"' in notion_setup,
+        "expected notion-ssot setup to pass the integration secret to handshake explicitly",
+    )
+    expect(
+        '--api-version "$notion_api_version"' in notion_setup,
+        "expected notion-ssot setup to pass the Notion API version to handshake explicitly",
+    )
+    print("PASS test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake")
+
+
+def test_shell_scripts_avoid_bash4_only_features() -> None:
+    case_mod = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]+\])?(?:,{1,2}|\^{1,2})\}")
+    for path in sorted((REPO / "bin").glob("*.sh")):
+        text = path.read_text(encoding="utf-8")
+        expect("mapfile" not in text, f"expected {path} to avoid bash-4-only mapfile")
+        expect("readarray" not in text, f"expected {path} to avoid bash-4-only readarray")
+        expect("declare -A" not in text, f"expected {path} to avoid bash-4-only associative arrays")
+        match = case_mod.search(text)
+        if match is not None:
+            raise AssertionError(
+                f"expected {path} to avoid bash-4-only case-modifying expansion; found {match.group(0)!r}"
+            )
+    print("PASS test_shell_scripts_avoid_bash4_only_features")
+
+
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
@@ -831,11 +1167,107 @@ def test_enrollment_reset_supports_full_forget_purge() -> None:
     print("PASS test_enrollment_reset_supports_full_forget_purge")
 
 
+def test_enrollment_align_reseeds_agent_identity() -> None:
+    text = DEPLOY_SH.read_text()
+    align = extract(text, "run_enrollment_align() {", "run_enrollment_reset() {")
+    expect("--identity-only" in align, "expected enrollment-align to run headless identity reseed")
+    expect("--user-name" in align, "expected enrollment-align identity reseed to pass the saved user name")
+    expect("SELECT linked_agent_id, answers_json, sender_display_name" in align, align)
+    expect("ALMANAC_ORG_NAME" in text, "expected deploy config to persist org interview fields")
+    print("PASS test_enrollment_align_reseeds_agent_identity")
+
+
+def test_root_install_and_upgrade_do_not_globally_export_runtime_secrets() -> None:
+    text = DEPLOY_SH.read_text()
+    install = extract(text, "run_root_install() {", "run_root_upgrade() {")
+    upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    expect("export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD" not in install, install)
+    expect("export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD" not in install, install)
+    expect('env \\' in install and '"$BOOTSTRAP_DIR/bin/bootstrap-system.sh"' in install, install)
+    expect("export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD" not in upgrade, upgrade)
+    expect("export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD" not in upgrade, upgrade)
+    expect('env \\' in upgrade and '"$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"' in upgrade, upgrade)
+    print("PASS test_root_install_and_upgrade_do_not_globally_export_runtime_secrets")
+
+
+def test_bootstrap_system_supports_optional_podman_and_tailscale_install() -> None:
+    text = (REPO / "bin" / "bootstrap-system.sh").read_text(encoding="utf-8")
+    expect("install_podman_if_requested()" in text, text)
+    expect("install_tailscale_if_requested()" in text, text)
+    expect("curl -fsSL https://tailscale.com/install.sh | sh" in text, text)
+    expect("systemd=true" in text and "wsl --shutdown" in text, text)
+    print("PASS test_bootstrap_system_supports_optional_podman_and_tailscale_install")
+
+
+def test_install_system_services_includes_independent_notion_claim_poller() -> None:
+    text = INSTALL_SYSTEM_SERVICES_SH.read_text(encoding="utf-8")
+    expect("almanac-notion-claim-poll.service" in text, "expected dedicated notion claim poll service")
+    expect("almanac-notion-claim-poll.timer" in text, "expected dedicated notion claim poll timer")
+    expect("--claims-only" in text, "expected claim poller to use provisioner claims-only mode")
+    expect("OnUnitActiveSec=2m" in text, "expected claim poll cadence to be configured")
+    print("PASS test_install_system_services_includes_independent_notion_claim_poller")
+
+
+def test_install_system_services_units_pass_systemd_analyze_verify() -> None:
+    systemd_analyze = shutil.which("systemd-analyze")
+    if not systemd_analyze:
+        print("PASS test_install_system_services_units_pass_systemd_analyze_verify (skipped: systemd-analyze unavailable)")
+        return
+    text = INSTALL_SYSTEM_SERVICES_SH.read_text(encoding="utf-8")
+    enrollment_service = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-enrollment-provision.service" <<EOF')
+    enrollment_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-enrollment-provision.timer" <<EOF')
+    claim_service = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-notion-claim-poll.service" <<EOF')
+    claim_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-notion-claim-poll.timer" <<EOF')
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo_dir = root / "repo"
+        (repo_dir / "bin").mkdir(parents=True, exist_ok=True)
+        provision_script = repo_dir / "bin" / "almanac-enrollment-provision.sh"
+        provision_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        provision_script.chmod(0o755)
+        replacements = {
+            "$CONFIG_PATH": str(root / "almanac.env"),
+            "$ALMANAC_REPO_DIR": str(repo_dir),
+        }
+
+        def materialize(content: str) -> str:
+            rendered = content
+            for needle, value in replacements.items():
+                rendered = rendered.replace(needle, value)
+            return rendered
+
+        service_path = root / "almanac-enrollment-provision.service"
+        timer_path = root / "almanac-enrollment-provision.timer"
+        claim_service_path = root / "almanac-notion-claim-poll.service"
+        claim_timer_path = root / "almanac-notion-claim-poll.timer"
+        service_path.write_text(materialize(enrollment_service) + "\n", encoding="utf-8")
+        timer_path.write_text(materialize(enrollment_timer) + "\n", encoding="utf-8")
+        claim_service_path.write_text(materialize(claim_service) + "\n", encoding="utf-8")
+        claim_timer_path.write_text(materialize(claim_timer) + "\n", encoding="utf-8")
+        result = run(
+            [
+                systemd_analyze,
+                "verify",
+                str(service_path),
+                str(timer_path),
+                str(claim_service_path),
+                str(claim_timer_path),
+            ]
+        )
+        expect(result.returncode == 0, f"systemd-analyze verify failed: {result.stderr or result.stdout}")
+    print("PASS test_install_system_services_units_pass_systemd_analyze_verify")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
         test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag,
+        test_emit_runtime_config_persists_notion_ssot_fields,
+        test_emit_runtime_config_persists_org_interview_fields,
+        test_org_interview_validators_accept_known_good_values,
+        test_org_interview_validators_reject_bad_values,
         test_describe_operator_channel_summary_avoids_tui_only_duplication,
         test_install_reexecs_for_unreadable_breadcrumb_config,
         test_install_does_not_reexec_for_readable_breadcrumb_config,
@@ -849,10 +1281,20 @@ def main() -> int:
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,
         test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,
+        test_require_supported_host_mode_rejects_native_macos_install,
+        test_require_supported_host_mode_guides_wsl_without_systemd,
+        test_collect_install_answers_records_missing_host_dependency_choices,
+        test_write_answers_file_persists_host_dependency_choices,
+        test_shell_scripts_avoid_bash4_only_features,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,
         test_enrollment_reset_supports_full_forget_purge,
+        test_enrollment_align_reseeds_agent_identity,
+        test_root_install_and_upgrade_do_not_globally_export_runtime_secrets,
+        test_bootstrap_system_supports_optional_podman_and_tailscale_install,
+        test_install_system_services_includes_independent_notion_claim_poller,
+        test_install_system_services_units_pass_systemd_analyze_verify,
     ]
     for test in tests:
         test()

@@ -132,8 +132,10 @@ run_qmd_embed() {
 }
 
 maybe_run_qmd_embed() {
-  local mode="${VAULT_WATCH_RUN_EMBED,,}"
+  local mode=""
   local pending=0
+
+  mode="$(lowercase "${VAULT_WATCH_RUN_EMBED:-}")"
 
   case "$mode" in
     0|false|no|off)
@@ -364,7 +366,7 @@ while true; do
     run_vault_notify_paths
   fi
 
-  if [[ "${VAULT_WATCH_RUN_EMBED,,}" != "1" ]]; then
+  if [[ "$(lowercase "${VAULT_WATCH_RUN_EMBED:-}")" != "1" ]]; then
     maybe_run_qmd_embed
   fi
 done

@@ -16,7 +16,9 @@ if [[ $# -eq 0 ]]; then
     almanac-vault-reconciler \
     almanac-first-contact \
     almanac-vaults \
-    almanac-ssot
+    almanac-ssot \
+    almanac-ssot-connect \
+    almanac-notion-mcp
 fi
 
 SKILLS_ROOT="$REPO_DIR/skills"

@@ -57,6 +57,7 @@ def config_values(root: Path) -> dict[str, str]:
         "ALMANAC_MCP_PORT": "8282",
         "ALMANAC_NOTION_WEBHOOK_HOST": "127.0.0.1",
         "ALMANAC_NOTION_WEBHOOK_PORT": "8283",
+        "ALMANAC_SSOT_NOTION_SPACE_URL": "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "tui-only",
         "OPERATOR_NOTIFY_CHANNEL_ID": "",
         "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
@@ -162,7 +163,9 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("QMD MCP retrieval rail: https://kor.tail77f45e.ts.net/mcp" in full_text, full_text)
             expect("Almanac MCP control rail: https://kor.tail77f45e.ts.net/almanac-mcp" in full_text, full_text)
             expect("Chutes knowledge rail: https://chutes.example/mcp" in full_text, full_text)
+            expect("Shared Notion SSOT: https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef" in full_text, full_text)
             expect("Notion webhook: shared operator-managed rail on this host" in full_text, full_text)
+            expect("Shared Notion writes:" in full_text, full_text)
             expect(str(user_home) in full_text, full_text)
 
             telegram_button = bundle["telegram_reply_markup"]["inline_keyboard"][0][0]

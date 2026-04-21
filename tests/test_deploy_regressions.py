@@ -1230,6 +1230,13 @@ def test_bootstrap_system_supports_optional_podman_and_tailscale_install() -> No
     print("PASS test_bootstrap_system_supports_optional_podman_and_tailscale_install")
 
 
+def test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch() -> None:
+    text = (REPO / "bin" / "bootstrap-userland.sh").read_text(encoding="utf-8")
+    expect("official/research/qmd" not in text, text)
+    expect("ensure_shared_hermes_runtime" in text, text)
+    print("PASS test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch")
+
+
 def test_install_system_services_includes_independent_notion_claim_poller() -> None:
     text = INSTALL_SYSTEM_SERVICES_SH.read_text(encoding="utf-8")
     expect("almanac-notion-claim-poll.service" in text, "expected dedicated notion claim poll service")
@@ -1324,6 +1331,7 @@ def main() -> int:
         test_enrollment_align_reseeds_agent_identity,
         test_root_install_and_upgrade_do_not_globally_export_runtime_secrets,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
+        test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,
         test_install_system_services_includes_independent_notion_claim_poller,
         test_install_system_services_units_pass_systemd_analyze_verify,
     ]

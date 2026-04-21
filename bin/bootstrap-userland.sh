@@ -51,9 +51,11 @@ install_qmd() {
   fi
 }
 
-install_hermes() {
+install_hermes_runtime() {
+  # The shared Almanac runtime only needs Hermes itself here. Almanac skills are
+  # installed into Curator and user Hermes homes later from local repo paths.
+  # Avoid legacy remote skill fetches during host bootstrap.
   ensure_shared_hermes_runtime
-  "$RUNTIME_DIR/hermes-venv/bin/hermes" skills install official/research/qmd --yes || true
 }
 
 install_podman_compose_if_available() {
@@ -79,7 +81,7 @@ seed_private_repo_layout
 install_uv_if_missing
 install_node_if_missing
 install_qmd
-install_hermes
+install_hermes_runtime
 install_podman_compose_if_available
 initialize_private_git_repo
 configure_qmd_collections

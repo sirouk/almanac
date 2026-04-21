@@ -383,6 +383,7 @@ def _handle_operator_callback(
     try:
         visible_reply: str | None = None
         replacement_text: str | None = None
+        message_text = str(message.get("text") or "").strip()
         with connect_db(cfg) as conn:
             if scope == "onboarding" and target_id.startswith("onb_"):
                 if action == "approve":
@@ -397,7 +398,10 @@ def _handle_operator_callback(
                 else:
                     raise ValueError(f"unknown onboarding action: {action}")
                 notify_session_state(cfg, updated)
-                visible_reply = result_text
+                if message_text:
+                    replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
+                else:
+                    visible_reply = result_text
             elif scope == "request" and target_id.startswith("req_"):
                 if action == "approve":
                     approve_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
@@ -407,8 +411,11 @@ def _handle_operator_callback(
                     result_text = f"Denied {target_id}."
                 else:
                     raise ValueError(f"unknown request action: {action}")
+                if message_text:
+                    replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
+                else:
+                    visible_reply = result_text
             elif scope == "upgrade":
-                message_text = str(message.get("text") or "").strip()
                 if action == "dismiss":
                     upsert_setting(conn, "almanac_upgrade_last_dismissed_sha", target_id)
                     result_text = f"Dismissed Almanac update notice for {target_id[:12]}."

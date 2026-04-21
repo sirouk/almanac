@@ -144,14 +144,14 @@ def test_verify_notion_command_reopens_latest_completed_session() -> None:
             expect("Notion" in replies[0].text, replies[0].text)
             resumed = control.find_active_onboarding_session(conn, platform="telegram", sender_id="123456", redact_secrets=False)
             expect(resumed is not None, "expected resumed onboarding session")
-            expect(str(resumed.get("state") or "") == "awaiting-notion-email", str(resumed))
+            expect(str(resumed.get("state") or "") == "awaiting-notion-access", str(resumed))
             print("PASS test_verify_notion_command_reopens_latest_completed_session")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
 
 
-def test_awaiting_notion_email_skip_returns_completion_bundle() -> None:
+def test_awaiting_notion_access_skip_returns_completion_bundle() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     control = load_module(CONTROL_PY, "almanac_control_onboarding_notion_skip_test")
@@ -185,7 +185,7 @@ def test_awaiting_notion_email_skip_returns_completion_bundle() -> None:
             session = control.save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-notion-email",
+                state="awaiting-notion-access",
             )
             replies = onboarding.process_onboarding_message(
                 cfg,
@@ -205,7 +205,51 @@ def test_awaiting_notion_email_skip_returns_completion_bundle() -> None:
             refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
             expect(str(refreshed.get("state") or "") == "completed", str(refreshed))
             expect(bool((refreshed.get("answers") or {}).get("notion_verification_skipped")), str(refreshed))
-            print("PASS test_awaiting_notion_email_skip_returns_completion_bundle")
+            print("PASS test_awaiting_notion_access_skip_returns_completion_bundle")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_awaiting_notion_access_ready_moves_to_email_step() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_notion_access_ready_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_notion_access_ready_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            unix_user = pwd.getpwuid(os.getuid()).pw_name
+            session = bootstrap_completed_session(control, cfg, conn)
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-notion-access",
+                answers={"unix_user": unix_user},
+            )
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="telegram",
+                    chat_id="123456",
+                    sender_id="123456",
+                    sender_username="sirouk",
+                    sender_display_name="Chris",
+                    text="ready",
+                ),
+                validate_bot_token=lambda raw: None,
+            )
+            expect(len(replies) == 1, str(replies))
+            expect("Notion email" in replies[0].text, replies[0].text)
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            expect(str(refreshed.get("state") or "") == "awaiting-notion-email", str(refreshed))
+            print("PASS test_awaiting_notion_access_ready_moves_to_email_step")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -327,6 +371,26 @@ def test_verify_notion_command_reissues_pending_claim_with_same_email() -> None:
                 validate_bot_token=lambda raw: None,
             )
             expect(len(replies) == 1, str(replies))
+            expect("shared Almanac page" in replies[0].text, replies[0].text)
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            expect(str(refreshed.get("state") or "") == "awaiting-notion-access", str(refreshed))
+            answers = refreshed.get("answers") or {}
+            expect(str(answers.get("notion_claim_email") or "") == "chris@example.com", str(answers))
+            expect(str(answers.get("notion_claim_id") or "") == "", str(answers))
+
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="telegram",
+                    chat_id="123456",
+                    sender_id="123456",
+                    sender_username="sirouk",
+                    sender_display_name="Chris",
+                    text="ready",
+                ),
+                validate_bot_token=lambda raw: None,
+            )
+            expect(len(replies) == 1, str(replies))
             expect("fresh Notion verification page" in replies[0].text, replies[0].text)
             expect("https://www.notion.so/claim-fresh" in replies[0].text, replies[0].text)
             refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
@@ -403,10 +467,9 @@ def test_verify_notion_command_reopens_expired_claim_at_email_step() -> None:
                 validate_bot_token=lambda raw: None,
             )
             expect(len(replies) == 1, str(replies))
-            expect("expired" in replies[0].text.lower(), replies[0].text)
-            expect("reply with the Notion email" in replies[0].text, replies[0].text)
+            expect("shared Almanac page" in replies[0].text, replies[0].text)
             refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
-            expect(str(refreshed.get("state") or "") == "awaiting-notion-email", str(refreshed))
+            expect(str(refreshed.get("state") or "") == "awaiting-notion-access", str(refreshed))
             answers = refreshed.get("answers") or {}
             expect(str(answers.get("notion_claim_id") or "") == "", str(answers))
             print("PASS test_verify_notion_command_reopens_expired_claim_at_email_step")
@@ -508,12 +571,13 @@ def test_awaiting_notion_verification_skip_marks_claim_and_returns_completion_bu
 
 def main() -> int:
     test_verify_notion_command_reopens_latest_completed_session()
-    test_awaiting_notion_email_skip_returns_completion_bundle()
+    test_awaiting_notion_access_skip_returns_completion_bundle()
+    test_awaiting_notion_access_ready_moves_to_email_step()
     test_awaiting_notion_email_starts_claim_and_moves_to_verification()
     test_verify_notion_command_reissues_pending_claim_with_same_email()
     test_verify_notion_command_reopens_expired_claim_at_email_step()
     test_awaiting_notion_verification_skip_marks_claim_and_returns_completion_bundle()
-    print("PASS all 6 onboarding notion tests")
+    print("PASS all 7 onboarding notion tests")
     return 0
 
 

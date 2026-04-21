@@ -492,7 +492,7 @@ def _begin_notion_onboarding_phase(conn, cfg: Config, session: dict[str, Any]) -
     updated_session = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
-        state="awaiting-notion-email",
+        state="awaiting-notion-access",
         pending_bot_token="",
         pending_bot_token_path="",
         provision_error="",
@@ -1108,7 +1108,7 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-notion-email",
+                state="awaiting-notion-access",
                 answers={
                     "notion_claim_email": "",
                     "notion_claim_id": "",
@@ -1124,7 +1124,7 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-notion-email",
+                state="awaiting-notion-access",
                 answers={
                     "notion_claim_email": "",
                     "notion_claim_id": "",
@@ -1140,7 +1140,7 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-notion-email",
+                state="awaiting-notion-access",
                 answers={
                     "notion_claim_email": "",
                     "notion_claim_id": "",

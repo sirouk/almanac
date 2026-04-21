@@ -117,6 +117,17 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             expect("Open Installation and copy the install link" in prompt, prompt)
             expect("share a server" in prompt or "Add App" in prompt, prompt)
 
+            notion_access_prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "state": "awaiting-notion-access",
+                    "answers": {},
+                },
+            )
+            expect("shared Almanac page" in notion_access_prompt, notion_access_prompt)
+            expect("ready" in notion_access_prompt.lower(), notion_access_prompt)
+            expect("skip" in notion_access_prompt.lower(), notion_access_prompt)
+
             notion_email_prompt = onboarding.session_prompt(
                 cfg,
                 {

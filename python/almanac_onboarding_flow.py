@@ -50,6 +50,7 @@ START_COMMANDS = {"/start", "/onboard", "start", "onboard"}
 STATUS_COMMANDS = {"/status", "status"}
 CANCEL_COMMANDS = {"/cancel", "cancel"}
 VERIFY_NOTION_COMMANDS = {"/verify-notion", "verify-notion", "verify notion"}
+NOTION_READY_COMMANDS = {"ready"}
 UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
 PLATFORM_ALIASES = {
     "telegram": "telegram",
@@ -117,6 +118,13 @@ def resolve_curator_discord_bot_token(cfg: Config) -> str:
     if token:
         return token
     return read_env_file_value(cfg.curator_hermes_home / ".env", "DISCORD_BOT_TOKEN").strip()
+
+
+def shared_notion_home_url() -> str:
+    root_url = config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_URL", "").strip()
+    if root_url:
+        return root_url
+    return config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip()
 
 
 def send_session_message(
@@ -435,9 +443,21 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 "I’ve kept your session open so the operator can recover it cleanly. Reply `/status` here any time for the latest state."
             )
         return "I’m provisioning your agent and wiring your bot now. This usually lands within a minute. I’ll ping you as soon as your lane is ready."
+    if state == "awaiting-notion-access":
+        shared_page_url = shared_notion_home_url().strip()
+        lines = [
+            "Your lane is live. Before shared Notion access can work, make sure you can open the shared Almanac page in this Notion workspace.",
+        ]
+        if shared_page_url:
+            lines.append(shared_page_url)
+        lines.append(
+            "If Notion says `Request access`, the operator needs to invite you into the workspace or teamspace and share that page with you first."
+        )
+        lines.append("Reply `ready` once you can open it. If you want to finish now and leave shared Notion writes disabled, reply `skip`.")
+        return "\n".join(lines)
     if state == "awaiting-notion-email":
         return (
-            "Your lane is live. One last step for shared Notion access: reply with the Notion email you use in this organization's workspace. "
+            "Good. One last step for shared Notion access: reply with the Notion email you use in this organization's workspace. "
             "If you want to finish now and leave shared Notion writes disabled, reply `skip`."
         )
     if state == "awaiting-notion-verification":
@@ -573,7 +593,7 @@ def _resume_verify_notion_session(
     updated = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
-        state="awaiting-notion-email",
+        state="awaiting-notion-access",
         chat_id=incoming.chat_id,
         sender_username=incoming.sender_username,
         sender_display_name=incoming.sender_display_name or str(session.get("sender_display_name") or ""),
@@ -887,7 +907,80 @@ def process_onboarding_message(
                 return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when the lane is ready.")]
             return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when the lane is ready.")]
 
+        if state == "awaiting-notion-access":
+            if lower == "skip":
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    state="completed",
+                    answers={
+                        "notion_verification_skipped": True,
+                        "notion_claim_email": "",
+                        "notion_claim_id": "",
+                        "notion_claim_url": "",
+                        "notion_claim_expires_at": "",
+                    },
+                    completed_at=utc_now_iso(),
+                )
+                return _completion_reply_for_session(
+                    conn,
+                    cfg,
+                    updated,
+                    fallback_text=(
+                        "Your lane is ready. Shared Notion writes stay read-only until you reply "
+                        "`/verify-notion` here and finish the claim."
+                    ),
+                )
+            if lower in NOTION_READY_COMMANDS:
+                answers = session.get("answers", {})
+                agent_id = str(session.get("linked_agent_id") or "").strip()
+                unix_user = str(answers.get("unix_user") or "").strip()
+                claimed_email = str(answers.get("notion_claim_email") or "").strip()
+                if claimed_email and agent_id and unix_user:
+                    try:
+                        claim = start_notion_identity_claim(
+                            conn,
+                            session_id=str(session["session_id"]),
+                            agent_id=agent_id,
+                            unix_user=unix_user,
+                            claimed_notion_email=claimed_email,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        return [OutboundMessage(incoming.chat_id, str(exc).strip() or "I couldn't restart Notion verification yet.")]
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-notion-verification",
+                        answers={
+                            "notion_verification_skipped": False,
+                            "notion_claim_email": str(claim.get("claimed_notion_email") or claimed_email),
+                            "notion_claim_id": str(claim.get("claim_id") or ""),
+                            "notion_claim_url": str(claim.get("notion_page_url") or ""),
+                            "notion_claim_expires_at": str(claim.get("expires_at") or ""),
+                        },
+                    )
+                    return [
+                        OutboundMessage(
+                            incoming.chat_id,
+                            "Great. I opened a fresh Notion verification page for you.\n\n" + session_prompt(cfg, updated),
+                        )
+                    ]
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    state="awaiting-notion-email",
+                    answers={
+                        "notion_verification_skipped": False,
+                        "notion_claim_id": "",
+                        "notion_claim_url": "",
+                        "notion_claim_expires_at": "",
+                    },
+                )
+                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+
         if state == "awaiting-notion-email":
+            if lower in NOTION_READY_COMMANDS:
+                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
             if lower == "skip":
                 updated = save_onboarding_session(
                     conn,
@@ -972,59 +1065,26 @@ def process_onboarding_message(
                     ),
                 )
             if lower in VERIFY_NOTION_COMMANDS:
-                unix_user = str((session.get("answers") or {}).get("unix_user") or "").strip()
                 claimed_email = str((session.get("answers") or {}).get("notion_claim_email") or "").strip()
-                claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
-                agent_id = str(session.get("linked_agent_id") or session.get("agent_id") or "").strip()
-                claim = get_notion_identity_claim(conn, claim_id=claim_id) if claim_id else None
-                if claim is not None and str(claim.get("status") or "").strip() == "expired":
-                    updated = save_onboarding_session(
-                        conn,
-                        session_id=str(session["session_id"]),
-                        state="awaiting-notion-email",
-                        answers={
-                            "notion_claim_email": "",
-                            "notion_claim_id": "",
-                            "notion_claim_url": "",
-                            "notion_claim_expires_at": "",
-                        },
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    state="awaiting-notion-access",
+                    answers={
+                        "notion_verification_skipped": False,
+                        "notion_claim_email": claimed_email,
+                        "notion_claim_id": "",
+                        "notion_claim_url": "",
+                        "notion_claim_expires_at": "",
+                    },
+                )
+                return [
+                    OutboundMessage(
+                        incoming.chat_id,
+                        "Before I mint a fresh verification page, let’s make sure you can open the shared Almanac page first.\n\n"
+                        + session_prompt(cfg, updated),
                     )
-                    return [
-                        OutboundMessage(
-                            incoming.chat_id,
-                            "That verification link expired, so I opened a fresh claim step for you.\n\n"
-                            + session_prompt(cfg, updated),
-                        )
-                    ]
-                if unix_user and claimed_email and agent_id:
-                    try:
-                        claim = start_notion_identity_claim(
-                            conn,
-                            session_id=str(session["session_id"]),
-                            agent_id=agent_id,
-                            unix_user=unix_user,
-                            claimed_notion_email=claimed_email,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        return [OutboundMessage(incoming.chat_id, str(exc).strip() or "I couldn't restart Notion verification yet.")]
-                    updated = save_onboarding_session(
-                        conn,
-                        session_id=str(session["session_id"]),
-                        state="awaiting-notion-verification",
-                        answers={
-                            "notion_verification_skipped": False,
-                            "notion_claim_email": str(claim.get("claimed_notion_email") or claimed_email),
-                            "notion_claim_id": str(claim.get("claim_id") or claim_id),
-                            "notion_claim_url": str(claim.get("notion_page_url") or ""),
-                            "notion_claim_expires_at": str(claim.get("expires_at") or ""),
-                        },
-                    )
-                    return [
-                        OutboundMessage(
-                            incoming.chat_id,
-                            "I opened a fresh Notion verification page for you.\n\n" + session_prompt(cfg, updated),
-                        )
-                    ]
+                ]
             if lower == "status":
                 claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
                 claim = get_notion_identity_claim(conn, claim_id=claim_id) if claim_id else None
@@ -1032,8 +1092,9 @@ def process_onboarding_message(
                     updated = save_onboarding_session(
                         conn,
                         session_id=str(session["session_id"]),
-                        state="awaiting-notion-email",
+                        state="awaiting-notion-access",
                         answers={
+                            "notion_verification_skipped": False,
                             "notion_claim_email": "",
                             "notion_claim_id": "",
                             "notion_claim_url": "",

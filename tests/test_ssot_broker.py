@@ -52,6 +52,8 @@ def config_values(root: Path) -> dict[str, str]:
         "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
         "ALMANAC_MCP_HOST": "127.0.0.1",
         "ALMANAC_MCP_PORT": "8282",
+        "ALMANAC_SSOT_NOTION_ROOT_PAGE_URL": "https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        "ALMANAC_SSOT_NOTION_ROOT_PAGE_ID": "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
         "ALMANAC_SSOT_NOTION_SPACE_URL": "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         "ALMANAC_SSOT_NOTION_SPACE_ID": "12345678-90ab-cdef-1234-567890abcdef",
         "ALMANAC_SSOT_NOTION_SPACE_KIND": "database",
@@ -227,6 +229,100 @@ def test_ssot_read_scopes_database_results_to_verified_user() -> None:
             os.environ.update(old_env)
 
 
+def test_ssot_read_scopes_database_results_to_identity_override() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_read_override_scope_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.upsert_notion_identity_override(
+                conn,
+                unix_user="sirouk",
+                notion_user_id="22222222-2222-2222-2222-222222222222",
+                notion_user_email="alias@example.com",
+                notes="temporary reassignment",
+            )
+
+            mod.retrieve_notion_database = lambda **kwargs: {
+                "id": "12345678-90ab-cdef-1234-567890abcdef",
+                "properties": {
+                    "Owner": {"type": "people"},
+                    "Assignee": {"type": "people"},
+                },
+            }
+            mod.query_notion_collection = lambda **kwargs: {
+                "query_kind": "database",
+                "database": kwargs["payload"],
+                "data_source_id": "",
+                "result": {
+                    "results": [
+                        {
+                            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                            "properties": {
+                                "Owner": {
+                                    "people": [
+                                        {
+                                            "id": "22222222-2222-2222-2222-222222222222",
+                                            "name": "Chris Alias",
+                                        }
+                                    ]
+                                }
+                            },
+                        },
+                        {
+                            "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                            "properties": {
+                                "Owner": {
+                                    "people": [
+                                        {
+                                            "id": "33333333-3333-3333-3333-333333333333",
+                                            "name": "Somebody Else",
+                                        }
+                                    ]
+                                }
+                            },
+                        },
+                    ],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            }
+
+            result = mod.read_ssot(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                target_id="",
+                query={},
+                include_markdown=False,
+                requested_by_actor="agent-sirouk",
+            )
+            expect(result["target_kind"] == "database", result)
+            expect(len(result["results"]) == 1, result)
+            expect(result["results"][0]["id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", result)
+            print("PASS test_ssot_read_scopes_database_results_to_identity_override")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_ssot_write_requires_verified_write_mode() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_ssot_write_gate_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -266,6 +362,129 @@ def test_ssot_write_requires_verified_write_mode() -> None:
             ).fetchone()
             expect(audit is not None and audit["decision"] == "deny", str(dict(audit) if audit else {}))
             print("PASS test_ssot_write_requires_verified_write_mode")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ensure_notion_verification_database_repairs_missing_managed_schema() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_verify_db_schema_repair_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.upsert_setting(conn, mod.NOTION_VERIFICATION_DB_ID_SETTING, "dddddddd-dddd-dddd-dddd-dddddddddddd")
+            mod.upsert_setting(
+                conn,
+                mod.NOTION_VERIFICATION_DB_URL_SETTING,
+                "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+            )
+            mod.upsert_setting(conn, mod.NOTION_VERIFICATION_DB_PARENT_SETTING, "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb")
+
+            data_source_calls = {"count": 0}
+            update_calls: list[dict] = []
+
+            mod.retrieve_notion_database = lambda **kwargs: {
+                "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "url": "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+                "data_sources": [{"id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}],
+            }
+
+            def fake_retrieve_data_source(**kwargs):
+                data_source_calls["count"] += 1
+                if data_source_calls["count"] == 1:
+                    return {
+                        "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                        "properties": {"Name": {"type": "title"}},
+                    }
+                return {
+                    "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                    "properties": {
+                        "Name": {"type": "title"},
+                        "Claimed Email": {"type": "email"},
+                        "Unix User": {"type": "rich_text"},
+                        "Agent ID": {"type": "rich_text"},
+                        "Session ID": {"type": "rich_text"},
+                        "Status": {"type": "rich_text"},
+                        "Verified": {"type": "checkbox"},
+                        "Verified At": {"type": "date"},
+                    },
+                }
+
+            mod.retrieve_notion_data_source = fake_retrieve_data_source
+            mod.update_notion_data_source = lambda **kwargs: update_calls.append(kwargs) or {"id": kwargs["data_source_id"]}
+
+            result = mod.ensure_notion_verification_database(conn)
+            expect(result["database_id"] == "dddddddd-dddd-dddd-dddd-dddddddddddd", result)
+            expect(result["parent_page_id"] == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb", result)
+            expect(len(update_calls) == 1, str(update_calls))
+            repaired = update_calls[0]["payload"]["properties"]
+            expect(
+                set(repaired) == {"Claimed Email", "Unix User", "Agent ID", "Session ID", "Status", "Verified", "Verified At"},
+                str(repaired),
+            )
+            print("PASS test_ensure_notion_verification_database_repairs_missing_managed_schema")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_drift() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_verify_db_schema_drift_fail_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.upsert_setting(conn, mod.NOTION_VERIFICATION_DB_ID_SETTING, "dddddddd-dddd-dddd-dddd-dddddddddddd")
+            mod.upsert_setting(
+                conn,
+                mod.NOTION_VERIFICATION_DB_URL_SETTING,
+                "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+            )
+            mod.upsert_setting(conn, mod.NOTION_VERIFICATION_DB_PARENT_SETTING, "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb")
+
+            mod.retrieve_notion_database = lambda **kwargs: {
+                "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "url": "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+                "data_sources": [{"id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}],
+            }
+            mod.retrieve_notion_data_source = lambda **kwargs: {
+                "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                "properties": {
+                    "Name": {"type": "title"},
+                    "Claimed Email": {"type": "email"},
+                    "Unix User": {"type": "rich_text"},
+                    "Agent ID": {"type": "rich_text"},
+                    "Session ID": {"type": "rich_text"},
+                    "Status": {"type": "checkbox"},
+                    "Verified": {"type": "checkbox"},
+                    "Verified At": {"type": "date"},
+                },
+            }
+
+            def boom(**kwargs):
+                raise AssertionError("cached verification database should not be silently recreated on schema drift")
+
+            mod.create_notion_database = boom
+
+            try:
+                mod.ensure_notion_verification_database(conn)
+            except RuntimeError as exc:
+                expect("schema drift" in str(exc), str(exc))
+                expect("wrong types" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected wrong-type schema drift to fail closed")
+            print("PASS test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_drift")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -1113,6 +1332,11 @@ def test_notion_batcher_marks_event_failed_after_retry_budget() -> None:
             )
             expect("hydration failed" in str(row["last_error"] or ""), str(dict(row) if row else {}))
             expect(str(row["processed_at"] or "").strip() != "", str(dict(row) if row else {}))
+            refresh_job = conn.execute(
+                "SELECT last_status, last_note FROM refresh_jobs ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            expect(refresh_job is not None and refresh_job["last_status"] == "fail", str(dict(refresh_job) if refresh_job else {}))
+            expect("SLO targets" in str(refresh_job["last_note"] or ""), str(dict(refresh_job)))
             print("PASS test_notion_batcher_marks_event_failed_after_retry_budget")
         finally:
             os.environ.clear()
@@ -1306,10 +1530,100 @@ def test_notion_batcher_rejects_claim_page_edit_from_wrong_email() -> None:
             os.environ.update(old_env)
 
 
+def test_notion_batcher_accepts_claim_page_edit_via_identity_override() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_override_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                verification_status="unverified",
+                write_mode="read_only",
+            )
+            mod.upsert_notion_identity_override(
+                conn,
+                unix_user="sirouk",
+                notion_user_id="22222222-2222-2222-2222-222222222222",
+                notion_user_email="alias@example.com",
+                notes="approved workspace alias",
+            )
+            now = mod.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO notion_identity_claims (
+                  claim_id, session_id, agent_id, unix_user, claimed_notion_email,
+                  notion_page_id, notion_page_url, status, failure_reason,
+                  verified_notion_user_id, verified_notion_email, created_at, updated_at, expires_at, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', '', '', '', ?, ?, ?, NULL)
+                """,
+                (
+                    "nclaim_override",
+                    "onb_test",
+                    "agent-sirouk",
+                    "sirouk",
+                    "chris@example.com",
+                    "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                    "https://www.notion.so/claim",
+                    now,
+                    now,
+                    (mod.utc_now() + mod.dt.timedelta(hours=1)).replace(microsecond=0).isoformat(),
+                ),
+            )
+            conn.commit()
+            mod.store_notion_event(
+                conn,
+                event_id="event-claim-override",
+                event_type="page.properties_updated",
+                payload={
+                    "entity": {
+                        "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                        "type": "page",
+                    }
+                },
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "last_edited_by": {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "type": "person",
+                    "person": {"email": "alias@example.com"},
+                },
+                "properties": {},
+            }
+            mod.update_notion_page = lambda **kwargs: {
+                "id": kwargs["page_id"],
+                "properties": kwargs["payload"]["properties"],
+            }
+
+            result = mod.process_pending_notion_events(conn)
+            expect(result["verified_claims"] == 1, result)
+            claim = mod.get_notion_identity_claim(conn, claim_id="nclaim_override")
+            expect(claim is not None and claim["status"] == "verified", str(claim))
+            identity = mod.get_agent_identity(conn, agent_id="agent-sirouk", unix_user="sirouk")
+            expect(identity is not None and identity["verification_status"] == "verified", str(identity))
+            print("PASS test_notion_batcher_accepts_claim_page_edit_via_identity_override")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_ssot_read_denies_database_query_until_verified()
     test_ssot_read_scopes_database_results_to_verified_user()
+    test_ssot_read_scopes_database_results_to_identity_override()
     test_ssot_write_requires_verified_write_mode()
+    test_ensure_notion_verification_database_repairs_missing_managed_schema()
+    test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_drift()
     test_ssot_write_applies_verified_owned_update()
     test_ssot_write_applies_verified_owned_insert()
     test_ssot_write_applies_without_changed_by_property()
@@ -1326,7 +1640,8 @@ def main() -> int:
     test_notion_batcher_marks_event_failed_after_retry_budget()
     test_notion_batcher_verifies_claim_page_event()
     test_notion_batcher_rejects_claim_page_edit_from_wrong_email()
-    print("PASS all 19 ssot broker tests")
+    test_notion_batcher_accepts_claim_page_edit_via_identity_override()
+    print("PASS all 22 ssot broker tests")
     return 0
 
 

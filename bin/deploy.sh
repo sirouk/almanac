@@ -43,6 +43,8 @@ ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
 ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
 ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
+ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
 ALMANAC_SSOT_NOTION_SPACE_URL="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
 ALMANAC_SSOT_NOTION_SPACE_ID="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
 ALMANAC_SSOT_NOTION_SPACE_KIND="${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
@@ -1130,6 +1132,8 @@ emit_runtime_config() {
     write_kv ALMANAC_NOTION_WEBHOOK_HOST "$ALMANAC_NOTION_WEBHOOK_HOST"
     write_kv ALMANAC_NOTION_WEBHOOK_PORT "$ALMANAC_NOTION_WEBHOOK_PORT"
     write_kv ALMANAC_NOTION_WEBHOOK_PUBLIC_URL "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+    write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_URL "${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
+    write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_ID "${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
     write_kv ALMANAC_SSOT_NOTION_SPACE_URL "${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
     write_kv ALMANAC_SSOT_NOTION_SPACE_ID "${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
     write_kv ALMANAC_SSOT_NOTION_SPACE_KIND "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
@@ -4182,6 +4186,7 @@ run_rotate_nextcloud_secrets() {
 run_notion_ssot_setup() {
   local notion_space_url="" notion_token="" notion_api_version="" notion_public_webhook_url="" handshake_file=""
   local integration_name="" workspace_name="" space_title="" space_id="" space_kind="" target_url=""
+  local root_page_id="" root_page_url="" root_page_title=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config notion-ssot; then
@@ -4249,6 +4254,8 @@ run_notion_ssot_setup() {
   notion_public_webhook_url="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
 
   if [[ -z "$notion_space_url" && -z "$notion_token" ]]; then
+    ALMANAC_SSOT_NOTION_ROOT_PAGE_URL=""
+    ALMANAC_SSOT_NOTION_ROOT_PAGE_ID=""
     ALMANAC_SSOT_NOTION_SPACE_URL=""
     ALMANAC_SSOT_NOTION_SPACE_ID=""
     ALMANAC_SSOT_NOTION_SPACE_KIND=""
@@ -4321,6 +4328,30 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
 print(str(data.get("space_url") or "").strip())
 PY
 )"
+  root_page_id="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("root_page_id") or "").strip())
+PY
+)"
+  root_page_url="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("root_page_url") or "").strip())
+PY
+)"
+  root_page_title="$(python3 - "$handshake_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(str(data.get("root_page_title") or "").strip())
+PY
+)"
   integration_name="$(python3 - "$handshake_file" <<'PY'
 import json
 import sys
@@ -4339,7 +4370,19 @@ integration = data.get("integration") or {}
 print(str(integration.get("workspace_name") or "").strip())
 PY
 )"
+  if ! env \
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion preflight-root \
+      --root-page-id "$root_page_id" \
+      --token "$notion_token" \
+      --api-version "$notion_api_version" >/dev/null; then
+    rm -f "$handshake_file"
+    echo "Notion root preflight failed; leaving the current config unchanged." >&2
+    exit 1
+  fi
 
+  ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"
+  ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"
   ALMANAC_SSOT_NOTION_SPACE_URL="$notion_space_url"
   ALMANAC_SSOT_NOTION_SPACE_ID="$space_id"
   ALMANAC_SSOT_NOTION_SPACE_KIND="$space_kind"
@@ -4360,6 +4403,9 @@ PY
     echo "Workspace:"
     echo "  $workspace_name"
   fi
+  echo "Root page:"
+  echo "  ${root_page_title:-$root_page_id}"
+  echo "  ${root_page_id:-unknown}"
   echo "Shared SSOT target:"
   echo "  ${space_kind:-object} ${space_id:-}"
   if [[ -n "$space_title" ]]; then

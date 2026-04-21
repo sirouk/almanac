@@ -1422,7 +1422,7 @@ if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     pass "Notion webhook public URL configured: $ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"
   else
-    warn "Notion webhook public URL is not configured; the local receiver is healthy but Notion cannot reach 127.0.0.1 directly"
+    pass "Notion webhook public URL not configured; the independent claim poller covers self-serve verification"
   fi
 else
   pass "Notion webhook public URL not required because shared Notion SSOT is not configured"

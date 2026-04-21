@@ -322,6 +322,50 @@ def retrieve_notion_data_source(
         raise _friendly_api_error(exc, target=f"data source {target_id}") from exc
 
 
+def update_notion_database(
+    *,
+    database_id: str,
+    token: str,
+    payload: dict[str, Any] | None = None,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    target_id = extract_notion_space_id(database_id)
+    try:
+        return _request_json(
+            "PATCH",
+            f"/databases/{target_id}",
+            token=token,
+            api_version=api_version,
+            payload=payload or {},
+            urlopen_fn=urlopen_fn,
+        )
+    except NotionApiError as exc:
+        raise _friendly_api_error(exc, target=f"database {target_id}") from exc
+
+
+def update_notion_data_source(
+    *,
+    data_source_id: str,
+    token: str,
+    payload: dict[str, Any] | None = None,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    target_id = extract_notion_space_id(data_source_id)
+    try:
+        return _request_json(
+            "PATCH",
+            f"/data_sources/{target_id}",
+            token=token,
+            api_version=api_version,
+            payload=payload or {},
+            urlopen_fn=urlopen_fn,
+        )
+    except NotionApiError as exc:
+        raise _friendly_api_error(exc, target=f"data source {target_id}") from exc
+
+
 def query_notion_data_source(
     *,
     data_source_id: str,
@@ -475,6 +519,14 @@ def _database_parent_payload(
     return {"type": "database_id", "database_id": database_id}
 
 
+def notion_database_data_source_id(database_payload: dict[str, Any]) -> str:
+    data_sources = database_payload.get("data_sources") if isinstance(database_payload, dict) else None
+    if isinstance(data_sources, list) and data_sources:
+        first = data_sources[0] if isinstance(data_sources[0], dict) else {}
+        return str(first.get("id") or "").strip()
+    return ""
+
+
 def create_notion_page(
     *,
     parent_id: str,
@@ -581,6 +633,126 @@ def update_notion_page(
         raise _friendly_api_error(exc, target=f"page {target_id}") from exc
 
 
+def _resolve_root_page(
+    *,
+    target: dict[str, str],
+    token: str,
+    api_version: str,
+    urlopen_fn: Callable[..., Any],
+) -> dict[str, str]:
+    target_kind = str(target.get("kind") or "").strip()
+    target_id = str(target.get("id") or "").strip()
+    target_url = normalize_notion_space_url(str(target.get("url") or "").strip())
+    target_title = str(target.get("title") or "").strip()
+    if target_kind == "page":
+        return {
+            "id": target_id,
+            "url": target_url,
+            "title": target_title,
+        }
+    if target_kind != "database":
+        raise RuntimeError(f"unsupported Notion root target kind: {target_kind or 'unknown'}")
+    database_payload = retrieve_notion_database(
+        database_id=target_id,
+        token=token,
+        api_version=api_version,
+        urlopen_fn=urlopen_fn,
+    )
+    parent = database_payload.get("parent") if isinstance(database_payload, dict) else {}
+    if not isinstance(parent, dict) or str(parent.get("type") or "").strip() != "page_id":
+        raise RuntimeError("shared Notion databases must live under a page so Almanac has a stable root page")
+    root_page_id = str(parent.get("page_id") or "").strip()
+    root_page = retrieve_notion_page(
+        page_id=root_page_id,
+        token=token,
+        api_version=api_version,
+        urlopen_fn=urlopen_fn,
+    )
+    return {
+        "id": str(root_page.get("id") or root_page_id).strip() or root_page_id,
+        "url": normalize_notion_space_url(str(root_page.get("url") or "").strip()),
+        "title": _page_title(root_page),
+    }
+
+
+def preflight_notion_root_children(
+    *,
+    root_page_id: str,
+    token: str,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    root_id = extract_notion_space_id(root_page_id)
+    temp_page_id = ""
+    temp_database_id = ""
+    create_error: Exception | None = None
+    cleanup_errors: list[str] = []
+    try:
+        temp_page = create_notion_page(
+            parent_id=root_id,
+            parent_kind="page",
+            token=token,
+            api_version=api_version,
+            payload={
+                "properties": {
+                    "title": [
+                        {
+                            "type": "text",
+                            "text": {"content": "Almanac preflight page"},
+                        }
+                    ]
+                }
+            },
+            urlopen_fn=urlopen_fn,
+        )
+        temp_page_id = str(temp_page.get("id") or "").strip()
+        temp_database = create_notion_database(
+            parent_page_id=root_id,
+            title="Almanac Preflight Database",
+            description="Temporary database created by Almanac setup preflight. Safe to trash immediately.",
+            properties={"Name": {"title": {}}},
+            token=token,
+            api_version=api_version,
+            urlopen_fn=urlopen_fn,
+        )
+        temp_database_id = str(temp_database.get("id") or "").strip()
+    except Exception as exc:
+        create_error = exc
+    finally:
+        if temp_database_id:
+            try:
+                update_notion_database(
+                    database_id=temp_database_id,
+                    token=token,
+                    api_version=api_version,
+                    payload={"in_trash": True},
+                    urlopen_fn=urlopen_fn,
+                )
+            except Exception as exc:
+                cleanup_errors.append(f"database {temp_database_id}: {exc}")
+        if temp_page_id:
+            try:
+                update_notion_page(
+                    page_id=temp_page_id,
+                    token=token,
+                    api_version=api_version,
+                    payload={"in_trash": True},
+                    urlopen_fn=urlopen_fn,
+                )
+            except Exception as exc:
+                cleanup_errors.append(f"page {temp_page_id}: {exc}")
+    if create_error is not None:
+        raise create_error
+    if cleanup_errors:
+        raise RuntimeError("Notion root preflight cleanup failed: " + "; ".join(cleanup_errors))
+    return {
+        "ok": True,
+        "root_page_id": root_id,
+        "temp_page_id": temp_page_id,
+        "temp_database_id": temp_database_id,
+    }
+
+
 def handshake_notion_space(
     *,
     space_url: str,
@@ -617,6 +789,12 @@ def handshake_notion_space(
         target_id=target_id,
         urlopen_fn=urlopen_fn,
     )
+    root_page = _resolve_root_page(
+        target=target,
+        token=normalized_token,
+        api_version=normalized_api_version,
+        urlopen_fn=urlopen_fn,
+    )
     integration = _integration_summary(me_payload)
     return {
         "ok": True,
@@ -625,6 +803,9 @@ def handshake_notion_space(
         "space_kind": target["kind"],
         "space_title": target["title"],
         "target_url": normalize_notion_space_url(target["url"] or normalized_space_url),
+        "root_page_id": root_page["id"],
+        "root_page_url": root_page["url"],
+        "root_page_title": root_page["title"],
         "api_version": normalized_api_version,
         "integration": integration,
     }

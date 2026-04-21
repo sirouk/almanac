@@ -39,6 +39,7 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
+lowercase() {{ printf '%s' "${{1:-}}" | tr '[:upper:]' '[:lower:]'; }}
 {snippet}
 ENABLE_NEXTCLOUD=1
 POSTGRES_PASSWORD=change-me
@@ -136,11 +137,34 @@ check_port_loopback_only 8282 "almanac-mcp backend port 8282"
     print("PASS test_loopback_bind_probe_reports_safe_and_unsafe_listeners")
 
 
+def test_shared_notion_without_webhook_reports_poller_fallback() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
+{snippet}
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"shared notion poller fallback case failed: {result.stderr}")
+    expect("PASS:Notion webhook public URL not configured; the independent claim poller covers self-serve verification" in result.stdout, result.stdout)
+    print("PASS test_shared_notion_without_webhook_reports_poller_fallback")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
-    print("PASS all 3 health regression tests")
+    test_shared_notion_without_webhook_reports_poller_fallback()
+    print("PASS all 4 health regression tests")
     return 0
 
 

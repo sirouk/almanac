@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -55,6 +57,8 @@ def config_values(root: Path) -> dict[str, str]:
         "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
         "ALMANAC_MCP_HOST": "127.0.0.1",
         "ALMANAC_MCP_PORT": "8282",
+        "ALMANAC_SSOT_NOTION_ROOT_PAGE_URL": "https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        "ALMANAC_SSOT_NOTION_ROOT_PAGE_ID": "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
         "ALMANAC_SSOT_NOTION_SPACE_URL": "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         "ALMANAC_SSOT_NOTION_SPACE_ID": "12345678-90ab-cdef-1234-567890abcdef",
         "ALMANAC_SSOT_NOTION_SPACE_KIND": "database",
@@ -386,6 +390,155 @@ def test_expire_stale_notion_identity_claims_marks_pending_claims_expired() -> N
             os.environ.update(old_env)
 
 
+def test_notion_override_cli_round_trip() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        control = load_module(CONTROL_PY, "almanac_control_ctl_override_test")
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            insert_agent(control, conn, agent_id="agent-sirouk", unix_user="sirouk")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        env = {
+            **os.environ,
+            "ALMANAC_CONFIG_FILE": str(config_path),
+            "PYTHONPATH": str(PYTHON_DIR),
+        }
+        set_result = subprocess.run(
+            [
+                sys.executable,
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "override-set",
+                "sirouk",
+                "11111111-1111-1111-1111-111111111111",
+                "--email",
+                "chris@example.com",
+                "--notes",
+                "seeded from test",
+            ],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(set_result.returncode == 0, set_result.stderr or set_result.stdout)
+        set_payload = json.loads(set_result.stdout)
+        expect(set_payload["notion_user_email"] == "c***@example.com", str(set_payload))
+        expect(set_payload["notion_user_id"] == "[redacted]", str(set_payload))
+
+        list_default = subprocess.run(
+            [sys.executable, str(CTL_PY), "--json", "notion", "override-list"],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(list_default.returncode == 0, list_default.stderr or list_default.stdout)
+        listed = json.loads(list_default.stdout)
+        expect(len(listed["overrides"]) == 1, str(listed))
+        expect(listed["overrides"][0]["notion_user_email"] == "c***@example.com", str(listed))
+
+        list_sensitive = subprocess.run(
+            [sys.executable, str(CTL_PY), "--json", "notion", "override-list", "--show-sensitive"],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(list_sensitive.returncode == 0, list_sensitive.stderr or list_sensitive.stdout)
+        sensitive = json.loads(list_sensitive.stdout)
+        expect(sensitive["overrides"][0]["notion_user_email"] == "chris@example.com", str(sensitive))
+        expect(
+            sensitive["overrides"][0]["notion_user_id"] == "11111111-1111-1111-1111-111111111111",
+            str(sensitive),
+        )
+
+        clear_result = subprocess.run(
+            [sys.executable, str(CTL_PY), "--json", "notion", "override-clear", "sirouk"],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(clear_result.returncode == 0, clear_result.stderr or clear_result.stdout)
+        cleared = json.loads(clear_result.stdout)
+        expect(cleared["cleared"] is True, str(cleared))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            audit_rows = control.list_ssot_access_audit(conn, unix_user="sirouk", limit=5)
+            operations = [row["operation"] for row in audit_rows]
+            expect("override-identity" in operations, str(audit_rows))
+            expect("override-identity-clear" in operations, str(audit_rows))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+        print("PASS test_notion_override_cli_round_trip")
+
+
+def test_notion_preflight_root_cli_uses_root_page_id() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    ctl = load_module(CTL_PY, "almanac_ctl_notion_preflight_test")
+    original_preflight = ctl.preflight_notion_root_children
+    original_argv = sys.argv[:]
+    old_env = os.environ.copy()
+    buffer = io.StringIO()
+    calls: list[dict[str, str]] = []
+    try:
+        os.environ["ALMANAC_SSOT_NOTION_ROOT_PAGE_ID"] = "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb"
+        os.environ["ALMANAC_SSOT_NOTION_TOKEN"] = "secret_test"
+        os.environ["ALMANAC_SSOT_NOTION_API_VERSION"] = "2026-03-11"
+
+        def fake_preflight(*, root_page_id: str, token: str, api_version: str, urlopen_fn=None):
+            calls.append(
+                {
+                    "root_page_id": root_page_id,
+                    "token": token,
+                    "api_version": api_version,
+                }
+            )
+            return {"ok": True, "root_page_id": root_page_id}
+
+        ctl.preflight_notion_root_children = fake_preflight
+        sys.argv = [str(CTL_PY), "--json", "notion", "preflight-root"]
+        with contextlib.redirect_stdout(buffer):
+            ctl.main()
+    finally:
+        ctl.preflight_notion_root_children = original_preflight
+        sys.argv = original_argv
+        os.environ.clear()
+        os.environ.update(old_env)
+    expect(
+        calls == [
+            {
+                "root_page_id": "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
+                "token": "secret_test",
+                "api_version": "2026-03-11",
+            }
+        ],
+        str(calls),
+    )
+    payload = json.loads(buffer.getvalue())
+    expect(payload["root_page_id"] == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb", str(payload))
+    print("PASS test_notion_preflight_root_cli_uses_root_page_id")
+
+
 def main() -> int:
     test_redact_identity_rows_masks_emails_by_default()
     test_manual_verify_notion_user_fetches_and_validates_email()
@@ -393,7 +546,9 @@ def main() -> int:
     test_notion_suspend_and_unsuspend_cli_audit()
     test_connect_db_migrates_legacy_notion_claim_nonce_column()
     test_expire_stale_notion_identity_claims_marks_pending_claims_expired()
-    print("PASS all 6 almanac ctl notion tests")
+    test_notion_override_cli_round_trip()
+    test_notion_preflight_root_cli_uses_root_page_id()
+    print("PASS all 8 almanac ctl notion tests")
     return 0
 
 

@@ -30,12 +30,15 @@ from almanac_notion_ssot import (
     create_notion_page,
     DEFAULT_NOTION_API_VERSION,
     extract_notion_space_id,
+    notion_database_data_source_id,
     query_notion_collection,
     retrieve_notion_data_source,
     retrieve_notion_database,
     retrieve_notion_page,
     retrieve_notion_page_markdown,
     retrieve_notion_user,
+    update_notion_data_source,
+    update_notion_database,
     update_notion_page,
     resolve_notion_target,
 )
@@ -690,6 +693,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           expires_at TEXT NOT NULL,
           verified_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS notion_identity_overrides (
+          unix_user TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL UNIQUE,
+          notion_user_id TEXT NOT NULL DEFAULT '',
+          notion_user_email TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
         """
     )
     _migrate_notion_identity_claims_remove_legacy_nonce(conn)
@@ -724,6 +737,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_notion_identity_claims_session_created
         ON notion_identity_claims (session_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_overrides_user_id
+        ON notion_identity_overrides (notion_user_id)
+        WHERE notion_user_id != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_overrides_email
+        ON notion_identity_overrides (LOWER(notion_user_email))
+        WHERE notion_user_email != ''
         """
     )
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
@@ -863,6 +890,12 @@ def _agent_identity_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | Non
     return payload
 
 
+def _notion_identity_override_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
 def get_agent_identity(
     conn: sqlite3.Connection,
     *,
@@ -890,6 +923,118 @@ def get_agent_identity(
 def list_agent_identities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute("SELECT * FROM agent_identity ORDER BY unix_user").fetchall()
     return [dict(row) for row in rows]
+
+
+def get_notion_identity_override(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str = "",
+    unix_user: str = "",
+    notion_user_id: str = "",
+    notion_user_email: str = "",
+) -> dict[str, Any] | None:
+    normalized_agent_id = str(agent_id or "").strip()
+    normalized_unix_user = str(unix_user or "").strip()
+    normalized_user_id = str(notion_user_id or "").strip()
+    normalized_email = _normalize_email(notion_user_email)
+    if not any((normalized_agent_id, normalized_unix_user, normalized_user_id, normalized_email)):
+        return None
+    row = conn.execute(
+        """
+        SELECT *
+        FROM notion_identity_overrides
+        WHERE (? != '' AND agent_id = ?)
+           OR (? != '' AND unix_user = ?)
+           OR (? != '' AND notion_user_id = ?)
+           OR (? != '' AND LOWER(notion_user_email) = ?)
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (
+            normalized_agent_id,
+            normalized_agent_id,
+            normalized_unix_user,
+            normalized_unix_user,
+            normalized_user_id,
+            normalized_user_id,
+            normalized_email,
+            normalized_email,
+        ),
+    ).fetchone()
+    return _notion_identity_override_row_to_dict(row)
+
+
+def list_notion_identity_overrides(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM notion_identity_overrides ORDER BY unix_user").fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_notion_identity_override(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str = "",
+    unix_user: str = "",
+    notion_user_id: str = "",
+    notion_user_email: str = "",
+    notes: str = "",
+) -> dict[str, Any]:
+    target = _resolve_identity_target(conn, agent_id=agent_id, unix_user=unix_user)
+    normalized_user_id = str(notion_user_id or "").strip()
+    normalized_email = _normalize_email(notion_user_email)
+    if not normalized_user_id and not normalized_email:
+        raise ValueError("identity override needs a Notion user id or Notion email")
+    now_iso = utc_now_iso()
+    existing = get_notion_identity_override(conn, agent_id=str(target["agent_id"]), unix_user=str(target["unix_user"])) or {}
+    row = {
+        "agent_id": str(target["agent_id"]),
+        "unix_user": str(target["unix_user"]),
+        "notion_user_id": normalized_user_id or str(existing.get("notion_user_id") or ""),
+        "notion_user_email": normalized_email or _normalize_email(str(existing.get("notion_user_email") or "")),
+        "notes": str(notes or existing.get("notes") or "").strip(),
+        "created_at": str(existing.get("created_at") or now_iso),
+        "updated_at": now_iso,
+    }
+    if not row["notion_user_id"] and not row["notion_user_email"]:
+        raise ValueError("identity override needs a Notion user id or Notion email")
+    conn.execute(
+        """
+        INSERT INTO notion_identity_overrides (
+          unix_user, agent_id, notion_user_id, notion_user_email, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(unix_user) DO UPDATE SET
+          agent_id = excluded.agent_id,
+          notion_user_id = excluded.notion_user_id,
+          notion_user_email = excluded.notion_user_email,
+          notes = excluded.notes,
+          updated_at = excluded.updated_at
+        """,
+        (
+            row["unix_user"],
+            row["agent_id"],
+            row["notion_user_id"],
+            row["notion_user_email"],
+            row["notes"],
+            row["created_at"],
+            row["updated_at"],
+        ),
+    )
+    conn.commit()
+    return get_notion_identity_override(conn, agent_id=row["agent_id"], unix_user=row["unix_user"]) or row
+
+
+def clear_notion_identity_override(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str = "",
+    unix_user: str = "",
+) -> bool:
+    target = _resolve_identity_target(conn, agent_id=agent_id, unix_user=unix_user)
+    cursor = conn.execute(
+        "DELETE FROM notion_identity_overrides WHERE unix_user = ? OR agent_id = ?",
+        (str(target["unix_user"]), str(target["agent_id"])),
+    )
+    conn.commit()
+    return bool(cursor.rowcount)
 
 
 AGENT_IDENTITY_VERIFICATION_STATUSES = ("unverified", "pending", "verified")
@@ -1286,6 +1431,102 @@ def _notion_rich_text_value(value: str) -> dict[str, Any]:
     }
 
 
+def _notion_property_type(property_payload: Any) -> str:
+    if not isinstance(property_payload, dict):
+        return ""
+    return str(property_payload.get("type") or "").strip()
+
+
+def _expected_notion_property_type(property_payload: dict[str, Any]) -> str:
+    if not isinstance(property_payload, dict):
+        return ""
+    return next(iter(property_payload.keys()), "")
+
+
+def _managed_database_schema_drift(
+    *,
+    actual_properties: dict[str, Any],
+    expected_properties: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    missing: dict[str, Any] = {}
+    wrong_types: list[str] = []
+    for property_name, property_schema in expected_properties.items():
+        actual = actual_properties.get(property_name)
+        if actual is None:
+            missing[property_name] = property_schema
+            continue
+        expected_type = _expected_notion_property_type(property_schema)
+        actual_type = _notion_property_type(actual)
+        if expected_type and actual_type != expected_type:
+            wrong_types.append(f"{property_name} expected {expected_type}, found {actual_type or 'unknown'}")
+    return missing, wrong_types
+
+
+def _ensure_managed_database_schema(
+    *,
+    database_payload: dict[str, Any],
+    data_source_payload: dict[str, Any],
+    expected_properties: dict[str, Any],
+    token: str,
+    api_version: str,
+    label: str,
+    notion_kwargs: dict[str, Any] | None = None,
+) -> None:
+    kwargs = notion_kwargs or {}
+    schema_payload = data_source_payload or database_payload
+    actual_properties = schema_payload.get("properties") if isinstance(schema_payload, dict) else {}
+    if not isinstance(actual_properties, dict):
+        actual_properties = {}
+    missing, wrong_types = _managed_database_schema_drift(
+        actual_properties=actual_properties,
+        expected_properties=expected_properties,
+    )
+    if missing:
+        data_source_id = notion_database_data_source_id(database_payload)
+        if data_source_id:
+            update_notion_data_source(
+                data_source_id=data_source_id,
+                token=token,
+                api_version=api_version,
+                payload={"properties": missing},
+                **kwargs,
+            )
+            refreshed_database = retrieve_notion_database(
+                database_id=str(database_payload.get("id") or ""),
+                token=token,
+                api_version=api_version,
+                **kwargs,
+            )
+            refreshed_data_source = {}
+            refreshed_data_source_id = notion_database_data_source_id(refreshed_database)
+            if refreshed_data_source_id:
+                refreshed_data_source = retrieve_notion_data_source(
+                    data_source_id=refreshed_data_source_id,
+                    token=token,
+                    api_version=api_version,
+                    **kwargs,
+                )
+            schema_payload = refreshed_data_source or refreshed_database
+            actual_properties = schema_payload.get("properties") if isinstance(schema_payload, dict) else {}
+            if not isinstance(actual_properties, dict):
+                actual_properties = {}
+            missing, wrong_types = _managed_database_schema_drift(
+                actual_properties=actual_properties,
+                expected_properties=expected_properties,
+            )
+        else:
+            raise RuntimeError(
+                f"{label} is missing required properties ({', '.join(sorted(missing))}) and does not expose a data source for repair"
+            )
+    if missing or wrong_types:
+        details: list[str] = []
+        if missing:
+            details.append("missing: " + ", ".join(sorted(missing)))
+        if wrong_types:
+            details.append("wrong types: " + "; ".join(wrong_types))
+        raise RuntimeError(f"{label} schema drift detected; {'; '.join(details)}")
+
+
 def _verification_db_parent_page_id(
     *,
     settings: dict[str, str],
@@ -1294,6 +1535,8 @@ def _verification_db_parent_page_id(
     notion_kwargs: dict[str, Any] = {}
     if urlopen_fn is not None:
         notion_kwargs["urlopen_fn"] = urlopen_fn
+    if settings.get("root_page_id"):
+        return str(settings["root_page_id"]).strip()
     if settings["space_kind"] == "page":
         return settings["space_id"]
     database = retrieve_notion_database(
@@ -1319,10 +1562,12 @@ def ensure_notion_verification_database(
     cached_id = get_setting(conn, NOTION_VERIFICATION_DB_ID_SETTING, "").strip()
     cached_url = get_setting(conn, NOTION_VERIFICATION_DB_URL_SETTING, "").strip()
     cached_parent = get_setting(conn, NOTION_VERIFICATION_DB_PARENT_SETTING, "").strip()
+    desired_parent = _verification_db_parent_page_id(settings=settings, urlopen_fn=urlopen_fn)
     notion_kwargs: dict[str, Any] = {}
     if urlopen_fn is not None:
         notion_kwargs["urlopen_fn"] = urlopen_fn
-    if cached_id:
+    if cached_id and (not desired_parent or not cached_parent or cached_parent == desired_parent):
+        database_missing = False
         try:
             database = retrieve_notion_database(
                 database_id=cached_id,
@@ -1330,14 +1575,35 @@ def ensure_notion_verification_database(
                 api_version=settings["api_version"],
                 **notion_kwargs,
             )
+        except RuntimeError as exc:
+            if "could not retrieve database" not in str(exc).lower():
+                raise
+            database_missing = True
+        if not database_missing:
+            data_source_payload = {}
+            data_source_id = notion_database_data_source_id(database)
+            if data_source_id:
+                data_source_payload = retrieve_notion_data_source(
+                    data_source_id=data_source_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                    **notion_kwargs,
+                )
+            _ensure_managed_database_schema(
+                database_payload=database,
+                data_source_payload=data_source_payload,
+                expected_properties=_notion_verification_db_property_schema(),
+                token=settings["token"],
+                api_version=settings["api_version"],
+                label="Almanac verification database",
+                notion_kwargs=notion_kwargs,
+            )
             return {
                 "database_id": str(database.get("id") or cached_id).strip() or cached_id,
                 "database_url": cached_url or str(database.get("url") or "").strip(),
-                "parent_page_id": cached_parent,
+                "parent_page_id": cached_parent or desired_parent,
             }
-        except Exception:
-            pass
-    parent_page_id = _verification_db_parent_page_id(settings=settings, urlopen_fn=urlopen_fn)
+    parent_page_id = desired_parent
     database = create_notion_database(
         parent_page_id=parent_page_id,
         title="Almanac Verification",
@@ -1354,6 +1620,24 @@ def ensure_notion_verification_database(
     database_url = str(database.get("url") or "").strip()
     if not database_id:
         raise RuntimeError("Notion created the verification database without returning an id")
+    data_source_id = notion_database_data_source_id(database)
+    data_source_payload = {}
+    if data_source_id:
+        data_source_payload = retrieve_notion_data_source(
+            data_source_id=data_source_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+    _ensure_managed_database_schema(
+        database_payload=database,
+        data_source_payload=data_source_payload,
+        expected_properties=_notion_verification_db_property_schema(),
+        token=settings["token"],
+        api_version=settings["api_version"],
+        label="Almanac verification database",
+        notion_kwargs=notion_kwargs,
+    )
     upsert_setting(conn, NOTION_VERIFICATION_DB_ID_SETTING, database_id)
     upsert_setting(conn, NOTION_VERIFICATION_DB_URL_SETTING, database_url)
     upsert_setting(conn, NOTION_VERIFICATION_DB_PARENT_SETTING, parent_page_id)
@@ -1587,27 +1871,34 @@ def try_verify_notion_identity_claim(
         return None
     person = last_edited_by.get("person") if isinstance(last_edited_by.get("person"), dict) else {}
     email = _normalize_email(str(person.get("email") or last_edited_by.get("email") or ""))
-    if email != _normalize_email(str(claim.get("claimed_notion_email") or "")):
-        mark_notion_identity_claim(
-            conn,
-            claim_id=str(claim["claim_id"]),
-            status="pending",
-            failure_reason="the most recent edit came from a different Notion email",
-        )
-        log_ssot_access_audit(
-            conn,
-            agent_id=agent_id,
-            unix_user=unix_user,
-            notion_user_id="",
-            operation="verify-identity",
-            target_id=target_id,
-            decision="deny",
-            reason="verification page edit came from a different Notion email",
-            actor=verification_source,
-            request_payload={"claim_id": str(claim.get("claim_id") or ""), "claimed_email": str(claim.get("claimed_notion_email") or ""), "observed_email": email},
-        )
-        return None
     notion_user_id = str(last_edited_by.get("id") or "").strip()
+    override = get_notion_identity_override(
+        conn,
+        agent_id=agent_id,
+        unix_user=unix_user,
+    )
+    if email != _normalize_email(str(claim.get("claimed_notion_email") or "")):
+        override_values = {value.lower() for value in _notion_identity_override_values(override)}
+        if email.lower() not in override_values and notion_user_id.lower() not in override_values:
+            mark_notion_identity_claim(
+                conn,
+                claim_id=str(claim["claim_id"]),
+                status="pending",
+                failure_reason="the most recent edit came from a different Notion email",
+            )
+            log_ssot_access_audit(
+                conn,
+                agent_id=agent_id,
+                unix_user=unix_user,
+                notion_user_id="",
+                operation="verify-identity",
+                target_id=target_id,
+                decision="deny",
+                reason="verification page edit came from a different Notion email",
+                actor=verification_source,
+                request_payload={"claim_id": str(claim.get("claim_id") or ""), "claimed_email": str(claim.get("claimed_notion_email") or ""), "observed_email": email},
+            )
+            return None
     if not notion_user_id:
         mark_notion_identity_claim(
             conn,
@@ -1628,6 +1919,28 @@ def try_verify_notion_identity_claim(
             request_payload={"claim_id": str(claim.get("claim_id") or ""), "claimed_email": str(claim.get("claimed_notion_email") or ""), "observed_email": email},
         )
         return None
+    if override is not None:
+        override_values = {value.lower() for value in _notion_identity_override_values(override)}
+        if override_values and notion_user_id.lower() not in override_values and email.lower() not in override_values:
+            mark_notion_identity_claim(
+                conn,
+                claim_id=str(claim["claim_id"]),
+                status="pending",
+                failure_reason="the verification edit did not match the explicit Notion identity override",
+            )
+            log_ssot_access_audit(
+                conn,
+                agent_id=agent_id,
+                unix_user=unix_user,
+                notion_user_id=notion_user_id,
+                operation="verify-identity",
+                target_id=target_id,
+                decision="deny",
+                reason="verification page edit did not match the explicit Notion identity override",
+                actor=verification_source,
+                request_payload={"claim_id": str(claim.get("claim_id") or ""), "observed_email": email, "observed_user_id": notion_user_id},
+            )
+            return None
     mark_agent_identity_verified(
         conn,
         agent_id=str(claim.get("agent_id") or ""),
@@ -1809,6 +2122,8 @@ TERMINAL_ONBOARDING_STATES = ("denied", "completed", "cancelled")
 NOTION_VERIFICATION_DB_ID_SETTING = "notion_verification_database_id"
 NOTION_VERIFICATION_DB_URL_SETTING = "notion_verification_database_url"
 NOTION_VERIFICATION_DB_PARENT_SETTING = "notion_verification_database_parent_page_id"
+NOTION_SLO_P50_SECONDS = 60
+NOTION_SLO_P99_SECONDS = 600
 NOTION_CLAIM_ACTIVE_STATUSES = ("pending", "verified")
 NOTION_CLAIM_TERMINAL_STATUSES = ("verified", "skipped", "expired", "failed")
 
@@ -5643,12 +5958,23 @@ def _notion_owner_identity(payload: dict[str, Any]) -> tuple[str, str]:
     return "", "needs-approval"
 
 
+def _notion_identity_override_values(override: dict[str, Any] | None) -> set[str]:
+    if not isinstance(override, dict):
+        return set()
+    values = {
+        _normalize_email(str(override.get("notion_user_email") or "")),
+        str(override.get("notion_user_id") or "").strip(),
+    }
+    return {value for value in values if value}
+
+
 def _ssot_identity_match_values(agent_row: sqlite3.Row, identity: dict[str, Any]) -> set[str]:
     _ = agent_row
     values = {
         _normalize_email(str(identity.get("notion_user_email") or "")),
         str(identity.get("notion_user_id") or "").strip(),
     }
+    values.update(_notion_identity_override_values(identity.get("override")))
     return {value for value in values if value}
 
 
@@ -5668,8 +5994,13 @@ def _page_access_matches_identity(
 
 def _insert_payload_targets_verified_identity(payload: dict[str, Any], identity: dict[str, Any]) -> tuple[bool, str]:
     match_values = {
-        str(identity.get("notion_user_id") or "").strip().lower(),
-        _normalize_email(str(identity.get("notion_user_email") or "")),
+        str(value).strip().lower()
+        for value in {
+            str(identity.get("notion_user_id") or "").strip(),
+            _normalize_email(str(identity.get("notion_user_email") or "")),
+            *_notion_identity_override_values(identity.get("override")),
+        }
+        if str(value).strip()
     }
     match_values = {value for value in match_values if value}
     if not match_values:
@@ -5704,6 +6035,32 @@ def _find_agent_for_owner(conn: sqlite3.Connection, owner_identity: str) -> dict
     ).fetchone()
     if identity_row is not None:
         return dict(identity_row)
+    override_row = conn.execute(
+        """
+        SELECT agent_id, unix_user
+        FROM notion_identity_overrides
+        WHERE notion_user_id = ?
+           OR LOWER(notion_user_email) = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (
+            normalized_owner,
+            normalized_email,
+        ),
+    ).fetchone()
+    if override_row is not None:
+        agent_row = conn.execute(
+            """
+            SELECT agent_id, unix_user, display_name
+            FROM agents
+            WHERE agent_id = ?
+            LIMIT 1
+            """,
+            (str(override_row["agent_id"]),),
+        ).fetchone()
+        if agent_row is not None:
+            return dict(agent_row)
     return None
 
 
@@ -5834,6 +6191,14 @@ def _ssot_principal(conn: sqlite3.Connection, agent_id: str) -> tuple[sqlite3.Ro
             )
     except sqlite3.Error as exc:
         raise PermissionError("shared Notion identity registry is unavailable") from exc
+    override = get_notion_identity_override(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+    )
+    if override is not None:
+        identity = dict(identity)
+        identity["override"] = override
     if str(identity.get("suspended_at") or "").strip():
         raise PermissionError("shared Notion access is suspended for this identity")
     return agent_row, identity
@@ -5874,9 +6239,21 @@ def _log_ssot_principal_denial(
 
 
 def _shared_notion_settings() -> dict[str, str]:
+    space_url = str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "")).strip()
+    space_id = str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_ID", "")).strip()
+    space_kind = str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_KIND", "")).strip()
+    root_page_url = str(config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_URL", "")).strip()
+    root_page_id = str(config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_ID", "")).strip()
+    if not root_page_id and space_kind == "page":
+        root_page_id = space_id
+    if not root_page_url and space_kind == "page":
+        root_page_url = space_url
     return {
-        "space_id": str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_ID", "")).strip(),
-        "space_kind": str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_KIND", "")).strip(),
+        "space_url": space_url,
+        "space_id": space_id,
+        "space_kind": space_kind,
+        "root_page_url": root_page_url,
+        "root_page_id": root_page_id,
         "token": str(config_env_value("ALMANAC_SSOT_NOTION_TOKEN", "")).strip(),
         "api_version": str(
             config_env_value("ALMANAC_SSOT_NOTION_API_VERSION", DEFAULT_NOTION_API_VERSION)
@@ -6777,7 +7154,10 @@ def build_managed_memory_payload(
             qmd_path=config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp",
             almanac_mcp_path=config_env_value("TAILSCALE_ALMANAC_MCP_PATH", "/almanac-mcp").strip() or "/almanac-mcp",
             chutes_mcp_url=cfg.chutes_mcp_url,
-            notion_space_url=config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip(),
+            notion_space_url=(
+                config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_URL", "").strip()
+                or config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip()
+            ),
         ),
     )
     topology = "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n" + "\n".join(
@@ -7226,16 +7606,22 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
         )
 
     conn.commit()
+    batch_status = "ok"
+    if failed_events:
+        batch_status = "fail"
+    elif unresolved_events:
+        batch_status = "warn"
     note_refresh_job(
         conn,
         job_name="notion-ssot-batcher",
         job_kind="ssot-batcher",
         target_id="notion",
         schedule="every 5m",
-        status="ok",
+        status=batch_status,
         note=(
             f"processed {processed} event(s); verified_claims={verified_claims}; "
-            f"unresolved {len(unresolved_events)}; failed {len(failed_events)}"
+            f"unresolved {len(unresolved_events)}; failed {len(failed_events)}; "
+            f"SLO targets p50<{NOTION_SLO_P50_SECONDS}s p99<{NOTION_SLO_P99_SECONDS}s"
         ),
     )
     return {

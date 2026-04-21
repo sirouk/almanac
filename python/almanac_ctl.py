@@ -17,6 +17,7 @@ from almanac_agent_access import clear_tailscale_https, load_access_state
 from almanac_notion_ssot import (
     DEFAULT_NOTION_API_VERSION,
     handshake_notion_space,
+    preflight_notion_root_children,
     retrieve_notion_user,
 )
 from almanac_nextcloud_access import delete_nextcloud_user_access
@@ -35,6 +36,7 @@ from almanac_control import (
     generate_raw_token,
     grant_agent_runtime_access,
     get_agent,
+    get_notion_identity_override,
     get_onboarding_session,
     get_setting,
     hash_token,
@@ -43,6 +45,7 @@ from almanac_control import (
     list_notifications,
     list_onboarding_sessions,
     list_auto_provision_requests,
+    list_notion_identity_overrides,
     list_requests,
     list_ssot_access_audit,
     list_tokens,
@@ -70,6 +73,8 @@ from almanac_control import (
     sync_vault_repo_mirrors,
     unsuspend_agent_identity,
     utc_now_iso,
+    upsert_notion_identity_override,
+    clear_notion_identity_override,
     upsert_setting,
 )
 
@@ -188,9 +193,25 @@ def parse_args() -> argparse.Namespace:
     notion_handshake.add_argument("--space-url", default="")
     notion_handshake.add_argument("--token", default="")
     notion_handshake.add_argument("--api-version", default="")
+    notion_preflight = notion_sub.add_parser("preflight-root")
+    notion_preflight.add_argument("--root-page-id", default="")
+    notion_preflight.add_argument("--token", default="")
+    notion_preflight.add_argument("--api-version", default="")
     notion_identity_list = notion_sub.add_parser("identity-list")
     notion_identity_list.add_argument("--show-sensitive", dest="show_sensitive", action="store_true")
     notion_identity_list.add_argument("--show-emails", dest="show_sensitive", action="store_true", help=argparse.SUPPRESS)
+    notion_override_list = notion_sub.add_parser("override-list")
+    notion_override_list.add_argument("--show-sensitive", dest="show_sensitive", action="store_true")
+    notion_override_list.add_argument("--show-emails", dest="show_sensitive", action="store_true", help=argparse.SUPPRESS)
+    notion_override_set = notion_sub.add_parser("override-set")
+    notion_override_set.add_argument("target")
+    notion_override_set.add_argument("notion_user_id")
+    notion_override_set.add_argument("--email", default="")
+    notion_override_set.add_argument("--notes", default="")
+    notion_override_set.add_argument("--show-sensitive", dest="show_sensitive", action="store_true")
+    notion_override_set.add_argument("--show-emails", dest="show_sensitive", action="store_true", help=argparse.SUPPRESS)
+    notion_override_clear = notion_sub.add_parser("override-clear")
+    notion_override_clear.add_argument("target")
     notion_claim = notion_sub.add_parser("claim-email")
     notion_claim.add_argument("target")
     notion_claim.add_argument("email")
@@ -275,6 +296,18 @@ def _redact_identity_rows(rows: list[dict[str, Any]], *, show_sensitive: bool) -
     for row in rows:
         item = dict(row)
         item["claimed_notion_email"] = _redacted_email(item.get("claimed_notion_email", ""))
+        item["notion_user_email"] = _redacted_email(item.get("notion_user_email", ""))
+        item["notion_user_id"] = _redacted_identifier(item.get("notion_user_id", ""))
+        scrubbed.append(item)
+    return scrubbed
+
+
+def _redact_override_rows(rows: list[dict[str, Any]], *, show_sensitive: bool) -> list[dict[str, Any]]:
+    if show_sensitive:
+        return rows
+    scrubbed: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
         item["notion_user_email"] = _redacted_email(item.get("notion_user_email", ""))
         item["notion_user_id"] = _redacted_identifier(item.get("notion_user_id", ""))
         scrubbed.append(item)
@@ -1908,6 +1941,25 @@ def main() -> None:
                 raise SystemExit(str(exc)) from exc
             dump_output(args, payload)
             return
+        if args.domain == "notion" and args.action == "preflight-root":
+            try:
+                payload = preflight_notion_root_children(
+                    root_page_id=(
+                        args.root_page_id
+                        or config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_ID", "").strip()
+                        or config_env_value("ALMANAC_SSOT_NOTION_SPACE_ID", "").strip()
+                    ),
+                    token=args.token or config_env_value("ALMANAC_SSOT_NOTION_TOKEN", "").strip(),
+                    api_version=(
+                        args.api_version
+                        or config_env_value("ALMANAC_SSOT_NOTION_API_VERSION", DEFAULT_NOTION_API_VERSION).strip()
+                        or DEFAULT_NOTION_API_VERSION
+                    ),
+                )
+            except RuntimeError as exc:
+                raise SystemExit(str(exc)) from exc
+            dump_output(args, payload)
+            return
         if args.domain == "notion" and args.action == "identity-list":
             dump_output(
                 args,
@@ -1918,6 +1970,71 @@ def main() -> None:
                     )
                 },
             )
+            return
+        if args.domain == "notion" and args.action == "override-list":
+            dump_output(
+                args,
+                {
+                    "overrides": _redact_override_rows(
+                        list_notion_identity_overrides(conn),
+                        show_sensitive=args.show_sensitive,
+                    )
+                },
+            )
+            return
+        if args.domain == "notion" and args.action == "override-set":
+            payload = upsert_notion_identity_override(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+                notion_user_id=args.notion_user_id,
+                notion_user_email=args.email,
+                notes=args.notes,
+            )
+            log_ssot_access_audit(
+                conn,
+                agent_id=str(payload.get("agent_id") or ""),
+                unix_user=str(payload.get("unix_user") or ""),
+                notion_user_id=str(payload.get("notion_user_id") or ""),
+                operation="override-identity",
+                target_id=str(payload.get("unix_user") or payload.get("agent_id") or args.target),
+                decision="allow",
+                reason="identity override upserted",
+                actor="operator-cli",
+                request_payload={
+                    "target": args.target,
+                    "notion_user_id": args.notion_user_id,
+                    "notion_user_email": args.email,
+                    "notes": args.notes,
+                },
+            )
+            dump_output(args, payload if args.show_sensitive else _redact_override_rows([payload], show_sensitive=False)[0])
+            return
+        if args.domain == "notion" and args.action == "override-clear":
+            existing_override = get_notion_identity_override(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+            ) or {}
+            removed = clear_notion_identity_override(
+                conn,
+                agent_id=args.target if args.target.startswith("agent-") else "",
+                unix_user="" if args.target.startswith("agent-") else args.target,
+            )
+            if removed:
+                log_ssot_access_audit(
+                    conn,
+                    agent_id=str(existing_override.get("agent_id") or (args.target if args.target.startswith("agent-") else "")),
+                    unix_user=str(existing_override.get("unix_user") or ("" if args.target.startswith("agent-") else args.target)),
+                    notion_user_id="",
+                    operation="override-identity-clear",
+                    target_id=args.target,
+                    decision="allow",
+                    reason="identity override cleared",
+                    actor="operator-cli",
+                    request_payload={"target": args.target},
+                )
+            dump_output(args, {"cleared": bool(removed), "target": args.target})
             return
         if args.domain == "notion" and args.action == "claim-email":
             payload = set_agent_identity_claim(

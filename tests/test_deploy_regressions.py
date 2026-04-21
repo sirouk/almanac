@@ -70,6 +70,8 @@ def render_runtime_config(
     *,
     enable_tailscale_serve: str = "0",
     agent_enable_tailscale_serve: str = "",
+    notion_root_page_url: str = "",
+    notion_root_page_id: str = "",
     notion_space_url: str = "",
     notion_space_id: str = "",
     notion_space_kind: str = "",
@@ -107,6 +109,8 @@ POSTGRES_USER=nextcloud
 POSTGRES_PASSWORD=dbpass
 NEXTCLOUD_ADMIN_USER=admin
 NEXTCLOUD_ADMIN_PASSWORD=adminpass
+ALMANAC_SSOT_NOTION_ROOT_PAGE_URL={shlex.quote(notion_root_page_url)}
+ALMANAC_SSOT_NOTION_ROOT_PAGE_ID={shlex.quote(notion_root_page_id)}
 ALMANAC_SSOT_NOTION_SPACE_URL={shlex.quote(notion_space_url)}
 ALMANAC_SSOT_NOTION_SPACE_ID={shlex.quote(notion_space_id)}
 ALMANAC_SSOT_NOTION_SPACE_KIND={shlex.quote(notion_space_kind)}
@@ -181,12 +185,23 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     config = render_runtime_config(
         "tui-only",
         "tui-only",
+        notion_root_page_url="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        notion_root_page_id="aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
         notion_space_url="https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         notion_space_id="12345678-90ab-cdef-1234-567890abcdef",
         notion_space_kind="database",
         notion_api_version="2026-03-11",
         notion_token="secret_test",
         notion_public_webhook_url="https://hooks.example.com/notion/webhook",
+    )
+    expect(
+        source_value(config, "ALMANAC_SSOT_NOTION_ROOT_PAGE_URL")
+        == "https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        config,
+    )
+    expect(
+        source_value(config, "ALMANAC_SSOT_NOTION_ROOT_PAGE_ID") == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
+        config,
     )
     expect(
         source_value(config, "ALMANAC_SSOT_NOTION_SPACE_URL") == "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
@@ -1032,6 +1047,22 @@ def test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake() -> None:
     expect(
         '--api-version "$notion_api_version"' in notion_setup,
         "expected notion-ssot setup to pass the Notion API version to handshake explicitly",
+    )
+    expect(
+        '"$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion preflight-root' in notion_setup,
+        "expected notion-ssot setup to preflight child page/database creation under the resolved root page",
+    )
+    expect(
+        '--root-page-id "$root_page_id"' in notion_setup,
+        "expected notion-ssot setup to pass the resolved root page id explicitly to the preflight check",
+    )
+    expect(
+        'ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"' in notion_setup,
+        "expected notion-ssot setup to persist the resolved Notion root page URL",
+    )
+    expect(
+        'ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"' in notion_setup,
+        "expected notion-ssot setup to persist the resolved Notion root page id",
     )
     print("PASS test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake")
 

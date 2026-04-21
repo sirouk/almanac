@@ -186,6 +186,8 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
                 managed_payload["almanac-skill-ref"],
             )
             expect("almanac-ssot" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
+            expect("Treat the skill as the workflow and guardrail layer" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
+            expect("When a brokered action is refused" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
             expect("Use almanac-ssot" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
 
             trigger_payload = json.loads(trigger_path.read_text(encoding="utf-8"))
@@ -540,6 +542,7 @@ def test_managed_notion_stub_reports_verified_page_scoped_write_access() -> None
             expect("page-scoped right now" in stub, stub)
             expect("Verification: confirmed for chris@example.com." in stub, stub)
             expect("Shared brokered writes are enabled within your scoped rails." in stub, stub)
+            expect("do not describe that as the skill being missing" in stub, stub)
             print("PASS test_managed_notion_stub_reports_verified_page_scoped_write_access")
         finally:
             os.environ.clear()

@@ -6797,6 +6797,7 @@ def _build_notion_stub(
             "- The shared SSOT target is page-scoped right now, so Almanac cannot build a structured database digest yet.",
             "- Shared organizational writes still stay on the brokered ssot.write rail for concrete user-scoped page work.",
             "- Use ssot.read for specific page lookups.",
+            "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing.",
         ]
         if verification_status != "verified":
             if claimed_email:
@@ -6830,6 +6831,7 @@ def _build_notion_stub(
         "Shared Notion digest:",
         "- Shared organizational writes stay on the brokered ssot.write rail.",
         "- Native Notion edit history shows the Almanac integration. When the database exposes a Changed By people property, Almanac also stamps the verified human there on every brokered write.",
+        "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing.",
     ]
     if identity is None or verification_status != "verified":
         if claimed_email:
@@ -7405,6 +7407,13 @@ def build_managed_memory_payload(
         " sync rail is curator fanout -> activation trigger / refresh timer ->"
         " user-agent-refresh -> local managed-memory stubs and recent events. Use"
         " those stubs plus qmd for depth instead of trying to memorize the vault."
+        " Treat the skill as the workflow and guardrail layer, and the wired"
+        " broker/MCP/tool as the actuation layer. Do not decide that a rail is"
+        " unavailable just because raw env vars are absent in a chat turn; use"
+        " the installed skills, managed stubs, and Almanac-provisioned rails as"
+        " the source of truth. When a brokered action is refused, explain"
+        " whether the block is verification, ownership scope, or an unsupported"
+        " archive/delete request instead of saying the skill is missing."
         " On a shared host, the shared deployment root may live under"
         " /home/almanac/almanac; treat that as read-only shared infrastructure,"
         " not another enrolled user's workspace."

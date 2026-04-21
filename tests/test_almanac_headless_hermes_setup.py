@@ -123,6 +123,8 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("Your durable identity lives at HERMES_HOME/SOUL.md" in prefill_messages[0]["content"], prefill_messages)
         expect("preferred name, desk hours, or current focus" in prefill_messages[0]["content"], prefill_messages)
         expect("save them in your own local memory entries" in prefill_messages[0]["content"], prefill_messages)
+        expect("a skill tells you the right workflow and guardrails" in prefill_messages[0]["content"], prefill_messages)
+        expect("Do not decide that a capability is missing just because raw env vars are absent" in prefill_messages[0]["content"], prefill_messages)
         expect("almanac-qmd-mcp for vault retrieval" not in prefill_messages[0]["content"], prefill_messages)
 
         hermes_cfg = json.loads(hermes_config.read_text(encoding="utf-8"))

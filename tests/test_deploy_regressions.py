@@ -357,7 +357,11 @@ def test_run_install_flow_stops_after_failed_sudo_reexec() -> None:
     snippet = extract(text, "run_install_flow() {", "run_remove_flow() {")
     script = f"""
 MODE=install
-maybe_reexec_install_for_config_defaults() {{ return 42; }}
+ALMANAC_REEXEC_ATTEMPTED=0
+maybe_reexec_install_for_config_defaults() {{
+  ALMANAC_REEXEC_ATTEMPTED=1
+  return 42
+}}
 collect_install_answers() {{
   echo "collect_install_answers should not run after failed reexec" >&2
   return 99
@@ -381,6 +385,41 @@ printf 'STATUS=%s\\n' "$status"
         f"expected install flow to stop before collecting prompts, got: {result.stderr!r}",
     )
     print("PASS test_run_install_flow_stops_after_failed_sudo_reexec")
+
+
+def test_run_install_flow_stops_after_failed_sudo_reexec_exit_one() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "run_install_flow() {", "run_remove_flow() {")
+    script = f"""
+MODE=install
+ALMANAC_REEXEC_ATTEMPTED=0
+maybe_reexec_install_for_config_defaults() {{
+  ALMANAC_REEXEC_ATTEMPTED=1
+  return 1
+}}
+collect_install_answers() {{
+  echo "collect_install_answers should not run after exit-1 reexec failure" >&2
+  return 99
+}}
+seed_private_repo() {{ return 0; }}
+write_runtime_config() {{ return 0; }}
+write_answers_file() {{ return 0; }}
+write_agent_install_payload_file() {{ return 0; }}
+write_operator_checkout_artifact() {{ return 0; }}
+run_root_install() {{ return 0; }}
+{snippet}
+run_install_flow
+status=$?
+printf 'STATUS=%s\\n' "$status"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"run_install_flow exit-1 reexec-failure case failed: {result.stderr}")
+    expect("STATUS=1" in result.stdout, f"expected exit-1 sudo reexec failure to propagate, got: {result.stdout!r}")
+    expect(
+        "collect_install_answers should not run after exit-1 reexec failure" not in result.stderr,
+        f"expected install flow to stop before collecting prompts on exit-1 failure, got: {result.stderr!r}",
+    )
+    print("PASS test_run_install_flow_stops_after_failed_sudo_reexec_exit_one")
 
 
 def test_write_operator_artifact_falls_back_to_discovered_config() -> None:
@@ -1310,6 +1349,7 @@ def main() -> int:
         test_install_reexecs_for_unreadable_breadcrumb_config,
         test_install_does_not_reexec_for_readable_breadcrumb_config,
         test_run_install_flow_stops_after_failed_sudo_reexec,
+        test_run_install_flow_stops_after_failed_sudo_reexec_exit_one,
         test_write_operator_artifact_falls_back_to_discovered_config,
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,

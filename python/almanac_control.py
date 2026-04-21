@@ -809,12 +809,6 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_ssot_pending_writes_status_expires
-        ON ssot_pending_writes (status, expires_at)
-        """
-    )
-    conn.execute(
-        """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_claims_page_id
         ON notion_identity_claims (notion_page_id)
         WHERE notion_page_id != ''
@@ -852,12 +846,6 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON operator_actions (status, action_kind, created_at)
         """
     )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending_target_channel_next_attempt
-        ON notification_outbox (delivered_at, target_kind, channel_kind, next_attempt_at, id)
-        """
-    )
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activated_at", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "auto_provision", "INTEGER NOT NULL DEFAULT 0")
@@ -890,7 +878,19 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "notification_outbox", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "notification_outbox", "last_attempt_at", "TEXT")
     _ensure_column(conn, "notification_outbox", "next_attempt_at", "TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending_target_channel_next_attempt
+        ON notification_outbox (delivered_at, target_kind, channel_kind, next_attempt_at, id)
+        """
+    )
     _ensure_column(conn, "ssot_pending_writes", "expires_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ssot_pending_writes_status_expires
+        ON ssot_pending_writes (status, expires_at)
+        """
+    )
     _ensure_column(conn, "notion_identity_claims", "failure_reason", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "notion_identity_claims", "verified_notion_user_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "notion_identity_claims", "verified_notion_email", "TEXT NOT NULL DEFAULT ''")

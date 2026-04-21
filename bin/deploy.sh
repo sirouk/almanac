@@ -7,6 +7,7 @@ ANSWERS_FILE="${ALMANAC_INSTALL_ANSWERS_FILE:-}"
 MODE=""
 PRIVILEGED_MODE=""
 DISCOVERED_CONFIG=""
+ALMANAC_REEXEC_ATTEMPTED=0
 ALMANAC_NAME="${ALMANAC_NAME:-almanac}"
 TRACE_UNIX_USER="${TRACE_UNIX_USER:-}"
 TRACE_SESSION_ID="${TRACE_SESSION_ID:-}"
@@ -2398,6 +2399,7 @@ maybe_reexec_with_sudo_for_config() {
   local status=""
   local -a cmd=()
 
+  ALMANAC_REEXEC_ATTEMPTED=0
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 1
   fi
@@ -2414,6 +2416,7 @@ maybe_reexec_with_sudo_for_config() {
   fi
 
   echo "Switching to sudo to inspect the deployed config..."
+  ALMANAC_REEXEC_ATTEMPTED=1
   cmd=(sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" "$mode")
   if [[ "$mode" == "enrollment-trace" ]]; then
     if [[ -n "${TRACE_UNIX_USER:-}" ]]; then
@@ -2438,6 +2441,7 @@ maybe_reexec_install_for_config_defaults() {
   local requested_mode="${1:-$MODE}"
   local status=""
 
+  ALMANAC_REEXEC_ATTEMPTED=0
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 1
   fi
@@ -2452,6 +2456,7 @@ maybe_reexec_install_for_config_defaults() {
 
   CONFIG_TARGET="$DISCOVERED_CONFIG"
   echo "Switching to sudo before prompting so existing defaults can be loaded from $DISCOVERED_CONFIG ..."
+  ALMANAC_REEXEC_ATTEMPTED=1
   if sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" "$requested_mode"; then
     write_operator_checkout_artifact
     return 0
@@ -2927,11 +2932,16 @@ run_root_remove() {
 }
 
 run_enrollment_status() {
-  local onboarding_file="" provision_file="" timer_enabled="" timer_active="" service_active="" claim_timer_enabled="" claim_timer_active="" claim_service_active=""
+  local onboarding_file="" provision_file="" timer_enabled="" timer_active="" service_active="" claim_timer_enabled="" claim_timer_active="" claim_service_active="" reexec_status=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-status; then
     return 0
+  else
+    reexec_status="$?"
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+      return "$reexec_status"
+    fi
   fi
   ensure_deployed_config_exists
 
@@ -3076,11 +3086,16 @@ resolve_enrollment_trace_selector() {
 
 run_enrollment_trace() {
   local selector_spec="" selector_kind="" selector_value="" trace_file=""
-  local timer_enabled="" timer_active="" service_active="" resolved_unix_user="" resolved_hermes_home=""
+  local timer_enabled="" timer_active="" service_active="" resolved_unix_user="" resolved_hermes_home="" reexec_status=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-trace; then
     return 0
+  else
+    reexec_status="$?"
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+      return "$reexec_status"
+    fi
   fi
   ensure_deployed_config_exists
 
@@ -3627,11 +3642,16 @@ PY
 }
 
 run_enrollment_align() {
-  local agent_id="" unix_user="" hermes_home="" channels_json="" bot_label="" user_name="" uid="" activation_path="" user_home=""
+  local agent_id="" unix_user="" hermes_home="" channels_json="" bot_label="" user_name="" uid="" activation_path="" user_home="" reexec_status=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-align; then
     return 0
+  else
+    reexec_status="$?"
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+      return "$reexec_status"
+    fi
   fi
   ensure_deployed_config_exists
 
@@ -3803,12 +3823,17 @@ PY
 run_enrollment_reset() {
   local target_unix_user="" remove_unix_user="" purge_rate_limits="" remove_archives="" confirm_text="" extra_subject="" uid=""
   local forget_history="" remove_nextcloud_user=""
-  local snapshot_file="" agent_id="" agent_status=""
+  local snapshot_file="" agent_id="" agent_status="" reexec_status=""
   local -a session_ids=() request_specs=() rate_subjects=() purge_cmd=()
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config enrollment-reset; then
     return 0
+  else
+    reexec_status="$?"
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+      return "$reexec_status"
+    fi
   fi
   ensure_deployed_config_exists
 
@@ -4195,11 +4220,16 @@ run_rotate_nextcloud_secrets() {
 run_notion_ssot_setup() {
   local notion_space_url="" notion_token="" notion_api_version="" notion_public_webhook_url="" handshake_file=""
   local integration_name="" workspace_name="" space_title="" space_id="" space_kind="" target_url=""
-  local root_page_id="" root_page_url="" root_page_title=""
+  local root_page_id="" root_page_url="" root_page_title="" reexec_status=""
 
   prepare_deployed_context
   if maybe_reexec_with_sudo_for_config notion-ssot; then
     return 0
+  else
+    reexec_status="$?"
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+      return "$reexec_status"
+    fi
   fi
   ensure_deployed_config_exists
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
@@ -4571,7 +4601,7 @@ run_install_flow() {
     return 0
   else
     reexec_status="$?"
-    if [[ "$reexec_status" != "1" ]]; then
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi

@@ -364,9 +364,157 @@ def test_user_purge_enrollment_removes_completed_state_and_files() -> None:
             os.environ.update(old_env)
 
 
+def test_connect_db_repairs_legacy_notification_outbox_before_creating_retry_index() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_legacy_notification_outbox_repair_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = control.sqlite3.connect(cfg.db_path)
+            conn.execute(
+                """
+                CREATE TABLE notification_outbox (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  target_kind TEXT NOT NULL,
+                  target_id TEXT NOT NULL,
+                  channel_kind TEXT NOT NULL,
+                  message TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  delivered_at TEXT,
+                  delivery_error TEXT
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            conn = control.connect_db(cfg)
+            try:
+                columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(notification_outbox)").fetchall()}
+                expect("next_attempt_at" in columns, str(sorted(columns)))
+                index_names = {str(row["name"]) for row in conn.execute("PRAGMA index_list(notification_outbox)").fetchall()}
+                expect(
+                    "idx_notification_outbox_pending_target_channel_next_attempt" in index_names,
+                    str(sorted(index_names)),
+                )
+            finally:
+                conn.close()
+
+            print("PASS test_connect_db_repairs_legacy_notification_outbox_before_creating_retry_index")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_connect_db_repairs_legacy_ssot_pending_writes_before_creating_expiry_index() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_legacy_ssot_pending_writes_repair_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = control.sqlite3.connect(cfg.db_path)
+            conn.execute(
+                """
+                CREATE TABLE ssot_pending_writes (
+                  pending_id TEXT PRIMARY KEY,
+                  agent_id TEXT NOT NULL,
+                  unix_user TEXT NOT NULL,
+                  notion_user_id TEXT NOT NULL DEFAULT '',
+                  operation TEXT NOT NULL,
+                  target_id TEXT NOT NULL,
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  requested_by_actor TEXT NOT NULL DEFAULT '',
+                  request_source TEXT NOT NULL DEFAULT '',
+                  request_reason TEXT NOT NULL DEFAULT '',
+                  owner_identity TEXT NOT NULL DEFAULT '',
+                  owner_source TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL DEFAULT 'pending',
+                  requested_at TEXT NOT NULL,
+                  decision_surface TEXT NOT NULL DEFAULT '',
+                  decided_by_actor TEXT NOT NULL DEFAULT '',
+                  decided_at TEXT,
+                  decision_note TEXT NOT NULL DEFAULT '',
+                  applied_at TEXT,
+                  apply_result_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO ssot_pending_writes (
+                  pending_id, agent_id, unix_user, notion_user_id, operation, target_id,
+                  payload_json, requested_by_actor, request_source, request_reason,
+                  owner_identity, owner_source, status, requested_at, decision_surface,
+                  decided_by_actor, decided_at, decision_note, applied_at, apply_result_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "pw_legacy",
+                    "agent-sirouk",
+                    "sirouk",
+                    "",
+                    "create-page",
+                    "page_123",
+                    "{}",
+                    "operator",
+                    "test",
+                    "",
+                    "sirouk",
+                    "test",
+                    "pending",
+                    "2026-04-21T00:00:00+00:00",
+                    "",
+                    "",
+                    None,
+                    "",
+                    None,
+                    "{}",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            conn = control.connect_db(cfg)
+            try:
+                columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(ssot_pending_writes)").fetchall()}
+                expect("expires_at" in columns, str(sorted(columns)))
+                index_names = {str(row["name"]) for row in conn.execute("PRAGMA index_list(ssot_pending_writes)").fetchall()}
+                expect("idx_ssot_pending_writes_status_expires" in index_names, str(sorted(index_names)))
+                row = conn.execute(
+                    "SELECT expires_at FROM ssot_pending_writes WHERE pending_id = ?",
+                    ("pw_legacy",),
+                ).fetchone()
+                expect(str(row["expires_at"] or "").strip() != "", str(dict(row)))
+            finally:
+                conn.close()
+
+            print("PASS test_connect_db_repairs_legacy_ssot_pending_writes_before_creating_expiry_index")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_user_purge_enrollment_removes_completed_state_and_files()
-    print("PASS all 1 purge-enrollment regression tests")
+    test_connect_db_repairs_legacy_notification_outbox_before_creating_retry_index()
+    test_connect_db_repairs_legacy_ssot_pending_writes_before_creating_expiry_index()
+    print("PASS all 3 purge-enrollment regression tests")
     return 0
 
 

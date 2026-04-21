@@ -726,6 +726,43 @@ def _refresh_user_agent_identity_prompt(
         raise RuntimeError(f"user-agent identity refresh failed for {unix_user}: {detail}")
 
 
+def _restart_user_agent_gateway_if_enabled(
+    *,
+    unix_user: str,
+    home: Path,
+    hermes_home: Path,
+    uid: int,
+) -> bool:
+    enabled_result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=["systemctl", "--user", "is-enabled", "almanac-user-agent-gateway.service"],
+    )
+    enabled_status = (enabled_result.stdout or enabled_result.stderr or "").strip().lower()
+    if enabled_result.returncode != 0 and enabled_status not in {"enabled", "static", "indirect"}:
+        return False
+
+    restart_result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=["systemctl", "--user", "restart", "almanac-user-agent-gateway.service"],
+    )
+    if restart_result.returncode != 0:
+        detail = (restart_result.stderr or restart_result.stdout or "gateway restart failed").strip()
+        raise RuntimeError(f"user-agent gateway restart failed for {unix_user}: {detail}")
+    _assert_user_gateway_active(
+        unix_user=unix_user,
+        home=home,
+        hermes_home=hermes_home,
+        uid=uid,
+    )
+    return True
+
+
 def _run_pending_onboarding_provider_authorizations(conn, cfg: Config) -> None:
     for session in list_onboarding_sessions(conn, redact_secrets=False):
         if str(session.get("state") or "") != "awaiting-provider-browser-auth":
@@ -1255,6 +1292,12 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
                         conn,
                         cfg,
                         agent_id=agent_id,
+                        unix_user=unix_user,
+                        home=Path(passwd.pw_dir),
+                        hermes_home=Path(str(agent_row["hermes_home"])),
+                        uid=passwd.pw_uid,
+                    )
+                    _restart_user_agent_gateway_if_enabled(
                         unix_user=unix_user,
                         home=Path(passwd.pw_dir),
                         hermes_home=Path(str(agent_row["hermes_home"])),

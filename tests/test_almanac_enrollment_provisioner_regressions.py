@@ -261,6 +261,9 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             provisioner._refresh_user_agent_memory = (
                 lambda conn, cfg, *, agent_id, unix_user, home, hermes_home, uid: refresh_calls.append(("memory", agent_id))
             )
+            provisioner._restart_user_agent_gateway_if_enabled = (
+                lambda *, unix_user, home, hermes_home, uid: refresh_calls.append(("gateway-restart", unix_user)) or True
+            )
             provisioner._notify_user_via_curator = (
                 lambda cfg, *, session, message, telegram_reply_markup=None, discord_components=None: deliveries.append(
                     {
@@ -306,7 +309,10 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             expect(str(answers.get("notion_verified_email") or "") == "chris@example.com", str(answers))
             identity = control.get_agent_identity(conn, agent_id="agent-sirouk", unix_user="sirouk")
             expect(identity is not None and identity["verification_status"] == "verified", str(identity))
-            expect(refresh_calls == [("identity", "sirouk"), ("memory", "agent-sirouk")], str(refresh_calls))
+            expect(
+                refresh_calls == [("identity", "sirouk"), ("memory", "agent-sirouk"), ("gateway-restart", "sirouk")],
+                str(refresh_calls),
+            )
             expect(len(deliveries) == 2, str(deliveries))
             expect("Verified. I can now write to shared Notion" in str(deliveries[0]["message"]), str(deliveries))
             expect(str(deliveries[1]["message"]) == "lane ready bundle", str(deliveries))

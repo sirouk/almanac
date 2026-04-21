@@ -293,6 +293,14 @@ install_default_skills() {
     almanac-notion-mcp
 }
 
+install_default_plugins() {
+  local hermes_home="$1"
+  "$SHARED_REPO_DIR/bin/install-almanac-plugins.sh" \
+    "$SHARED_REPO_DIR" \
+    "$hermes_home" \
+    almanac-managed-context
+}
+
 register_default_mcps() {
   local hermes_home="$1"
   local hermes_bin=""
@@ -539,6 +547,7 @@ PY
   write_enrollment_state "$state_file" "$request_id" "$agent_id" "$requester_identity" "$unix_user" "$hermes_home" "$model_preset" "$model_string" "$channels_json"
 
   install_default_skills "$hermes_home"
+  install_default_plugins "$hermes_home"
   register_default_mcps "$hermes_home"
 
   activation_trigger_path="${ALMANAC_ACTIVATION_TRIGGER_PATH:-${ALMANAC_PRIV_DIR:-$SHARED_REPO_DIR/almanac-priv}/state/activation-triggers/$agent_id.json}"

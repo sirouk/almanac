@@ -76,6 +76,17 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         fake_pkg_root = write_fake_hermes_cli(root)
         almanac_config = root / "almanac-priv" / "config" / "almanac.env"
         hermes_config = root / "fake-hermes-config.json"
+        hermes_config.write_text(
+            json.dumps(
+                {
+                    "plugins": {"disabled": ["almanac-managed-context", "other-plugin"]}
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         write_almanac_config(almanac_config)
 
         result = subprocess.run(
@@ -97,11 +108,14 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         payload = json.loads(result.stdout)
         soul_path = Path(payload["soul_file"])
         prefill_path = Path(payload["prefill_messages_file"])
+        identity_state_path = Path(payload["identity_state_file"])
         expect(payload["identity_only"] is True, payload)
         expect(soul_path == hermes_home / "SOUL.md", payload)
         expect(prefill_path == hermes_home / "state" / "almanac-prefill-messages.json", payload)
+        expect(identity_state_path == hermes_home / "state" / "almanac-identity-context.json", payload)
         expect(soul_path.is_file(), f"expected SOUL.md at {soul_path}")
         expect(prefill_path.is_file(), f"expected prefill file at {prefill_path}")
+        expect(identity_state_path.is_file(), f"expected identity state file at {identity_state_path}")
 
         soul_text = soul_path.read_text(encoding="utf-8")
         expect("You are Kor" in soul_text, soul_text)
@@ -117,6 +131,15 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("Code workspace:" not in soul_text, soul_text)
         expect("$" not in soul_text, soul_text)
 
+        identity_state = json.loads(identity_state_path.read_text(encoding="utf-8"))
+        expect(identity_state["agent_label"] == "Kor", identity_state)
+        expect(identity_state["user_name"] == "Kora Reed", identity_state)
+        expect(identity_state["org_name"] == "Acme Labs", identity_state)
+        expect(identity_state["org_mission"] == "Make serious research more legible and actionable.", identity_state)
+        expect(identity_state["org_primary_project"] == "Hermes deployment lane", identity_state)
+        expect(identity_state["org_timezone"] == "America/New_York", identity_state)
+        expect(identity_state["org_quiet_hours"] == "22:00-08:00 weekdays", identity_state)
+
         prefill_messages = json.loads(prefill_path.read_text(encoding="utf-8"))
         expect(prefill_messages[0]["role"] == "system", prefill_messages)
         expect("[managed:resource-ref]" in prefill_messages[0]["content"], prefill_messages)
@@ -125,11 +148,16 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("save them in your own local memory entries" in prefill_messages[0]["content"], prefill_messages)
         expect("a skill tells you the right workflow and guardrails" in prefill_messages[0]["content"], prefill_messages)
         expect("Do not decide that a capability is missing just because raw env vars are absent" in prefill_messages[0]["content"], prefill_messages)
+        expect("[managed:notion-stub]" in prefill_messages[0]["content"], prefill_messages)
+        expect("almanac-managed-context plugin can inject refreshed local Almanac context into future turns" in prefill_messages[0]["content"], prefill_messages)
+        expect("the next session, /reset, or a gateway restart" not in prefill_messages[0]["content"], prefill_messages)
         expect("almanac-qmd-mcp for vault retrieval" not in prefill_messages[0]["content"], prefill_messages)
 
         hermes_cfg = json.loads(hermes_config.read_text(encoding="utf-8"))
         expect(hermes_cfg["prefill_messages_file"] == str(prefill_path), hermes_cfg)
         expect(hermes_cfg["agent"]["prefill_messages_file"] == str(prefill_path), hermes_cfg)
+        expect("almanac-managed-context" not in hermes_cfg["plugins"]["disabled"], hermes_cfg)
+        expect("other-plugin" in hermes_cfg["plugins"]["disabled"], hermes_cfg)
         print("PASS test_identity_only_writes_soul_and_dual_surface_prefill_config")
 
 

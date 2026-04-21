@@ -92,6 +92,59 @@ When the user says memory is stale or asks how Almanac sync works, do this in or
 5. verify Curator fanout / activation-trigger behavior when relevant
 6. report drift and repair the Almanac-side rail, not Hermes internals
 
+## Warm reload reality
+
+Today, Almanac can refresh the managed stubs on disk immediately, and the preferred no-core-code path is to let the shipped `almanac-managed-context` Hermes plugin inject refreshed local Almanac context into future turns.
+
+Important distinctions:
+
+- `user-agent-refresh.sh` rewrites the local files correctly
+- Hermes built-in `MEMORY.md` is still loaded into a frozen prompt snapshot for the session
+- the `almanac-managed-context` plugin avoids mutating that built-in snapshot by injecting ephemeral Almanac context through Hermes's plugin hook system on future turns
+
+So if the user asks why the newest managed stub text is not visible in the built-in memory block of an already-active chat, do not misdiagnose the Almanac rail as broken.
+
+The right interpretation is usually:
+
+- disk refresh succeeded
+- built-in `MEMORY.md` remains a session snapshot
+- the plugin-injected Almanac context is the warm path for future turns without touching Hermes core
+- restart or `/reset` is only a fallback if the plugin is not loaded yet or the issue is in Hermes plugin discovery itself
+
+## Preferred non-invasive warm-reload design
+
+If the user specifically wants warm reload without editing Hermes core, prefer this design:
+
+1. Almanac publishes a stable `managed_memory_revision` with the canonical payload
+2. `user-agent-refresh.sh` writes the local stubs and records the applied revision under the user's `HERMES_HOME/state`
+3. the shipped `almanac-managed-context` plugin reads that local state on `pre_llm_call`
+4. the plugin injects compact refreshed Almanac context into the current user turn when:
+   - the session is new,
+   - the managed revision changed,
+   - or the user asks an Almanac-relevant question
+
+Important details:
+
+- the revision should be content-based, not `updated_at`
+- use the canonical managed entry content as the source for the revision
+- treat the activation-trigger file as a wake signal, not the source of truth
+- use the local structured reconciler state under `HERMES_HOME/state`, not raw `MEMORY.md`, as the plugin's source
+- keep the plugin context compact so it is cheaper than reloading the built-in system prompt on every turn
+
+This preserves prompt-cache stability better than mutating built-in memory, because the plugin context is injected into the current user turn rather than the frozen system prompt.
+
+## Scope decision
+
+With the shipped plugin path, Almanac does not need Hermes core edits to achieve practical next-turn warm reload.
+
+So when investigating this class of issue:
+
+- repair Almanac first if the payload, trigger, timer, local state file, or local stub writes are wrong
+- verify the plugin is installed under `HERMES_HOME/plugins/almanac-managed-context`
+- verify the plugin's local state source under `HERMES_HOME/state/almanac-vault-reconciler.json`
+- only consider Hermes core changes if the user explicitly wants built-in `MEMORY.md` hot-reload semantics instead of the non-invasive plugin path
+- keep gateway restart as the fallback, not the first resort
+
 ## Guardrails
 
 - prefer qmd through MCP over direct filesystem reads when it is available
@@ -99,4 +152,4 @@ When the user says memory is stale or asks how Almanac sync works, do this in or
 - do not browse other users' home directories
 - do not rely on vague reassurance; point to the actual state files and rails
 - do not store note bodies or PDF bodies in built-in memory
-- do not patch Hermes code for this; use Almanac skills, settings, timers, payloads, and MCP rails
+- do not patch Hermes code for this unless the task is explicitly about adding warm-reload support after verifying the Almanac rail is already correct

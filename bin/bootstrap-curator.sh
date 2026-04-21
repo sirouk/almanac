@@ -786,6 +786,11 @@ PY
     almanac-notion-mcp \
     almanac-upgrade-orchestrator
 
+  "$BOOTSTRAP_DIR/bin/install-almanac-plugins.sh" \
+    "$BOOTSTRAP_DIR" \
+    "$ALMANAC_CURATOR_HERMES_HOME" \
+    almanac-managed-context
+
   if set_user_systemd_bus_env; then
     systemctl --user daemon-reload
     systemctl --user enable almanac-curator-refresh.timer >/dev/null

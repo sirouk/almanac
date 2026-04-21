@@ -3694,6 +3694,15 @@ PY
       almanac-ssot \
       almanac-ssot-connect \
       almanac-notion-mcp >/dev/null
+    run_root_env_cmd runuser -u "$unix_user" -- env \
+      HOME="$user_home" \
+      USER="$unix_user" \
+      LOGNAME="$unix_user" \
+      HERMES_HOME="$hermes_home" \
+      "$ALMANAC_REPO_DIR/bin/install-almanac-plugins.sh" \
+      "$ALMANAC_REPO_DIR" \
+      "$hermes_home" \
+      almanac-managed-context >/dev/null
     echo "Reinstalling user-agent services for $agent_id ($unix_user)..."
     run_root_env_cmd runuser -u "$unix_user" -- env \
       XDG_RUNTIME_DIR="/run/user/$uid" \

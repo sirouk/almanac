@@ -131,10 +131,28 @@ python3 - <<'PY'
 import json
 import os
 from pathlib import Path
+import tempfile
 
 notif_path = Path(os.environ["ALMANAC_NOTIF_FILE"])
 hermes_home = Path(os.environ["ALMANAC_HERMES_HOME"])
 payload = json.loads(notif_path.read_text())
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".almanac-events-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 events_dir = hermes_home / "state"
 events_dir.mkdir(parents=True, exist_ok=True)
@@ -150,13 +168,13 @@ if events_path.is_file():
 new_events = payload.get("notifications", []) or []
 # keep the last 200 events total
 combined = (existing + new_events)[-200:]
-events_path.write_text(
+atomic_write_text(
+    events_path,
     json.dumps({
         "agent_id": payload.get("agent_id"),
         "events": combined,
         "last_consumed_count": len(new_events),
     }, indent=2, sort_keys=True) + "\n",
-    encoding="utf-8",
 )
 print(json.dumps({"consumed": len(new_events), "events_file": str(events_path)}, sort_keys=True))
 PY

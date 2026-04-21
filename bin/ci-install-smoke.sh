@@ -942,7 +942,7 @@ from pathlib import Path
 
 repo_dir = Path(sys.argv[1])
 vault_dir = Path(sys.argv[2])
-required_dirs = ["Research", "Skills", "Projects", "Repos"]
+required_dirs = ["Research", "Skills", "Projects", "Repos", "Plugins"]
 for name in required_dirs:
     target = vault_dir / name
     if not target.is_dir():
@@ -971,6 +971,15 @@ for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir() a
         missing.append(note.name)
 if missing:
     raise SystemExit(f"expected shipped skill starter notes, missing: {', '.join(missing)}")
+
+plugins_dir = repo_dir / "plugins" / "hermes-agent"
+missing_plugins = []
+for plugin_dir in sorted(path for path in plugins_dir.iterdir() if path.is_dir() and (path / "plugin.yaml").is_file()):
+    note = vault_dir / "Plugins" / f"{plugin_dir.name}.md"
+    if not note.is_file():
+        missing_plugins.append(note.name)
+if missing_plugins:
+    raise SystemExit(f"expected shipped plugin starter notes, missing: {', '.join(missing_plugins)}")
 PY
 }
 
@@ -1045,6 +1054,8 @@ assert_almanac_control_plane_roundtrip() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$smoke_home"
   run_almanac_shell \
     "'$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh' '$ALMANAC_REPO_DIR' '$smoke_home'" >/dev/null
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/install-almanac-plugins.sh' '$ALMANAC_REPO_DIR' '$smoke_home'" >/dev/null
 
   status_json="$(
     run_almanac_shell \
@@ -1649,6 +1660,8 @@ assert_ssot_rails() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ssot_home"
   run_almanac_shell \
     "'$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh' '$ALMANAC_REPO_DIR' '$ssot_home'" >/dev/null
+  run_almanac_shell \
+    "'$ALMANAC_REPO_DIR/bin/install-almanac-plugins.sh' '$ALMANAC_REPO_DIR' '$ssot_home'" >/dev/null
   req_json="$(run_almanac_shell \
     "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"ssot-bot\",\"unix_user\":\"ssotbot\",\"source_ip\":\"127.0.0.1\"}'")"
   req_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$req_json")"

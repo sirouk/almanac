@@ -6,10 +6,12 @@ import json
 import os
 from pathlib import Path
 from string import Template
+import tempfile
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOUL_TEMPLATE_PATH = REPO_ROOT / "templates" / "SOUL.md.tmpl"
+IDENTITY_STATE_FILENAME = "almanac-identity-context.json"
 
 
 def _load_provider_spec(raw_json: str) -> dict[str, Any]:
@@ -150,6 +152,23 @@ def _identity_value(value: str, default: str) -> str:
     return normalized or default
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".almanac-identity-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
     try:
         template = SOUL_TEMPLATE_PATH.read_text(encoding="utf-8")
@@ -196,6 +215,9 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
         "almanac-ssot-connect",
         "almanac-notion-mcp",
     ]
+    almanac_plugin_names = [
+        "almanac-managed-context",
+    ]
     label = bot_name.strip() or "your Almanac agent"
     unix_user = unix_user.strip()
     user_name = user_name.strip()
@@ -204,8 +226,41 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
     state_dir.mkdir(parents=True, exist_ok=True)
     soul_path = hermes_home / "SOUL.md"
     prefill_path = state_dir / "almanac-prefill-messages.json"
+    identity_state_path = state_dir / IDENTITY_STATE_FILENAME
+    org_name = _identity_value(_config_value("ALMANAC_ORG_NAME"), "the organization you support")
+    org_mission = _identity_value(
+        _config_value("ALMANAC_ORG_MISSION"),
+        "Help the organization stay coherent, responsive, and moving.",
+    )
+    org_primary_project = _identity_value(
+        _config_value("ALMANAC_ORG_PRIMARY_PROJECT"),
+        "the work your user puts in front of you",
+    )
+    org_timezone = _identity_value(_config_value("ALMANAC_ORG_TIMEZONE", "Etc/UTC"), "Etc/UTC")
+    org_quiet_hours = _identity_value(
+        _config_value("ALMANAC_ORG_QUIET_HOURS"),
+        "No quiet hours are configured yet; confirm before sending time-sensitive nudges.",
+    )
     # Hermes reads HERMES_HOME/SOUL.md directly at runtime as the durable identity prompt.
-    soul_path.write_text(_render_soul(label, unix_user, user_name), encoding="utf-8")
+    _atomic_write_text(soul_path, _render_soul(label, unix_user, user_name))
+    _atomic_write_text(
+        identity_state_path,
+        json.dumps(
+            {
+                "agent_label": label,
+                "unix_user": unix_user,
+                "user_name": user_name,
+                "org_name": org_name,
+                "org_mission": org_mission,
+                "org_primary_project": org_primary_project,
+                "org_timezone": org_timezone,
+                "org_quiet_hours": org_quiet_hours,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
     prefill_messages = [
         {
             "role": "system",
@@ -222,7 +277,12 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
                 "straight: a skill tells you the right workflow and guardrails; the wired broker "
                 "or MCP rail performs the actual read or write. Do not decide that a capability "
                 "is missing just because raw env vars are absent in a chat turn; rely on the "
-                "installed skills, managed stubs, and Almanac-provisioned rails first. If a "
+                "installed skills, managed stubs, and Almanac-provisioned rails first. Treat "
+                "[managed:resource-ref] and [managed:notion-stub] as the authoritative shared-rail "
+                "snapshot even when human-facing setup copy leaves machine-facing rails out for "
+                "brevity. The almanac-managed-context plugin can inject refreshed local Almanac "
+                "context into future turns without requiring /reset or a gateway restart once it "
+                "has been loaded. If a "
                 "brokered action is denied, explain the concrete scope, verification, or "
                 "operation limit instead of acting like the skill disappeared. If you learn "
                 "personal preferences such as preferred name, desk hours, or current focus, save "
@@ -236,7 +296,7 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
             ),
         }
     ]
-    prefill_path.write_text(json.dumps(prefill_messages, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_text(prefill_path, json.dumps(prefill_messages, indent=2) + "\n")
 
     config = load_config()
     skills_cfg = config.setdefault("skills", {})
@@ -254,6 +314,14 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
             skills_cfg["platform_disabled"] = cleaned_platform_disabled
         else:
             skills_cfg.pop("platform_disabled", None)
+
+    plugins_cfg = config.setdefault("plugins", {})
+    disabled_plugins = plugins_cfg.get("disabled", [])
+    if isinstance(disabled_plugins, list):
+        plugins_cfg["disabled"] = [name for name in disabled_plugins if name not in almanac_plugin_names]
+    else:
+        plugins_cfg["disabled"] = []
+
     config["prefill_messages_file"] = str(prefill_path)
     agent_cfg = config.get("agent")
     if not isinstance(agent_cfg, dict):
@@ -262,6 +330,7 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
     config["agent"] = agent_cfg
     save_config(config)
     return {
+        "identity_state_file": str(identity_state_path),
         "prefill_messages_file": str(prefill_path),
         "soul_file": str(soul_path),
     }

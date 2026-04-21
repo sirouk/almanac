@@ -97,7 +97,7 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
         )
         expect(result.returncode == 0, f"expected reconcile-vault-layout to succeed, got rc={result.returncode} stderr={result.stderr!r}")
 
-        for dirname in ("Research", "Skills", "Projects", "Repos"):
+        for dirname in ("Research", "Skills", "Projects", "Repos", "Plugins"):
             target_dir = vault_dir / dirname
             expect(target_dir.is_dir(), f"expected {dirname} directory to exist")
             expect((target_dir / ".vault").is_file(), f"expected {dirname}/.vault metadata file")
@@ -127,6 +127,10 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
             "almanac-vaults.md",
         }
         expect(expected_skill_notes.issubset(set(skill_notes)), f"missing seeded skill notes: expected {expected_skill_notes}, got {skill_notes}")
+
+        plugin_notes = sorted(path.name for path in (vault_dir / "Plugins").glob("*.md") if path.name != "README.md")
+        expected_plugin_notes = {"almanac-managed-context.md"}
+        expect(expected_plugin_notes.issubset(set(plugin_notes)), f"missing seeded plugin notes: expected {expected_plugin_notes}, got {plugin_notes}")
         print("PASS test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legacy_defaults")
 
 
@@ -140,6 +144,7 @@ def test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git(
 
         (repo_dir / "templates").symlink_to(REPO / "templates", target_is_directory=True)
         (repo_dir / "skills").symlink_to(REPO / "skills", target_is_directory=True)
+        (repo_dir / "plugins").symlink_to(REPO / "plugins", target_is_directory=True)
 
         result = subprocess.run(
             [

@@ -180,6 +180,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         expect(state_payload["agent_id"] == "agent-jeef", state_payload)
         expect(state_payload["catalog"][0]["vault_name"] == "Projects", state_payload)
         expect(state_payload["subscriptions"][0]["vault_name"] == "Projects", state_payload)
+        expect(len(str(state_payload.get("managed_memory_revision") or "")) >= 12, state_payload)
 
         stub_body = stub_path.read_text(encoding="utf-8")
         expect("# Almanac managed memory stubs" in stub_body, stub_body)

@@ -167,6 +167,22 @@ def load_skill_metadata(skill_dir: Path) -> tuple[str, str]:
     return name, description
 
 
+def load_plugin_metadata(plugin_dir: Path) -> tuple[str, str]:
+    manifest_file = plugin_dir / "plugin.yaml"
+    name = plugin_dir.name
+    description = ""
+    if not manifest_file.is_file():
+        return name, description
+
+    for raw_line in read_text(manifest_file).splitlines():
+        line = raw_line.strip()
+        if line.startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+        elif line.startswith("description:"):
+            description = line.split(":", 1)[1].strip()
+    return name, description
+
+
 def make_skill_note(skill_id: str, name: str, description: str, repo_url: str) -> str:
     lines = [
         MANAGED_MARKER_NOTE,
@@ -251,6 +267,39 @@ def make_project_note(project_name: str, repo_name: str, repo_url: str) -> str:
     return "\n".join(lines)
 
 
+def make_plugin_note(plugin_id: str, name: str, description: str, repo_url: str) -> str:
+    lines = [
+        MANAGED_MARKER_NOTE,
+        f"# {name}",
+        "",
+        f"Plugin ID: `{plugin_id}`",
+        "",
+        f"Description: {description or 'Hermes Agent plugin shipped with Almanac for shared managed-context refresh.'}",
+        "",
+        "How to use this note:",
+        "- capture rollout status and the agent cohorts that should have this plugin installed",
+        "- record what the plugin injects or automates at runtime",
+        "- document caveats, compatibility notes, and troubleshooting",
+        "",
+        "Sources:",
+        f"- Local: `plugins/hermes-agent/{plugin_id}/plugin.yaml`",
+    ]
+    if repo_url:
+        lines.append(f"- GitHub: {repo_url}/tree/main/plugins/hermes-agent/{plugin_id}")
+    lines.extend(
+        [
+            "",
+            "Suggested expansions:",
+            "- rollout / ownership",
+            "- compatibility matrix",
+            "- operator runbooks",
+            "- related vault notes and skills",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def reconcile_static_vault_templates(repo_dir: Path, vault_dir: Path) -> dict[str, int]:
     counts = {"created": 0, "updated": 0, "preserved": 0}
     for template_dir in template_vault_dirs(repo_dir):
@@ -275,6 +324,18 @@ def reconcile_dynamic_notes(repo_dir: Path, vault_dir: Path, repo_url: str) -> d
         )
         if result in counts:
             counts[result] += 1
+
+    plugins_root = repo_dir / "plugins" / "hermes-agent"
+    plugins_dir = vault_dir / "Plugins"
+    if plugins_root.is_dir():
+        for plugin_dir in sorted(path for path in plugins_root.iterdir() if path.is_dir() and (path / "plugin.yaml").is_file()):
+            name, description = load_plugin_metadata(plugin_dir)
+            result = sync_text(
+                plugins_dir / f"{plugin_dir.name}.md",
+                make_plugin_note(plugin_dir.name, name, description, repo_url),
+            )
+            if result in counts:
+                counts[result] += 1
 
     repo_name = repo_url.rsplit("/", 1)[-1] if repo_url else repo_dir.name
     repo_note = make_repo_note(repo_name, repo_url, repo_dir)

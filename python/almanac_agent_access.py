@@ -8,6 +8,7 @@ import pwd
 import secrets
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -45,9 +46,25 @@ def access_url_slug(unix_user: str) -> str:
     return access_username(unix_user).replace("_", "-")
 
 
-def _write_access_state(path: Path, payload: dict[str, Any], *, uid: int, gid: int) -> None:
+def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".almanac-access-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _write_access_state(path: Path, payload: dict[str, Any], *, uid: int, gid: int) -> None:
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     try:
         os.chown(path, uid, gid)
         path.chmod(0o600)

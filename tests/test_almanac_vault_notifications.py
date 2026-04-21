@@ -193,18 +193,22 @@ def test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents
 
             curator_rows = conn.execute(
                 """
-                SELECT message
+                SELECT target_id, message
                 FROM notification_outbox
                 WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'
                 ORDER BY id ASC
                 """
             ).fetchall()
             vault_refresh_rows = [
-                str(row["message"] or "")
+                (str(row["target_id"] or ""), str(row["message"] or ""))
                 for row in curator_rows
                 if "vault-content-refresh" in str(row["message"] or "")
             ]
-            expect(len(vault_refresh_rows) == 1, curator_rows)
+            expect(
+                sorted(target_id for target_id, _ in vault_refresh_rows) == ["agent-default", "agent-optin"],
+                str(vault_refresh_rows),
+            )
+            expect(all(target_id != "curator" for target_id, _ in vault_refresh_rows), str(vault_refresh_rows))
             print("PASS test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents")
         finally:
             os.environ.clear()

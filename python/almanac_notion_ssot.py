@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Callable
 from urllib import error, parse, request
 
 NOTION_API_BASE_URL = "https://api.notion.com/v1"
 DEFAULT_NOTION_API_VERSION = "2026-03-11"
+NOTION_API_MAX_ATTEMPTS = 5
+NOTION_API_RETRY_BASE_SECONDS = 1.0
+NOTION_API_RETRY_MAX_SECONDS = 10.0
 _NOTION_ID_RE = re.compile(
     r"([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
 )
@@ -89,6 +93,38 @@ def _database_title(payload: dict[str, Any]) -> str:
     return _rich_text_to_plain_text(payload.get("title"))
 
 
+def _retryable_notion_http_status(status: int) -> bool:
+    return int(status) in {409, 429, 500, 502, 503, 504}
+
+
+def _retry_delay_seconds_for_attempt(
+    attempt: int,
+    *,
+    retry_after: float | None = None,
+) -> float:
+    if retry_after is not None:
+        return max(0.0, min(float(retry_after), NOTION_API_RETRY_MAX_SECONDS))
+    step = max(1, int(attempt))
+    delay = NOTION_API_RETRY_BASE_SECONDS * (2 ** max(0, step - 1))
+    return max(
+        NOTION_API_RETRY_BASE_SECONDS,
+        min(NOTION_API_RETRY_MAX_SECONDS, float(delay)),
+    )
+
+
+def _http_retry_after_seconds(exc: error.HTTPError) -> float | None:
+    if exc.headers is None:
+        return None
+    raw = str(exc.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
 def _request_json(
     method: str,
     path: str,
@@ -97,6 +133,7 @@ def _request_json(
     api_version: str,
     payload: dict[str, Any] | None = None,
     urlopen_fn: Callable[..., Any] = request.urlopen,
+    sleep_fn: Callable[[float], Any] = time.sleep,
 ) -> dict[str, Any]:
     body = None
     headers = {
@@ -113,31 +150,41 @@ def _request_json(
         headers=headers,
         method=method,
     )
-    try:
-        with urlopen_fn(req, timeout=15) as response:
-            raw = response.read().decode("utf-8") or "{}"
-    except error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        message = raw.strip() or f"http {exc.code}"
-        code = ""
+    for attempt in range(1, NOTION_API_MAX_ATTEMPTS + 1):
         try:
-            payload_json = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            payload_json = {}
-        if isinstance(payload_json, dict):
-            message = str(payload_json.get("message") or payload_json.get("error") or message)
-            code = str(payload_json.get("code") or "")
-        raise NotionApiError(status=exc.code, message=message, code=code) from exc
-    except error.URLError as exc:
-        raise RuntimeError(f"Unable to reach Notion API: {exc.reason}") from exc
+            with urlopen_fn(req, timeout=15) as response:
+                raw = response.read().decode("utf-8") or "{}"
+        except error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            message = raw.strip() or f"http {exc.code}"
+            code = ""
+            try:
+                payload_json = json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                payload_json = {}
+            if isinstance(payload_json, dict):
+                message = str(payload_json.get("message") or payload_json.get("error") or message)
+                code = str(payload_json.get("code") or "")
+            notion_error = NotionApiError(status=exc.code, message=message, code=code)
+            if attempt >= NOTION_API_MAX_ATTEMPTS or not _retryable_notion_http_status(exc.code):
+                raise notion_error from exc
+            sleep_fn(_retry_delay_seconds_for_attempt(attempt, retry_after=_http_retry_after_seconds(exc)))
+            continue
+        except error.URLError as exc:
+            if attempt >= NOTION_API_MAX_ATTEMPTS:
+                raise RuntimeError(f"Unable to reach Notion API: {exc.reason}") from exc
+            sleep_fn(_retry_delay_seconds_for_attempt(attempt))
+            continue
 
-    try:
-        payload_json = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Notion API returned invalid JSON: {raw[:200]}") from exc
-    if not isinstance(payload_json, dict):
-        raise RuntimeError("Notion API returned an unexpected response shape")
-    return payload_json
+        try:
+            payload_json = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Notion API returned invalid JSON: {raw[:200]}") from exc
+        if not isinstance(payload_json, dict):
+            raise RuntimeError("Notion API returned an unexpected response shape")
+        return payload_json
+
+    raise RuntimeError("Notion API request exhausted retry budget")
 
 
 def _friendly_api_error(exc: NotionApiError, *, target: str) -> RuntimeError:
@@ -631,6 +678,50 @@ def update_notion_page(
         )
     except NotionApiError as exc:
         raise _friendly_api_error(exc, target=f"page {target_id}") from exc
+
+
+def append_notion_block_children(
+    *,
+    block_id: str,
+    token: str,
+    payload: dict[str, Any] | None = None,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    target_id = extract_notion_space_id(block_id)
+    try:
+        return _request_json(
+            "PATCH",
+            f"/blocks/{target_id}/children",
+            token=token,
+            api_version=api_version,
+            payload=payload or {},
+            urlopen_fn=urlopen_fn,
+        )
+    except NotionApiError as exc:
+        raise _friendly_api_error(exc, target=f"block {target_id}") from exc
+
+
+def update_notion_block(
+    *,
+    block_id: str,
+    token: str,
+    payload: dict[str, Any] | None = None,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    target_id = extract_notion_space_id(block_id)
+    try:
+        return _request_json(
+            "PATCH",
+            f"/blocks/{target_id}",
+            token=token,
+            api_version=api_version,
+            payload=payload or {},
+            urlopen_fn=urlopen_fn,
+        )
+    except NotionApiError as exc:
+        raise _friendly_api_error(exc, target=f"block {target_id}") from exc
 
 
 def _resolve_root_page(

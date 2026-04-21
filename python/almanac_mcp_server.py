@@ -22,6 +22,8 @@ from almanac_control import (
     is_loopback_ip,
     is_tailnet_ip,
     list_notifications,
+    list_agent_ssot_pending_writes,
+    count_ssot_pending_writes,
     list_requests,
     list_vault_warnings,
     note_refresh_job,
@@ -59,7 +61,8 @@ TOOLS = {
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
     "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering.",
-    "ssot.write": "Apply a Notion SSOT write (insert/update) through the central broker. Archive/delete are rejected.",
+    "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided.",
+    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for approval. Archive/delete are rejected.",
 }
 
 
@@ -478,6 +481,27 @@ class Handler(BaseHTTPRequestHandler):
                     include_markdown=bool(arguments.get("include_markdown")),
                     requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
                 )
+
+            if tool_name == "ssot.pending":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                status = str(arguments.get("status") or "pending").strip().lower()
+                limit = int(arguments.get("limit") or 25)
+                agent_id = str(token_row["agent_id"])
+                return {
+                    "agent_id": agent_id,
+                    "status": status,
+                    "count": count_ssot_pending_writes(
+                        conn,
+                        status=status,
+                        agent_id=agent_id,
+                    ),
+                    "pending_writes": list_agent_ssot_pending_writes(
+                        conn,
+                        agent_id=agent_id,
+                        status=status,
+                        limit=limit,
+                    ),
+                }
 
             if tool_name == "ssot.write":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))

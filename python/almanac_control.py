@@ -26,6 +26,7 @@ if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
 from almanac_notion_ssot import (
+    append_notion_block_children,
     create_notion_database,
     create_notion_page,
     DEFAULT_NOTION_API_VERSION,
@@ -51,6 +52,35 @@ def utc_now() -> dt.datetime:
 
 def utc_now_iso() -> str:
     return utc_now().replace(microsecond=0).isoformat()
+
+
+def utc_after_seconds_iso(seconds: int) -> str:
+    return (utc_now() + dt.timedelta(seconds=max(1, int(seconds)))).replace(microsecond=0).isoformat()
+
+
+def parse_utc_iso(value: str | None) -> dt.datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def format_utc_iso_brief(value: str | None) -> str:
+    parsed = parse_utc_iso(value)
+    if parsed is None:
+        return str(value or "").strip()
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def expiry_from_iso(value: str | None, *, ttl_seconds: int) -> str:
+    base = parse_utc_iso(value) or utc_now()
+    return (base + dt.timedelta(seconds=max(1, int(ttl_seconds)))).replace(microsecond=0).isoformat()
 
 
 def auto_provision_stale_before_iso(seconds: int = 300) -> str:
@@ -305,6 +335,9 @@ class Config:
     onboarding_per_telegram_user_limit: int
     onboarding_global_pending_limit: int
     onboarding_update_failure_limit: int
+    ssot_pending_write_ttl_seconds: int
+    curator_fanout_retry_base_seconds: int
+    curator_fanout_retry_max_seconds: int
     operator_notify_platform: str
     operator_notify_channel_id: str
     operator_telegram_user_ids: tuple[str, ...]
@@ -410,6 +443,9 @@ class Config:
             ),
             onboarding_global_pending_limit=int(env.get("ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT", "20")),
             onboarding_update_failure_limit=int(env.get("ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT", "3")),
+            ssot_pending_write_ttl_seconds=int(env.get("ALMANAC_SSOT_PENDING_WRITE_TTL_SECONDS", "86400")),
+            curator_fanout_retry_base_seconds=int(env.get("ALMANAC_CURATOR_FANOUT_RETRY_BASE_SECONDS", "15")),
+            curator_fanout_retry_max_seconds=int(env.get("ALMANAC_CURATOR_FANOUT_RETRY_MAX_SECONDS", "300")),
             operator_notify_platform=operator_notify_platform,
             operator_notify_channel_id=operator_notify_channel_id,
             operator_telegram_user_ids=operator_telegram_user_ids,
@@ -446,15 +482,19 @@ def ensure_runtime_paths(cfg: Config) -> None:
 
 def connect_db(cfg: Config) -> sqlite3.Connection:
     ensure_runtime_paths(cfg)
-    conn = sqlite3.connect(cfg.db_path)
+    conn = sqlite3.connect(cfg.db_path, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
-    ensure_schema(conn)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    ensure_schema(conn, cfg)
     _migrate_onboarding_bot_tokens(conn, cfg)
+    expire_stale_ssot_pending_writes(conn)
     return conn
 
 
-def ensure_schema(conn: sqlite3.Connection) -> None:
+def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS settings (
@@ -598,6 +638,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           message TEXT NOT NULL,
           extra_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_attempt_at TEXT,
+          next_attempt_at TEXT,
           delivered_at TEXT,
           delivery_error TEXT
         );
@@ -690,6 +733,30 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS ssot_pending_writes (
+          pending_id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL,
+          unix_user TEXT NOT NULL,
+          notion_user_id TEXT NOT NULL DEFAULT '',
+          operation TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          requested_by_actor TEXT NOT NULL DEFAULT '',
+          request_source TEXT NOT NULL DEFAULT '',
+          request_reason TEXT NOT NULL DEFAULT '',
+          owner_identity TEXT NOT NULL DEFAULT '',
+          owner_source TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending',
+          requested_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          decision_surface TEXT NOT NULL DEFAULT '',
+          decided_by_actor TEXT NOT NULL DEFAULT '',
+          decided_at TEXT,
+          decision_note TEXT NOT NULL DEFAULT '',
+          applied_at TEXT,
+          apply_result_json TEXT NOT NULL DEFAULT '{}'
+        );
+
         CREATE TABLE IF NOT EXISTS notion_identity_claims (
           claim_id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL DEFAULT '',
@@ -736,6 +803,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_ssot_pending_writes_status_requested
+        ON ssot_pending_writes (status, requested_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ssot_pending_writes_status_expires
+        ON ssot_pending_writes (status, expires_at)
+        """
+    )
+    conn.execute(
+        """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_claims_page_id
         ON notion_identity_claims (notion_page_id)
         WHERE notion_page_id != ''
@@ -773,6 +852,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         ON operator_actions (status, action_kind, created_at)
         """
     )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending_target_channel_next_attempt
+        ON notification_outbox (delivered_at, target_kind, channel_kind, next_attempt_at, id)
+        """
+    )
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activated_at", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "auto_provision", "INTEGER NOT NULL DEFAULT 0")
@@ -802,12 +887,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "onboarding_sessions", "completed_at", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "last_prompt_at", "TEXT")
     _ensure_column(conn, "notification_outbox", "extra_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "notification_outbox", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "notification_outbox", "last_attempt_at", "TEXT")
+    _ensure_column(conn, "notification_outbox", "next_attempt_at", "TEXT")
+    _ensure_column(conn, "ssot_pending_writes", "expires_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "notion_identity_claims", "failure_reason", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "notion_identity_claims", "verified_notion_user_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "notion_identity_claims", "verified_notion_email", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "notion_webhook_events", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "notion_webhook_events", "last_attempt_at", "TEXT")
     _ensure_column(conn, "notion_webhook_events", "last_error", "TEXT NOT NULL DEFAULT ''")
+    if cfg is not None:
+        _backfill_ssot_pending_write_expiry(conn, ttl_seconds=cfg.ssot_pending_write_ttl_seconds)
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_notion_webhook_events_status_received
@@ -869,6 +960,28 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.commit()
+
+
+def _backfill_ssot_pending_write_expiry(conn: sqlite3.Connection, *, ttl_seconds: int) -> int:
+    rows = conn.execute(
+        """
+        SELECT pending_id, requested_at
+        FROM ssot_pending_writes
+        WHERE expires_at IS NULL OR expires_at = ''
+        """
+    ).fetchall()
+    if not rows:
+        return 0
+    for row in rows:
+        conn.execute(
+            "UPDATE ssot_pending_writes SET expires_at = ? WHERE pending_id = ?",
+            (
+                expiry_from_iso(str(row["requested_at"] or ""), ttl_seconds=ttl_seconds),
+                str(row["pending_id"] or "").strip(),
+            ),
+        )
+    conn.commit()
+    return len(rows)
 
 
 def upsert_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
@@ -1734,6 +1847,35 @@ def expire_stale_notion_identity_claims(conn: sqlite3.Connection) -> int:
     return int(cursor.rowcount or 0)
 
 
+def expire_stale_ssot_pending_writes(conn: sqlite3.Connection) -> int:
+    now_iso = utc_now_iso()
+    cursor = conn.execute(
+        """
+        UPDATE ssot_pending_writes
+        SET status = 'expired',
+            decision_surface = CASE
+              WHEN decision_surface = '' THEN 'expiry'
+              ELSE decision_surface
+            END,
+            decided_by_actor = CASE
+              WHEN decided_by_actor = '' THEN 'system'
+              ELSE decided_by_actor
+            END,
+            decided_at = COALESCE(decided_at, ?),
+            decision_note = CASE
+              WHEN decision_note = '' THEN 'expired before operator approval'
+              ELSE decision_note
+            END
+        WHERE status = 'pending'
+          AND expires_at != ''
+          AND expires_at < ?
+        """,
+        (now_iso, now_iso),
+    )
+    conn.commit()
+    return int(cursor.rowcount or 0)
+
+
 def start_notion_identity_claim(
     conn: sqlite3.Connection,
     *,
@@ -2155,11 +2297,28 @@ def generate_onboarding_session_id() -> str:
     return f"onb_{secrets.token_hex(8)}"
 
 
+def generate_ssot_pending_write_id() -> str:
+    return f"ssotw_{secrets.token_hex(8)}"
+
+
 class RateLimitError(RuntimeError):
     def __init__(self, message: str, *, retry_after_seconds: int, scope: str) -> None:
         super().__init__(message)
         self.retry_after_seconds = int(retry_after_seconds)
         self.scope = scope
+
+
+class SSOTApprovalRequired(PermissionError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        owner_identity: str = "",
+        owner_source: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.owner_identity = str(owner_identity or "").strip()
+        self.owner_source = str(owner_source or "").strip()
 
 
 def ensure_request_expiry(conn: sqlite3.Connection) -> None:
@@ -3119,7 +3278,7 @@ def reload_vault_definitions(conn: sqlite3.Connection, cfg: Config) -> dict[str,
     if added or default_changed:
         fanout_summary = _fanout_default_subscriptions(conn, cfg, vault_names=set(added) | set(default_changed))
 
-    if added or removed or new_warnings:
+    if added or removed or new_warnings or default_changed:
         bits: list[str] = []
         if added:
             bits.append(f"added={','.join(added)}")
@@ -3127,6 +3286,8 @@ def reload_vault_definitions(conn: sqlite3.Connection, cfg: Config) -> dict[str,
             bits.append(f"removed={','.join(removed)}")
         if new_warnings:
             bits.append(f"warnings={len(new_warnings)}")
+        if default_changed:
+            bits.append(f"default_changed={','.join(default_changed)}")
         queue_notification(
             conn,
             target_kind="operator",
@@ -3134,13 +3295,17 @@ def reload_vault_definitions(conn: sqlite3.Connection, cfg: Config) -> dict[str,
             channel_kind=cfg.operator_notify_platform or "tui-only",
             message="Vault catalog changed: " + "; ".join(bits),
         )
-        queue_notification(
-            conn,
-            target_kind="curator",
-            target_id="curator",
-            channel_kind="brief-fanout",
-            message=f"catalog-reload: added={len(added)} removed={len(removed)} warnings={len(new_warnings)}",
-        )
+        if added or removed or default_changed:
+            queue_notification(
+                conn,
+                target_kind="curator",
+                target_id="curator",
+                channel_kind="brief-fanout",
+                message=(
+                    f"catalog-reload: added={len(added)} removed={len(removed)} "
+                    f"default_changed={len(default_changed)} warnings={len(new_warnings)}"
+                ),
+            )
 
     scan["diff"] = {
         "added": added,
@@ -3259,6 +3424,125 @@ def queue_notification(
     )
     conn.commit()
     return int(cursor.lastrowid)
+
+
+def _notification_due_now(next_attempt_at: str | None) -> bool:
+    due_at = parse_utc_iso(next_attempt_at)
+    return due_at is None or due_at <= utc_now()
+
+
+def _queue_curator_fanout_agent_notification(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    message: str,
+    source_notification_id: int = 0,
+) -> int:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        raise ValueError("curator fanout agent id is required")
+    now_iso = utc_now_iso()
+    existing = conn.execute(
+        """
+        SELECT id, next_attempt_at
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'curator'
+          AND channel_kind = 'brief-fanout'
+          AND target_id = ?
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (normalized_agent_id,),
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET next_attempt_at = CASE
+                  WHEN next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at > ?
+                    THEN ?
+                  ELSE next_attempt_at
+                END,
+                message = CASE
+                  WHEN message = '' THEN ?
+                  ELSE message
+                END
+            WHERE id = ?
+            """,
+            (
+                now_iso,
+                now_iso,
+                str(message or "").strip(),
+                int(existing["id"]),
+            ),
+        )
+        return int(existing["id"])
+    cursor = conn.execute(
+        """
+        INSERT INTO notification_outbox (
+          target_kind, target_id, channel_kind, message, extra_json, created_at,
+          attempt_count, last_attempt_at, next_attempt_at, delivered_at, delivery_error
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, NULL)
+        """,
+        (
+            "curator",
+            normalized_agent_id,
+            "brief-fanout",
+            str(message or "").strip(),
+            json_dumps(
+                {
+                    "fanout_scope": "agent",
+                    "source_notification_id": int(source_notification_id) if source_notification_id else 0,
+                }
+            ),
+            now_iso,
+            now_iso,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def _record_curator_fanout_retry(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    notification_ids: list[int],
+    error_message: str,
+) -> int:
+    normalized_ids = [int(value) for value in notification_ids]
+    if not normalized_ids:
+        return 0
+    placeholders = ",".join("?" for _ in normalized_ids)
+    rows = conn.execute(
+        f"SELECT id, attempt_count FROM notification_outbox WHERE id IN ({placeholders})",
+        tuple(normalized_ids),
+    ).fetchall()
+    now_iso = utc_now_iso()
+    max_attempts = 0
+    error_text = str(error_message or "").strip()[:500]
+    for row in rows:
+        attempts = int(row["attempt_count"] or 0) + 1
+        max_attempts = max(max_attempts, attempts)
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET attempt_count = ?,
+                last_attempt_at = ?,
+                next_attempt_at = ?,
+                delivery_error = ?
+            WHERE id = ?
+            """,
+            (
+                attempts,
+                now_iso,
+                utc_after_seconds_iso(curator_fanout_retry_delay_seconds(cfg, attempts)),
+                error_text,
+                int(row["id"]),
+            ),
+        )
+    conn.commit()
+    return max_attempts
 
 
 def _operator_action_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -3398,6 +3682,226 @@ def finish_operator_action(
     return _operator_action_row_to_dict(row) or {}
 
 
+def _ssot_pending_write_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["payload"] = json_loads(str(payload.pop("payload_json") or "{}"), {})
+    payload["apply_result"] = json_loads(str(payload.pop("apply_result_json") or "{}"), {})
+    return payload
+
+
+def _ssot_pending_write_filters(
+    *,
+    status: str = "",
+    agent_id: str = "",
+) -> tuple[str, tuple[Any, ...]]:
+    params: list[Any] = []
+    clauses: list[str] = []
+    normalized_status = str(status or "").strip().lower()
+    normalized_agent_id = str(agent_id or "").strip()
+    if normalized_status:
+        clauses.append("status = ?")
+        params.append(normalized_status)
+    if normalized_agent_id:
+        clauses.append("agent_id = ?")
+        params.append(normalized_agent_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, tuple(params)
+
+
+def get_ssot_pending_write(
+    conn: sqlite3.Connection,
+    pending_id: str,
+) -> dict[str, Any] | None:
+    expire_stale_ssot_pending_writes(conn)
+    row = conn.execute(
+        "SELECT * FROM ssot_pending_writes WHERE pending_id = ?",
+        (str(pending_id or "").strip(),),
+    ).fetchone()
+    return _ssot_pending_write_row_to_dict(row)
+
+
+def list_ssot_pending_writes(
+    conn: sqlite3.Connection,
+    *,
+    status: str = "",
+    agent_id: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    expire_stale_ssot_pending_writes(conn)
+    where, params = _ssot_pending_write_filters(status=status, agent_id=agent_id)
+    mutable_params = list(params)
+    mutable_params.append(max(1, int(limit)))
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM ssot_pending_writes
+        {where}
+        ORDER BY requested_at DESC
+        LIMIT ?
+        """,
+        tuple(mutable_params),
+    ).fetchall()
+    return [item for item in (_ssot_pending_write_row_to_dict(row) for row in rows) if item is not None]
+
+
+def count_ssot_pending_writes(
+    conn: sqlite3.Connection,
+    *,
+    status: str = "",
+    agent_id: str = "",
+) -> int:
+    expire_stale_ssot_pending_writes(conn)
+    where, params = _ssot_pending_write_filters(status=status, agent_id=agent_id)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS count
+        FROM ssot_pending_writes
+        {where}
+        """,
+        params,
+    ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def list_agent_ssot_pending_writes(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    status: str = "pending",
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    return list_ssot_pending_writes(
+        conn,
+        status=status,
+        agent_id=agent_id,
+        limit=limit,
+    )
+
+
+def _agent_ssot_pending_stub_lines(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    limit: int = 3,
+) -> list[str]:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        return []
+    pending_count = count_ssot_pending_writes(
+        conn,
+        status="pending",
+        agent_id=normalized_agent_id,
+    )
+    if pending_count <= 0:
+        return []
+    pending_rows = list_agent_ssot_pending_writes(
+        conn,
+        agent_id=normalized_agent_id,
+        status="pending",
+        limit=limit,
+    )
+    lines = [
+        f"- Pending shared-write approvals: {pending_count}. Use ssot.pending for live status and expiry details.",
+    ]
+    for row in pending_rows:
+        operation = str(row.get("operation") or "write")
+        target_id = str(row.get("target_id") or "unknown target")
+        expires_at = format_utc_iso_brief(str(row.get("expires_at") or ""))
+        lines.append(f"  - {row.get('pending_id') or 'pending'}: {operation} {target_id}; expires {expires_at}")
+    return lines
+
+
+def _find_matching_pending_ssot_write(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    operation: str,
+    target_id: str,
+    payload_json: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM ssot_pending_writes
+        WHERE agent_id = ?
+          AND operation = ?
+          AND target_id = ?
+          AND payload_json = ?
+          AND status = 'pending'
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (
+            str(agent_id or "").strip(),
+            str(operation or "").strip().lower(),
+            str(target_id or "").strip(),
+            str(payload_json or "{}"),
+        ),
+    ).fetchone()
+    return _ssot_pending_write_row_to_dict(row)
+
+
+def request_ssot_pending_write(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    unix_user: str,
+    notion_user_id: str,
+    operation: str,
+    target_id: str,
+    payload: dict[str, Any],
+    requested_by_actor: str,
+    request_source: str,
+    request_reason: str,
+    owner_identity: str,
+    owner_source: str,
+    ttl_seconds: int,
+) -> tuple[dict[str, Any], bool]:
+    expire_stale_ssot_pending_writes(conn)
+    payload_json = json_dumps(payload)
+    existing = _find_matching_pending_ssot_write(
+        conn,
+        agent_id=agent_id,
+        operation=operation,
+        target_id=target_id,
+        payload_json=payload_json,
+    )
+    if existing is not None:
+        return existing, False
+    now_iso = utc_now_iso()
+    expires_at = utc_after_seconds_iso(ttl_seconds)
+    pending_id = generate_ssot_pending_write_id()
+    conn.execute(
+        """
+        INSERT INTO ssot_pending_writes (
+          pending_id, agent_id, unix_user, notion_user_id, operation, target_id,
+          payload_json, requested_by_actor, request_source, request_reason,
+          owner_identity, owner_source, status, requested_at, expires_at, decision_surface,
+          decided_by_actor, decided_at, decision_note, applied_at, apply_result_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, '', '', NULL, '', NULL, '{}')
+        """,
+        (
+            pending_id,
+            str(agent_id or "").strip(),
+            str(unix_user or "").strip(),
+            str(notion_user_id or "").strip(),
+            str(operation or "").strip().lower(),
+            str(target_id or "").strip(),
+            payload_json,
+            str(requested_by_actor or "").strip(),
+            str(request_source or "").strip(),
+            str(request_reason or "").strip(),
+            str(owner_identity or "").strip(),
+            str(owner_source or "").strip(),
+            now_iso,
+            expires_at,
+        ),
+    )
+    conn.commit()
+    return get_ssot_pending_write(conn, pending_id) or {}, True
+
 def subscribed_agent_ids_for_vault(conn: sqlite3.Connection, vault_name: str) -> list[str]:
     vault = conn.execute(
         "SELECT default_subscribed FROM vaults WHERE vault_name = ? AND state = 'active'",
@@ -3408,7 +3912,7 @@ def subscribed_agent_ids_for_vault(conn: sqlite3.Connection, vault_name: str) ->
     default_subscribed = int(vault["default_subscribed"] or 0)
     rows = conn.execute(
         """
-        SELECT a.agent_id, s.subscribed
+        SELECT a.agent_id, s.subscribed, s.source
         FROM agents a
         LEFT JOIN agent_vault_subscriptions s
           ON s.agent_id = a.agent_id AND s.vault_name = ?
@@ -3420,7 +3924,8 @@ def subscribed_agent_ids_for_vault(conn: sqlite3.Connection, vault_name: str) ->
     result: list[str] = []
     for row in rows:
         explicit = row["subscribed"]
-        if explicit is None:
+        source_kind = _subscription_source_kind(str(row["source"] or ""))
+        if explicit is None or source_kind != "user":
             if default_subscribed == 1:
                 result.append(str(row["agent_id"]))
             continue
@@ -3512,21 +4017,28 @@ def queue_vault_content_notifications(
         if trigger_path is not None:
             activation_triggers[agent_id] = str(trigger_path)
 
-    if changed_by_vault:
+    if changed_by_vault and agents_notified:
         summary = ", ".join(
             f"{vault_name}({len(relative_paths)} path(s))"
             for vault_name, relative_paths in sorted(changed_by_vault.items())
         )
-        queue_notification(
-            conn,
-            target_kind="curator",
-            target_id="curator",
-            channel_kind="brief-fanout",
-            message=(
-                "vault-content-refresh: "
-                f"{summary}. Refresh managed-memory stubs for org-wide vault awareness."
-            ),
-        )
+        for agent_id in sorted(agents_notified):
+            queue_notification(
+                conn,
+                target_kind="curator",
+                target_id=agent_id,
+                channel_kind="brief-fanout",
+                message=(
+                    "vault-content-refresh: "
+                    f"{summary}. Refresh managed-memory stubs only if this agent's "
+                    "subscription-scoped context changed."
+                ),
+                extra={
+                    "source": source,
+                    "vaults_changed": sorted(changed_by_vault),
+                    "subscription_scoped": True,
+                },
+            )
         brief_fanout_queued = True
 
     return {
@@ -4102,13 +4614,17 @@ def fetch_undelivered_notifications(
     limit: int = 50,
     *,
     include_user_agent: bool = True,
+    include_curator: bool = True,
 ) -> list[dict[str, Any]]:
     where = ["delivered_at IS NULL"]
     if not include_user_agent:
         where.append("target_kind != 'user-agent'")
+    if not include_curator:
+        where.append("target_kind != 'curator'")
     rows = conn.execute(
         f"""
-        SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error
+        SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error,
+               attempt_count, last_attempt_at, next_attempt_at
         FROM notification_outbox
         WHERE {' AND '.join(where)}
         ORDER BY
@@ -4126,6 +4642,7 @@ def fetch_undelivered_notifications(
 
 
 def has_pending_curator_brief_fanout(conn: sqlite3.Connection) -> bool:
+    now_iso = utc_now_iso()
     row = conn.execute(
         """
         SELECT 1
@@ -4133,9 +4650,10 @@ def has_pending_curator_brief_fanout(conn: sqlite3.Connection) -> bool:
         WHERE delivered_at IS NULL
           AND target_kind = 'curator'
           AND channel_kind = 'brief-fanout'
+          AND (next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)
         LIMIT 1
         """
-    ).fetchone()
+    , (now_iso,)).fetchone()
     return row is not None
 
 
@@ -4209,6 +4727,54 @@ def operator_upgrade_action_extra(
                             "style": 1,
                             "label": "Install",
                             "custom_id": callback_install,
+                        },
+                    ],
+                }
+            ]
+        }
+    return None
+
+
+def operator_ssot_write_action_extra(
+    cfg: Config,
+    *,
+    pending_id: str,
+) -> dict[str, Any] | None:
+    target = str(pending_id or "").strip()
+    if not target:
+        return None
+    callback_approve = f"almanac:ssot:approve:{target}"
+    callback_deny = f"almanac:ssot:deny:{target}"
+    if cfg.operator_notify_platform == "telegram" and cfg.curator_telegram_onboarding_enabled:
+        return {
+            "telegram_reply_markup": {
+                "inline_keyboard": [[
+                    {"text": "Deny", "callback_data": callback_deny},
+                    {"text": "Approve", "callback_data": callback_approve},
+                ]]
+            }
+        }
+    if (
+        cfg.operator_notify_platform == "discord"
+        and cfg.curator_discord_onboarding_enabled
+        and str(cfg.operator_notify_channel_id or "").strip().isdigit()
+    ):
+        return {
+            "discord_components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 2,
+                            "label": "Deny",
+                            "custom_id": callback_deny,
+                        },
+                        {
+                            "type": 2,
+                            "style": 1,
+                            "label": "Approve",
+                            "custom_id": callback_approve,
                         },
                     ],
                 }
@@ -4469,6 +5035,50 @@ def normalize_surface(raw: str, default: str = "curator-tui") -> str:
     return value
 
 
+def _subscription_source_kind(raw_source: str) -> str:
+    source = str(raw_source or "").strip().lower()
+    return "user" if source == "user" else "default"
+
+
+def effective_subscriptions_for_agent(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
+    explicit_rows = {str(row["vault_name"]): dict(row) for row in subscriptions_for_agent(conn, agent_id)}
+    result: list[dict[str, Any]] = []
+    for vault in list_vaults(conn):
+        vault_name = str(vault["vault_name"])
+        explicit = explicit_rows.get(vault_name)
+        default_subscribed = int(vault.get("default_subscribed") or 0)
+        raw_source = str(explicit.get("source") or "").strip() if explicit else "default"
+        source_kind = _subscription_source_kind(raw_source)
+        effective_subscribed = int(explicit.get("subscribed") or 0) if source_kind == "user" and explicit is not None else default_subscribed
+        explicit_override = source_kind == "user"
+        if explicit_override:
+            subscription_state = "user-opt-in" if effective_subscribed == 1 else "user-opt-out"
+            hierarchy_source = "user-override"
+        else:
+            subscription_state = "default-in" if default_subscribed == 1 else "default-out"
+            hierarchy_source = "catalog-default"
+        result.append(
+            {
+                "vault_name": vault_name,
+                "vault_path": vault.get("vault_path"),
+                "description": vault.get("description"),
+                "brief_template": vault.get("brief_template"),
+                "category": vault.get("category"),
+                "owner": vault.get("owner"),
+                "default_subscribed": default_subscribed,
+                "subscribed": effective_subscribed,
+                "effective_subscribed": bool(effective_subscribed),
+                "push_enabled": bool(effective_subscribed),
+                "hierarchy_source": hierarchy_source,
+                "explicit_override": explicit_override,
+                "subscription_state": subscription_state,
+                "source": raw_source,
+                "updated_at": explicit.get("updated_at") if explicit else None,
+            }
+        )
+    return result
+
+
 def subscriptions_for_agent(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -4650,6 +5260,15 @@ def auto_provision_retry_delay_seconds(cfg: Config, attempts: int) -> int:
     return max(
         cfg.auto_provision_retry_base_seconds,
         min(cfg.auto_provision_retry_max_seconds, delay),
+    )
+
+
+def curator_fanout_retry_delay_seconds(cfg: Config, attempts: int) -> int:
+    step = max(1, int(attempts))
+    delay = cfg.curator_fanout_retry_base_seconds * (2 ** max(0, step - 1))
+    return max(
+        cfg.curator_fanout_retry_base_seconds,
+        min(cfg.curator_fanout_retry_max_seconds, delay),
     )
 
 
@@ -6009,8 +6628,8 @@ def refresh_agent_context(
     token_row = validate_token(conn, raw_token)
     agent_id = str(token_row["agent_id"])
     ensure_default_subscriptions(conn, agent_id)
-    subscriptions = subscriptions_for_agent(conn, agent_id)
-    active = [row["vault_name"] for row in subscriptions if int(row["subscribed"]) == 1]
+    subscriptions = effective_subscriptions_for_agent(conn, agent_id)
+    active = [row["vault_name"] for row in subscriptions if bool(row.get("push_enabled"))]
     note_refresh_job(
         conn,
         job_name=f"{agent_id}-refresh",
@@ -6031,26 +6650,7 @@ def refresh_agent_context(
 def subscription_catalog(conn: sqlite3.Connection, raw_token: str) -> list[dict[str, Any]]:
     token_row = validate_token(conn, raw_token)
     agent_id = str(token_row["agent_id"])
-    subscriptions = {
-        row["vault_name"]: bool(row["subscribed"])
-        for row in conn.execute(
-            "SELECT vault_name, subscribed FROM agent_vault_subscriptions WHERE agent_id = ?",
-            (agent_id,),
-        )
-    }
-    result = []
-    for row in list_vaults(conn):
-        result.append(
-            {
-                "vault_name": row["vault_name"],
-                "vault_path": row["vault_path"],
-                "description": row.get("description"),
-                "owner": row.get("owner"),
-                "default_subscribed": bool(row.get("default_subscribed", 0)),
-                "subscribed": subscriptions.get(row["vault_name"], False),
-            }
-        )
-    return result
+    return effective_subscriptions_for_agent(conn, agent_id)
 
 
 def set_subscription_from_token(
@@ -6143,7 +6743,7 @@ def store_notion_event(
 
 
 SSOT_READ_OPERATIONS = ("read",)
-SSOT_WRITE_OPERATIONS = ("insert", "update")
+SSOT_WRITE_OPERATIONS = ("insert", "update", "append")
 SSOT_ALLOWED_OPERATIONS = SSOT_READ_OPERATIONS + SSOT_WRITE_OPERATIONS
 SSOT_FORBIDDEN_OPERATIONS = ("archive", "delete", "trash", "destroy")
 NOTION_WEBHOOK_EVENT_MAX_ATTEMPTS = 10
@@ -6245,17 +6845,68 @@ def _ssot_identity_match_values(agent_row: sqlite3.Row, identity: dict[str, Any]
     return {value for value in values if value}
 
 
+def _agent_has_prior_brokered_page_write(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    page_id: str,
+) -> bool:
+    normalized_page_id = str(page_id or "").strip()
+    if not normalized_page_id:
+        return False
+    try:
+        normalized_page_id = extract_notion_space_id(normalized_page_id)
+    except ValueError:
+        normalized_page_id = str(page_id or "").strip()
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM ssot_access_audit
+        WHERE agent_id = ?
+          AND target_id = ?
+          AND decision = 'allow'
+          AND operation IN ('insert', 'update', 'append')
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (str(agent_id or "").strip(), normalized_page_id),
+    ).fetchone()
+    return row is not None
+
+
 def _page_access_matches_identity(
     payload: dict[str, Any],
     *,
     agent_row: sqlite3.Row,
     identity: dict[str, Any],
+    conn: sqlite3.Connection | None = None,
+    allow_prior_agent_touch: bool = False,
 ) -> tuple[bool, str]:
     match_values = {value.lower() for value in _ssot_identity_match_values(agent_row, identity)}
     for value, source in _notion_principal_identities(payload):
         normalized = _normalize_email(value) if "@" in value else value.strip().lower()
         if normalized in match_values:
             return True, source
+    # Do not let local broker history override an explicit people owner/assignee
+    # assignment that points at somebody else.
+    for property_name in ("Owner", "Assignee"):
+        if _notion_property_people_identities(payload, property_name):
+            return False, "ownership-mismatch"
+    last_edited_by = payload.get("last_edited_by") if isinstance(payload, dict) else {}
+    # Local broker history is only meant to bridge over non-human integration
+    # edits so a page does not fall out of scope immediately after Almanac
+    # writes it. If another human is now the last editor, require a fresh
+    # human-based scope signal instead of extending the old thread forever.
+    if isinstance(last_edited_by, dict) and str(last_edited_by.get("type") or "").strip() == "person":
+        return False, "ownership-mismatch"
+    if allow_prior_agent_touch and conn is not None:
+        page_id = str(payload.get("id") or "").strip()
+        if page_id and _agent_has_prior_brokered_page_write(
+            conn,
+            agent_id=str(agent_row["agent_id"] or ""),
+            page_id=page_id,
+        ):
+            return True, "agent-write-history"
     return False, "ownership-mismatch"
 
 
@@ -6783,6 +7434,7 @@ def _build_notion_stub(
     *,
     agent_row: sqlite3.Row,
     identity: dict[str, Any] | None,
+    notion_stub_cache: dict[str, Any] | None = None,
 ) -> str:
     try:
         settings = _require_shared_notion_settings()
@@ -6791,13 +7443,17 @@ def _build_notion_stub(
     verification_status = str((identity or {}).get("verification_status") or "").strip()
     verified_email = str((identity or {}).get("notion_user_email") or (identity or {}).get("claimed_notion_email") or "").strip()
     claimed_email = _normalize_email(str((identity or {}).get("claimed_notion_email") or ""))
+    pending_lines = _agent_ssot_pending_stub_lines(
+        conn,
+        agent_id=str(agent_row["agent_id"] or ""),
+    )
     if settings["space_kind"] != "database":
         lines = [
             "Shared Notion digest:",
-            "- The shared SSOT target is page-scoped right now, so Almanac cannot build a structured database digest yet.",
-            "- Shared organizational writes still stay on the brokered ssot.write rail for concrete user-scoped page work.",
-            "- Use ssot.read for specific page lookups.",
-            "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing.",
+            "- Current SSOT shape: page-scoped. Almanac cannot build a structured database digest from this target yet.",
+            "- Current rail map: use ssot.read for live scoped page lookups and ssot.write for permitted brokered updates on in-scope user work.",
+            "- Best fit for repeated brokered writes is still an owner/assignee-backed database row when one exists. Plain child pages can be more fragile under strict scope checks.",
+            "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing or the rail disappearing.",
         ]
         if verification_status != "verified":
             if claimed_email:
@@ -6805,23 +7461,38 @@ def _build_notion_stub(
             else:
                 lines.append("- Verification: not started yet. Shared writes remain read-only until the user verifies their Notion identity.")
         else:
-            lines.append(f"- Verification: confirmed for {verified_email or 'your verified Notion identity'}. Shared brokered writes are enabled within your scoped rails.")
+            lines.append(f"- Verification: confirmed for {verified_email or 'your verified Notion identity'}. Shared brokered reads and writes are enabled within your scoped rails.")
+            lines.append("- Plain shared pages stay writable when they are in your user's edit lane or when this same agent already established brokered write history there. If a page is still outside scope, move the work into an owned database item or ask for approval instead of asking the user to re-touch it.")
+        lines.extend(pending_lines)
         return "\n".join(lines)
     notion_kwargs: dict[str, Any] = {}
     try:
-        database_payload, schema_payload = _load_notion_collection_schema(
-            target_id=settings["space_id"],
-            settings=settings,
-            notion_kwargs=notion_kwargs,
-        )
+        shared_key = f"shared-notion:{settings['space_id']}"
+        shared_digest = notion_stub_cache.get(shared_key) if isinstance(notion_stub_cache, dict) else None
+        if isinstance(shared_digest, dict):
+            database_payload = shared_digest.get("database_payload") if isinstance(shared_digest.get("database_payload"), dict) else {}
+            schema_payload = shared_digest.get("schema_payload") if isinstance(shared_digest.get("schema_payload"), dict) else {}
+            team_result = shared_digest.get("team_result") if isinstance(shared_digest.get("team_result"), dict) else {}
+        else:
+            database_payload, schema_payload = _load_notion_collection_schema(
+                target_id=settings["space_id"],
+                settings=settings,
+                notion_kwargs=notion_kwargs,
+            )
+            team_result = query_notion_collection(
+                database_id=settings["space_id"],
+                token=settings["token"],
+                api_version=settings["api_version"],
+                payload={"page_size": 100},
+                **notion_kwargs,
+            )
+            if isinstance(notion_stub_cache, dict):
+                notion_stub_cache[shared_key] = {
+                    "database_payload": database_payload,
+                    "schema_payload": schema_payload,
+                    "team_result": team_result,
+                }
         schema = schema_payload or database_payload
-        team_result = query_notion_collection(
-            database_id=settings["space_id"],
-            token=settings["token"],
-            api_version=settings["api_version"],
-            payload={"page_size": 100},
-            **notion_kwargs,
-        )
     except Exception as exc:
         return f"Shared Notion digest:\n- Curator could not refresh the shared Notion snapshot just now ({exc})."
     entries = team_result.get("result") if isinstance(team_result, dict) else {}
@@ -6829,15 +7500,17 @@ def _build_notion_stub(
     team_items = [item for item in items_raw if isinstance(item, dict)]
     lines = [
         "Shared Notion digest:",
-        "- Shared organizational writes stay on the brokered ssot.write rail.",
+        "- Current SSOT shape: database-backed shared workflow.",
+        "- Current rail map: use ssot.read for live scoped reads and ssot.write for permitted brokered inserts, updates, or append-only page notes on in-scope records.",
         "- Native Notion edit history shows the Almanac integration. When the database exposes a Changed By people property, Almanac also stamps the verified human there on every brokered write.",
-        "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing.",
+        "- If a brokered action is queued or denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing or the rail disappearing.",
     ]
     if identity is None or verification_status != "verified":
         if claimed_email:
             lines.append(f"- Verification: pending for {claimed_email}. Shared writes remain read-only until the claim is verified.")
         else:
             lines.append("- Verification: not started yet. Shared writes remain read-only until the user verifies their Notion identity.")
+        lines.extend(pending_lines)
         lines.extend(_notion_team_summary(team_items))
         return "\n".join(lines)
     try:
@@ -6866,6 +7539,7 @@ def _build_notion_stub(
     lines.append(
         f"- Verification: confirmed for {verified_email}."
     )
+    lines.extend(pending_lines)
     lines.append(f"- My scoped SSOT records: {len(user_items)}. Due within 7 days: {due_soon}. Updated in the last 7 days: {recent_updates}.")
     if user_items:
         lines.append("- Current focus rows:")
@@ -7007,9 +7681,15 @@ def read_ssot(
         api_version=settings["api_version"],
         **notion_kwargs,
     )
-    allowed, source = _page_access_matches_identity(page, agent_row=agent_row, identity=identity)
+    allowed, source = _page_access_matches_identity(
+        page,
+        agent_row=agent_row,
+        identity=identity,
+        conn=conn,
+        allow_prior_agent_touch=True,
+    )
     if not allowed:
-        reason = "page read is outside the caller's owned/assigned Notion scope"
+        reason = "page read is outside the caller's scoped Notion edit lane"
         log_ssot_access_audit(
             conn,
             agent_id=str(agent_row["agent_id"]),
@@ -7051,162 +7731,302 @@ def read_ssot(
     }
 
 
-def enqueue_ssot_write(
+def _normalize_ssot_append_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("shared Notion append requires a payload object")
+    if "after" in payload and str(payload.get("after") or "").strip():
+        raise ValueError("shared Notion append only supports appending at the end; omit 'after'")
+    children = payload.get("children")
+    if not isinstance(children, list) or not children:
+        raise ValueError("shared Notion append requires a non-empty 'children' list")
+    if set(payload.keys()) - {"children"}:
+        raise ValueError("shared Notion append only supports a top-level 'children' field")
+    return {"children": children}
+
+
+def _ssot_write_gate_reason(identity: dict[str, Any]) -> str:
+    verification_status = str(identity.get("verification_status") or "").strip()
+    write_mode = str(identity.get("write_mode") or "").strip()
+    if verification_status != "verified" or write_mode != "verified_limited":
+        return "shared Notion writes require a verified Notion claim and verified_limited write mode"
+    return ""
+
+
+def _notify_ssot_pending_write_resolution(
     conn: sqlite3.Connection,
     cfg: Config,
     *,
+    pending_row: dict[str, Any],
+    message: str,
+) -> None:
+    agent_id = str(pending_row.get("agent_id") or "").strip()
+    if not agent_id:
+        return
+    queue_notification(
+        conn,
+        target_kind="user-agent",
+        target_id=agent_id,
+        channel_kind="ssot-approval",
+        message=message,
+    )
+    try:
+        signal_agent_refresh_from_curator(
+            conn,
+            cfg,
+            agent_id=agent_id,
+            note=f"ssot pending write resolution: {pending_row.get('pending_id') or ''}",
+        )
+    except Exception:
+        return
+
+
+def _queue_ssot_write_for_approval(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_row: sqlite3.Row,
+    identity: dict[str, Any],
+    operation: str,
+    target_id: str,
+    payload: dict[str, Any],
+    requested_by_actor: str,
+    request_reason: str,
+    request_source: str,
+    owner_identity: str,
+    owner_source: str,
+    audit_payload: dict[str, Any],
+) -> dict[str, Any]:
+    pending_row, created = request_ssot_pending_write(
+        conn,
+        agent_id=str(agent_row["agent_id"] or ""),
+        unix_user=str(agent_row["unix_user"] or ""),
+        notion_user_id=str(identity.get("notion_user_id") or ""),
+        operation=operation,
+        target_id=target_id,
+        payload=payload,
+        requested_by_actor=requested_by_actor,
+        request_source=request_source,
+        request_reason=request_reason,
+        owner_identity=owner_identity,
+        owner_source=owner_source,
+        ttl_seconds=cfg.ssot_pending_write_ttl_seconds,
+    )
+    pending_id = str(pending_row.get("pending_id") or "").strip()
+    expires_label = format_utc_iso_brief(str(pending_row.get("expires_at") or ""))
+    if created:
+        owner_label = owner_identity or "unknown"
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=(
+                "SSOT write approval requested.\n"
+                f"Pending: {pending_id}\n"
+                f"Agent: {agent_row['agent_id']}\n"
+                f"Requested by: {requested_by_actor}\n"
+                f"Operation: {operation}\n"
+                f"Target: {target_id}\n"
+                f"Owner: {owner_label}\n"
+                f"Expires: {expires_label}\n"
+                f"Reason: {request_reason}\n"
+                f"Approve: /approve {pending_id} or ./bin/almanac-ctl ssot approve {pending_id}\n"
+                f"Deny: /deny {pending_id} optional reason or ./bin/almanac-ctl ssot deny {pending_id} --reason 'optional reason'"
+            ),
+            extra=operator_ssot_write_action_extra(cfg, pending_id=pending_id),
+        )
+    note_refresh_job(
+        conn,
+        job_name=f"ssot-{operation}-{pending_id or secrets.token_hex(4)}",
+        job_kind="ssot-write",
+        target_id=target_id or str(agent_row["agent_id"]),
+        schedule="manual",
+        status="queued",
+        note=json_dumps(
+            {
+                "pending_id": pending_id,
+                "agent_id": str(agent_row["agent_id"] or ""),
+                "operation": operation,
+                "target_id": target_id,
+                "expires_at": str(pending_row.get("expires_at") or ""),
+                "owner_identity": owner_identity,
+                "owner_source": owner_source,
+                "requested_by_actor": requested_by_actor,
+                "created": created,
+            }
+        ),
+    )
+    log_ssot_access_audit(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+        notion_user_id=str(identity.get("notion_user_id") or ""),
+        operation=operation,
+        target_id=target_id,
+        decision="queue",
+        reason=f"{request_reason}; operator approval required",
+        actor=requested_by_actor,
+        request_payload={**audit_payload, "pending_id": pending_id, "created": created},
+    )
+    return {
+        "applied": False,
+        "queued": True,
+        "agent_id": str(agent_row["agent_id"] or ""),
+        "operation": operation,
+        "target_id": target_id,
+        "owner_identity": owner_identity,
+        "owner_source": owner_source,
+        "approval_required": True,
+        "pending_id": pending_id,
+        "pending_write": pending_row,
+    }
+
+
+def _apply_ssot_write(
+    conn: sqlite3.Connection,
+    *,
+    settings: dict[str, str],
+    agent_row: sqlite3.Row,
+    identity: dict[str, Any],
     agent_id: str,
     operation: str,
     target_id: str,
     payload: dict[str, Any],
     requested_by_actor: str,
+    audit_payload: dict[str, Any],
+    bypass_scope: bool = False,
+    pending_id: str = "",
+    approval_actor: str = "",
+    approval_surface: str = "",
 ) -> dict[str, Any]:
-    """Accept insert/update only. Reject archive/delete. Apply approved writes immediately."""
-    op = (operation or "").strip().lower()
-    if op in SSOT_FORBIDDEN_OPERATIONS:
-        raise PermissionError(
-            f"SSOT rail violation: operation '{op}' is not permitted; archive/delete require operator."
-        )
-    if op not in SSOT_WRITE_OPERATIONS:
-        raise ValueError(
-            f"unsupported SSOT operation '{op}'; allowed: {', '.join(SSOT_WRITE_OPERATIONS)}"
-        )
-
-    settings = _require_shared_notion_settings()
-    if op == "update" and not str(target_id or "").strip():
-        raise ValueError("shared Notion updates require a target page id")
     notion_kwargs: dict[str, Any] = {}
-    notion_target = str(target_id or settings["space_id"]).strip()
-    normalized_target_id = extract_notion_space_id(notion_target)
-    audit_payload = {"operation": op, "target_id": normalized_target_id, "payload": payload}
-    try:
-        agent_row, identity = _ssot_principal(conn, agent_id)
-    except PermissionError as exc:
-        _log_ssot_principal_denial(
-            conn,
-            agent_id=agent_id,
-            operation=op,
-            target_id=normalized_target_id,
-            actor=requested_by_actor,
-            reason=str(exc),
-            request_payload=audit_payload,
-        )
-        raise
-    verification_status = str(identity.get("verification_status") or "").strip()
-    write_mode = str(identity.get("write_mode") or "").strip()
-    if verification_status != "verified" or write_mode != "verified_limited":
-        reason = "shared Notion writes require a verified Notion claim and verified_limited write mode"
-        log_ssot_access_audit(
-            conn,
-            agent_id=str(agent_row["agent_id"]),
-            unix_user=str(agent_row["unix_user"]),
-            notion_user_id=str(identity.get("notion_user_id") or ""),
-            operation=op,
-            target_id=normalized_target_id,
-            decision="deny",
-            reason=reason,
-            actor=requested_by_actor,
-            request_payload=audit_payload,
-        )
-        raise PermissionError(reason)
-
-    try:
-        owner_identity, owner_source = ("", "insert")
-        if op == "insert":
-            approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
-            owner_identity = str(identity.get("notion_user_id") or identity.get("notion_user_email") or "")
-            if not approved:
-                reason = "insert payload must assign Owner or Assignee to the verified caller"
-                log_ssot_access_audit(
-                    conn,
-                    agent_id=str(agent_row["agent_id"]),
-                    unix_user=str(agent_row["unix_user"]),
-                    notion_user_id=str(identity.get("notion_user_id") or ""),
-                    operation=op,
-                    target_id=normalized_target_id,
-                    decision="deny",
-                    reason=reason,
-                    actor=requested_by_actor,
-                    request_payload=audit_payload,
-                )
-                raise PermissionError(reason)
-            parent_meta = resolve_notion_target(
+    owner_identity, owner_source = ("", "insert")
+    op = str(operation or "").strip().lower()
+    normalized_target_id = str(target_id or "").strip()
+    if op == "insert":
+        approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
+        owner_identity = str(identity.get("notion_user_id") or identity.get("notion_user_email") or "")
+        if not approved:
+            reason = "insert payload must assign Owner or Assignee to the verified caller"
+            log_ssot_access_audit(
+                conn,
+                agent_id=str(agent_row["agent_id"]),
+                unix_user=str(agent_row["unix_user"]),
+                notion_user_id=str(identity.get("notion_user_id") or ""),
+                operation=op,
                 target_id=normalized_target_id,
-                token=settings["token"],
-                api_version=settings["api_version"],
-                **notion_kwargs,
+                decision="deny",
+                reason=reason,
+                actor=requested_by_actor,
+                request_payload=audit_payload,
             )
-            parent_kind = str(parent_meta.get("kind") or "").strip()
-            changed_by_property = ""
-            applied_request_payload = _strip_attribution_properties(payload)
-            if parent_kind == "database":
-                database_payload, schema_payload = _load_notion_collection_schema(
-                    target_id=normalized_target_id,
-                    settings=settings,
-                    notion_kwargs=notion_kwargs,
-                )
-                applied_request_payload, changed_by_property = _stamp_changed_by_property(
-                    applied_request_payload,
-                    schema_payload=schema_payload or database_payload,
-                    notion_user_id=str(identity.get("notion_user_id") or ""),
-                )
-            applied_payload = create_notion_page(
-                parent_id=normalized_target_id,
-                parent_kind=parent_kind,
-                token=settings["token"],
-                api_version=settings["api_version"],
-                payload=applied_request_payload,
-                **notion_kwargs,
+            raise PermissionError(reason)
+        parent_meta = resolve_notion_target(
+            target_id=normalized_target_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        parent_kind = str(parent_meta.get("kind") or "").strip()
+        parent_access_source = ""
+        changed_by_property = ""
+        applied_request_payload = _strip_attribution_properties(payload)
+        if parent_kind == "database":
+            database_payload, schema_payload = _load_notion_collection_schema(
+                target_id=normalized_target_id,
+                settings=settings,
+                notion_kwargs=notion_kwargs,
             )
-            result_target_id = str(applied_payload.get("id") or "").strip() or normalized_target_id
-            result_status = "applied"
-            result_reason = f"verified caller insert applied under {parent_kind} {normalized_target_id}"
-            result_note = {
-                "agent_id": agent_id,
-                "operation": op,
-                "target_id": result_target_id,
-                "parent_id": normalized_target_id,
-                "parent_kind": parent_kind,
-                "owner_identity": owner_identity,
-                "owner_source": owner_source,
-                "changed_by_property": changed_by_property,
-                "actor": requested_by_actor,
-            }
-        else:
-            page = retrieve_notion_page(
+            applied_request_payload, changed_by_property = _stamp_changed_by_property(
+                applied_request_payload,
+                schema_payload=schema_payload or database_payload,
+                notion_user_id=str(identity.get("notion_user_id") or ""),
+            )
+        elif parent_kind == "page":
+            parent_page = retrieve_notion_page(
                 page_id=normalized_target_id,
                 token=settings["token"],
                 api_version=settings["api_version"],
                 **notion_kwargs,
             )
-            approved, owner_source = _page_access_matches_identity(page, agent_row=agent_row, identity=identity)
-            owner_identity, _ = _notion_owner_identity(page)
-            if not approved:
-                owner_label = owner_identity or "unknown"
-                queue_notification(
-                    conn,
-                    target_kind="operator",
-                    target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
-                    channel_kind=cfg.operator_notify_platform or "tui-only",
-                    message=(
-                        f"SSOT write approval requested: agent={agent_id} op={op} target={normalized_target_id} "
-                        f"owner={owner_label} source={owner_source}"
-                    ),
+            parent_approved, parent_access_source = _page_access_matches_identity(
+                parent_page,
+                agent_row=agent_row,
+                identity=identity,
+                conn=conn,
+                allow_prior_agent_touch=True,
+            )
+            if not parent_approved and not bypass_scope:
+                parent_owner_identity, _ = _notion_owner_identity(parent_page)
+                raise SSOTApprovalRequired(
+                    "target parent page is outside the verified caller's scoped Notion edit lane",
+                    owner_identity=parent_owner_identity,
+                    owner_source="page-parent-ownership-mismatch",
                 )
-                reason = "target page is outside the verified caller's owned/assigned Notion scope"
-                log_ssot_access_audit(
-                    conn,
-                    agent_id=str(agent_row["agent_id"]),
-                    unix_user=str(agent_row["unix_user"]),
-                    notion_user_id=str(identity.get("notion_user_id") or ""),
-                    operation=op,
-                    target_id=normalized_target_id,
-                    decision="deny",
-                    reason=reason,
-                    actor=requested_by_actor,
-                    request_payload=audit_payload,
-                )
-                raise PermissionError(reason)
+        applied_payload = create_notion_page(
+            parent_id=normalized_target_id,
+            parent_kind=parent_kind,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            payload=applied_request_payload,
+            **notion_kwargs,
+        )
+        result_target_id = str(applied_payload.get("id") or "").strip() or normalized_target_id
+        result_reason = f"verified caller insert applied under {parent_kind} {normalized_target_id}"
+        result_note = {
+            "agent_id": agent_id,
+            "operation": op,
+            "target_id": result_target_id,
+            "parent_id": normalized_target_id,
+            "parent_kind": parent_kind,
+            "owner_identity": owner_identity,
+            "owner_source": owner_source,
+            "parent_access_source": parent_access_source,
+            "changed_by_property": changed_by_property,
+            "actor": requested_by_actor,
+        }
+    else:
+        page = retrieve_notion_page(
+            page_id=normalized_target_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        approved, owner_source = _page_access_matches_identity(
+            page,
+            agent_row=agent_row,
+            identity=identity,
+            conn=conn,
+            allow_prior_agent_touch=True,
+        )
+        owner_identity, _ = _notion_owner_identity(page)
+        if not approved and not bypass_scope:
+            raise SSOTApprovalRequired(
+                "target page is outside the verified caller's scoped Notion edit lane",
+                owner_identity=owner_identity,
+                owner_source=owner_source,
+            )
+        if op == "append":
+            applied_request_payload = _normalize_ssot_append_payload(payload)
+            applied_payload = append_notion_block_children(
+                block_id=normalized_target_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                payload=applied_request_payload,
+                **notion_kwargs,
+            )
+            result_target_id = normalized_target_id
+            result_reason = f"verified caller append applied to page {normalized_target_id}"
+            result_note = {
+                "agent_id": agent_id,
+                "operation": op,
+                "target_id": result_target_id,
+                "owner_identity": owner_identity,
+                "owner_source": owner_source,
+                "appended_children": len(applied_request_payload["children"]),
+                "actor": requested_by_actor,
+            }
+        else:
             changed_by_property = ""
             applied_request_payload = _strip_attribution_properties(payload)
             parent = page.get("parent") if isinstance(page, dict) else {}
@@ -7241,7 +8061,6 @@ def enqueue_ssot_write(
                 **notion_kwargs,
             )
             result_target_id = str(applied_payload.get("id") or "").strip() or normalized_target_id
-            result_status = "applied"
             result_reason = f"verified caller update applied to page {normalized_target_id}"
             result_note = {
                 "agent_id": agent_id,
@@ -7253,39 +8072,137 @@ def enqueue_ssot_write(
                 "actor": requested_by_actor,
             }
 
-        job_name = f"ssot-{op}-{result_target_id or secrets.token_hex(4)}"
-        note_refresh_job(
-            conn,
-            job_name=job_name,
-            job_kind="ssot-write",
-            target_id=result_target_id or agent_id,
-            schedule="manual",
-            status=result_status,
-            note=json_dumps(result_note),
+    if pending_id:
+        result_note["pending_id"] = pending_id
+    if approval_actor:
+        result_note["approval_actor"] = approval_actor
+        result_note["approval_surface"] = approval_surface
+    note_refresh_job(
+        conn,
+        job_name=f"ssot-{op}-{result_target_id or secrets.token_hex(4)}",
+        job_kind="ssot-write",
+        target_id=result_target_id or agent_id,
+        schedule="manual",
+        status="applied",
+        note=json_dumps(result_note),
+    )
+    allow_payload = dict(audit_payload)
+    if pending_id:
+        allow_payload["pending_id"] = pending_id
+    if approval_actor:
+        allow_payload["approved_by_actor"] = approval_actor
+        allow_payload["approval_surface"] = approval_surface
+    log_ssot_access_audit(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+        notion_user_id=str(identity.get("notion_user_id") or ""),
+        operation=op,
+        target_id=result_target_id,
+        decision="allow",
+        reason=result_reason,
+        actor=requested_by_actor,
+        request_payload=allow_payload,
+    )
+    return {
+        "applied": True,
+        "queued": False,
+        "agent_id": agent_id,
+        "operation": op,
+        "target_id": result_target_id,
+        "owner_identity": owner_identity,
+        "owner_source": owner_source,
+        "approval_required": False,
+        "pending_id": pending_id,
+        "notion_result": applied_payload,
+    }
+
+
+def enqueue_ssot_write(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    operation: str,
+    target_id: str,
+    payload: dict[str, Any],
+    requested_by_actor: str,
+) -> dict[str, Any]:
+    """Accept insert/update/append only. Reject archive/delete. Apply approved writes immediately."""
+    op = (operation or "").strip().lower()
+    if op in SSOT_FORBIDDEN_OPERATIONS:
+        raise PermissionError(
+            f"SSOT rail violation: operation '{op}' is not permitted; archive/delete require operator."
         )
+    if op not in SSOT_WRITE_OPERATIONS:
+        raise ValueError(
+            f"unsupported SSOT operation '{op}'; allowed: {', '.join(SSOT_WRITE_OPERATIONS)}"
+        )
+
+    settings = _require_shared_notion_settings()
+    if op in {"update", "append"} and not str(target_id or "").strip():
+        raise ValueError(f"shared Notion {op}s require a target page id")
+    notion_target = str(target_id or settings["space_id"]).strip()
+    normalized_target_id = extract_notion_space_id(notion_target)
+    audit_payload = {"operation": op, "target_id": normalized_target_id, "payload": payload}
+    try:
+        agent_row, identity = _ssot_principal(conn, agent_id)
+    except PermissionError as exc:
+        _log_ssot_principal_denial(
+            conn,
+            agent_id=agent_id,
+            operation=op,
+            target_id=normalized_target_id,
+            actor=requested_by_actor,
+            reason=str(exc),
+            request_payload=audit_payload,
+        )
+        raise
+    reason = _ssot_write_gate_reason(identity)
+    if reason:
         log_ssot_access_audit(
             conn,
             agent_id=str(agent_row["agent_id"]),
             unix_user=str(agent_row["unix_user"]),
             notion_user_id=str(identity.get("notion_user_id") or ""),
             operation=op,
-            target_id=result_target_id,
-            decision="allow",
-            reason=result_reason,
+            target_id=normalized_target_id,
+            decision="deny",
+            reason=reason,
             actor=requested_by_actor,
             request_payload=audit_payload,
         )
-        return {
-            "applied": True,
-            "queued": False,
-            "agent_id": agent_id,
-            "operation": op,
-            "target_id": result_target_id,
-            "owner_identity": owner_identity,
-            "owner_source": owner_source,
-            "approval_required": False,
-            "notion_result": applied_payload,
-        }
+        raise PermissionError(reason)
+
+    try:
+        return _apply_ssot_write(
+            conn,
+            settings=settings,
+            agent_row=agent_row,
+            identity=identity,
+            agent_id=agent_id,
+            operation=op,
+            target_id=normalized_target_id,
+            payload=payload,
+            requested_by_actor=requested_by_actor,
+            audit_payload=audit_payload,
+        )
+    except SSOTApprovalRequired as exc:
+        return _queue_ssot_write_for_approval(
+            conn,
+            cfg,
+            agent_row=agent_row,
+            identity=identity,
+            operation=op,
+            target_id=normalized_target_id,
+            payload=payload,
+            requested_by_actor=requested_by_actor,
+            request_reason=str(exc),
+            request_source=exc.owner_source or "scope-mismatch",
+            owner_identity=exc.owner_identity,
+            owner_source=exc.owner_source,
+            audit_payload=audit_payload,
+        )
     except PermissionError:
         raise
     except Exception as exc:
@@ -7319,11 +8236,277 @@ def enqueue_ssot_write(
             request_payload=audit_payload,
         )
         raise
+
+
+def approve_ssot_pending_write(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    pending_id: str,
+    surface: str,
+    actor: str,
+) -> dict[str, Any]:
+    pending_row = get_ssot_pending_write(conn, pending_id)
+    if pending_row is None:
+        raise ValueError(f"unknown pending SSOT write: {pending_id}")
+    status = str(pending_row.get("status") or "").strip().lower()
+    if status == "applied":
+        return pending_row
+    if status != "pending":
+        reason = f"pending SSOT write is not awaiting approval: {status or 'unknown'}"
+        log_ssot_access_audit(
+            conn,
+            agent_id=str(pending_row.get("agent_id") or ""),
+            unix_user=str(pending_row.get("unix_user") or ""),
+            notion_user_id=str(pending_row.get("notion_user_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            decision="deny",
+            reason=f"operator could not approve pending SSOT write {pending_id}: {reason}",
+            actor=str(actor or "").strip(),
+            request_payload={
+                "pending_id": pending_id,
+                "requested_by_actor": pending_row.get("requested_by_actor") or "",
+                "decision_surface": surface,
+            },
+        )
+        raise PermissionError(reason)
+    try:
+        agent_row, identity = _ssot_principal(conn, str(pending_row.get("agent_id") or ""))
+    except PermissionError as exc:
+        log_ssot_access_audit(
+            conn,
+            agent_id=str(pending_row.get("agent_id") or ""),
+            unix_user=str(pending_row.get("unix_user") or ""),
+            notion_user_id=str(pending_row.get("notion_user_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            decision="deny",
+            reason=f"pending SSOT write {pending_id} cannot be approved right now: {exc}",
+            actor=str(actor or "").strip(),
+            request_payload={
+                "pending_id": pending_id,
+                "requested_by_actor": pending_row.get("requested_by_actor") or "",
+                "decision_surface": surface,
+            },
+        )
+        raise
+    approval_gate_reason = _ssot_write_gate_reason(identity)
+    if approval_gate_reason:
+        reason = f"{approval_gate_reason} at approval time"
+        log_ssot_access_audit(
+            conn,
+            agent_id=str(agent_row["agent_id"]),
+            unix_user=str(agent_row["unix_user"]),
+            notion_user_id=str(identity.get("notion_user_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            decision="deny",
+            reason=f"pending SSOT write {pending_id} cannot be approved right now: {reason}",
+            actor=str(actor or "").strip(),
+            request_payload={
+                "pending_id": pending_id,
+                "requested_by_actor": pending_row.get("requested_by_actor") or "",
+                "decision_surface": surface,
+            },
+        )
+        raise PermissionError(reason)
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE ssot_pending_writes
+        SET decision_surface = ?,
+            decided_by_actor = ?,
+            decided_at = ?,
+            decision_note = 'approved'
+        WHERE pending_id = ?
+        """,
+        (str(surface or "").strip(), str(actor or "").strip(), now_iso, str(pending_id or "").strip()),
+    )
+    conn.commit()
+    try:
+        log_ssot_access_audit(
+            conn,
+            agent_id=str(agent_row["agent_id"]),
+            unix_user=str(agent_row["unix_user"]),
+            notion_user_id=str(identity.get("notion_user_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            decision="approve",
+            reason=f"operator approved pending SSOT write {pending_id}",
+            actor=str(actor or "").strip(),
+            request_payload={
+                "pending_id": pending_id,
+                "requested_by_actor": pending_row.get("requested_by_actor") or "",
+                "decision_surface": surface,
+            },
+        )
+        result = _apply_ssot_write(
+            conn,
+            settings=_require_shared_notion_settings(),
+            agent_row=agent_row,
+            identity=identity,
+            agent_id=str(pending_row.get("agent_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            payload=pending_row.get("payload") if isinstance(pending_row.get("payload"), dict) else {},
+            requested_by_actor=str(pending_row.get("requested_by_actor") or ""),
+            audit_payload={
+                "operation": str(pending_row.get("operation") or ""),
+                "target_id": str(pending_row.get("target_id") or ""),
+                "payload": pending_row.get("payload") if isinstance(pending_row.get("payload"), dict) else {},
+                "pending_id": pending_id,
+            },
+            bypass_scope=True,
+            pending_id=str(pending_id or ""),
+            approval_actor=str(actor or "").strip(),
+            approval_surface=str(surface or "").strip(),
+        )
+    except Exception as exc:
+        conn.execute(
+            """
+            UPDATE ssot_pending_writes
+            SET status = 'failed',
+                decision_note = ?,
+                apply_result_json = ?
+            WHERE pending_id = ?
+            """,
+            (
+                str(exc),
+                json_dumps({"error": str(exc)}),
+                str(pending_id or "").strip(),
+            ),
+        )
+        conn.commit()
+        log_ssot_access_audit(
+            conn,
+            agent_id=str(pending_row.get("agent_id") or ""),
+            unix_user=str(pending_row.get("unix_user") or ""),
+            notion_user_id=str(pending_row.get("notion_user_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            decision="fail",
+            reason=f"approved pending SSOT write {pending_id} failed: {exc}",
+            actor=str(actor or "").strip(),
+            request_payload={
+                "pending_id": pending_id,
+                "requested_by_actor": pending_row.get("requested_by_actor") or "",
+                "decision_surface": surface,
+            },
+        )
+        raise
+    conn.execute(
+        """
+        UPDATE ssot_pending_writes
+        SET status = 'applied',
+            applied_at = ?,
+            apply_result_json = ?
+        WHERE pending_id = ?
+        """,
+        (utc_now_iso(), json_dumps(result), str(pending_id or "").strip()),
+    )
+    conn.commit()
+    updated = get_ssot_pending_write(conn, pending_id) or {}
+    _notify_ssot_pending_write_resolution(
+        conn,
+        cfg,
+        pending_row=updated,
+        message=(
+            f"SSOT pending write {pending_id} was approved by {actor or 'operator'} "
+            f"and applied to {updated.get('target_id') or 'the requested target'}."
+        ),
+    )
+    return updated
+
+
+def deny_ssot_pending_write(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    pending_id: str,
+    surface: str,
+    actor: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    pending_row = get_ssot_pending_write(conn, pending_id)
+    if pending_row is None:
+        raise ValueError(f"unknown pending SSOT write: {pending_id}")
+    status = str(pending_row.get("status") or "").strip().lower()
+    if status == "denied":
+        return pending_row
+    if status != "pending":
+        note = f"pending SSOT write is not awaiting approval: {status or 'unknown'}"
+        log_ssot_access_audit(
+            conn,
+            agent_id=str(pending_row.get("agent_id") or ""),
+            unix_user=str(pending_row.get("unix_user") or ""),
+            notion_user_id=str(pending_row.get("notion_user_id") or ""),
+            operation=str(pending_row.get("operation") or ""),
+            target_id=str(pending_row.get("target_id") or ""),
+            decision="deny",
+            reason=f"operator could not deny pending SSOT write {pending_id}: {note}",
+            actor=str(actor or "").strip(),
+            request_payload={
+                "pending_id": pending_id,
+                "requested_by_actor": pending_row.get("requested_by_actor") or "",
+                "decision_surface": surface,
+            },
+        )
+        raise PermissionError(note)
+    note = str(reason or "").strip() or "denied"
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE ssot_pending_writes
+        SET status = 'denied',
+            decision_surface = ?,
+            decided_by_actor = ?,
+            decided_at = ?,
+            decision_note = ?
+        WHERE pending_id = ?
+        """,
+        (
+            str(surface or "").strip(),
+            str(actor or "").strip(),
+            now_iso,
+            note,
+            str(pending_id or "").strip(),
+        ),
+    )
+    conn.commit()
+    log_ssot_access_audit(
+        conn,
+        agent_id=str(pending_row.get("agent_id") or ""),
+        unix_user=str(pending_row.get("unix_user") or ""),
+        notion_user_id=str(pending_row.get("notion_user_id") or ""),
+        operation=str(pending_row.get("operation") or ""),
+        target_id=str(pending_row.get("target_id") or ""),
+        decision="deny",
+        reason=f"operator denied pending SSOT write {pending_id}: {note}",
+        actor=str(actor or "").strip(),
+        request_payload={
+            "pending_id": pending_id,
+            "requested_by_actor": pending_row.get("requested_by_actor") or "",
+            "decision_surface": surface,
+        },
+    )
+    updated = get_ssot_pending_write(conn, pending_id) or {}
+    _notify_ssot_pending_write_resolution(
+        conn,
+        cfg,
+        pending_row=updated,
+        message=(
+            f"SSOT pending write {pending_id} was denied by {actor or 'operator'}"
+            + (f": {note}" if note else ".")
+        ),
+    )
+    return updated
 def build_managed_memory_payload(
     conn: sqlite3.Connection,
     cfg: Config,
     *,
     agent_id: str,
+    notion_stub_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose the canonical managed-memory stubs for an agent.
 
@@ -7336,25 +8519,33 @@ def build_managed_memory_payload(
       [managed:notion-stub]    Curator-produced shared Notion digest + verification state
     """
     agent = conn.execute(
-        "SELECT role, unix_user, display_name, hermes_home FROM agents WHERE agent_id = ?",
+        "SELECT agent_id, role, unix_user, display_name, hermes_home FROM agents WHERE agent_id = ?",
         (agent_id,),
     ).fetchone()
     if agent is None:
         raise ValueError(f"unknown agent: {agent_id}")
 
     catalog = list_vaults(conn)
-    subs = {row["vault_name"]: dict(row) for row in subscriptions_for_agent(conn, agent_id)}
+    subscriptions = effective_subscriptions_for_agent(conn, agent_id)
+    active_subscriptions = [row["vault_name"] for row in subscriptions if bool(row.get("push_enabled"))]
     vault_root = str(cfg.vault_dir)
 
     topology_lines: list[str] = []
-    for vault in catalog:
-        sub = subs.get(vault["vault_name"])
-        subscribed = bool(sub and int(sub.get("subscribed") or 0) == 1)
-        mark = "+" if subscribed else ("·" if int(vault.get("default_subscribed") or 0) else "-")
-        brief = (vault.get("brief_template") or vault.get("description") or "").strip()
+    for subscription in subscriptions:
+        mark = "+" if bool(subscription.get("effective_subscribed")) else "-"
+        source_label = "user" if subscription.get("hierarchy_source") == "user-override" else "default"
+        default_label = "on" if int(subscription.get("default_subscribed") or 0) == 1 else "off"
+        push_label = "on" if bool(subscription.get("push_enabled")) else "off"
+        brief = (subscription.get("brief_template") or subscription.get("description") or "").strip()
         if brief:
             brief = brief.splitlines()[0][:140]
-        topology_lines.append(f"  {mark} {vault['vault_name']}: {brief}")
+        line = (
+            f"  {mark} {subscription['vault_name']}: "
+            f"source={source_label}, default={default_label}, push={push_label}"
+        )
+        if brief:
+            line += f" — {brief}"
+        topology_lines.append(line)
 
     display_name = str(agent["display_name"] or "").strip()
     agent_role = str(agent["role"] or "").strip() or "user"
@@ -7390,33 +8581,24 @@ def build_managed_memory_payload(
         "This agent works on behalf of one enrolled user inside that shared deployment."
     )
     skill_ref = (
-        "Installed Almanac skills are live defaults on this dedicated user agent."
-        " Use almanac-qmd-mcp for vault retrieval and follow-ups, almanac-vaults"
-        " for subscription, catalog, and curate-vaults work, almanac-vault-reconciler"
-        " for Almanac memory drift or repair, almanac-ssot for organization-aware"
-        " SSOT coordination in the shared Notion workspace, almanac-ssot-connect"
-        " when the user wants to link their own Notion through the official Notion"
-        " MCP flow, almanac-notion-mcp once that user-owned Notion MCP is live,"
-        " and almanac-first-contact for Almanac setup or diagnostic checks. All"
-        " vaults remain retrievable through Almanac/qmd even when a vault is"
-        " unsubscribed; subscriptions only shape managed-memory awareness and"
-        " Curator push behavior. Curator also publishes a shared Notion digest"
-        " into managed memory so the agent has ambient SSOT orientation without"
-        " live cross-user reads. First flight should already have run the initial"
-        " vault discovery and managed-memory stubbing. After that, the intended"
-        " sync rail is curator fanout -> activation trigger / refresh timer ->"
-        " user-agent-refresh -> local managed-memory stubs and recent events. Use"
-        " those stubs plus qmd for depth instead of trying to memorize the vault."
-        " Treat the skill as the workflow and guardrail layer, and the wired"
-        " broker/MCP/tool as the actuation layer. Do not decide that a rail is"
-        " unavailable just because raw env vars are absent in a chat turn; use"
-        " the installed skills, managed stubs, and Almanac-provisioned rails as"
-        " the source of truth. When a brokered action is refused, explain"
-        " whether the block is verification, ownership scope, or an unsupported"
-        " archive/delete request instead of saying the skill is missing."
-        " On a shared host, the shared deployment root may live under"
-        " /home/almanac/almanac; treat that as read-only shared infrastructure,"
-        " not another enrolled user's workspace."
+        "Current Almanac capability snapshot:\n"
+        "- Installed Almanac skills are live defaults on this dedicated user agent.\n"
+        "- Use almanac-qmd-mcp for vault retrieval and follow-ups.\n"
+        "- Use almanac-vaults for subscription, catalog, and curate-vaults work.\n"
+        "- Use almanac-vault-reconciler for Almanac memory drift or repair.\n"
+        "- Use almanac-ssot for organization-aware SSOT coordination in the shared Notion workspace.\n"
+        "- Use almanac-ssot-connect only when the user wants to link their own Notion through the official Notion MCP flow.\n"
+        "- Use almanac-notion-mcp only after that user-owned Notion MCP is actually live.\n"
+        "- Use almanac-first-contact for Almanac setup or diagnostic checks.\n"
+        "- All vaults remain retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions only shape managed-memory awareness and Curator push behavior.\n"
+        "- Curator publishes a shared Notion digest into managed memory so the agent has ambient SSOT orientation without live cross-user reads.\n"
+        "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local managed-memory stubs and recent events.\n"
+        "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
+        "- Treat the skill as the workflow and guardrail layer, and the wired broker/MCP/tool as the actuation layer.\n"
+        "- Human-facing completion or onboarding messages may omit machine-facing MCP/control rails for simplicity; [managed:resource-ref] is the authoritative map of the rails that this agent can try.\n"
+        "- Do not decide that a rail is unavailable just because raw env vars are absent in a chat turn; use the installed skills, managed stubs, and Almanac-provisioned rails as the source of truth.\n"
+        "- When a brokered action is refused, explain whether the block is verification, ownership scope, or an unsupported archive/delete request instead of saying the skill is missing.\n"
+        "- On a shared host, the shared deployment root may live under /home/almanac/almanac; treat that as read-only shared infrastructure, not another enrolled user's workspace."
     )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
@@ -7424,10 +8606,11 @@ def build_managed_memory_payload(
         "'vault-pdf-ingest' collection when present for PDF-derived markdown.\n"
         "Use almanac-ssot when the task is about organization state, Notion,\n"
         "or user-scoped SSOT updates; use qmd when the task is about vault depth.\n"
-        "Never browse other users' home directories for Almanac context.\n"
         "Use the already wired MCP endpoints and agent-local Almanac state for\n"
-        "site context. Do not read central deployment secrets such as\n"
-        "almanac.env or source common.sh from a user-agent session."
+        "site context even when a human-facing message leaves those rail URLs out.\n"
+        "Never browse other users' home directories for Almanac context.\n"
+        "Do not read central deployment secrets such as almanac.env or source\n"
+        "common.sh from a user-agent session."
     )
     resource_ref = managed_resource_ref(
         access=access_state,
@@ -7447,12 +8630,18 @@ def build_managed_memory_payload(
             ),
         ),
     )
-    topology = "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n" + "\n".join(
-        topology_lines
+    topology = (
+        "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n"
+        + "\n".join(topology_lines)
     )
-    notion_stub = _build_notion_stub(conn, agent_row=agent, identity=identity)
+    notion_stub = _build_notion_stub(
+        conn,
+        agent_row=agent,
+        identity=identity,
+        notion_stub_cache=notion_stub_cache,
+    )
 
-    return {
+    payload = {
         "agent_id": agent_id,
         "almanac-skill-ref": skill_ref,
         "vault-ref": vault_ref,
@@ -7461,30 +8650,57 @@ def build_managed_memory_payload(
         "vault-topology": topology,
         "notion-stub": notion_stub,
         "catalog": catalog,
-        "subscriptions": [dict(s) for s in subs.values()],
+        "subscriptions": subscriptions,
+        "active_subscriptions": active_subscriptions,
     }
+    payload["managed_memory_revision"] = _compute_managed_memory_revision(payload)
+    payload["managed_payload_cache_key"] = _compute_managed_payload_cache_key(payload)
+    return payload
 
 
 _MEMORY_ENTRY_DELIMITER = "\n§\n"
 _MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "resource-ref", "qmd-ref", "vault-topology", "notion-stub")
 _MANAGED_MEMORY_PREFIXES = tuple(f"[managed:{key}]" for key in _MANAGED_MEMORY_KEYS)
+_MANAGED_PAYLOAD_CACHE_KEYS = ("agent_id", *_MANAGED_MEMORY_KEYS, "catalog", "subscriptions", "active_subscriptions")
 
 
-def _read_memory_entries(path: Path) -> list[str]:
+def _compute_managed_memory_revision(payload: dict[str, Any]) -> str:
+    material = {
+        key: str(payload.get(key) or "").strip()
+        for key in _MANAGED_MEMORY_KEYS
+    }
+    blob = json.dumps(material, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _compute_managed_payload_cache_key(payload: dict[str, Any]) -> str:
+    material = {
+        key: payload.get(key)
+        for key in _MANAGED_PAYLOAD_CACHE_KEYS
+    }
+    blob = json.dumps(material, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _read_text_file(path: Path) -> str:
     if not path.exists():
-        return []
+        return ""
     try:
-        raw = path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except OSError:
-        return []
+        return ""
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    raw = _read_text_file(path)
     if not raw.strip():
-        return []
-    return [entry.strip() for entry in raw.split(_MEMORY_ENTRY_DELIMITER) if entry.strip()]
+        return {}
+    payload = json_loads(raw, {})
+    return payload if isinstance(payload, dict) else {}
 
 
-def _write_memory_entries(path: Path, entries: list[str]) -> None:
+def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = _MEMORY_ENTRY_DELIMITER.join(entries) if entries else ""
     fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix=".almanac-memory-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -7498,6 +8714,21 @@ def _write_memory_entries(path: Path, entries: list[str]) -> None:
         except OSError:
             pass
         raise
+
+
+def _read_memory_entries(path: Path) -> list[str]:
+    raw = _read_text_file(path)
+    if not raw.strip():
+        return []
+    return [entry.strip() for entry in raw.split(_MEMORY_ENTRY_DELIMITER) if entry.strip()]
+
+
+def _render_memory_entries(entries: list[str]) -> str:
+    return _MEMORY_ENTRY_DELIMITER.join(entries) if entries else ""
+
+
+def _write_memory_entries(path: Path, entries: list[str]) -> None:
+    _atomic_write_text(path, _render_memory_entries(entries))
 
 
 def _managed_memory_entries(payload: dict[str, Any]) -> list[str]:
@@ -7514,7 +8745,7 @@ def write_managed_memory_stubs(
     *,
     hermes_home: Path,
     payload: dict[str, Any],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Idempotently write the managed-memory stubs into an agent's
     HERMES_HOME. Three artefacts are produced:
 
@@ -7559,6 +8790,14 @@ def write_managed_memory_stubs(
         "notion-stub",
         "Shared Notion digest:\n- Curator has not published a Notion digest into managed memory yet.",
     )
+    payload.setdefault("managed_memory_revision", _compute_managed_memory_revision(payload))
+    payload.setdefault("active_subscriptions", [
+        str(row.get("vault_name") or "")
+        for row in payload.get("subscriptions", [])
+        if bool(row.get("push_enabled")) or int(row.get("subscribed") or 0) == 1
+    ])
+    payload.setdefault("managed_payload_cache_key", _compute_managed_payload_cache_key(payload))
+
     state_dir = hermes_home / "state"
     memories_dir = hermes_home / "memories"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -7566,26 +8805,29 @@ def write_managed_memory_stubs(
 
     now = utc_now_iso()
     state_path = state_dir / "almanac-vault-reconciler.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "agent_id": payload["agent_id"],
-                "almanac-skill-ref": payload["almanac-skill-ref"],
-                "vault-ref": payload["vault-ref"],
-                "resource-ref": payload["resource-ref"],
-                "qmd-ref": payload["qmd-ref"],
-                "vault-topology": payload["vault-topology"],
-                "notion-stub": payload.get("notion-stub") or "",
-                "catalog": payload["catalog"],
-                "subscriptions": payload["subscriptions"],
-                "updated_at": now,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    state_payload = {
+        "agent_id": payload["agent_id"],
+        "almanac-skill-ref": payload["almanac-skill-ref"],
+        "vault-ref": payload["vault-ref"],
+        "resource-ref": payload["resource-ref"],
+        "qmd-ref": payload["qmd-ref"],
+        "vault-topology": payload["vault-topology"],
+        "notion-stub": payload.get("notion-stub") or "",
+        "managed_memory_revision": str(payload["managed_memory_revision"]),
+        "managed_payload_cache_key": str(payload["managed_payload_cache_key"]),
+        "catalog": payload["catalog"],
+        "subscriptions": payload["subscriptions"],
+        "active_subscriptions": payload.get("active_subscriptions") or [],
+        "updated_at": now,
+    }
+    existing_state = _read_json_dict(state_path)
+    existing_state_key = str(
+        existing_state.get("managed_payload_cache_key")
+        or (_compute_managed_payload_cache_key(existing_state) if existing_state else "")
     )
+    state_changed = (not state_path.is_file()) or existing_state_key != state_payload["managed_payload_cache_key"]
+    if state_changed:
+        _atomic_write_text(state_path, json.dumps(state_payload, indent=2, sort_keys=True) + "\n")
 
     stub_path = memories_dir / "almanac-managed-stubs.md"
     body = (
@@ -7597,10 +8839,11 @@ def write_managed_memory_stubs(
         f"## [managed:resource-ref]\n\n{payload['resource-ref']}\n\n"
         f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
         f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
-        f"## [managed:notion-stub]\n\n{payload.get('notion-stub') or ''}\n\n"
-        f"_updated_at: {now}_\n"
+        f"## [managed:notion-stub]\n\n{payload.get('notion-stub') or ''}\n"
     )
-    stub_path.write_text(body, encoding="utf-8")
+    stub_changed = _read_text_file(stub_path) != body
+    if stub_changed:
+        _atomic_write_text(stub_path, body)
 
     memory_path = memories_dir / "MEMORY.md"
     existing_entries = _read_memory_entries(memory_path)
@@ -7609,12 +8852,19 @@ def write_managed_memory_stubs(
         for entry in existing_entries
         if not any(entry.lstrip().startswith(prefix) for prefix in _MANAGED_MEMORY_PREFIXES)
     ]
-    _write_memory_entries(memory_path, filtered_entries + _managed_memory_entries(payload))
+    desired_memory_content = _render_memory_entries(filtered_entries + _managed_memory_entries(payload))
+    memory_changed = _read_text_file(memory_path) != desired_memory_content
+    if memory_changed:
+        _atomic_write_text(memory_path, desired_memory_content)
 
     return {
         "state_path": str(state_path),
         "stub_path": str(stub_path),
         "memory_path": str(memory_path),
+        "state_changed": state_changed,
+        "stub_changed": stub_changed,
+        "memory_changed": memory_changed,
+        "changed": state_changed or stub_changed or memory_changed,
     }
 
 
@@ -7627,23 +8877,40 @@ def publish_central_managed_memory(
     cfg: Config,
     *,
     agent_id: str,
-) -> Path:
+    notion_stub_cache: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Write the agent's managed-memory payload into the shared state dir so
     the user-agent-refresh worker (running as the enrollment user) can read
     the curator's latest view without crossing uid boundaries."""
-    payload = build_managed_memory_payload(conn, cfg, agent_id=agent_id)
+    payload = build_managed_memory_payload(
+        conn,
+        cfg,
+        agent_id=agent_id,
+        notion_stub_cache=notion_stub_cache,
+    )
     out_path = _central_managed_payload_path(cfg, agent_id)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps({**payload, "updated_at": utc_now_iso()}, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+
+    existing_payload = _read_json_dict(out_path)
+    existing_cache_key = str(
+        existing_payload.get("managed_payload_cache_key")
+        or (_compute_managed_payload_cache_key(existing_payload) if existing_payload else "")
     )
+    changed = (not out_path.is_file()) or existing_cache_key != str(payload["managed_payload_cache_key"])
+    if changed:
+        _atomic_write_text(out_path, json.dumps({**payload, "updated_at": utc_now_iso()}, indent=2, sort_keys=True) + "\n")
+
     # world-readable so the enrollment user can read it without ACL fuss.
     try:
         out_path.chmod(0o644)
     except PermissionError:
         pass
-    return out_path
+    return {
+        "path": str(out_path),
+        "changed": changed,
+        "managed_memory_revision": str(payload["managed_memory_revision"]),
+        "managed_payload_cache_key": str(payload["managed_payload_cache_key"]),
+    }
 
 
 def signal_agent_refresh_from_curator(
@@ -7686,54 +8953,136 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
     payload on its next run (every 4h or on agent boot) and writes it into the
     user's own HERMES_HOME. This respects the uid boundary between curator and
     user agents."""
-    rows = conn.execute(
+    now_iso = utc_now_iso()
+    due_rows = conn.execute(
         """
-        SELECT id, target_id, message
+        SELECT id, target_id, message, next_attempt_at, attempt_count
         FROM notification_outbox
         WHERE delivered_at IS NULL
           AND target_kind = 'curator'
           AND channel_kind = 'brief-fanout'
+          AND (next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)
+        ORDER BY id ASC
+        """,
+        (now_iso,),
+    ).fetchall()
+
+    expanded_notifications = 0
+    expanded_agents = 0
+    catalog_events: list[str] = []
+    global_rows = [
+        row for row in due_rows
+        if str(row["target_id"] or "").strip() in {"", "curator"}
+    ]
+    if global_rows:
+        active_agents = [
+            str(agent["agent_id"] or "").strip()
+            for agent in conn.execute(
+                "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active'"
+            ).fetchall()
+        ]
+        for row in global_rows:
+            expanded_notifications += 1
+            catalog_events.append(str(row["message"] or ""))
+            for agent_id in active_agents:
+                if not agent_id:
+                    continue
+                _queue_curator_fanout_agent_notification(
+                    conn,
+                    agent_id=agent_id,
+                    message=str(row["message"] or ""),
+                    source_notification_id=int(row["id"]),
+                )
+                expanded_agents += 1
+        conn.executemany(
+            """
+            UPDATE notification_outbox
+            SET delivered_at = ?, delivery_error = NULL
+            WHERE id = ?
+            """,
+            [(now_iso, int(row["id"])) for row in global_rows],
+        )
+        conn.commit()
+
+    agent_rows = conn.execute(
+        """
+        SELECT id, target_id, message, next_attempt_at, attempt_count
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'curator'
+          AND channel_kind = 'brief-fanout'
+          AND target_id NOT IN ('', 'curator')
         ORDER BY id ASC
         """
     ).fetchall()
 
-    regen_targets: set[str] = set()
-    catalog_events: list[str] = []
-    for row in rows:
-        target = str(row["target_id"])
-        if target in ("", "curator"):
-            for agent in conn.execute(
-                "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active'"
-            ):
-                regen_targets.add(str(agent["agent_id"]))
-            catalog_events.append(row["message"] or "")
-        else:
-            regen_targets.add(target)
-
-    published: list[dict[str, str]] = []
+    published: list[dict[str, Any]] = []
     failures: list[str] = []
-    for agent_id in sorted(regen_targets):
+    cache_hits = 0
+    refresh_signals = 0
+    processed_notifications = len(global_rows)
+    notion_stub_cache: dict[str, Any] = {}
+    rows_by_agent: dict[str, list[sqlite3.Row]] = {}
+    for row in agent_rows:
+        agent_id = str(row["target_id"] or "").strip()
+        if not agent_id:
+            continue
+        rows_by_agent.setdefault(agent_id, []).append(row)
+
+    for agent_id in sorted(rows_by_agent):
+        grouped_rows = rows_by_agent[agent_id]
+        if not any(_notification_due_now(str(row["next_attempt_at"] or "")) for row in grouped_rows):
+            continue
+        processed_notifications += len(grouped_rows)
         try:
-            path = publish_central_managed_memory(conn, cfg, agent_id=agent_id)
-            trigger_path = signal_agent_refresh_from_curator(
+            publish_result = publish_central_managed_memory(
                 conn,
                 cfg,
                 agent_id=agent_id,
-                note="curator brief-fanout: refresh managed memory stubs",
+                notion_stub_cache=notion_stub_cache,
             )
-            published_payload = {"agent_id": agent_id, "path": str(path)}
-            if trigger_path is not None:
-                published_payload["activation_trigger_path"] = str(trigger_path)
+            published_payload = {"agent_id": agent_id, **publish_result}
+            if bool(publish_result.get("changed")):
+                trigger_path = signal_agent_refresh_from_curator(
+                    conn,
+                    cfg,
+                    agent_id=agent_id,
+                    note="curator brief-fanout: refresh managed memory stubs",
+                )
+                if trigger_path is not None:
+                    published_payload["activation_trigger_path"] = str(trigger_path)
+                    refresh_signals += 1
+            else:
+                cache_hits += 1
             published.append(published_payload)
+            conn.executemany(
+                """
+                UPDATE notification_outbox
+                SET delivered_at = ?, delivery_error = NULL
+                WHERE id = ?
+                """,
+                [(utc_now_iso(), int(row["id"])) for row in grouped_rows],
+            )
+            conn.commit()
         except Exception as exc:  # noqa: BLE001
-            failures.append(f"{agent_id}:{exc}")
-
-    if rows:
-        conn.executemany(
-            "UPDATE notification_outbox SET delivered_at = ? WHERE id = ?",
-            [(utc_now_iso(), int(r["id"])) for r in rows],
-        )
-        conn.commit()
+            attempts = _record_curator_fanout_retry(
+                conn,
+                cfg,
+                notification_ids=[int(row["id"]) for row in grouped_rows],
+                error_message=str(exc),
+            )
+            retry_at = conn.execute(
+                """
+                SELECT next_attempt_at
+                FROM notification_outbox
+                WHERE id = ?
+                """,
+                (int(grouped_rows[0]["id"]),),
+            ).fetchone()
+            retry_label = format_utc_iso_brief(str(retry_at["next_attempt_at"] or "")) if retry_at is not None else ""
+            failures.append(
+                f"{agent_id}:{exc} (attempt {attempts}; retry {retry_label or 'scheduled'})"
+            )
 
     note_refresh_job(
         conn,
@@ -7742,13 +9091,22 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
         target_id="curator",
         schedule="on-demand",
         status="ok" if not failures else "warn",
-        note=f"published {len(published)} central payload(s); failures={len(failures)}",
+        note=(
+            f"processed_notifications={processed_notifications}; "
+            f"expanded_notifications={expanded_notifications}; "
+            f"published {len(published)} central payload(s); "
+            f"cache_hits={cache_hits}; refresh_signals={refresh_signals}; failures={len(failures)}"
+        ),
     )
     return {
-        "processed_notifications": len(rows),
+        "processed_notifications": processed_notifications,
+        "expanded_notifications": expanded_notifications,
+        "expanded_agents": expanded_agents,
         "published_agents": published,
         "failures": failures,
         "catalog_events": catalog_events,
+        "cache_hits": cache_hits,
+        "refresh_signals": refresh_signals,
     }
 
 

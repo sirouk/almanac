@@ -247,7 +247,12 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                     f"published {summary['curator_fanout_agents']} payload(s)\n"
                 )
 
-        rows = fetch_undelivered_notifications(conn, limit=limit, include_user_agent=False)
+        rows = fetch_undelivered_notifications(
+            conn,
+            limit=limit,
+            include_user_agent=False,
+            include_curator=False,
+        )
 
         for row in rows:
             summary["processed"] += 1

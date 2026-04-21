@@ -24,12 +24,14 @@ from almanac_nextcloud_access import delete_nextcloud_user_access
 from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
     Config,
+    approve_ssot_pending_write,
     approve_request,
     archive_agent_files,
     cancel_auto_provision_request,
     config_env_value,
     connect_db,
     deny_request,
+    deny_ssot_pending_write,
     deny_onboarding_session,
     ensure_unix_user_ready,
     ensure_config_file_update,
@@ -39,6 +41,7 @@ from almanac_control import (
     get_notion_identity_override,
     get_onboarding_session,
     get_setting,
+    get_ssot_pending_write,
     hash_token,
     list_agents,
     list_agent_identities,
@@ -48,6 +51,7 @@ from almanac_control import (
     list_notion_identity_overrides,
     list_requests,
     list_ssot_access_audit,
+    list_ssot_pending_writes,
     list_tokens,
     list_vault_warnings,
     list_vaults,
@@ -122,6 +126,24 @@ def parse_args() -> argparse.Namespace:
     onboarding_deny.add_argument("session_id")
     onboarding_deny.add_argument("--actor", default=os.environ.get("USER", "operator"))
     onboarding_deny.add_argument("--reason", default="")
+
+    ssot = subparsers.add_parser("ssot")
+    ssot_sub = ssot.add_subparsers(dest="action", required=True)
+    ssot_list = ssot_sub.add_parser("list")
+    ssot_list.add_argument("--status", default="pending")
+    ssot_list.add_argument("--agent-id", default="")
+    ssot_list.add_argument("--limit", type=int, default=100)
+    ssot_show = ssot_sub.add_parser("show")
+    ssot_show.add_argument("pending_id")
+    ssot_approve = ssot_sub.add_parser("approve")
+    ssot_approve.add_argument("pending_id")
+    ssot_approve.add_argument("--surface", default="ctl")
+    ssot_approve.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    ssot_deny = ssot_sub.add_parser("deny")
+    ssot_deny.add_argument("pending_id")
+    ssot_deny.add_argument("--surface", default="ctl")
+    ssot_deny.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    ssot_deny.add_argument("--reason", default="")
 
     agent = subparsers.add_parser("agent")
     agent_sub = agent.add_subparsers(dest="action", required=True)
@@ -1543,6 +1565,49 @@ def main() -> None:
             )
             send_session_message(cfg, session, f"The operator declined this onboarding request: {session.get('denial_reason') or 'denied'}")
             dump_output(args, session)
+            return
+
+        if args.domain == "ssot" and args.action == "list":
+            dump_output(
+                args,
+                list_ssot_pending_writes(
+                    conn,
+                    status=args.status,
+                    agent_id=args.agent_id,
+                    limit=args.limit,
+                ),
+            )
+            return
+        if args.domain == "ssot" and args.action == "show":
+            pending = get_ssot_pending_write(conn, args.pending_id)
+            if pending is None:
+                raise SystemExit(f"unknown pending SSOT write: {args.pending_id}")
+            dump_output(args, pending)
+            return
+        if args.domain == "ssot" and args.action == "approve":
+            dump_output(
+                args,
+                approve_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=args.pending_id,
+                    surface=args.surface,
+                    actor=args.actor,
+                ),
+            )
+            return
+        if args.domain == "ssot" and args.action == "deny":
+            dump_output(
+                args,
+                deny_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=args.pending_id,
+                    surface=args.surface,
+                    actor=args.actor,
+                    reason=args.reason,
+                ),
+            )
             return
 
         if args.domain == "agent" and args.action == "list":

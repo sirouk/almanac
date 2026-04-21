@@ -10,11 +10,13 @@ from typing import Any
 
 from almanac_control import (
     Config,
+    approve_ssot_pending_write,
     approve_request,
     approve_onboarding_session,
     clear_onboarding_update_failure,
     connect_db,
     deny_request,
+    deny_ssot_pending_write,
     deny_onboarding_session,
     get_onboarding_session,
     request_operator_action,
@@ -157,7 +159,7 @@ def _handle_operator_command(
             send_text(
                 bot_token,
                 operator_chat_id,
-                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, or /deny req_xxx.",
+                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, or /deny ssotw_xxx optional reason.",
             )
         return
     target_id = parts[1].strip()
@@ -188,6 +190,27 @@ def _handle_operator_command(
                 send_text(bot_token, operator_chat_id, f"Approved {target_id}.")
                 return
             deny_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
+            send_text(bot_token, operator_chat_id, f"Denied {target_id}.")
+            return
+        if target_id.startswith("ssotw_"):
+            if command == "/approve":
+                approve_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=target_id,
+                    surface="curator-channel",
+                    actor=actor,
+                )
+                send_text(bot_token, operator_chat_id, f"Approved {target_id}.")
+                return
+            deny_ssot_pending_write(
+                conn,
+                cfg,
+                pending_id=target_id,
+                surface="curator-channel",
+                actor=actor,
+                reason=parts[2].strip() if len(parts) > 2 else "",
+            )
             send_text(bot_token, operator_chat_id, f"Denied {target_id}.")
             return
         send_text(bot_token, operator_chat_id, f"Unknown approval target: {target_id}")
@@ -415,6 +438,29 @@ def _handle_operator_callback(
                     replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
                 else:
                     visible_reply = result_text
+            elif scope == "ssot" and target_id.startswith("ssotw_"):
+                if action == "approve":
+                    approve_ssot_pending_write(
+                        conn,
+                        cfg,
+                        pending_id=target_id,
+                        surface="curator-channel",
+                        actor=actor,
+                    )
+                    result_text = f"Approved {target_id}."
+                elif action == "deny":
+                    deny_ssot_pending_write(
+                        conn,
+                        cfg,
+                        pending_id=target_id,
+                        surface="curator-channel",
+                        actor=actor,
+                        reason="",
+                    )
+                    result_text = f"Denied {target_id}."
+                else:
+                    raise ValueError(f"unknown ssot action: {action}")
+                replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip() if message_text else result_text
             elif scope == "upgrade":
                 if action == "dismiss":
                     upsert_setting(conn, "almanac_upgrade_last_dismissed_sha", target_id)

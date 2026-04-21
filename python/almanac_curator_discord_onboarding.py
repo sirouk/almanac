@@ -7,9 +7,11 @@ import sys
 
 from almanac_control import (
     Config,
+    approve_ssot_pending_write,
     approve_onboarding_session,
     approve_request,
     connect_db,
+    deny_ssot_pending_write,
     deny_onboarding_session,
     deny_request,
     get_onboarding_session,
@@ -125,6 +127,25 @@ async def main() -> None:
                     approve_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
                     return f"Approved {target_id}."
                 deny_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
+                return f"Denied {target_id}."
+            if target_id.startswith("ssotw_"):
+                if normalized_action == "approve":
+                    approve_ssot_pending_write(
+                        conn,
+                        cfg,
+                        pending_id=target_id,
+                        surface="curator-channel",
+                        actor=actor,
+                    )
+                    return f"Approved {target_id}."
+                deny_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=target_id,
+                    surface="curator-channel",
+                    actor=actor,
+                    reason=reason.strip(),
+                )
                 return f"Denied {target_id}."
             if normalized_action in {"install", "dismiss"}:
                 if normalized_action == "dismiss":
@@ -275,7 +296,7 @@ async def main() -> None:
             return False
         if len(parts) < 2:
             await message.channel.send(
-                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, or /deny req_xxx."
+                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, or /deny ssotw_xxx optional reason."
             )
             return True
 
@@ -310,8 +331,8 @@ async def main() -> None:
     async def verify_notion_command(interaction) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, "/verify-notion")
 
-    @tree.command(name="approve", description="Approve an onboarding session or provisioning request.")
-    @app_commands.describe(target_id="onb_xxx or req_xxx")
+    @tree.command(name="approve", description="Approve an onboarding session, provisioning request, or pending SSOT write.")
+    @app_commands.describe(target_id="onb_xxx, req_xxx, or ssotw_xxx")
     async def approve_command(interaction, target_id: str) -> None:  # type: ignore[no-untyped-def]
         if not await _ensure_operator_channel(interaction):
             return
@@ -320,8 +341,8 @@ async def main() -> None:
             _run_operator_action(target_id=target_id.strip(), action="approve", actor=actor)
         )
 
-    @tree.command(name="deny", description="Deny an onboarding session or provisioning request.")
-    @app_commands.describe(target_id="onb_xxx or req_xxx", reason="Optional deny reason for onboarding sessions")
+    @tree.command(name="deny", description="Deny an onboarding session, provisioning request, or pending SSOT write.")
+    @app_commands.describe(target_id="onb_xxx, req_xxx, or ssotw_xxx", reason="Optional deny reason")
     async def deny_command(interaction, target_id: str, reason: str = "") -> None:  # type: ignore[no-untyped-def]
         if not await _ensure_operator_channel(interaction):
             return
@@ -385,17 +406,16 @@ async def main() -> None:
             return
         data = getattr(interaction, "data", {}) or {}
         custom_id = str(data.get("custom_id") or "").strip()
-        upgrade_prefix = "almanac:upgrade:"
-        if custom_id.startswith(upgrade_prefix):
+        if custom_id.startswith("almanac:upgrade:") or custom_id.startswith("almanac:ssot:"):
             if not await _ensure_operator_channel(interaction):
                 return
             try:
                 _, scope, action, target_id = custom_id.split(":", 3)
             except ValueError:
-                await interaction.response.send_message("That upgrade action is malformed.", ephemeral=True)
+                await interaction.response.send_message("That operator action is malformed.", ephemeral=True)
                 return
-            if scope != "upgrade" or not target_id:
-                await interaction.response.send_message("That upgrade action is malformed.", ephemeral=True)
+            if scope not in {"upgrade", "ssot"} or not target_id:
+                await interaction.response.send_message("That operator action is malformed.", ephemeral=True)
                 return
             actor = _format_actor_label(interaction.user)
             result_text = _run_operator_action(target_id=target_id, action=action, actor=actor)

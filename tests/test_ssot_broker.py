@@ -94,6 +94,29 @@ def insert_agent(mod, conn, *, agent_id: str, unix_user: str, display_name: str 
     conn.commit()
 
 
+def test_connect_db_enables_sqlite_wal_and_busy_timeout() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_sqlite_pragmas_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            synchronous = conn.execute("PRAGMA synchronous").fetchone()[0]
+            expect(str(journal_mode).lower() == "wal", f"expected WAL journal mode, got {journal_mode!r}")
+            expect(int(busy_timeout) == 5000, f"expected busy_timeout=5000, got {busy_timeout!r}")
+            expect(int(synchronous) == 1, f"expected synchronous=NORMAL (1), got {synchronous!r}")
+            print("PASS test_connect_db_enables_sqlite_wal_and_busy_timeout")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_ssot_read_denies_database_query_until_verified() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_ssot_read_deny_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -636,6 +659,91 @@ def test_ssot_write_applies_verified_owned_update() -> None:
             os.environ.update(old_env)
 
 
+def test_ssot_write_applies_verified_owned_append() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_append_apply_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "properties": {
+                    "Owner": {
+                        "people": [
+                            {
+                                "id": "11111111-1111-1111-1111-111111111111",
+                                "name": "Chris",
+                            }
+                        ]
+                    }
+                },
+            }
+            append_calls: list[dict] = []
+
+            def fake_append(**kwargs):
+                append_calls.append(kwargs)
+                return {
+                    "results": kwargs["payload"]["children"],
+                }
+
+            mod.append_notion_block_children = fake_append
+            result = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="append",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={
+                    "children": [
+                        {
+                            "object": "block",
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [
+                                    {
+                                        "type": "text",
+                                        "text": {"content": "Quick status note"},
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+                requested_by_actor="agent-sirouk",
+            )
+            expect(result["applied"] is True, result)
+            expect(result["queued"] is False, result)
+            expect(len(append_calls) == 1, str(append_calls))
+            expect(append_calls[0]["block_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", str(append_calls))
+            expect(len(append_calls[0]["payload"]["children"]) == 1, str(append_calls[0]["payload"]))
+            audit = conn.execute(
+                "SELECT decision, operation FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            expect(audit is not None and audit["decision"] == "allow", str(dict(audit) if audit else {}))
+            expect(audit["operation"] == "append", str(dict(audit)))
+            print("PASS test_ssot_write_applies_verified_owned_append")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_ssot_write_applies_verified_owned_insert() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_ssot_insert_apply_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -710,6 +818,236 @@ def test_ssot_write_applies_verified_owned_insert() -> None:
             ).fetchone()
             expect(audit is not None and audit["decision"] == "allow", str(dict(audit) if audit else {}))
             print("PASS test_ssot_write_applies_verified_owned_insert")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_write_allows_page_update_from_prior_agent_history() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_page_history_update_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.log_ssot_access_audit(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                decision="allow",
+                reason="prior brokered write",
+                actor="agent-sirouk",
+                request_payload={},
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "created_by": {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "name": "Somebody Else",
+                },
+                "last_edited_by": {
+                    "id": "99999999-9999-9999-9999-999999999999",
+                    "type": "bot",
+                },
+                "properties": {},
+            }
+            update_calls: list[dict] = []
+
+            def fake_update_notion_page(**kwargs):
+                update_calls.append(kwargs)
+                return {"id": kwargs["page_id"], "properties": kwargs["payload"].get("properties", {})}
+
+            mod.update_notion_page = fake_update_notion_page
+            result = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "In Progress"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            expect(result["applied"] is True, result)
+            expect(result["owner_source"] == "agent-write-history", str(result))
+            expect(len(update_calls) == 1, str(update_calls))
+            print("PASS test_ssot_write_allows_page_update_from_prior_agent_history")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_write_queues_prior_agent_history_when_page_has_other_owner() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_page_history_owner_guard_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.log_ssot_access_audit(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                decision="allow",
+                reason="prior brokered write",
+                actor="agent-sirouk",
+                request_payload={},
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "properties": {
+                    "Owner": {
+                        "people": [
+                            {
+                                "id": "22222222-2222-2222-2222-222222222222",
+                                "name": "Somebody Else",
+                            }
+                        ]
+                    }
+                },
+                "last_edited_by": {
+                    "id": "99999999-9999-9999-9999-999999999999",
+                    "type": "bot",
+                },
+            }
+            result = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            expect(result["applied"] is False, result)
+            expect(result["queued"] is True, result)
+            expect(result["approval_required"] is True, result)
+            expect(str(result["pending_id"]).startswith("ssotw_"), result)
+            pending = conn.execute(
+                "SELECT status, owner_source FROM ssot_pending_writes WHERE pending_id = ?",
+                (str(result["pending_id"]),),
+            ).fetchone()
+            expect(pending is not None and pending["status"] == "pending", str(dict(pending) if pending else {}))
+            expect(pending["owner_source"] == "ownership-mismatch", str(dict(pending)))
+            audit = conn.execute(
+                "SELECT decision FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            expect(audit is not None and audit["decision"] == "queue", str(dict(audit) if audit else {}))
+            print("PASS test_ssot_write_queues_prior_agent_history_when_page_has_other_owner")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_write_queues_insert_under_out_of_scope_parent_page() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_page_parent_insert_scope_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.resolve_notion_target = lambda **kwargs: {
+                "kind": "page",
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            }
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "created_by": {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "name": "Somebody Else",
+                },
+                "last_edited_by": {
+                    "id": "99999999-9999-9999-9999-999999999999",
+                    "type": "bot",
+                },
+                "properties": {},
+            }
+
+            def boom(**kwargs):
+                raise AssertionError("expected page-scoped insert to stop before create_notion_page")
+
+            mod.create_notion_page = boom
+            result = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="insert",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={
+                    "properties": {
+                        "Owner": {"people": [{"id": "11111111-1111-1111-1111-111111111111"}]}
+                    }
+                },
+                requested_by_actor="agent-sirouk",
+            )
+            expect(result["applied"] is False, result)
+            expect(result["queued"] is True, result)
+            expect(result["approval_required"] is True, result)
+            audit = conn.execute(
+                "SELECT decision, reason FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            expect(audit is not None and audit["decision"] == "queue", str(dict(audit) if audit else {}))
+            expect("parent page is outside" in str(audit["reason"]).lower(), str(dict(audit)))
+            pending = conn.execute(
+                "SELECT status, owner_source FROM ssot_pending_writes WHERE pending_id = ?",
+                (str(result["pending_id"]),),
+            ).fetchone()
+            expect(pending is not None and pending["status"] == "pending", str(dict(pending) if pending else {}))
+            expect(pending["owner_source"] == "page-parent-ownership-mismatch", str(dict(pending)))
+            print("PASS test_ssot_write_queues_insert_under_out_of_scope_parent_page")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -946,7 +1284,7 @@ def test_ssot_read_denies_suspended_identity() -> None:
             os.environ.update(old_env)
 
 
-def test_ssot_write_denies_cross_owner_update() -> None:
+def test_ssot_write_queues_cross_owner_update() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_ssot_write_cross_owner_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -982,25 +1320,448 @@ def test_ssot_write_denies_cross_owner_update() -> None:
                     }
                 },
             }
-            try:
-                mod.enqueue_ssot_write(
-                    conn,
-                    cfg,
-                    agent_id="agent-sirouk",
-                    operation="update",
-                    target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                    payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
-                    requested_by_actor="agent-sirouk",
-                )
-            except PermissionError as exc:
-                expect("outside the verified caller" in str(exc).lower(), str(exc))
-            else:
-                raise AssertionError("expected cross-owner write to be denied")
+            result = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            expect(result["applied"] is False, result)
+            expect(result["queued"] is True, result)
+            expect(result["approval_required"] is True, result)
             audit = conn.execute(
                 "SELECT decision FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
             ).fetchone()
+            expect(audit is not None and audit["decision"] == "queue", str(dict(audit) if audit else {}))
+            pending = conn.execute(
+                "SELECT status, owner_source FROM ssot_pending_writes WHERE pending_id = ?",
+                (str(result["pending_id"]),),
+            ).fetchone()
+            expect(pending is not None and pending["status"] == "pending", str(dict(pending) if pending else {}))
+            expect(pending["owner_source"] == "ownership-mismatch", str(dict(pending)))
+            print("PASS test_ssot_write_queues_cross_owner_update")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_pending_write_approval_applies_queued_update() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_approve_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            page_payload = {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "properties": {
+                    "Owner": {
+                        "people": [
+                            {
+                                "id": "22222222-2222-2222-2222-222222222222",
+                                "name": "Somebody Else",
+                            }
+                        ]
+                    }
+                },
+            }
+            mod.retrieve_notion_page = lambda **kwargs: page_payload
+            queued = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            update_calls: list[dict] = []
+
+            def fake_update_notion_page(**kwargs):
+                update_calls.append(kwargs)
+                return {"id": kwargs["page_id"], "properties": kwargs["payload"]["properties"]}
+
+            mod.update_notion_page = fake_update_notion_page
+            approved = mod.approve_ssot_pending_write(
+                conn,
+                cfg,
+                pending_id=str(queued["pending_id"]),
+                surface="test",
+                actor="operator",
+            )
+            expect(approved["status"] == "applied", approved)
+            expect(len(update_calls) == 1, str(update_calls))
+            expect(update_calls[0]["page_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", str(update_calls))
+            decisions = [
+                str(row["decision"])
+                for row in conn.execute(
+                    "SELECT decision FROM ssot_access_audit ORDER BY id DESC LIMIT 3"
+                ).fetchall()
+            ]
+            expect("allow" in decisions and "approve" in decisions and "queue" in decisions, str(decisions))
+            print("PASS test_ssot_pending_write_approval_applies_queued_update")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_pending_write_approval_requires_current_verified_write_mode() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_approval_gate_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "properties": {
+                    "Owner": {
+                        "people": [
+                            {
+                                "id": "22222222-2222-2222-2222-222222222222",
+                                "name": "Somebody Else",
+                            }
+                        ]
+                    }
+                },
+            }
+            queued = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            conn.execute(
+                """
+                UPDATE agent_identity
+                SET notion_user_id = '',
+                    notion_user_email = '',
+                    verification_status = 'unverified',
+                    write_mode = 'read_only',
+                    verified_at = NULL
+                WHERE unix_user = 'sirouk'
+                """
+            )
+            conn.commit()
+            update_calls: list[dict] = []
+
+            def fake_update_notion_page(**kwargs):
+                update_calls.append(kwargs)
+                return {"id": kwargs["page_id"], "properties": kwargs["payload"]["properties"]}
+
+            mod.update_notion_page = fake_update_notion_page
+            try:
+                mod.approve_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=str(queued["pending_id"]),
+                    surface="test",
+                    actor="operator",
+                )
+            except PermissionError as exc:
+                expect("verified_limited" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected approval replay to fail once the identity is no longer verified_limited")
+            expect(len(update_calls) == 0, str(update_calls))
+            pending = conn.execute(
+                """
+                SELECT status, decision_surface, decided_at
+                FROM ssot_pending_writes
+                WHERE pending_id = ?
+                """,
+                (str(queued["pending_id"]),),
+            ).fetchone()
+            expect(pending is not None and pending["status"] == "pending", str(dict(pending) if pending else {}))
+            expect(str(pending["decision_surface"] or "") == "", str(dict(pending)))
+            expect(str(pending["decided_at"] or "") == "", str(dict(pending)))
+            audit = conn.execute(
+                "SELECT decision, reason FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
             expect(audit is not None and audit["decision"] == "deny", str(dict(audit) if audit else {}))
-            print("PASS test_ssot_write_denies_cross_owner_update")
+            expect("approval time" in str(audit["reason"]).lower(), str(dict(audit)))
+            print("PASS test_ssot_pending_write_approval_requires_current_verified_write_mode")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_pending_write_denial_marks_pending_row() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_deny_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "properties": {
+                    "Owner": {
+                        "people": [
+                            {
+                                "id": "22222222-2222-2222-2222-222222222222",
+                                "name": "Somebody Else",
+                            }
+                        ]
+                    }
+                },
+            }
+            queued = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            denied = mod.deny_ssot_pending_write(
+                conn,
+                cfg,
+                pending_id=str(queued["pending_id"]),
+                surface="test",
+                actor="operator",
+                reason="leave this with the owner",
+            )
+            expect(denied["status"] == "denied", denied)
+            expect(str(denied["decision_note"]) == "leave this with the owner", denied)
+            audit = conn.execute(
+                "SELECT decision, reason FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            expect(audit is not None and audit["decision"] == "deny", str(dict(audit) if audit else {}))
+            expect("leave this with the owner" in str(audit["reason"]).lower(), str(dict(audit)))
+            print("PASS test_ssot_pending_write_denial_marks_pending_row")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_ssot_pending_write_expiry_blocks_approval_replay() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_expiry_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="chris@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "properties": {
+                    "Owner": {
+                        "people": [
+                            {
+                                "id": "22222222-2222-2222-2222-222222222222",
+                                "name": "Somebody Else",
+                            }
+                        ]
+                    }
+                },
+            }
+            queued = mod.enqueue_ssot_write(
+                conn,
+                cfg,
+                agent_id="agent-sirouk",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+            )
+            conn.execute(
+                "UPDATE ssot_pending_writes SET expires_at = ? WHERE pending_id = ?",
+                (
+                    mod.auto_provision_stale_before_iso(600),
+                    str(queued["pending_id"]),
+                ),
+            )
+            conn.commit()
+            update_calls: list[dict] = []
+
+            def fake_update_notion_page(**kwargs):
+                update_calls.append(kwargs)
+                return {"id": kwargs["page_id"], "properties": kwargs["payload"]["properties"]}
+
+            mod.update_notion_page = fake_update_notion_page
+            try:
+                mod.approve_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=str(queued["pending_id"]),
+                    surface="test",
+                    actor="operator",
+                )
+            except PermissionError as exc:
+                expect("expired" in str(exc).lower(), str(exc))
+            else:
+                raise AssertionError("expected expired pending SSOT write to refuse approval replay")
+            expect(len(update_calls) == 0, str(update_calls))
+            pending = conn.execute(
+                """
+                SELECT status, decision_surface, decided_by_actor, decision_note
+                FROM ssot_pending_writes
+                WHERE pending_id = ?
+                """,
+                (str(queued["pending_id"]),),
+            ).fetchone()
+            expect(pending is not None and pending["status"] == "expired", str(dict(pending) if pending else {}))
+            expect(str(pending["decision_surface"] or "") == "expiry", str(dict(pending)))
+            expect(str(pending["decided_by_actor"] or "") == "system", str(dict(pending)))
+            expect("expired before operator approval" in str(pending["decision_note"] or "").lower(), str(dict(pending)))
+            audit = conn.execute(
+                "SELECT decision, reason FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            expect(audit is not None and audit["decision"] == "deny", str(dict(audit) if audit else {}))
+            expect("could not approve" in str(audit["reason"]).lower(), str(dict(audit)))
+            print("PASS test_ssot_pending_write_expiry_blocks_approval_replay")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_list_agent_ssot_pending_writes_stays_scoped_and_expires_stale_rows() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_scope_list_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            insert_agent(mod, conn, agent_id="agent-alex", unix_user="alex")
+            sirouk_pending, _ = mod.request_ssot_pending_write(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                operation="update",
+                target_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                payload={"properties": {"Status": {"status": {"name": "Blocked"}}}},
+                requested_by_actor="agent-sirouk",
+                request_source="scope-mismatch",
+                request_reason="outside edit lane",
+                owner_identity="22222222-2222-2222-2222-222222222222",
+                owner_source="ownership-mismatch",
+                ttl_seconds=cfg.ssot_pending_write_ttl_seconds,
+            )
+            alex_pending, _ = mod.request_ssot_pending_write(
+                conn,
+                agent_id="agent-alex",
+                unix_user="alex",
+                notion_user_id="33333333-3333-3333-3333-333333333333",
+                operation="append",
+                target_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                payload={"children": [{"object": "block", "type": "paragraph", "paragraph": {"rich_text": []}}]},
+                requested_by_actor="agent-alex",
+                request_source="scope-mismatch",
+                request_reason="outside edit lane",
+                owner_identity="44444444-4444-4444-4444-444444444444",
+                owner_source="ownership-mismatch",
+                ttl_seconds=cfg.ssot_pending_write_ttl_seconds,
+            )
+            conn.execute(
+                "UPDATE ssot_pending_writes SET expires_at = ? WHERE pending_id = ?",
+                (
+                    mod.auto_provision_stale_before_iso(600),
+                    str(sirouk_pending["pending_id"]),
+                ),
+            )
+            conn.commit()
+            sirouk_rows = mod.list_agent_ssot_pending_writes(
+                conn,
+                agent_id="agent-sirouk",
+                status="pending",
+                limit=10,
+            )
+            expect(sirouk_rows == [], str(sirouk_rows))
+            alex_rows = mod.list_agent_ssot_pending_writes(
+                conn,
+                agent_id="agent-alex",
+                status="pending",
+                limit=10,
+            )
+            expect(len(alex_rows) == 1, str(alex_rows))
+            expect(str(alex_rows[0]["pending_id"]) == str(alex_pending["pending_id"]), str(alex_rows))
+            expired_rows = mod.list_ssot_pending_writes(
+                conn,
+                status="expired",
+                agent_id="agent-sirouk",
+                limit=10,
+            )
+            expect(len(expired_rows) == 1, str(expired_rows))
+            expect(str(expired_rows[0]["pending_id"]) == str(sirouk_pending["pending_id"]), str(expired_rows))
+            expect(mod.count_ssot_pending_writes(conn, status="pending", agent_id="agent-alex") == 1, "expected alex pending count to remain 1")
+            expect(mod.count_ssot_pending_writes(conn, status="pending", agent_id="agent-sirouk") == 0, "expected sirouk pending count to drop to 0 after expiry")
+            print("PASS test_list_agent_ssot_pending_writes_stays_scoped_and_expires_stale_rows")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -1758,6 +2519,7 @@ def test_notion_batcher_accepts_claim_page_edit_via_identity_override() -> None:
 
 
 def main() -> int:
+    test_connect_db_enables_sqlite_wal_and_busy_timeout()
     test_ssot_read_denies_database_query_until_verified()
     test_ssot_read_scopes_database_results_to_verified_user()
     test_ssot_read_scopes_database_results_to_identity_override()
@@ -1766,12 +2528,21 @@ def main() -> int:
     test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_drift()
     test_start_notion_identity_claim_creates_page_under_shared_parent()
     test_ssot_write_applies_verified_owned_update()
+    test_ssot_write_applies_verified_owned_append()
     test_ssot_write_applies_verified_owned_insert()
+    test_ssot_write_allows_page_update_from_prior_agent_history()
+    test_ssot_write_queues_prior_agent_history_when_page_has_other_owner()
+    test_ssot_write_queues_insert_under_out_of_scope_parent_page()
     test_ssot_write_applies_without_changed_by_property()
     test_ssot_write_fails_closed_when_changed_by_schema_lookup_fails()
     test_ssot_write_logs_failure_when_notion_apply_raises()
     test_ssot_read_denies_suspended_identity()
-    test_ssot_write_denies_cross_owner_update()
+    test_ssot_write_queues_cross_owner_update()
+    test_ssot_pending_write_approval_applies_queued_update()
+    test_ssot_pending_write_approval_requires_current_verified_write_mode()
+    test_ssot_pending_write_denial_marks_pending_row()
+    test_ssot_pending_write_expiry_blocks_approval_replay()
+    test_list_agent_ssot_pending_writes_stays_scoped_and_expires_stale_rows()
     test_ssot_read_denies_name_collision()
     test_ssot_read_denies_changed_by_only_match()
     test_ssot_write_denies_suspended_identity()
@@ -1783,7 +2554,7 @@ def main() -> int:
     test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only()
     test_notion_batcher_rejects_claim_page_edit_from_wrong_email()
     test_notion_batcher_accepts_claim_page_edit_via_identity_override()
-    print("PASS all 24 ssot broker tests")
+    print("PASS all 35 ssot broker tests")
     return 0
 
 

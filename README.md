@@ -716,9 +716,16 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 - the hosted Notion MCP is only for each user's optional private Notion lane
 - the shared organizational rail is for `almanac-ssot`
 - shared SSOT reads now go through a central brokered `ssot.read` rail and
-  shared SSOT writes apply immediately when the caller has a verified local
-  Notion identity in `verified_limited` mode and the target stays inside that
-  caller's scoped ownership rails
+  shared SSOT writes support `insert`, `update`, and append-only page notes;
+  they apply immediately when the caller has a verified local Notion identity
+  in `verified_limited` mode and the target stays inside that caller's scoped
+  ownership rails
+- plain shared pages can also stay editable within the same user/agent edit
+  lane: Almanac accepts the verified user's own last human edit and the same
+  agent's prior brokered write history as continuity for later page updates
+- when a shared write falls outside that lane, Almanac now queues a pending
+  approval instead of asking the user to re-touch the page, and operators can
+  resolve it from Curator or `almanac-ctl ssot ...`
 - shared Notion onboarding is self-serve inside the Curator DM: once the lane
   is provisioned, Curator asks for the user's Notion email, creates a
   verification page in the shared workspace, and waits for a human edit before

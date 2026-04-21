@@ -73,7 +73,13 @@ def test_discord_operator_delivery_supports_channel_ids() -> None:
             cfg = control.Config.from_env()
             calls: list[dict[str, str]] = []
 
-            def fake_send(*, bot_token: str, channel_id: str, text: str) -> dict[str, str]:
+            def fake_send(
+                *,
+                bot_token: str,
+                channel_id: str,
+                text: str,
+                components=None,
+            ) -> dict[str, str]:
                 calls.append(
                     {
                         "bot_token": bot_token,

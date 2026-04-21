@@ -41,12 +41,12 @@ class FakeResponse:
         return False
 
 
-def http_error(url: str, status: int, payload: dict) -> HTTPError:
+def http_error(url: str, status: int, payload: dict, hdrs=None) -> HTTPError:
     return HTTPError(
         url=url,
         code=status,
         msg=str(payload.get("message") or f"http {status}"),
-        hdrs=None,
+        hdrs=hdrs,
         fp=io.BytesIO(json.dumps(payload).encode("utf-8")),
     )
 
@@ -228,6 +228,36 @@ def test_update_notion_page_uses_patch_endpoint() -> None:
     print("PASS test_update_notion_page_uses_patch_endpoint")
 
 
+def test_request_json_retries_rate_limit_and_honors_retry_after() -> None:
+    mod = load_module(MODULE_PATH, "almanac_notion_ssot_retry_test")
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    def fake_urlopen(req, timeout=15):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise http_error(
+                req.full_url,
+                429,
+                {"message": "slow down", "code": "rate_limited"},
+                hdrs={"Retry-After": "2"},
+            )
+        return FakeResponse({"object": "user", "id": "integration-1"})
+
+    payload = mod._request_json(
+        "GET",
+        "/users/me",
+        token="secret_test",
+        api_version=mod.DEFAULT_NOTION_API_VERSION,
+        urlopen_fn=fake_urlopen,
+        sleep_fn=lambda seconds: sleeps.append(float(seconds)),
+    )
+    expect(payload["id"] == "integration-1", payload)
+    expect(attempts["count"] == 3, str(attempts))
+    expect(sleeps == [2.0, 2.0], str(sleeps))
+    print("PASS test_request_json_retries_rate_limit_and_honors_retry_after")
+
+
 def test_preflight_notion_root_children_creates_and_trashes_temp_objects() -> None:
     mod = load_module(MODULE_PATH, "almanac_notion_ssot_preflight_root_test")
     seen: list[tuple[str, str, dict]] = []
@@ -355,9 +385,10 @@ def main() -> int:
     test_handshake_notion_space_reports_invalid_secret_cleanly()
     test_create_notion_page_prefers_database_data_source_parent()
     test_update_notion_page_uses_patch_endpoint()
+    test_request_json_retries_rate_limit_and_honors_retry_after()
     test_preflight_notion_root_children_creates_and_trashes_temp_objects()
     test_update_notion_database_and_data_source_use_patch_endpoints()
-    print("PASS all 8 notion ssot regression tests")
+    print("PASS all 9 notion ssot regression tests")
     return 0
 
 

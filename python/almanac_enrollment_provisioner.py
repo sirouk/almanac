@@ -29,10 +29,12 @@ from almanac_control import (
     delete_onboarding_secret,
     ensure_unix_user_ready,
     expire_stale_notion_identity_claims,
+    finish_operator_action,
     grant_agent_runtime_access,
     get_agent,
     get_agent_identity,
     get_notion_identity_claim,
+    get_pending_operator_action,
     issue_auto_provision_token,
     json_loads,
     list_onboarding_sessions,
@@ -45,6 +47,7 @@ from almanac_control import (
     NOTION_SLO_P50_SECONDS,
     NOTION_SLO_P99_SECONDS,
     note_refresh_job,
+    operator_upgrade_action_extra,
     queue_notification,
     read_onboarding_bot_token_secret,
     read_onboarding_secret,
@@ -54,6 +57,7 @@ from almanac_control import (
     upsert_agent_identity,
     update_agent_channels,
     write_onboarding_secret,
+    mark_operator_action_running,
 )
 from almanac_onboarding_flow import begin_onboarding_provisioning, send_session_message, session_prompt
 from almanac_onboarding_completion import completion_bundle_for_session
@@ -121,6 +125,46 @@ def _log_dir(cfg: Config) -> Path:
     path = cfg.state_dir / "auto-provision"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _operator_action_log_dir(cfg: Config) -> Path:
+    path = cfg.state_dir / "operator-actions"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _tail_text(path: Path, *, max_lines: int = 16) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if len(lines) <= max_lines:
+        text = "\n".join(lines).strip()
+    else:
+        text = "\n".join(lines[-max_lines:]).strip()
+    if len(text) > 1400:
+        return text[-1400:]
+    return text
+
+
+def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["ALMANAC_CONFIG_FILE"] = str(cfg.config_path)
+    if cfg.upstream_repo_url:
+        env.setdefault("ALMANAC_UPSTREAM_REPO_URL", str(cfg.upstream_repo_url))
+    if cfg.upstream_branch:
+        env.setdefault("ALMANAC_UPSTREAM_BRANCH", str(cfg.upstream_branch))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as handle:
+        return subprocess.run(
+            [str(cfg.repo_dir / "deploy.sh"), "upgrade"],
+            cwd=str(cfg.repo_dir),
+            env=env,
+            text=True,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
 
 
 def _wait_for_user_bus(uid: str, timeout_seconds: int = 15) -> None:
@@ -1180,6 +1224,102 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
     )
 
 
+def _run_pending_operator_actions(conn, cfg: Config) -> None:
+    action = get_pending_operator_action(conn, action_kind="upgrade")
+    if action is None:
+        return
+    action_id = int(action["id"])
+    requested_by = str(action.get("requested_by") or "operator").strip() or "operator"
+    requested_target = str(action.get("requested_target") or "").strip()
+    log_path = _operator_action_log_dir(cfg) / f"upgrade-{action_id}.log"
+    mark_operator_action_running(
+        conn,
+        action_id=action_id,
+        note=f"starting upgrade requested by {requested_by}",
+        log_path=str(log_path),
+    )
+    note_refresh_job(
+        conn,
+        job_name="operator-upgrade",
+        job_kind="operator-action",
+        target_id="upgrade",
+        schedule="on demand via operator buttons",
+        status="warn",
+        note=f"running upgrade request {action_id} for {requested_target or 'latest upstream'} by {requested_by}",
+    )
+    _queue_operator_message(
+        conn,
+        cfg,
+        (
+            "Starting Almanac upgrade from the operator action queue.\n"
+            f"Requested by: {requested_by}\n"
+            f"Requested target: {requested_target or 'latest upstream'}"
+        ),
+    )
+    result = _run_host_upgrade(cfg, log_path=log_path)
+    tail = _tail_text(log_path)
+    if result.returncode == 0:
+        finish_operator_action(
+            conn,
+            action_id=action_id,
+            status="completed",
+            note=f"upgrade completed for {requested_target or 'latest upstream'}",
+            log_path=str(log_path),
+        )
+        note_refresh_job(
+            conn,
+            job_name="operator-upgrade",
+            job_kind="operator-action",
+            target_id="upgrade",
+            schedule="on demand via operator buttons",
+            status="ok",
+            note=f"completed upgrade request {action_id} for {requested_target or 'latest upstream'}",
+        )
+        _queue_operator_message(
+            conn,
+            cfg,
+            (
+                "Almanac upgrade completed successfully.\n"
+                f"Requested by: {requested_by}\n"
+                f"Log: {log_path}"
+            ),
+        )
+        return
+
+    finish_operator_action(
+        conn,
+        action_id=action_id,
+        status="failed",
+        note=f"upgrade failed with exit code {result.returncode}",
+        log_path=str(log_path),
+    )
+    note_refresh_job(
+        conn,
+        job_name="operator-upgrade",
+        job_kind="operator-action",
+        target_id="upgrade",
+        schedule="on demand via operator buttons",
+        status="fail",
+        note=f"failed upgrade request {action_id} with exit code {result.returncode}",
+    )
+    failure_message = (
+        "Almanac upgrade failed.\n"
+        f"Requested by: {requested_by}\n"
+        f"Exit code: {result.returncode}\n"
+        f"Log: {log_path}"
+    )
+    if tail:
+        failure_message += "\nRecent output:\n" + tail
+    queue_notification(
+        conn,
+        target_kind="operator",
+        target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+        channel_kind=cfg.operator_notify_platform or "tui-only",
+        message=failure_message,
+        extra=operator_upgrade_action_extra(cfg, upstream_commit=requested_target),
+    )
+
+
 def _schedule_failure(
     conn,
     cfg: Config,
@@ -1392,6 +1532,7 @@ def main() -> None:
             _run_one(conn, cfg, row)
         _run_pending_onboarding_gateway_configs(conn, cfg)
         _run_pending_onboarding_notion_verifications(conn, cfg)
+        _run_pending_operator_actions(conn, cfg)
 
 
 if __name__ == "__main__":

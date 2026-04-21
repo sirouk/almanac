@@ -13,8 +13,10 @@ from almanac_control import (
     deny_onboarding_session,
     deny_request,
     get_onboarding_session,
+    request_operator_action,
     save_onboarding_session,
     utc_now_iso,
+    upsert_setting,
 )
 from almanac_discord import discord_get_current_user
 from almanac_discord import discord_send_message
@@ -124,6 +126,23 @@ async def main() -> None:
                     return f"Approved {target_id}."
                 deny_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
                 return f"Denied {target_id}."
+            if normalized_action in {"install", "dismiss"}:
+                if normalized_action == "dismiss":
+                    upsert_setting(conn, "almanac_upgrade_last_dismissed_sha", target_id)
+                    return f"Dismissed Almanac update notice for {target_id[:12]}."
+                action_row, created = request_operator_action(
+                    conn,
+                    action_kind="upgrade",
+                    requested_by=actor,
+                    request_source="discord-button",
+                    requested_target=target_id,
+                )
+                status = str(action_row.get("status") or "pending")
+                if created:
+                    return "Queued Almanac upgrade. The root maintenance loop will pick it up within about a minute."
+                if status == "running":
+                    return "Almanac upgrade is already running."
+                return "Almanac upgrade is already queued."
         return f"Unknown approval target: {target_id}"
 
     async def _ensure_operator_channel(interaction) -> bool:  # type: ignore[no-untyped-def]
@@ -366,6 +385,25 @@ async def main() -> None:
             return
         data = getattr(interaction, "data", {}) or {}
         custom_id = str(data.get("custom_id") or "").strip()
+        upgrade_prefix = "almanac:upgrade:"
+        if custom_id.startswith(upgrade_prefix):
+            if not await _ensure_operator_channel(interaction):
+                return
+            try:
+                _, scope, action, target_id = custom_id.split(":", 3)
+            except ValueError:
+                await interaction.response.send_message("That upgrade action is malformed.", ephemeral=True)
+                return
+            if scope != "upgrade" or not target_id:
+                await interaction.response.send_message("That upgrade action is malformed.", ephemeral=True)
+                return
+            actor = _format_actor_label(interaction.user)
+            result_text = _run_operator_action(target_id=target_id, action=action, actor=actor)
+            message_text = str(getattr(getattr(interaction, "message", None), "content", "") or "").strip()
+            replacement = (message_text + f"\n\n{result_text} ({actor})").strip() if message_text else result_text
+            await interaction.response.edit_message(content=replacement, view=None)
+            return
+
         prefix = "almanac:onboarding-complete:ack:"
         if not custom_id.startswith(prefix):
             return

@@ -126,10 +126,13 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
             expect(result["relation"] == "behind", result)
 
             operator_rows = conn.execute(
-                "SELECT message FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
+                "SELECT message, extra_json FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
             ).fetchall()
             expect(len(operator_rows) == 1, operator_rows)
             expect("Almanac update available" in str(operator_rows[0]["message"] or ""), operator_rows)
+            operator_extra = json.loads(str(operator_rows[0]["extra_json"] or "{}"))
+            buttons = operator_extra.get("telegram_reply_markup", {}).get("inline_keyboard", [[]])[0]
+            expect([button.get("text") for button in buttons] == ["Dismiss", "Install"], str(operator_extra))
 
             agent_rows = conn.execute(
                 """
@@ -145,6 +148,76 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
             trigger_path = control.activation_trigger_path(cfg, "agent-upgrade")
             expect(trigger_path.is_file(), f"expected upgrade nudge to trigger agent refresh at {trigger_path}")
             print("PASS test_upgrade_check_notifies_operator_and_user_agents_once_per_sha")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_upgrade_check_adds_discord_buttons_for_operator_channel() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_upgrade_notification_discord_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_upgrade_notification_discord_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state_dir = root / "state"
+        release_state_file = state_dir / "almanac-release.json"
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(state_dir),
+                "RUNTIME_DIR": str(state_dir / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(state_dir / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(state_dir / "agents"),
+                "ALMANAC_CURATOR_DIR": str(state_dir / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(state_dir / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(state_dir / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(state_dir / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(release_state_file),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "123456789012345678",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",
+            },
+        )
+        release_state_file.parent.mkdir(parents=True, exist_ok=True)
+        release_state_file.write_text(
+            json.dumps(
+                {
+                    "deployed_commit": "aaaaaaaaaaaa1111111111111111111111111111",
+                    "tracked_upstream_repo_url": "https://github.com/example/almanac.git",
+                    "tracked_upstream_branch": "main",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            ctl._query_upstream_head = lambda repo_url, branch: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._classify_upstream_relation = lambda *args, **kwargs: "behind"
+            result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
+            expect(result["notification_sent"] is True, result)
+            operator_row = conn.execute(
+                "SELECT extra_json FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            extra = json.loads(str(operator_row["extra_json"] or "{}"))
+            components = extra.get("discord_components") or []
+            expect(len(components) == 1, str(extra))
+            buttons = components[0].get("components") or []
+            expect([button.get("label") for button in buttons] == ["Dismiss", "Install"], str(extra))
+            print("PASS test_upgrade_check_adds_discord_buttons_for_operator_channel")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -289,9 +362,10 @@ def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
 
 def main() -> int:
     test_upgrade_check_notifies_operator_and_user_agents_once_per_sha()
+    test_upgrade_check_adds_discord_buttons_for_operator_channel()
     test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs()
     test_upgrade_check_does_not_notify_when_deployed_is_ahead()
-    print("PASS all 3 upgrade notification regression tests")
+    print("PASS all 4 upgrade notification regression tests")
     return 0
 
 

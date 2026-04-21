@@ -490,6 +490,60 @@ def test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_dri
             os.environ.update(old_env)
 
 
+def test_start_notion_identity_claim_creates_page_under_shared_parent() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_claim_page_parent_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.set_agent_identity_claim = lambda *args, **kwargs: {
+                "agent_id": kwargs.get("agent_id", ""),
+                "unix_user": kwargs.get("unix_user", ""),
+                "claimed_notion_email": kwargs.get("claimed_notion_email", ""),
+            }
+            create_calls: list[dict[str, object]] = []
+
+            def fake_create_notion_page(**kwargs):
+                create_calls.append(kwargs)
+                return {
+                    "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                    "url": "https://www.notion.so/Almanac-Verification-sirouk-cccccccccccccccccccccccccccccccc",
+                }
+
+            mod.create_notion_page = fake_create_notion_page
+            claim = mod.start_notion_identity_claim(
+                conn,
+                session_id="onb_test",
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                claimed_notion_email="chris@example.com",
+            )
+            expect(len(create_calls) == 1, str(create_calls))
+            created = create_calls[0]
+            expect(created["parent_kind"] == "page", str(created))
+            expect(created["parent_id"] == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb", str(created))
+            payload = created["payload"]
+            expect(isinstance(payload, dict), str(payload))
+            properties = payload.get("properties") if isinstance(payload, dict) else {}
+            expect(isinstance(properties, dict) and "title" in properties, str(properties))
+            title_entries = properties.get("title")
+            expect(isinstance(title_entries, list) and title_entries, str(properties))
+            children = payload.get("children") if isinstance(payload, dict) else []
+            expect(isinstance(children, list) and len(children) >= 3, str(children))
+            expect(str(claim.get("verification_parent_page_id") or "") == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb", str(claim))
+            stored = mod.get_notion_identity_claim(conn, claim_id=str(claim.get("claim_id") or ""))
+            expect(stored is not None and stored["notion_page_id"] == "cccccccc-cccc-cccc-cccc-cccccccccccc", str(stored))
+            print("PASS test_start_notion_identity_claim_creates_page_under_shared_parent")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_ssot_write_applies_verified_owned_update() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_ssot_write_apply_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1624,6 +1678,7 @@ def main() -> int:
     test_ssot_write_requires_verified_write_mode()
     test_ensure_notion_verification_database_repairs_missing_managed_schema()
     test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_drift()
+    test_start_notion_identity_claim_creates_page_under_shared_parent()
     test_ssot_write_applies_verified_owned_update()
     test_ssot_write_applies_verified_owned_insert()
     test_ssot_write_applies_without_changed_by_property()
@@ -1641,7 +1696,7 @@ def main() -> int:
     test_notion_batcher_verifies_claim_page_event()
     test_notion_batcher_rejects_claim_page_edit_from_wrong_email()
     test_notion_batcher_accepts_claim_page_edit_via_identity_override()
-    print("PASS all 22 ssot broker tests")
+    print("PASS all 23 ssot broker tests")
     return 0
 
 

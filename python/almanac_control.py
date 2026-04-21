@@ -602,6 +602,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           delivery_error TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS operator_actions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          action_kind TEXT NOT NULL,
+          requested_target TEXT NOT NULL DEFAULT '',
+          requested_by TEXT NOT NULL,
+          request_source TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          log_path TEXT NOT NULL DEFAULT ''
+        );
+
         CREATE TABLE IF NOT EXISTS notion_webhook_events (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           event_id TEXT NOT NULL UNIQUE,
@@ -751,6 +765,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_overrides_email
         ON notion_identity_overrides (LOWER(notion_user_email))
         WHERE notion_user_email != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_operator_actions_status_kind_created
+        ON operator_actions (status, action_kind, created_at)
         """
     )
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
@@ -1527,7 +1547,7 @@ def _ensure_managed_database_schema(
         raise RuntimeError(f"{label} schema drift detected; {'; '.join(details)}")
 
 
-def _verification_db_parent_page_id(
+def _verification_claim_parent_page_id(
     *,
     settings: dict[str, str],
     urlopen_fn=None,
@@ -1551,6 +1571,14 @@ def _verification_db_parent_page_id(
     raise RuntimeError(
         "shared Notion self-serve verification needs the SSOT target to be a page or a page-owned database"
     )
+
+
+def _verification_db_parent_page_id(
+    *,
+    settings: dict[str, str],
+    urlopen_fn=None,
+) -> str:
+    return _verification_claim_parent_page_id(settings=settings, urlopen_fn=urlopen_fn)
 
 
 def ensure_notion_verification_database(
@@ -1718,7 +1746,6 @@ def start_notion_identity_claim(
     normalized_email = _normalize_email(claimed_notion_email)
     if not normalized_email or "@" not in normalized_email:
         raise ValueError("Reply with the Notion email you use in the shared workspace, or `skip`.")
-    verification_db = ensure_notion_verification_database(conn, urlopen_fn=urlopen_fn)
     for claim in list_notion_identity_claims(conn, session_id=session_id):
         if str(claim.get("status") or "") == "pending":
             mark_notion_identity_claim(
@@ -1738,30 +1765,23 @@ def start_notion_identity_claim(
     now_iso = utc_now_iso()
     expires_at = (utc_now() + dt.timedelta(hours=24)).replace(microsecond=0).isoformat()
     settings = _require_shared_notion_settings()
+    verification_parent_page_id = _verification_claim_parent_page_id(settings=settings, urlopen_fn=urlopen_fn)
     notion_kwargs: dict[str, Any] = {}
     if urlopen_fn is not None:
         notion_kwargs["urlopen_fn"] = urlopen_fn
     page = create_notion_page(
-        parent_id=verification_db["database_id"],
-        parent_kind="database",
+        parent_id=verification_parent_page_id,
+        parent_kind="page",
         token=settings["token"],
         api_version=settings["api_version"],
         payload={
             "properties": {
-                "Name": {
-                    "title": [
-                        {
-                            "type": "text",
-                            "text": {"content": f"Almanac Verification: {unix_user}"},
-                        }
-                    ]
-                },
-                "Claimed Email": {"email": normalized_email},
-                "Unix User": _notion_rich_text_value(unix_user),
-                "Agent ID": _notion_rich_text_value(agent_id),
-                "Session ID": _notion_rich_text_value(session_id),
-                "Status": _notion_rich_text_value("pending"),
-                "Verified": {"checkbox": False},
+                "title": [
+                    {
+                        "type": "text",
+                        "text": {"content": f"Almanac Verification: {unix_user}"},
+                    }
+                ]
             },
             "children": [
                 {
@@ -1777,6 +1797,42 @@ def start_notion_identity_claim(
                                         "Almanac will verify the edit automatically."
                                     )
                                 },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": f"Claimed Notion email: {normalized_email}"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": f"Almanac Unix user: {unix_user}"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": f"Agent ID: {agent_id}"},
                             }
                         ]
                     },
@@ -1811,8 +1867,7 @@ def start_notion_identity_claim(
     conn.commit()
     claim = get_notion_identity_claim(conn, claim_id=claim_id) or {}
     claim["identity"] = identity
-    claim["verification_database_id"] = verification_db["database_id"]
-    claim["verification_database_url"] = verification_db["database_url"]
+    claim["verification_parent_page_id"] = verification_parent_page_id
     return claim
 
 
@@ -1959,22 +2014,25 @@ def try_verify_notion_identity_claim(
         verified_notion_email=email,
         verified_at=verified_at,
     )
-    try:
-        update_notion_page(
-            page_id=str(claim.get("notion_page_id") or ""),
-            token=settings["token"],
-            api_version=settings["api_version"],
-            payload={
-                "properties": {
-                    "Status": _notion_rich_text_value("verified"),
-                    "Verified": {"checkbox": True},
-                    "Verified At": {"date": {"start": verified_at}},
-                }
-            },
-            **notion_kwargs,
-        )
-    except Exception:
-        pass
+    page_parent = page.get("parent") if isinstance(page, dict) else {}
+    page_parent_type = str(page_parent.get("type") or "").strip() if isinstance(page_parent, dict) else ""
+    if page_parent_type in {"database_id", "data_source_id"}:
+        try:
+            update_notion_page(
+                page_id=str(claim.get("notion_page_id") or ""),
+                token=settings["token"],
+                api_version=settings["api_version"],
+                payload={
+                    "properties": {
+                        "Status": _notion_rich_text_value("verified"),
+                        "Verified": {"checkbox": True},
+                        "Verified At": {"date": {"start": verified_at}},
+                    }
+                },
+                **notion_kwargs,
+            )
+        except Exception:
+            pass
     queue_notification(
         conn,
         target_kind="curator",
@@ -3184,6 +3242,143 @@ def queue_notification(
     return int(cursor.lastrowid)
 
 
+def _operator_action_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def get_active_operator_action(
+    conn: sqlite3.Connection,
+    *,
+    action_kind: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM operator_actions
+        WHERE action_kind = ?
+          AND status IN ('pending', 'running')
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (str(action_kind or "").strip(),),
+    ).fetchone()
+    return _operator_action_row_to_dict(row)
+
+
+def get_pending_operator_action(
+    conn: sqlite3.Connection,
+    *,
+    action_kind: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM operator_actions
+        WHERE action_kind = ?
+          AND status = 'pending'
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (str(action_kind or "").strip(),),
+    ).fetchone()
+    return _operator_action_row_to_dict(row)
+
+
+def request_operator_action(
+    conn: sqlite3.Connection,
+    *,
+    action_kind: str,
+    requested_by: str,
+    request_source: str = "",
+    requested_target: str = "",
+) -> tuple[dict[str, Any], bool]:
+    normalized_kind = str(action_kind or "").strip().lower()
+    if not normalized_kind:
+        raise ValueError("action_kind is required")
+    active = get_active_operator_action(conn, action_kind=normalized_kind)
+    if active is not None:
+        return active, False
+    now_iso = utc_now_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO operator_actions (
+          action_kind, requested_target, requested_by, request_source, status, note, created_at
+        ) VALUES (?, ?, ?, ?, 'pending', '', ?)
+        """,
+        (
+            normalized_kind,
+            str(requested_target or "").strip(),
+            str(requested_by or "").strip() or "operator",
+            str(request_source or "").strip(),
+            now_iso,
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
+    return _operator_action_row_to_dict(row) or {}, True
+
+
+def mark_operator_action_running(
+    conn: sqlite3.Connection,
+    *,
+    action_id: int,
+    note: str = "",
+    log_path: str = "",
+) -> dict[str, Any]:
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE operator_actions
+        SET status = 'running',
+            started_at = ?,
+            note = ?,
+            log_path = ?
+        WHERE id = ?
+        """,
+        (now_iso, str(note or ""), str(log_path or ""), int(action_id)),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(action_id),)).fetchone()
+    return _operator_action_row_to_dict(row) or {}
+
+
+def finish_operator_action(
+    conn: sqlite3.Connection,
+    *,
+    action_id: int,
+    status: str,
+    note: str = "",
+    log_path: str = "",
+) -> dict[str, Any]:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in {"completed", "failed", "dismissed"}:
+        raise ValueError(f"unsupported operator action status: {status}")
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE operator_actions
+        SET status = ?,
+            note = ?,
+            finished_at = ?,
+            log_path = CASE WHEN ? != '' THEN ? ELSE log_path END
+        WHERE id = ?
+        """,
+        (
+            normalized_status,
+            str(note or ""),
+            now_iso,
+            str(log_path or ""),
+            str(log_path or ""),
+            int(action_id),
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(action_id),)).fetchone()
+    return _operator_action_row_to_dict(row) or {}
+
+
 def subscribed_agent_ids_for_vault(conn: sqlite3.Connection, vault_name: str) -> list[str]:
     vault = conn.execute(
         "SELECT default_subscribed FROM vaults WHERE vault_name = ? AND state = 'active'",
@@ -3948,6 +4143,59 @@ def operator_telegram_action_extra(
             ]]
         }
     }
+
+
+def _short_commit(value: str) -> str:
+    text = str(value or "").strip()
+    return text[:12] if len(text) >= 12 else text
+
+
+def operator_upgrade_action_extra(
+    cfg: Config,
+    *,
+    upstream_commit: str,
+) -> dict[str, Any] | None:
+    target = str(upstream_commit or "").strip()
+    if not target:
+        return None
+    callback_install = f"almanac:upgrade:install:{target}"
+    callback_dismiss = f"almanac:upgrade:dismiss:{target}"
+    if cfg.operator_notify_platform == "telegram" and cfg.curator_telegram_onboarding_enabled:
+        return {
+            "telegram_reply_markup": {
+                "inline_keyboard": [[
+                    {"text": "Dismiss", "callback_data": callback_dismiss},
+                    {"text": "Install", "callback_data": callback_install},
+                ]]
+            }
+        }
+    if (
+        cfg.operator_notify_platform == "discord"
+        and cfg.curator_discord_onboarding_enabled
+        and str(cfg.operator_notify_channel_id or "").strip().isdigit()
+    ):
+        return {
+            "discord_components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 2,
+                            "label": "Dismiss",
+                            "custom_id": callback_dismiss,
+                        },
+                        {
+                            "type": 2,
+                            "style": 1,
+                            "label": "Install",
+                            "custom_id": callback_install,
+                        },
+                    ],
+                }
+            ]
+        }
+    return None
 
 
 def consume_agent_notifications(

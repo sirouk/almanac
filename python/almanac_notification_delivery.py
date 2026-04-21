@@ -60,7 +60,13 @@ def deliver_discord(message: str, *, webhook_url: str) -> str | None:
     return None
 
 
-def deliver_discord_channel(message: str, *, bot_token: str, channel_id: str) -> str | None:
+def deliver_discord_channel(
+    message: str,
+    *,
+    bot_token: str,
+    channel_id: str,
+    components: list[dict[str, Any]] | None = None,
+) -> str | None:
     if not bot_token:
         return "DISCORD_BOT_TOKEN is not configured"
     if not channel_id:
@@ -68,7 +74,7 @@ def deliver_discord_channel(message: str, *, bot_token: str, channel_id: str) ->
     if not channel_id.isdigit():
         return f"discord channel_id must be numeric, got {channel_id[:60]!r}"
     try:
-        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message)
+        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown discord delivery error"
     return None
@@ -175,6 +181,9 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
         platform = _operator_platform(cfg, row)
         if platform == "discord":
             target_kind, target_value = _resolve_discord_target(cfg, row)
+            discord_components = extra.get("discord_components")
+            if not isinstance(discord_components, list):
+                discord_components = None
             if target_kind == "webhook":
                 return deliver_discord(row["message"], webhook_url=target_value)
             if target_kind == "channel":
@@ -182,6 +191,7 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
                     row["message"],
                     bot_token=_resolve_curator_discord_bot_token(cfg),
                     channel_id=target_value,
+                    components=discord_components,
                 )
             return "discord target is not configured"
         if platform == "telegram":

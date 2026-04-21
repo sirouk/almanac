@@ -56,6 +56,7 @@ from almanac_control import (
     mark_notification_delivered,
     mark_notification_error,
     note_refresh_job,
+    operator_upgrade_action_extra,
     process_pending_notion_events,
     queue_notification,
     queue_vault_content_notifications,
@@ -1374,6 +1375,12 @@ def upgrade_check(
     if notify and update_available:
         last_notified_sha = get_setting(conn, "almanac_upgrade_last_notified_sha", "")
         if upstream_commit != last_notified_sha:
+            operator_extra = operator_upgrade_action_extra(cfg, upstream_commit=upstream_commit)
+            operator_tail = (
+                "Review with Curator using almanac-upgrade-orchestrator, then run ./deploy.sh upgrade on the host."
+            )
+            if operator_extra is not None:
+                operator_tail += " You can also use the Dismiss / Install buttons below."
             queue_notification(
                 conn,
                 target_kind="operator",
@@ -1383,8 +1390,9 @@ def upgrade_check(
                     "Almanac update available: "
                     f"deployed {_short_sha(deployed_commit)} -> upstream {_short_sha(upstream_commit)} "
                     f"on {upstream_repo_url}#{upstream_branch}. "
-                    "Review with Curator using almanac-upgrade-orchestrator, then run ./deploy.sh upgrade on the host."
+                    f"{operator_tail}"
                 ),
+                extra=operator_extra,
             )
             for row in conn.execute(
                 "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active' ORDER BY agent_id"

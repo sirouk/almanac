@@ -17,6 +17,7 @@ from almanac_control import (
     deny_request,
     deny_onboarding_session,
     get_onboarding_session,
+    request_operator_action,
     get_setting,
     mark_onboarding_update_skipped,
     record_onboarding_update_failure,
@@ -209,6 +210,29 @@ def _clear_operator_callback_buttons(bot_token: str, callback_query: dict[str, A
         return
 
 
+def _replace_operator_callback_message(
+    bot_token: str,
+    callback_query: dict[str, Any],
+    *,
+    text: str,
+) -> None:
+    message = callback_query.get("message") or {}
+    chat_id = str((message.get("chat") or {}).get("id") or "")
+    message_id = message.get("message_id")
+    if not chat_id or not isinstance(message_id, int):
+        return
+    try:
+        telegram_edit_message_text(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup={"inline_keyboard": []},
+        )
+    except Exception:
+        _clear_operator_callback_buttons(bot_token, callback_query)
+
+
 def _handle_user_completion_callback(
     *,
     cfg: Config,
@@ -358,6 +382,7 @@ def _handle_operator_callback(
     actor = _format_actor_label({"from": sender})
     try:
         visible_reply: str | None = None
+        replacement_text: str | None = None
         with connect_db(cfg) as conn:
             if scope == "onboarding" and target_id.startswith("onb_"):
                 if action == "approve":
@@ -382,9 +407,34 @@ def _handle_operator_callback(
                     result_text = f"Denied {target_id}."
                 else:
                     raise ValueError(f"unknown request action: {action}")
+            elif scope == "upgrade":
+                message_text = str(message.get("text") or "").strip()
+                if action == "dismiss":
+                    upsert_setting(conn, "almanac_upgrade_last_dismissed_sha", target_id)
+                    result_text = f"Dismissed Almanac update notice for {target_id[:12]}."
+                    replacement_text = (message_text + f"\n\nDismissed by {actor}.").strip()
+                elif action == "install":
+                    action_row, created = request_operator_action(
+                        conn,
+                        action_kind="upgrade",
+                        requested_by=actor,
+                        request_source="telegram-button",
+                        requested_target=target_id,
+                    )
+                    status = str(action_row.get("status") or "pending")
+                    if created:
+                        result_text = "Queued Almanac upgrade. The root maintenance loop will pick it up within about a minute."
+                    elif status == "running":
+                        result_text = "Almanac upgrade is already running."
+                    else:
+                        result_text = "Almanac upgrade is already queued."
+                    replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
             else:
                 raise ValueError(f"unknown approval target: {target_id}")
-        _clear_operator_callback_buttons(bot_token, callback_query)
+        if replacement_text:
+            _replace_operator_callback_message(bot_token, callback_query, text=replacement_text)
+        else:
+            _clear_operator_callback_buttons(bot_token, callback_query)
         telegram_answer_callback_query(
             bot_token=bot_token,
             callback_query_id=callback_query_id,

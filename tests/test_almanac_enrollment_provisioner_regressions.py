@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -373,13 +374,68 @@ def test_gateway_failures_notify_user_with_provision_error_status() -> None:
             os.environ.update(old_env)
 
 
+def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_operator_upgrade_queue_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_operator_upgrade_queue_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = config_values(root)
+        values["OPERATOR_NOTIFY_CHANNEL_PLATFORM"] = "telegram"
+        values["OPERATOR_NOTIFY_CHANNEL_ID"] = "1994645819"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            action_row, created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@sirouk",
+                request_source="telegram-button",
+                requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+            )
+            expect(created is True, str(action_row))
+
+            def fake_run_host_upgrade(cfg, *, log_path):
+                log_path.write_text("Fetching Almanac upstream...\nAlmanac upgrade complete.\n", encoding="utf-8")
+                return subprocess.CompletedProcess(
+                    args=[str(cfg.repo_dir / "deploy.sh"), "upgrade"],
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            provisioner._run_host_upgrade = fake_run_host_upgrade
+            provisioner._run_pending_operator_actions(conn, cfg)
+
+            refreshed = conn.execute("SELECT status, log_path FROM operator_actions WHERE id = ?", (int(action_row["id"]),)).fetchone()
+            expect(refreshed is not None and refreshed["status"] == "completed", str(dict(refreshed) if refreshed else {}))
+            expect(str(refreshed["log_path"] or "").endswith(f"upgrade-{action_row['id']}.log"), str(dict(refreshed)))
+
+            operator_rows = conn.execute(
+                "SELECT message FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
+            ).fetchall()
+            expect(len(operator_rows) == 2, str([dict(row) for row in operator_rows]))
+            expect("Starting Almanac upgrade" in str(operator_rows[0]["message"] or ""), str([dict(row) for row in operator_rows]))
+            expect("completed successfully" in str(operator_rows[1]["message"] or ""), str([dict(row) for row in operator_rows]))
+            print("PASS test_operator_upgrade_actions_run_root_upgrade_and_notify_operator")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
     test_completion_bundle_send_is_idempotent()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
-    print("PASS all 5 enrollment provisioner regression tests")
+    test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
+    print("PASS all 6 enrollment provisioner regression tests")
     return 0
 
 

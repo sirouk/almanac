@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import pwd
 import sys
 import tempfile
 from pathlib import Path
@@ -139,6 +140,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             )
             expect("https://www.notion.so/claim" in notion_verify_prompt, notion_verify_prompt)
             expect("chris@example.com" in notion_verify_prompt, notion_verify_prompt)
+            expect("Request access" in notion_verify_prompt, notion_verify_prompt)
 
             provisioning_error_prompt = onboarding.session_prompt(
                 cfg,
@@ -216,6 +218,13 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
         os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
+            desired_unix_user = "almanac-intake"
+            try:
+                pwd.getpwnam(desired_unix_user)
+            except KeyError:
+                pass
+            else:
+                desired_unix_user = "almanac-intake-01"
 
             def fake_validate(_token: str):
                 raise AssertionError("bot token validation should not run in intake-order test")
@@ -268,7 +277,7 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
                     platform="telegram",
                     chat_id="123",
                     sender_id="123",
-                    text="sirouk",
+                    text=desired_unix_user,
                     sender_username="sirouk",
                     sender_display_name="Chris",
                 ),

@@ -460,6 +460,9 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             lines.append(f"I’m watching for an edit from `{claimed_email}` and will finish automatically once it lands.{expiry_note}")
         else:
             lines.append("I’m watching for your verification edit and will finish automatically once it lands." + expiry_note)
+        lines.append(
+            "If Notion says `Request access`, the shared Almanac page is not visible to you yet. Ask the operator to share that parent page with your workspace access, then reply `/verify-notion` here to reissue the claim."
+        )
         lines.append("If you want to finish now and leave shared Notion writes disabled, reply `skip`.")
         return "\n".join(lines)
     if state == "denied":
@@ -968,7 +971,61 @@ def process_onboarding_message(
                         "`/verify-notion` here and finish the claim."
                     ),
                 )
-            if lower in VERIFY_NOTION_COMMANDS or lower == "status":
+            if lower in VERIFY_NOTION_COMMANDS:
+                unix_user = str((session.get("answers") or {}).get("unix_user") or "").strip()
+                claimed_email = str((session.get("answers") or {}).get("notion_claim_email") or "").strip()
+                claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
+                agent_id = str(session.get("linked_agent_id") or session.get("agent_id") or "").strip()
+                claim = get_notion_identity_claim(conn, claim_id=claim_id) if claim_id else None
+                if claim is not None and str(claim.get("status") or "").strip() == "expired":
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-notion-email",
+                        answers={
+                            "notion_claim_email": "",
+                            "notion_claim_id": "",
+                            "notion_claim_url": "",
+                            "notion_claim_expires_at": "",
+                        },
+                    )
+                    return [
+                        OutboundMessage(
+                            incoming.chat_id,
+                            "That verification link expired, so I opened a fresh claim step for you.\n\n"
+                            + session_prompt(cfg, updated),
+                        )
+                    ]
+                if unix_user and claimed_email and agent_id:
+                    try:
+                        claim = start_notion_identity_claim(
+                            conn,
+                            session_id=str(session["session_id"]),
+                            agent_id=agent_id,
+                            unix_user=unix_user,
+                            claimed_notion_email=claimed_email,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        return [OutboundMessage(incoming.chat_id, str(exc).strip() or "I couldn't restart Notion verification yet.")]
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        state="awaiting-notion-verification",
+                        answers={
+                            "notion_verification_skipped": False,
+                            "notion_claim_email": str(claim.get("claimed_notion_email") or claimed_email),
+                            "notion_claim_id": str(claim.get("claim_id") or claim_id),
+                            "notion_claim_url": str(claim.get("notion_page_url") or ""),
+                            "notion_claim_expires_at": str(claim.get("expires_at") or ""),
+                        },
+                    )
+                    return [
+                        OutboundMessage(
+                            incoming.chat_id,
+                            "I opened a fresh Notion verification page for you.\n\n" + session_prompt(cfg, updated),
+                        )
+                    ]
+            if lower == "status":
                 claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
                 claim = get_notion_identity_claim(conn, claim_id=claim_id) if claim_id else None
                 if claim is not None and str(claim.get("status") or "").strip() == "expired":

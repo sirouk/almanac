@@ -1496,6 +1496,92 @@ def test_notion_batcher_verifies_claim_page_event() -> None:
             os.environ.update(old_env)
 
 
+def test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_verify_user_object_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-sirouk", unix_user="sirouk")
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-sirouk",
+                unix_user="sirouk",
+                human_display_name="Chris",
+                verification_status="unverified",
+                write_mode="read_only",
+            )
+            now = mod.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO notion_identity_claims (
+                  claim_id, session_id, agent_id, unix_user, claimed_notion_email,
+                  notion_page_id, notion_page_url, status, failure_reason,
+                  verified_notion_user_id, verified_notion_email, created_at, updated_at, expires_at, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', '', '', '', ?, ?, ?, NULL)
+                """,
+                (
+                    "nclaim_user_object",
+                    "onb_test",
+                    "agent-sirouk",
+                    "sirouk",
+                    "chris@example.com",
+                    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "https://www.notion.so/claim",
+                    now,
+                    now,
+                    (mod.utc_now() + mod.dt.timedelta(hours=1)).replace(microsecond=0).isoformat(),
+                ),
+            )
+            conn.commit()
+            mod.store_notion_event(
+                conn,
+                event_id="event-claim-user-object",
+                event_type="page.properties_updated",
+                payload={
+                    "entity": {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "type": "page",
+                    }
+                },
+            )
+
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "last_edited_by": {
+                    "object": "user",
+                    "id": "11111111-1111-1111-1111-111111111111",
+                },
+                "properties": {},
+            }
+            mod.retrieve_notion_user = lambda **kwargs: {
+                "object": "user",
+                "id": "11111111-1111-1111-1111-111111111111",
+                "type": "person",
+                "person": {"email": "chris@example.com"},
+            }
+            mod.update_notion_page = lambda **kwargs: {
+                "id": kwargs["page_id"],
+                "properties": kwargs["payload"]["properties"],
+            }
+
+            result = mod.process_pending_notion_events(conn)
+            expect(result["verified_claims"] == 1, result)
+            claim = mod.get_notion_identity_claim(conn, claim_id="nclaim_user_object")
+            expect(claim is not None and claim["status"] == "verified", str(claim))
+            identity = mod.get_agent_identity(conn, agent_id="agent-sirouk", unix_user="sirouk")
+            expect(identity is not None and identity["verification_status"] == "verified", str(identity))
+            print("PASS test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_notion_batcher_rejects_claim_page_edit_from_wrong_email() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_wrong_email_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1694,9 +1780,10 @@ def main() -> int:
     test_notion_batcher_retries_when_hydration_fails()
     test_notion_batcher_marks_event_failed_after_retry_budget()
     test_notion_batcher_verifies_claim_page_event()
+    test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only()
     test_notion_batcher_rejects_claim_page_edit_from_wrong_email()
     test_notion_batcher_accepts_claim_page_edit_via_identity_override()
-    print("PASS all 23 ssot broker tests")
+    print("PASS all 24 ssot broker tests")
     return 0
 
 

@@ -383,7 +383,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     provider_setup = _provider_setup(session)
     browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
-        return "Hi. I’m Curator. I’ll guide the setup and keep us on the rails. What should I call you?"
+        return "Hi. I’m Almanac’s Curator. I’ll guide the setup and keep us on the rails. What should I call you?"
     if state == "awaiting-unix-user":
         return "Almanac runs on a shared host, so each enrolled user gets their own Unix account there. What username should I create for you?"
     if state == "awaiting-purpose":
@@ -451,7 +451,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         if shared_page_url:
             lines.append(shared_page_url)
         lines.append(
-            "If Notion says `Request access`, the operator needs to invite you into the workspace or teamspace and share that page with you first."
+            "If Notion says `Request access`, tell the operator you need edit access to the shared Almanac page. "
+            "On free Notion that usually means `Full access`, plus the operator may need to invite you into the workspace or teamspace first."
         )
         lines.append("Reply `ready` once you can open it. If you want to finish now and leave shared Notion writes disabled, reply `skip`.")
         return "\n".join(lines)
@@ -481,7 +482,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         else:
             lines.append("I’m watching for your verification edit and will finish automatically once it lands." + expiry_note)
         lines.append(
-            "If Notion says `Request access`, the shared Almanac page is not visible to you yet. Ask the operator to share that parent page with your workspace access, then reply `/verify-notion` here to reissue the claim."
+            "If Notion says `Request access`, tell the operator you need edit access to the shared Almanac page. "
+            "On free Notion that usually means `Full access`. Once they fix it, reply `/verify-notion` here to reissue the claim."
         )
         lines.append("If you want to finish now and leave shared Notion writes disabled, reply `skip`.")
         return "\n".join(lines)

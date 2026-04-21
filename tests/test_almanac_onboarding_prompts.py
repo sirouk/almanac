@@ -83,6 +83,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                     "answers": {},
                 },
             )
+            expect("Almanac’s Curator" in opening, opening)
             expect("keep us on the rails" in opening, opening)
 
             purpose_prompt = onboarding.session_prompt(
@@ -125,6 +126,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 },
             )
             expect("shared Almanac page" in notion_access_prompt, notion_access_prompt)
+            expect("Full access" in notion_access_prompt, notion_access_prompt)
             expect("ready" in notion_access_prompt.lower(), notion_access_prompt)
             expect("skip" in notion_access_prompt.lower(), notion_access_prompt)
 
@@ -152,6 +154,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             expect("https://www.notion.so/claim" in notion_verify_prompt, notion_verify_prompt)
             expect("chris@example.com" in notion_verify_prompt, notion_verify_prompt)
             expect("Request access" in notion_verify_prompt, notion_verify_prompt)
+            expect("Full access" in notion_verify_prompt, notion_verify_prompt)
 
             provisioning_error_prompt = onboarding.session_prompt(
                 cfg,

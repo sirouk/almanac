@@ -1904,6 +1904,25 @@ def try_verify_notion_identity_claim(
     last_edited_by = page.get("last_edited_by") if isinstance(page, dict) else {}
     if not isinstance(last_edited_by, dict):
         return None
+    if (
+        str(last_edited_by.get("object") or "").strip() == "user"
+        and str(last_edited_by.get("type") or "").strip() != "person"
+    ):
+        notion_user_id = str(last_edited_by.get("id") or "").strip()
+        if notion_user_id:
+            try:
+                resolved_user = retrieve_notion_user(
+                    user_id=notion_user_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                    **notion_kwargs,
+                )
+            except Exception:
+                resolved_user = {}
+            if isinstance(resolved_user, dict):
+                merged_user = dict(resolved_user)
+                merged_user.setdefault("id", notion_user_id)
+                last_edited_by = merged_user
     if str(last_edited_by.get("type") or "").strip() != "person":
         mark_notion_identity_claim(
             conn,

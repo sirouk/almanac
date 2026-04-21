@@ -79,7 +79,13 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
             or config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip()
         ),
     )
-    return ["Shared Almanac rails:", *[f"- {line}" for line in shared_lines]]
+    human_lines = [
+        line
+        for line in shared_lines
+        if not line.startswith("QMD MCP retrieval rail:")
+        and not line.startswith("Almanac MCP control rail:")
+    ]
+    return ["Shared Almanac links:", *[f"- {line}" for line in human_lines]]
 
 
 def completion_message_bundle(

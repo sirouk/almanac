@@ -690,6 +690,42 @@ def _refresh_user_agent_memory(
     )
 
 
+def _refresh_user_agent_identity_prompt(
+    cfg: Config,
+    *,
+    unix_user: str,
+    home: Path,
+    hermes_home: Path,
+    uid: int,
+    bot_name: str,
+    user_name: str,
+) -> None:
+    python_bin = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
+    if not python_bin.exists():
+        raise RuntimeError(f"missing Hermes runtime at {python_bin}")
+    script_path = cfg.repo_dir / "python" / "almanac_headless_hermes_setup.py"
+    result = _run_as_user(
+        unix_user=unix_user,
+        home=home,
+        uid=uid,
+        hermes_home=hermes_home,
+        cmd=[
+            str(python_bin),
+            str(script_path),
+            "--identity-only",
+            "--bot-name",
+            bot_name,
+            "--unix-user",
+            unix_user,
+            "--user-name",
+            user_name,
+        ],
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "identity refresh failed").strip()
+        raise RuntimeError(f"user-agent identity refresh failed for {unix_user}: {detail}")
+
+
 def _run_pending_onboarding_provider_authorizations(conn, cfg: Config) -> None:
     for session in list_onboarding_sessions(conn, redact_secrets=False):
         if str(session.get("state") or "") != "awaiting-provider-browser-auth":
@@ -1195,12 +1231,51 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
             },
             provision_error="",
         )
+        refresh_warning = ""
+        try:
+            agent_id = str(updated.get("linked_agent_id") or "").strip()
+            unix_user = str((updated.get("answers") or {}).get("unix_user") or "").strip()
+            if agent_id and unix_user:
+                agent_row = get_agent(conn, agent_id)
+                if agent_row is not None:
+                    try:
+                        passwd = pwd.getpwnam(unix_user)
+                    except KeyError as exc:
+                        raise RuntimeError(f"missing unix user for verified Notion refresh: {unix_user}") from exc
+                    _refresh_user_agent_identity_prompt(
+                        cfg,
+                        unix_user=unix_user,
+                        home=Path(passwd.pw_dir),
+                        hermes_home=Path(str(agent_row["hermes_home"])),
+                        uid=passwd.pw_uid,
+                        bot_name=_session_bot_label(updated),
+                        user_name=str((updated.get("answers") or {}).get("full_name") or updated.get("sender_display_name") or unix_user),
+                    )
+                    _refresh_user_agent_memory(
+                        conn,
+                        cfg,
+                        agent_id=agent_id,
+                        unix_user=unix_user,
+                        home=Path(passwd.pw_dir),
+                        hermes_home=Path(str(agent_row["hermes_home"])),
+                        uid=passwd.pw_uid,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            refresh_warning = str(exc).strip() or "unknown user-agent refresh failure after Notion verification"
+            queue_notification(
+                conn,
+                target_kind="operator",
+                target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+                channel_kind=cfg.operator_notify_platform or "tui-only",
+                message=f"Notion verification succeeded for {updated.get('linked_agent_id') or updated.get('session_id')}, but user-agent refresh failed: {refresh_warning}",
+            )
         _notify_user_via_curator(
             cfg,
             session=updated,
             message=(
                 "Verified. I can now write to shared Notion on your behalf through Almanac's brokered rail, "
                 "and every supported row write will stamp your Notion account in the Changed By field."
+                + (f"\n\nOne note: your agent's local Notion context refresh hit a snag, so it may speak from stale state until the next refresh cycle. The operator has been notified." if refresh_warning else "")
             ),
         )
         _finalize_completed_onboarding(conn, cfg, updated)

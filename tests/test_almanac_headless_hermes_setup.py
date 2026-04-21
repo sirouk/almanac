@@ -112,6 +112,7 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("22:00-08:00 weekdays" in soul_text, soul_text)
         expect("Curator brought you online through the Almanac" in soul_text, soul_text)
         expect("Notion is the organization's single source of truth" in soul_text, soul_text)
+        expect("Check the current Almanac verification state" in soul_text, soul_text)
         expect("Hermes dashboard:" not in soul_text, soul_text)
         expect("Code workspace:" not in soul_text, soul_text)
         expect("$" not in soul_text, soul_text)

@@ -6788,12 +6788,24 @@ def _build_notion_stub(
         settings = _require_shared_notion_settings()
     except PermissionError as exc:
         return f"Shared Notion digest:\n- Shared organizational Notion is not configured on this host yet ({exc})."
+    verification_status = str((identity or {}).get("verification_status") or "").strip()
+    verified_email = str((identity or {}).get("notion_user_email") or (identity or {}).get("claimed_notion_email") or "").strip()
+    claimed_email = _normalize_email(str((identity or {}).get("claimed_notion_email") or ""))
     if settings["space_kind"] != "database":
-        return (
-            "Shared Notion digest:\n"
-            "- The shared SSOT target is page-scoped right now, so Almanac cannot build a structured database digest yet.\n"
-            "- Use ssot.read for specific page lookups."
-        )
+        lines = [
+            "Shared Notion digest:",
+            "- The shared SSOT target is page-scoped right now, so Almanac cannot build a structured database digest yet.",
+            "- Shared organizational writes still stay on the brokered ssot.write rail for concrete user-scoped page work.",
+            "- Use ssot.read for specific page lookups.",
+        ]
+        if verification_status != "verified":
+            if claimed_email:
+                lines.append(f"- Verification: pending for {claimed_email}. Shared writes remain read-only until the claim is verified.")
+            else:
+                lines.append("- Verification: not started yet. Shared writes remain read-only until the user verifies their Notion identity.")
+        else:
+            lines.append(f"- Verification: confirmed for {verified_email or 'your verified Notion identity'}. Shared brokered writes are enabled within your scoped rails.")
+        return "\n".join(lines)
     notion_kwargs: dict[str, Any] = {}
     try:
         database_payload, schema_payload = _load_notion_collection_schema(
@@ -6819,8 +6831,7 @@ def _build_notion_stub(
         "- Shared organizational writes stay on the brokered ssot.write rail.",
         "- Native Notion edit history shows the Almanac integration. When the database exposes a Changed By people property, Almanac also stamps the verified human there on every brokered write.",
     ]
-    if identity is None or str(identity.get("verification_status") or "").strip() != "verified":
-        claimed_email = _normalize_email(str((identity or {}).get("claimed_notion_email") or ""))
+    if identity is None or verification_status != "verified":
         if claimed_email:
             lines.append(f"- Verification: pending for {claimed_email}. Shared writes remain read-only until the claim is verified.")
         else:
@@ -6851,7 +6862,7 @@ def _build_notion_stub(
     due_soon = sum(1 for item in user_items if _notion_due_within_days(_notion_date_property(item), 7))
     recent_updates = sum(1 for item in user_items if _notion_recently_updated(item, days=7))
     lines.append(
-        f"- Verification: confirmed for {str(identity.get('notion_user_email') or identity.get('claimed_notion_email') or '').strip()}."
+        f"- Verification: confirmed for {verified_email}."
     )
     lines.append(f"- My scoped SSOT records: {len(user_items)}. Due within 7 days: {due_soon}. Updated in the last 7 days: {recent_updates}.")
     if user_items:

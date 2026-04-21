@@ -247,6 +247,7 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             )
             conn.commit()
             deliveries: list[dict[str, object]] = []
+            refresh_calls: list[tuple[str, str]] = []
             provisioner.completion_bundle_for_session = lambda *args, **kwargs: {
                 "full_text": "lane ready bundle",
                 "scrubbed_text": "lane ready bundle",
@@ -254,6 +255,12 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
                 "telegram_reply_markup": None,
                 "discord_components": None,
             }
+            provisioner._refresh_user_agent_identity_prompt = (
+                lambda cfg, *, unix_user, home, hermes_home, uid, bot_name, user_name: refresh_calls.append(("identity", unix_user))
+            )
+            provisioner._refresh_user_agent_memory = (
+                lambda conn, cfg, *, agent_id, unix_user, home, hermes_home, uid: refresh_calls.append(("memory", agent_id))
+            )
             provisioner._notify_user_via_curator = (
                 lambda cfg, *, session, message, telegram_reply_markup=None, discord_components=None: deliveries.append(
                     {
@@ -299,6 +306,7 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             expect(str(answers.get("notion_verified_email") or "") == "chris@example.com", str(answers))
             identity = control.get_agent_identity(conn, agent_id="agent-sirouk", unix_user="sirouk")
             expect(identity is not None and identity["verification_status"] == "verified", str(identity))
+            expect(refresh_calls == [("identity", "sirouk"), ("memory", "agent-sirouk")], str(refresh_calls))
             expect(len(deliveries) == 2, str(deliveries))
             expect("Verified. I can now write to shared Notion" in str(deliveries[0]["message"]), str(deliveries))
             expect(str(deliveries[1]["message"]) == "lane ready bundle", str(deliveries))

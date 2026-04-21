@@ -33,7 +33,6 @@ from almanac_discord import discord_send_message
 from almanac_onboarding_provider_auth import (
     ProviderSetupSpec,
     complete_anthropic_pkce_authorization,
-    normalize_anthropic_credential,
     normalize_api_key_credential,
     provider_browser_auth_prompt,
     provider_credential_prompt,
@@ -821,18 +820,22 @@ def process_onboarding_message(
                     )
                 return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
             try:
-                if provider_setup.provider_id == "anthropic" and lower in {"oauth", "/oauth", "browser"}:
-                    updated = save_onboarding_session(
-                        conn,
-                        session_id=str(session["session_id"]),
-                        state="awaiting-provider-browser-auth",
-                        answers={"provider_browser_auth": start_anthropic_pkce_authorization()},
-                    )
-                    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
                 if provider_setup.provider_id == "anthropic":
-                    provider_secret = normalize_anthropic_credential(text)
-                else:
-                    provider_secret = normalize_api_key_credential(provider_setup, text)
+                    if lower in {"oauth", "/oauth", "browser"}:
+                        updated = save_onboarding_session(
+                            conn,
+                            session_id=str(session["session_id"]),
+                            state="awaiting-provider-browser-auth",
+                            answers={"provider_browser_auth": start_anthropic_pkce_authorization()},
+                        )
+                        return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                    return [
+                        OutboundMessage(
+                            incoming.chat_id,
+                            "Claude Opus onboarding here is OAuth-only. Reply `oauth` and I’ll open the Claude browser authorization flow.",
+                        )
+                    ]
+                provider_secret = normalize_api_key_credential(provider_setup, text)
                 provider_secret_path = write_onboarding_secret(
                     cfg,
                     str(session["session_id"]),
@@ -878,13 +881,23 @@ def process_onboarding_message(
             if provider_setup.provider_id != "anthropic":
                 return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
             try:
+                if lower in {"restart", "/restart"}:
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        answers={"provider_browser_auth": start_anthropic_pkce_authorization()},
+                        provision_error="",
+                    )
+                    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
                 stripped = text.strip()
                 if stripped.startswith("sk-ant-api-") or stripped.startswith("sk-ant-oat-"):
-                    provider_secret = normalize_anthropic_credential(stripped)
-                    auth_state = dict(_provider_auth_state(session) or {})
-                    auth_state["status"] = "bypassed"
-                else:
-                    provider_secret, auth_state = complete_anthropic_pkce_authorization(_provider_auth_state(session), text)
+                    return [
+                        OutboundMessage(
+                            incoming.chat_id,
+                            "Claude Opus onboarding here uses browser OAuth tied to the user's Claude account. Please finish the link flow instead of pasting an Anthropic token.",
+                        )
+                    ]
+                provider_secret, auth_state = complete_anthropic_pkce_authorization(_provider_auth_state(session), text)
                 provider_secret_path = write_onboarding_secret(
                     cfg,
                     str(session["session_id"]),

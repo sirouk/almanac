@@ -305,10 +305,122 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
             os.environ.update(old_env)
 
 
+def test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_anthropic_oauth_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_anthropic_oauth_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            session = {
+                "state": "awaiting-provider-browser-auth",
+                "answers": {
+                    "provider_setup": {
+                        "preset": "opus",
+                        "provider_id": "anthropic",
+                        "model_id": "claude-opus-4-6",
+                        "display_name": "Claude Opus",
+                        "auth_flow": "anthropic-credential",
+                    },
+                    "provider_browser_auth": {
+                        "provider": "anthropic",
+                        "auth_url": "https://claude.ai/oauth/authorize?example=1",
+                    },
+                },
+            }
+            prompt = onboarding.session_prompt(cfg, session)
+            expect("Claude account" in prompt, prompt)
+            expect("Claude Max" in prompt or "Max" in prompt, prompt)
+            expect("sk-ant-api" not in prompt, prompt)
+            expect("sk-ant-oat" not in prompt, prompt)
+
+            conn = control.connect_db(cfg)
+            live = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="123",
+                sender_id="123",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            live = control.save_onboarding_session(
+                conn,
+                session_id=str(live["session_id"]),
+                state="awaiting-provider-browser-auth",
+                answers={
+                    "provider_setup": {
+                        "preset": "opus",
+                        "provider_id": "anthropic",
+                        "model_id": "claude-opus-4-6",
+                        "display_name": "Claude Opus",
+                        "auth_flow": "anthropic-credential",
+                    },
+                    "provider_browser_auth": {
+                        "provider": "anthropic",
+                        "auth_url": "https://claude.ai/oauth/authorize?example=1",
+                    },
+                },
+            )
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="telegram",
+                    chat_id="123",
+                    sender_id="123",
+                    sender_username="sirouk",
+                    sender_display_name="Chris",
+                    text="sk-ant-api-test-token",
+                ),
+                validate_bot_token=lambda raw: None,
+            )
+            expect(len(replies) == 1, str(replies))
+            expect("OAuth" in replies[0].text or "browser" in replies[0].text, replies[0].text)
+            refreshed = control.get_onboarding_session(conn, str(live["session_id"]), redact_secrets=False)
+            expect(str(refreshed.get("state") or "") == "awaiting-provider-browser-auth", str(refreshed))
+            print("PASS test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_discord_prompt_and_operator_review_reflect_primary_control_channel()
     test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
-    print("PASS all 2 onboarding prompt regression tests")
+    test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth()
+    print("PASS all 3 onboarding prompt regression tests")
     return 0
 
 

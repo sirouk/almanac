@@ -166,10 +166,8 @@ def provider_secret_name(spec: ProviderSetupSpec) -> str:
 def provider_credential_prompt(spec: ProviderSetupSpec) -> str:
     if spec.auth_flow == "anthropic-credential":
         return (
-            f"One more thing. To finish wiring {spec.display_name}, send one of these:\n"
-            "1. `oauth` to open the Claude browser authorization flow.\n"
-            "2. An Anthropic API key (`sk-ant-api-...`).\n"
-            "3. A Claude setup-token (`sk-ant-oat-...`)."
+            f"One more thing. To finish wiring {spec.display_name}, reply `oauth` and I’ll open the Claude browser authorization flow.\n"
+            "This path is for the user's Claude account sign-in, not an Anthropic API key."
         )
     if spec.auth_flow == "api-key":
         label = spec.key_env or "API key"
@@ -198,10 +196,11 @@ def provider_browser_auth_prompt(spec: ProviderSetupSpec, auth_state: dict[str, 
 
     if spec.provider_id == "anthropic":
         return (
-            f"Open this link to authorize {spec.display_name} with your Anthropic account:\n"
+            f"Open this link to authorize {spec.display_name} with your Claude account:\n"
             f"{auth_state.get('auth_url') or '(missing auth url)'}\n"
+            "Use the Claude account and plan you want tied to this lane, such as Claude Max.\n"
             "When Claude shows you the authorization code, paste that whole code string back to me here.\n"
-            "If you'd rather skip the browser flow, paste an Anthropic API key (`sk-ant-api-...`) or Claude setup-token (`sk-ant-oat-...`) instead."
+            "If the link goes stale, reply `restart` and I’ll mint a fresh one."
         )
 
     return f"Finish browser authorization for {spec.display_name} and come back here."

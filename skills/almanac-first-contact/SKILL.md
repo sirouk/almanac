@@ -37,7 +37,7 @@ On a shared host, `ALMANAC_SHARED_REPO_DIR` may live under `/home/almanac/almana
   - `chutes-kb` when configured
 - resolve the active `.vault` catalog and surface subscribed vs default state
 - run one initial vault refresh via `vaults.refresh`
-- fetch the canonical managed-memory payload via `agents.managed-memory`
+- load the canonical managed-memory payload from Curator's published snapshot when available, falling back to `agents.managed-memory` only when needed
 - materialize the agent-local managed-memory stubs immediately in the agent's own `HERMES_HOME`
 - note the home channel in the manifest (already set at enrollment)
 - emit a curator brief-fanout ping so the Curator knows to push initial briefs and follow-up managed-memory updates

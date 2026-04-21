@@ -417,8 +417,8 @@ If Curator onboarding is enabled on Telegram or Discord, a user can instead DM
 Curator with `/start`, answer the step-by-step intake questions, wait for
 operator approval, and then hand Curator the token for their own bot on that
 same platform. Almanac will provision the Unix user on the host, wire that bot
-into the user agent, and hand the conversation off to the user's own bot
-instead of keeping Curator in the middle.
+into the user agent, and then finish any required shared Notion verification
+before the user sees the full handoff bundle.
 
 For Discord handoff, the user should also install the app from the Discord
 Developer Portal Installation page or add it to a shared server so the final DM
@@ -485,8 +485,9 @@ After approval, Almanac automatically:
 3. runs the host-side `bin/init.sh agent` flow noninteractively as that user
 4. registers the user agent, installs the refresh timer, and runs first
    contact on the host
-5. provisions a safe default `tui-only` channel set; Discord or Telegram can
-   still be configured later from Hermes once the user has host access
+5. during DM onboarding, wires the user's chosen Telegram or Discord bot on
+   that same platform and then continues into the shared Notion verification
+   step when it is configured on the host
 
 `sudo ./bin/almanac-ctl user prepare <unix-user>` still exists as a manual
 repair path, but it is no longer the normal onboarding prerequisite.

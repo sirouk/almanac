@@ -24,7 +24,7 @@ from almanac_control import (
     utc_now_iso,
     upsert_setting,
 )
-from almanac_onboarding_completion import completion_scrubbed_text_for_session
+from almanac_onboarding_completion import completion_followup_text_for_session, completion_scrubbed_text_for_session
 from almanac_onboarding_flow import (
     BotIdentity,
     IncomingMessage,
@@ -287,6 +287,18 @@ def _handle_user_completion_callback(
                 "password_scrubbed": True,
             }
         )
+        followup_text = completion_followup_text_for_session(conn, cfg, session)
+        if followup_text and not bool(completion_delivery.get("followup_sent")):
+            try:
+                send_text(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    text=followup_text,
+                    reply_to_message_id=message_id,
+                )
+                completion_delivery["followup_sent"] = True
+            except Exception:
+                completion_delivery["followup_sent"] = False
         save_onboarding_session(
             conn,
             session_id=session_id,

@@ -42,6 +42,8 @@ from almanac_control import (
     make_agent_id,
     mark_auto_provision_finished,
     mark_auto_provision_started,
+    NOTION_SLO_P50_SECONDS,
+    NOTION_SLO_P99_SECONDS,
     note_refresh_job,
     queue_notification,
     read_onboarding_bot_token_secret,
@@ -411,7 +413,9 @@ def _send_completion_bundle(conn, cfg: Config, session: dict[str, Any]) -> None:
                     "chat_id": str(session.get("chat_id") or delivery.get("channel_id") or ""),
                     "message_id": message_id,
                     "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
+                    "followup_text": str(completion_bundle.get("followup_text") or ""),
                     "password_scrubbed": False,
+                    "followup_sent": False,
                 }
             },
         )
@@ -1025,7 +1029,7 @@ def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
                 _configure_user_telegram_gateway(conn, cfg, session)
         except Exception as exc:  # noqa: BLE001
             message = str(exc).strip().replace("\n", " ")[:500] or "unknown onboarding gateway error"
-            save_onboarding_session(
+            updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
                 state="provision-pending",
@@ -1040,14 +1044,21 @@ def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
                 status="warn",
                 note=message,
             )
+            previous_error = str(session.get("provision_error") or "").strip()
+            if message != previous_error:
+                _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
 
 
 def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
-    expire_stale_notion_identity_claims(conn)
+    expired_claims = expire_stale_notion_identity_claims(conn)
+    pending_sessions = 0
+    verified_sessions = 0
+    poll_failures: list[str] = []
     for session in list_onboarding_sessions(conn, redact_secrets=False):
         state = str(session.get("state") or "").strip()
         if state != "awaiting-notion-verification":
             continue
+        pending_sessions += 1
         claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
         if not claim_id:
             updated = save_onboarding_session(
@@ -1118,10 +1129,13 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
                 if verified_claim is not None:
                     claim = verified_claim
                     status = str(claim.get("status") or "").strip()
-            except Exception:
+            except Exception as exc:
+                poll_failures.append(f"{claim_id or session.get('session_id')}: {str(exc).strip() or 'unknown error'}")
                 status = "pending"
         if status != "verified":
             continue
+        pending_sessions = max(0, pending_sessions - 1)
+        verified_sessions += 1
         identity = get_agent_identity(
             conn,
             agent_id=str(session.get("linked_agent_id") or ""),
@@ -1146,6 +1160,24 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
             ),
         )
         _finalize_completed_onboarding(conn, cfg, updated)
+    status = "ok"
+    if poll_failures:
+        status = "fail"
+    elif pending_sessions:
+        status = "warn"
+    note_refresh_job(
+        conn,
+        job_name="notion-claim-poll",
+        job_kind="notion-claim-poll",
+        target_id="shared-notion",
+        schedule="every 2m",
+        status=status,
+        note=(
+            f"pending_sessions={pending_sessions}; verified_sessions={verified_sessions}; "
+            f"expired_claims={expired_claims}; poll_failures={len(poll_failures)}; "
+            f"SLO targets p50<{NOTION_SLO_P50_SECONDS}s p99<{NOTION_SLO_P99_SECONDS}s"
+        ),
+    )
 
 
 def _schedule_failure(

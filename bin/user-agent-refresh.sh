@@ -13,6 +13,8 @@ MCP_URL="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
 TOKEN_FILE="${ALMANAC_BOOTSTRAP_TOKEN_FILE:-$HERMES_HOME/secrets/almanac-bootstrap-token}"
 ENROLLMENT_STATE_FILE="${ALMANAC_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/almanac-enrollment.json}"
+ALMANAC_AGENT_ID="${ALMANAC_AGENT_ID:-}"
+ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$REPO_DIR/almanac-priv/state/agents}"
 
 if [[ ! -f "$TOKEN_FILE" ]]; then
   echo "Missing bootstrap token file at $TOKEN_FILE" >&2
@@ -20,6 +22,23 @@ if [[ ! -f "$TOKEN_FILE" ]]; then
 fi
 
 token="$(tr -d '[:space:]' <"$TOKEN_FILE")"
+
+if [[ -z "$ALMANAC_AGENT_ID" && -f "$ENROLLMENT_STATE_FILE" ]]; then
+  ALMANAC_AGENT_ID="$(
+    python3 - "$ENROLLMENT_STATE_FILE" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+print(str(data.get("agent_id", "")))
+PY
+  )"
+fi
 
 if [[ -x "$REPO_DIR/bin/activate-agent.sh" ]]; then
   "$REPO_DIR/bin/activate-agent.sh"
@@ -55,18 +74,27 @@ print(json.dumps({"token": os.environ["ALMANAC_REFRESH_TOKEN"]}))
 PY
   )" >/dev/null
 
-# 2. fetch managed-memory payload and write stubs locally
+# 2. materialize the last curator-published managed-memory payload when it is
+# available locally; otherwise fall back to a live fetch.
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-python3 "$REPO_DIR/python/almanac_rpc_client.py" \
-  --url "$MCP_URL" \
-  --tool "agents.managed-memory" \
-  --json-args "$(ALMANAC_REFRESH_TOKEN="$token" python3 - <<'PY'
+managed_payload_path=""
+if [[ -n "$ALMANAC_AGENT_ID" ]]; then
+  managed_payload_path="$ALMANAC_AGENTS_STATE_DIR/$ALMANAC_AGENT_ID/managed-memory.json"
+fi
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]]; then
+  cp "$managed_payload_path" "$tmp"
+else
+  python3 "$REPO_DIR/python/almanac_rpc_client.py" \
+    --url "$MCP_URL" \
+    --tool "agents.managed-memory" \
+    --json-args "$(ALMANAC_REFRESH_TOKEN="$token" python3 - <<'PY'
 import json, os
 print(json.dumps({"token": os.environ["ALMANAC_REFRESH_TOKEN"]}))
 PY
-  )" >"$tmp"
+    )" >"$tmp"
+fi
 
 ALMANAC_MANAGED_PAYLOAD="$tmp" ALMANAC_HERMES_HOME="$HERMES_HOME" \
 PYTHONPATH="$REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \

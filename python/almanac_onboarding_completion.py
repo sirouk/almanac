@@ -51,6 +51,10 @@ def stored_completion_scrubbed_text(session: dict[str, Any]) -> str:
     return str(_completion_delivery(session).get("scrubbed_text") or "").strip()
 
 
+def stored_completion_followup_text(session: dict[str, Any]) -> str:
+    return str(_completion_delivery(session).get("followup_text") or "").strip()
+
+
 def _shared_tailnet_host() -> str:
     return shared_tailnet_host(
         tailscale_serve_enabled=(config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() == "1"),
@@ -70,7 +74,10 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
         qmd_path=config_env_value("TAILSCALE_QMD_PATH", "/mcp").strip() or "/mcp",
         almanac_mcp_path=config_env_value("TAILSCALE_ALMANAC_MCP_PATH", "/almanac-mcp").strip() or "/almanac-mcp",
         chutes_mcp_url=cfg.chutes_mcp_url,
-        notion_space_url=config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip(),
+        notion_space_url=(
+            config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_URL", "").strip()
+            or config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "").strip()
+        ),
     )
     return ["Shared Almanac rails:", *[f"- {line}" for line in shared_lines]]
 
@@ -87,35 +94,40 @@ def completion_message_bundle(
     discord_note: bool = False,
 ) -> dict[str, Any]:
     nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
-    base_lines = [
+    first_lines = [
         f"Your lane is ready. Your own bot is {bot_reference} now.",
         f"Unix user: {access.get('unix_user') or access.get('username')}",
+        notion_status_line,
+        "This shared password unlocks your Almanac dashboard, code workspace, and Nextcloud when it is enabled.",
+    ]
+    followup_lines = [
         f"Hermes dashboard: {access.get('dashboard_url')}",
         f"Dashboard username: {access.get('username')}",
         f"Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
         f"Code workspace: {access.get('code_url')}",
         f"Workspace root: {home}",
-        notion_status_line,
         *_shared_resource_lines(cfg),
         "The shared Vault and control rails are already wired into your agent by default.",
         notion_followup_line,
     ]
-    base_lines = [line for line in base_lines if line]
+    first_lines = [line for line in first_lines if line]
+    followup_lines = [line for line in followup_lines if line]
     if discord_note:
-        base_lines.append(
+        followup_lines.append(
             "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
         )
-    full_lines = list(base_lines)
-    full_lines.insert(4, f"Shared password: {access.get('password')}")
-    full_lines.append("After you've recorded this safely, click the button below and I'll remove the password from this message.")
+    full_lines = list(first_lines)
+    full_lines.insert(2, f"Shared password: {access.get('password')}")
+    full_lines.append("After you've recorded this safely, click the button below. I’ll remove the password from this message and then send the rest of your links.")
 
-    scrubbed_lines = list(base_lines)
-    scrubbed_lines.insert(4, "Shared password: removed after you confirmed you recorded it.")
+    scrubbed_lines = list(first_lines)
+    scrubbed_lines.insert(2, "Shared password: removed after you confirmed you recorded it.")
     scrubbed_lines.append("Password removed after confirmation.")
 
     return {
         "full_text": "\n".join(full_lines),
         "scrubbed_text": "\n".join(scrubbed_lines),
+        "followup_text": "\n".join(followup_lines),
         "telegram_reply_markup": completion_ack_telegram_markup(session_id),
         "discord_components": completion_ack_discord_components(session_id),
     }
@@ -196,3 +208,17 @@ def completion_scrubbed_text_for_session(
     if bundle is None:
         return ""
     return str(bundle.get("scrubbed_text") or "").strip()
+
+
+def completion_followup_text_for_session(
+    conn,
+    cfg: Config,
+    session: dict[str, Any],
+) -> str:
+    stored = stored_completion_followup_text(session)
+    if stored:
+        return stored
+    bundle = completion_bundle_for_session(conn, cfg, session)
+    if bundle is None:
+        return ""
+    return str(bundle.get("followup_text") or "").strip()

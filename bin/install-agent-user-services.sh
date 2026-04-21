@@ -16,6 +16,7 @@ ACCESS_STATE_FILE="$HERMES_HOME/state/almanac-web-access.json"
 TARGET_DIR="$HOME/.config/systemd/user"
 PYTHON3_BIN="$(command -v python3 || true)"
 PODMAN_BIN="$(command -v podman || true)"
+ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$SHARED_REPO_DIR/almanac-priv/state/agents}"
 mkdir -p "$TARGET_DIR"
 
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
@@ -70,6 +71,7 @@ Type=oneshot
 Environment=ALMANAC_AGENT_ID=$AGENT_ID
 Environment=HERMES_HOME=$HERMES_HOME
 Environment=ALMANAC_SHARED_REPO_DIR=$SHARED_REPO_DIR
+Environment=ALMANAC_AGENTS_STATE_DIR=$ALMANAC_AGENTS_STATE_DIR
 ExecStart=$SHARED_REPO_DIR/bin/user-agent-refresh.sh
 EOF
 

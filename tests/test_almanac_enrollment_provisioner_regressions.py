@@ -154,6 +154,7 @@ def test_completion_bundle_send_is_idempotent() -> None:
             provisioner.completion_bundle_for_session = lambda *args, **kwargs: {
                 "full_text": "lane ready",
                 "scrubbed_text": "lane ready",
+                "followup_text": "links",
                 "telegram_reply_markup": None,
                 "discord_components": None,
             }
@@ -248,6 +249,7 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             provisioner.completion_bundle_for_session = lambda *args, **kwargs: {
                 "full_text": "lane ready bundle",
                 "scrubbed_text": "lane ready bundle",
+                "followup_text": "links",
                 "telegram_reply_markup": None,
                 "discord_components": None,
             }
@@ -299,7 +301,73 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             expect(len(deliveries) == 2, str(deliveries))
             expect("Verified. I can now write to shared Notion" in str(deliveries[0]["message"]), str(deliveries))
             expect(str(deliveries[1]["message"]) == "lane ready bundle", str(deliveries))
+            refresh_job = conn.execute(
+                """
+                SELECT last_status, last_note
+                FROM refresh_jobs
+                WHERE job_kind = 'notion-claim-poll'
+                ORDER BY rowid DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            expect(refresh_job is not None and refresh_job["last_status"] == "ok", str(dict(refresh_job) if refresh_job else {}))
+            expect("verified_sessions=1" in str(refresh_job["last_note"] or ""), str(dict(refresh_job)))
+            expect("SLO targets" in str(refresh_job["last_note"] or ""), str(dict(refresh_job)))
             print("PASS test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_gateway_failures_notify_user_with_provision_error_status() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_gateway_failure_notify_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_gateway_failure_notify_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="123456",
+                sender_id="123456",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="provision-pending",
+                linked_agent_id="agent-sirouk",
+                answers={
+                    "bot_platform": "telegram",
+                    "bot_username": "Jeef",
+                    "preferred_bot_name": "Jeef",
+                    "unix_user": "sirouk",
+                },
+            )
+            provisioner.list_pending_onboarding_bot_configurations = lambda conn: [control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)]
+            provisioner._migrate_legacy_onboarding_session = lambda conn, cfg, session: session
+            provisioner._configure_user_telegram_gateway = lambda conn, cfg, session: (_ for _ in ()).throw(RuntimeError("gateway startup failed"))
+            notifications: list[str] = []
+            provisioner._notify_user_via_curator = lambda cfg, *, session, message, telegram_reply_markup=None, discord_components=None: notifications.append(message) or {"message_id": "1"}
+
+            provisioner._run_pending_onboarding_gateway_configs(conn, cfg)
+
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            expect(str(refreshed.get("provision_error") or "") == "gateway startup failed", str(refreshed))
+            expect(len(notifications) == 1, str(notifications))
+            expect("gateway startup failed" in notifications[0], str(notifications))
+            expect("/status" in notifications[0], str(notifications))
+            print("PASS test_gateway_failures_notify_user_with_provision_error_status")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -310,7 +378,8 @@ def main() -> int:
     test_onboarding_paths_enter_notion_phase_before_final_completion()
     test_completion_bundle_send_is_idempotent()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
-    print("PASS all 4 enrollment provisioner regression tests")
+    test_gateway_failures_notify_user_with_provision_error_status()
+    print("PASS all 5 enrollment provisioner regression tests")
     return 0
 
 

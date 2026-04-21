@@ -18,7 +18,7 @@ from almanac_control import (
 )
 from almanac_discord import discord_get_current_user
 from almanac_discord import discord_send_message
-from almanac_onboarding_completion import completion_scrubbed_text_for_session
+from almanac_onboarding_completion import completion_followup_text_for_session, completion_scrubbed_text_for_session
 from almanac_onboarding_flow import (
     OutboundMessage,
     BotIdentity,
@@ -415,6 +415,7 @@ async def main() -> None:
                     "password_scrubbed": True,
                 }
             )
+            followup_text = completion_followup_text_for_session(conn, cfg, session)
             save_onboarding_session(
                 conn,
                 session_id=session_id,
@@ -423,6 +424,22 @@ async def main() -> None:
                     "completion_secret_acknowledged_at": utc_now_iso(),
                 },
             )
+        if followup_text and not bool(completion_delivery.get("followup_sent")):
+            try:
+                await discord_send_message(
+                    bot_token=bot_token,
+                    channel_id=actual_chat,
+                    text=followup_text,
+                )
+                completion_delivery["followup_sent"] = True
+            except Exception:
+                completion_delivery["followup_sent"] = False
+            with connect_db(cfg) as conn:
+                save_onboarding_session(
+                    conn,
+                    session_id=session_id,
+                    answers={"completion_delivery": completion_delivery},
+                )
 
     await client.start(bot_token)
 

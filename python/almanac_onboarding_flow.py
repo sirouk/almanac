@@ -377,17 +377,28 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "awaiting-name":
         return "Hi. I’m Curator. I’ll guide the setup and keep us on the rails. What should I call you?"
     if state == "awaiting-unix-user":
-        return "What Unix username do you want on this host?"
+        return "Almanac runs on a shared host, so each enrolled user gets their own Unix account there. What username should I create for you?"
     if state == "awaiting-purpose":
         return "What should this agent help you practice or get done?"
     if state == "awaiting-bot-platform":
-        return "Which bot platform should I wire for your own agent: `telegram` or `discord`?"
+        return "I can only wire the same platform you're onboarding from right now. Reply with `telegram` or `discord` to match this DM."
     if state == "awaiting-bot-name":
-        return "What name should your own bot carry? A short plain-English name is enough."
+        return f"What name should your own {bot_platform or 'chat'} bot carry? A short plain-English name is enough."
     if state == "awaiting-model-preset":
         return f"Which model preset should this agent use? Available presets: `{_model_options(cfg)}`."
     if state == "awaiting-operator-approval":
-        return "Thanks. I’ve sent this to the operator for approval. I’ll keep watch and continue here once I hear back."
+        notified_at = str(session.get("operator_notified_at") or "").strip()
+        waiting_note = ""
+        if notified_at:
+            try:
+                queued_at = dt.datetime.fromisoformat(notified_at)
+                if queued_at.tzinfo is None:
+                    queued_at = queued_at.replace(tzinfo=dt.timezone.utc)
+                if (dt.datetime.now(dt.timezone.utc) - queued_at) >= dt.timedelta(minutes=10):
+                    waiting_note = " If this has been sitting for a while, ask the operator to check the onboarding queue and reply `/status` here any time."
+            except ValueError:
+                waiting_note = ""
+        return "Thanks. I’ve sent this to the operator for approval. I’ll keep watch and continue here once I hear back." + waiting_note
     if state == "awaiting-bot-token":
         if bot_platform == "discord":
             return (
@@ -416,6 +427,13 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "awaiting-provider-browser-auth" and provider_setup is not None:
         return provider_browser_auth_prompt(provider_setup, browser_auth)
     if state == "provision-pending":
+        provision_error = str(session.get("provision_error") or "").strip()
+        if provision_error:
+            return (
+                "I hit a provisioning problem while wiring your lane:\n"
+                f"{provision_error}\n\n"
+                "I’ve kept your session open so the operator can recover it cleanly. Reply `/status` here any time for the latest state."
+            )
         return "I’m provisioning your agent and wiring your bot now. This usually lands within a minute. I’ll ping you as soon as your lane is ready."
     if state == "awaiting-notion-email":
         return (
@@ -601,7 +619,7 @@ def process_onboarding_message(
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-unix-user",
+                state="awaiting-purpose",
                 answers={"full_name": text},
                 chat_id=incoming.chat_id,
                 sender_username=incoming.sender_username,
@@ -617,8 +635,11 @@ def process_onboarding_message(
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-purpose",
-                answers={"unix_user": candidate},
+                state="awaiting-bot-name",
+                answers={
+                    "unix_user": candidate,
+                    "bot_platform": incoming.platform,
+                },
                 chat_id=incoming.chat_id,
                 sender_username=incoming.sender_username,
                 sender_display_name=incoming.sender_display_name,
@@ -629,7 +650,7 @@ def process_onboarding_message(
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
-                state="awaiting-bot-platform",
+                state="awaiting-unix-user",
                 answers={"purpose": text},
             )
             return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]

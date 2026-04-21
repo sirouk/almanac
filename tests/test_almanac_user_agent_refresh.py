@@ -91,6 +91,33 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         shutil.copy2(RESOURCE_MAP_PY, python_dir / "almanac_resource_map.py")
         write_fake_rpc_client(python_dir / "almanac_rpc_client.py")
 
+        agents_state_dir = root / "agents-state" / "agent-jeef"
+        agents_state_dir.mkdir(parents=True, exist_ok=True)
+        (agents_state_dir / "managed-memory.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-jeef",
+                    "almanac-skill-ref": "Use almanac-qmd-mcp for retrieval and almanac-vault-reconciler for drift repair.",
+                    "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Jeef",
+                    "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Hermes dashboard: https://kor.tail77f45e.ts.net:30011/\n- Code workspace: https://kor.tail77f45e.ts.net:40011/\n- Credentials are intentionally omitted from managed memory.",
+                    "qmd-ref": "qmd MCP (deep retrieval): https://kor.tail77f45e.ts.net/mcp",
+                    "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
+                    "catalog": [
+                        {"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"},
+                        {"vault_name": "Teams", "default_subscribed": 0, "description": "Team coordination"},
+                    ],
+                    "subscriptions": [
+                        {"vault_name": "Projects", "subscribed": 1, "default_subscribed": 1},
+                        {"vault_name": "Teams", "subscribed": 0, "default_subscribed": 0},
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
         token_file = hermes_home / "secrets" / "almanac-bootstrap-token"
         token_file.parent.mkdir(parents=True, exist_ok=True)
         token_file.write_text("tok_jeef\n", encoding="utf-8")
@@ -135,6 +162,8 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                 "HOME": str(root / "home-jeef"),
                 "ALMANAC_MCP_URL": "http://127.0.0.1:8282/mcp",
                 "ALMANAC_FAKE_RPC_LOG": str(rpc_log),
+                "ALMANAC_AGENT_ID": "agent-jeef",
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "agents-state"),
             },
             text=True,
             capture_output=True,
@@ -184,7 +213,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         expect(events_payload["events"][2]["message"] == "Teams -> False", events_payload)
 
         rpc_calls = json.loads(rpc_log.read_text(encoding="utf-8"))
-        expect([call["tool"] for call in rpc_calls] == ["vaults.refresh", "agents.managed-memory", "agents.consume-notifications"], rpc_calls)
+        expect([call["tool"] for call in rpc_calls] == ["vaults.refresh", "agents.consume-notifications"], rpc_calls)
         expect(all(call["payload"].get("token") == "tok_jeef" for call in rpc_calls), rpc_calls)
         expect(rpc_calls[-1]["payload"].get("limit") == 200, rpc_calls)
         print("PASS test_user_agent_refresh_materializes_managed_stubs_and_recent_events")

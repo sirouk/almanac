@@ -12,6 +12,8 @@ set -euo pipefail
 : "${ALMANAC_SHARED_REPO_DIR:?ALMANAC_SHARED_REPO_DIR is required}"
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
+ENROLLMENT_STATE_FILE="${ALMANAC_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/almanac-enrollment.json}"
+ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$ALMANAC_SHARED_REPO_DIR/almanac-priv/state/agents}"
 
 if [[ ! -r "$ALMANAC_BOOTSTRAP_TOKEN_FILE" ]]; then
   echo "first-contact: cannot read bootstrap token at $ALMANAC_BOOTSTRAP_TOKEN_FILE" >&2
@@ -48,12 +50,37 @@ print(json.dumps({"token": sys.argv[1]}))
 PY
   )" >"$refresh_file"
 
-"$RPC" --url "$ALMANAC_MCP_URL" --tool "agents.managed-memory" \
-  --json-args "$(python3 - "$TOKEN" <<'PY'
+agent_id=""
+if [[ -r "$ENROLLMENT_STATE_FILE" ]]; then
+  agent_id="$(
+    python3 - "$ENROLLMENT_STATE_FILE" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+print(str(data.get("agent_id", "")))
+PY
+  )"
+fi
+managed_payload_path=""
+if [[ -n "$agent_id" ]]; then
+  managed_payload_path="$ALMANAC_AGENTS_STATE_DIR/$agent_id/managed-memory.json"
+fi
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]]; then
+  cp "$managed_payload_path" "$managed_file"
+else
+  "$RPC" --url "$ALMANAC_MCP_URL" --tool "agents.managed-memory" \
+    --json-args "$(python3 - "$TOKEN" <<'PY'
 import json, sys
 print(json.dumps({"token": sys.argv[1]}))
 PY
-  )" >"$managed_file"
+    )" >"$managed_file"
+fi
 
 "$RPC" --url "$ALMANAC_MCP_URL" --tool "status" --json-args "{}" >"$status_file"
 

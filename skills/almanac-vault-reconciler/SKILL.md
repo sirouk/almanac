@@ -11,6 +11,8 @@ This skill is for ongoing maintenance, not full-content ingestion.
 
 It does not turn every note or PDF into built-in agent memory.
 
+If the user is asking a normal vault-backed knowledge question rather than diagnosing memory drift, use `almanac-qmd-mcp` first instead of searching the repo or walking the sync rails.
+
 ## Core contract
 
 The vault is the source of truth.

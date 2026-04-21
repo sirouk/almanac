@@ -51,6 +51,7 @@ ALMANAC_SSOT_NOTION_SPACE_ID="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
 ALMANAC_SSOT_NOTION_SPACE_KIND="${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
 ALMANAC_SSOT_NOTION_API_VERSION="${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
 ALMANAC_SSOT_NOTION_TOKEN="${ALMANAC_SSOT_NOTION_TOKEN:-}"
+ALMANAC_NOTION_INDEX_ROOTS="${ALMANAC_NOTION_INDEX_ROOTS:-}"
 ALMANAC_ORG_NAME="${ALMANAC_ORG_NAME:-}"
 ALMANAC_ORG_MISSION="${ALMANAC_ORG_MISSION:-}"
 ALMANAC_ORG_PRIMARY_PROJECT="${ALMANAC_ORG_PRIMARY_PROJECT:-}"
@@ -1140,6 +1141,7 @@ emit_runtime_config() {
     write_kv ALMANAC_SSOT_NOTION_SPACE_KIND "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
     write_kv ALMANAC_SSOT_NOTION_API_VERSION "${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
     write_kv ALMANAC_SSOT_NOTION_TOKEN "${ALMANAC_SSOT_NOTION_TOKEN:-}"
+    write_kv ALMANAC_NOTION_INDEX_ROOTS "${ALMANAC_NOTION_INDEX_ROOTS:-}"
     write_kv ALMANAC_ORG_NAME "${ALMANAC_ORG_NAME:-}"
     write_kv ALMANAC_ORG_MISSION "${ALMANAC_ORG_MISSION:-}"
     write_kv ALMANAC_ORG_PRIMARY_PROJECT "${ALMANAC_ORG_PRIMARY_PROJECT:-}"
@@ -1613,6 +1615,8 @@ print_post_install_guide() {
       echo "  Shared Notion target:"
       echo "    ${ALMANAC_SSOT_NOTION_SPACE_KIND:-object} ${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
     fi
+    echo "  Shared Notion index roots:"
+    echo "    ${ALMANAC_NOTION_INDEX_ROOTS:-${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-${ALMANAC_SSOT_NOTION_SPACE_URL:-not configured}}}"
   else
     echo "  Shared Notion SSOT:"
     echo "    not configured yet; run $ALMANAC_REPO_DIR/deploy.sh notion-ssot"
@@ -1742,6 +1746,7 @@ render_agent_install_payload_body() {
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-first-contact\""
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-vaults\""
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-ssot\""
+  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-notion-knowledge\""
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-ssot-connect\""
   echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-notion-mcp\""
   echo "  model_presets:"
@@ -1750,7 +1755,7 @@ render_agent_install_payload_body() {
   echo "    chutes: \"$ALMANAC_MODEL_PRESET_CHUTES\""
   echo "  actions:"
   echo "    - run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup; keep local TUI available under the user's Unix account"
-  echo "    - install default Almanac skills: qmd MCP, vault reconciler, first-contact, vaults, ssot, ssot-connect, and notion-mcp"
+  echo "    - install default Almanac skills: qmd MCP, vault reconciler, first-contact, vaults, ssot, notion-knowledge, ssot-connect, and notion-mcp"
   echo "    - \"hermes mcp add almanac-mcp --url http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp\""
   echo "    - \"hermes mcp add almanac-qmd --url $AGENT_QMD_URL\""
   if [[ -n "${CHUTES_MCP_URL:-}" ]]; then
@@ -3712,6 +3717,7 @@ PY
       almanac-first-contact \
       almanac-vaults \
       almanac-ssot \
+      almanac-notion-knowledge \
       almanac-ssot-connect \
       almanac-notion-mcp >/dev/null
     run_root_env_cmd runuser -u "$unix_user" -- env \
@@ -4286,6 +4292,8 @@ run_notion_ssot_setup() {
   fi
   echo
 
+  local notion_index_roots=""
+
   notion_space_url="$(normalize_optional_answer "$(ask "Shared Notion page URL for Almanac (use a normal page, not the workspace Home screen) (ENTER keeps current, type none to clear)" "${ALMANAC_SSOT_NOTION_SPACE_URL:-}")")"
   notion_api_version="$(normalize_optional_answer "$(ask "Notion API version" "${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}")")"
   notion_api_version="${notion_api_version:-2026-03-11}"
@@ -4300,6 +4308,7 @@ run_notion_ssot_setup() {
     ALMANAC_SSOT_NOTION_SPACE_KIND=""
     ALMANAC_SSOT_NOTION_API_VERSION="$notion_api_version"
     ALMANAC_SSOT_NOTION_TOKEN=""
+    ALMANAC_NOTION_INDEX_ROOTS=""
     ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
     write_runtime_config "$CONFIG_TARGET"
     if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
@@ -4420,6 +4429,9 @@ PY
     exit 1
   fi
 
+  notion_index_roots="$(normalize_optional_answer "$(ask "Shared Notion index roots (comma-separated page/database URLs or IDs; ENTER keeps current/default root)" "${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}")")"
+  notion_index_roots="${notion_index_roots:-$root_page_url}"
+
   ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"
   ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"
   ALMANAC_SSOT_NOTION_SPACE_URL="$notion_space_url"
@@ -4427,6 +4439,7 @@ PY
   ALMANAC_SSOT_NOTION_SPACE_KIND="$space_kind"
   ALMANAC_SSOT_NOTION_API_VERSION="$notion_api_version"
   ALMANAC_SSOT_NOTION_TOKEN="$notion_token"
+  ALMANAC_NOTION_INDEX_ROOTS="$notion_index_roots"
   ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="$notion_public_webhook_url"
   write_runtime_config "$CONFIG_TARGET"
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
@@ -4450,6 +4463,8 @@ PY
   if [[ -n "$space_title" ]]; then
     echo "  $space_title"
   fi
+  echo "Shared Notion index roots:"
+  echo "  ${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}"
   echo "Resolved URL:"
   echo "  ${target_url:-$notion_space_url}"
   echo "Config persisted to:"

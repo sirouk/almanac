@@ -661,7 +661,7 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 - when Tailscale Serve is enabled, deploy also prints the tailnet MCP URL for remote agents
 - the matching skill lives at `skills/almanac-qmd-mcp/SKILL.md`
 - the recurring memory-maintenance skill lives at `skills/almanac-vault-reconciler/SKILL.md`
-- user enrollment also installs `almanac-first-contact`, `almanac-vaults`, `almanac-ssot`, `almanac-ssot-connect`, and `almanac-notion-mcp`
+- user enrollment also installs `almanac-first-contact`, `almanac-vaults`, `almanac-ssot`, plus the optional personal-Notion helpers `almanac-ssot-connect` and `almanac-notion-mcp`
 - first contact registers `almanac-mcp`, qmd MCP, and Chutes KB MCP when configured, then resolves default `.vault` subscriptions
 - if `sirouk/almanac` is public, remote host users can bootstrap with the raw `init.sh` URL
 - if `sirouk/almanac` is still private, users should enroll from a local clone on the host
@@ -752,9 +752,10 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
   - `./bin/almanac-ctl notion claim-email <agent-id|unix-user> <email>`
   - `./bin/almanac-ctl notion verify-identity <agent-id|unix-user> <notion-user-id> --email <email>`
   - `./bin/almanac-ctl notion audit --agent-id <agent-id>`
-- user-owned Notion linking uses `almanac-ssot-connect`
-- once a user's own Notion MCP is connected, ongoing work should use
-  `almanac-notion-mcp`
+- user-owned Notion linking uses the optional helper `almanac-ssot-connect`
+- once a user's own Notion MCP is connected, that separate personal lane can
+  use the optional helper `almanac-notion-mcp`; it is not the default shared
+  Almanac workspace-search contract
 - Almanac does not use per-user OAuth for the shared organizational rail:
   OAuth would scope access, but Notion would still attribute the write to the
   integration in native edit history. The shared rail stays centralized so the

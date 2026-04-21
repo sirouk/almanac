@@ -557,6 +557,7 @@ required_skill_names = [
     "almanac-first-contact",
     "almanac-vaults",
     "almanac-ssot",
+    "almanac-notion-knowledge",
     "almanac-ssot-connect",
     "almanac-notion-mcp",
 ]
@@ -1319,6 +1320,17 @@ if command -v qmd >/dev/null 2>&1; then
     pass "qmd collection '$QMD_COLLECTION_NAME' exists in index '$QMD_INDEX_NAME'"
   else
     fail "qmd collection '$QMD_COLLECTION_NAME' is missing from index '$QMD_INDEX_NAME'"
+  fi
+  if qmd --index "$QMD_INDEX_NAME" collection show "$ALMANAC_NOTION_INDEX_COLLECTION_NAME" >/dev/null 2>&1; then
+    if [[ -n "${ALMANAC_NOTION_INDEX_ROOTS:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+      pass "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' exists for shared Notion knowledge"
+    else
+      pass "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' is provisioned for optional shared Notion indexing"
+    fi
+  elif [[ -n "${ALMANAC_NOTION_INDEX_ROOTS:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+    fail "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' is missing from index '$QMD_INDEX_NAME'"
+  else
+    warn "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' is not provisioned yet"
   fi
 fi
 

@@ -29,6 +29,7 @@ from almanac_control import (
     archive_agent_files,
     cancel_auto_provision_request,
     config_env_value,
+    consume_notion_reindex_queue,
     connect_db,
     deny_request,
     deny_ssot_pending_write,
@@ -76,6 +77,7 @@ from almanac_control import (
     suspend_agent_identity,
     subscriptions_for_agent,
     sync_vault_repo_mirrors,
+    sync_shared_notion_index,
     unsuspend_agent_identity,
     utc_now_iso,
     upsert_notion_identity_override,
@@ -220,6 +222,11 @@ def parse_args() -> argparse.Namespace:
     notion_preflight.add_argument("--root-page-id", default="")
     notion_preflight.add_argument("--token", default="")
     notion_preflight.add_argument("--api-version", default="")
+    notion_index_sync = notion_sub.add_parser("index-sync")
+    notion_index_sync.add_argument("--full", action="store_true")
+    notion_index_sync.add_argument("--page-id", action="append", default=[])
+    notion_index_sync.add_argument("--database-id", action="append", default=[])
+    notion_index_sync.add_argument("--actor", default=os.environ.get("USER", "operator"))
     notion_identity_list = notion_sub.add_parser("identity-list")
     notion_identity_list.add_argument("--show-sensitive", dest="show_sensitive", action="store_true")
     notion_identity_list.add_argument("--show-emails", dest="show_sensitive", action="store_true", help=argparse.SUPPRESS)
@@ -1975,6 +1982,7 @@ def main() -> None:
 
             repo_sync = sync_vault_repo_mirrors(conn, cfg)
             scan = reload_vault_definitions(conn, cfg)
+            notion_index = consume_notion_reindex_queue(conn, cfg, actor=args.actor)
             fanout = consume_curator_brief_fanout(conn, cfg)
             upgrade = upgrade_check(conn, cfg, actor=args.actor, notify=True)
             note_refresh_job(
@@ -1986,11 +1994,12 @@ def main() -> None:
                 status="ok" if not repo_sync.get("repos_failed") else "warn",
                 note=(
                     f"repo sync changed {len(repo_sync.get('changed_paths', []))} path(s); "
+                    f"notion index status: {notion_index.get('status', 'unknown')}; "
                     f"vault warnings: {len(scan['warnings'])}; "
                     f"published {len(fanout.get('published_agents', []))} central stub(s)"
                 ),
             )
-            dump_output(args, {"repo_sync": repo_sync, "scan": scan, "fanout": fanout, "upgrade": upgrade})
+            dump_output(args, {"repo_sync": repo_sync, "scan": scan, "notion_index": notion_index, "fanout": fanout, "upgrade": upgrade})
             return
         if args.domain == "internal" and args.action == "vault-repo-sync":
             dump_output(args, sync_vault_repo_mirrors(conn, cfg))
@@ -2032,6 +2041,19 @@ def main() -> None:
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc
             dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "index-sync":
+            dump_output(
+                args,
+                sync_shared_notion_index(
+                    conn,
+                    cfg,
+                    full=bool(args.full),
+                    page_ids=list(args.page_id or []),
+                    database_ids=list(args.database_id or []),
+                    actor=args.actor,
+                ),
+            )
             return
         if args.domain == "notion" and args.action == "identity-list":
             dump_output(

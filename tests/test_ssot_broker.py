@@ -2045,10 +2045,23 @@ def test_notion_batcher_hydrates_entity_before_routing() -> None:
                 """
             ).fetchone()
             expect(int(fanout["c"] if fanout else 0) == 1, str(dict(fanout) if fanout else {}))
+            reindex_notice = conn.execute(
+                """
+                SELECT target_id, extra_json
+                FROM notification_outbox
+                WHERE target_kind = 'curator' AND channel_kind = 'notion-reindex'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            expect(reindex_notice is not None, "expected notion reindex notification to be queued")
+            expect(str(reindex_notice["target_id"] or "") == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", str(dict(reindex_notice)))
+            expect("page" in str(reindex_notice["extra_json"] or ""), str(dict(reindex_notice)))
             row = conn.execute(
                 "SELECT batch_status FROM notion_webhook_events WHERE event_id = 'event-1'"
             ).fetchone()
             expect(row is not None and row["batch_status"] == "processed", str(dict(row) if row else {}))
+            expect(result["reindex_entities"] == 1, result)
             print("PASS test_notion_batcher_hydrates_entity_before_routing")
         finally:
             os.environ.clear()

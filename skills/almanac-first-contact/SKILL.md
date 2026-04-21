@@ -35,6 +35,8 @@ On a shared host, `ALMANAC_SHARED_REPO_DIR` may live under `/home/almanac/almana
   - `almanac-mcp`
   - `almanac-qmd`
   - `chutes-kb` when configured
+- verify the retrieval rail is actually callable by running a real qmd `tools/call` probe instead of only trusting the configured URL
+- when the shared Notion knowledge rail is configured on the host, verify it by running one real `notion.search` probe through `almanac-mcp`
 - resolve the active `.vault` catalog and surface subscribed vs default state
 - run one initial vault refresh via `vaults.refresh`
 - load the canonical managed-memory payload from Curator's published snapshot when available, falling back to `agents.managed-memory` only when needed
@@ -51,6 +53,10 @@ After a successful run, the enrolled user agent should have:
 - `$HERMES_HOME/memories/MEMORY.md` with the managed Almanac routing entries
 
 These are not optional extras. First-contact is not complete until the initial memory stubs exist.
+
+The JSON summary should also include a successful qmd probe record. If qmd cannot answer a real MCP query call, first-contact is not complete.
+
+When shared Notion indexing is configured for the host, the summary should also include a successful `notion.search` probe record. If that rail is configured but not callable, first-contact is not complete.
 
 ## Guardrails
 

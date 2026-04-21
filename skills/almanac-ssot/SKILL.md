@@ -59,6 +59,17 @@ free-for-all edit surface.
 
 - use the brokered `ssot.read` rail for shared Notion lookups rather than
   trying to reach the shared workspace directly
+- treat `ssot.read` as the governed shared-SSOT lane, not as a broad
+  full-workspace documentation search tool
+- if the user explicitly wants wide retrieval across a separately connected
+  personal Notion workspace and that MCP lane is live, hand that work to
+  `almanac-notion-mcp`; do not present that lane as the default shared Almanac
+  workspace-search path
+- when the task is structured shared organizational state with filters such as
+  owner, status, due date, or assignee, prefer scoped structured reads over
+  page-by-page exploration
+- if an answer needs both the shared SSOT and the user's own Notion MCP lane,
+  name both sources instead of collapsing them together silently
 - write only on behalf of the user who owns the agent
 - do not silently cross-edit records owned by another user
 - do not fall back to "please touch the page again" when the page is already in the user's edit lane or this agent has already written there through the broker

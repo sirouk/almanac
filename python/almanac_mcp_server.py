@@ -26,6 +26,9 @@ from almanac_control import (
     count_ssot_pending_writes,
     list_requests,
     list_vault_warnings,
+    notion_fetch,
+    notion_query,
+    notion_search,
     note_refresh_job,
     queue_notification,
     read_ssot,
@@ -63,6 +66,9 @@ TOOLS = {
     "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering.",
     "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided.",
     "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for approval. Archive/delete are rejected.",
+    "notion.search": "Search shared Notion knowledge through Almanac's qmd-backed indexed Notion rail.",
+    "notion.fetch": "Fetch the live body or schema of a shared Notion page/database by exact id or URL.",
+    "notion.query": "Run a live structured query against a shared Notion database/data source.",
 }
 
 
@@ -467,6 +473,41 @@ class Handler(BaseHTTPRequestHandler):
                     undelivered_only=bool(arguments.get("undelivered_only")),
                 )
                 return {"notifications": notifications}
+
+            if tool_name == "notion.search":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                return notion_search(
+                    conn,
+                    cfg,
+                    agent_id=str(token_row["agent_id"]),
+                    query_text=str(arguments.get("query") or ""),
+                    limit=int(arguments.get("limit") or 5),
+                    requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
+                )
+
+            if tool_name == "notion.fetch":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                return notion_fetch(
+                    conn,
+                    cfg,
+                    agent_id=str(token_row["agent_id"]),
+                    target_id=str(arguments.get("target_id") or ""),
+                    requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
+                )
+
+            if tool_name == "notion.query":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                raw_query = arguments.get("query")
+                query = raw_query if isinstance(raw_query, dict) else {}
+                return notion_query(
+                    conn,
+                    cfg,
+                    agent_id=str(token_row["agent_id"]),
+                    target_id=str(arguments.get("target_id") or ""),
+                    query=query,
+                    limit=int(arguments.get("limit") or 25),
+                    requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
+                )
 
             if tool_name == "ssot.read":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))

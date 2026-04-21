@@ -22,11 +22,13 @@ confirm_default() {
   local default="${2:-yes}"
   local answer=""
   local hint="Y/n"
+  local normalized_answer=""
 
   [[ "$default" == "no" ]] && hint="y/N"
   read -r -p "$prompt [$hint]: " answer
   answer="${answer:-$default}"
-  [[ "$(lowercase "$answer")" =~ ^(y|yes|1)$ ]]
+  normalized_answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+  [[ "$normalized_answer" =~ ^(y|yes|1)$ ]]
 }
 
 choose_model_preset() {
@@ -58,6 +60,7 @@ choose_channels_csv() {
   local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
   local default_discord="no"
   local default_telegram="no"
+  local normalized_discord="" normalized_telegram=""
 
   if [[ "$skip_setup" == "1" && "$skip_gateway_setup" == "1" && -n "$existing_channels" ]]; then
     printf '%s\n' "$existing_channels"
@@ -83,10 +86,12 @@ choose_channels_csv() {
   local discord="" telegram="" channels="tui-only"
   discord="$(ask_default "Enable Discord for Curator gateway? (yes/no)" "$default_discord")"
   telegram="$(ask_default "Enable Telegram for Curator gateway? (yes/no)" "$default_telegram")"
-  if [[ "$(lowercase "$discord")" =~ ^(y|yes|1)$ ]]; then
+  normalized_discord="$(printf '%s' "$discord" | tr '[:upper:]' '[:lower:]')"
+  normalized_telegram="$(printf '%s' "$telegram" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$normalized_discord" =~ ^(y|yes|1)$ ]]; then
     channels="$channels,discord"
   fi
-  if [[ "$(lowercase "$telegram")" =~ ^(y|yes|1)$ ]]; then
+  if [[ "$normalized_telegram" =~ ^(y|yes|1)$ ]]; then
     channels="$channels,telegram"
   fi
   printf '%s\n' "$channels"
@@ -782,6 +787,7 @@ PY
     almanac-first-contact \
     almanac-vaults \
     almanac-ssot \
+    almanac-notion-knowledge \
     almanac-ssot-connect \
     almanac-notion-mcp \
     almanac-upgrade-orchestrator

@@ -504,6 +504,112 @@ def query_notion_collection(
     }
 
 
+def query_notion_collection_all(
+    *,
+    database_id: str,
+    token: str,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    payload: dict[str, Any] | None = None,
+    page_size: int = 100,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    normalized_payload = dict(payload or {})
+    normalized_page_size = max(1, min(int(page_size or 100), 100))
+    results: list[dict[str, Any]] = []
+    next_cursor = str(normalized_payload.get("start_cursor") or "").strip()
+    query_meta: dict[str, Any] | None = None
+
+    while True:
+        page_payload = dict(normalized_payload)
+        page_payload["page_size"] = normalized_page_size
+        if next_cursor:
+            page_payload["start_cursor"] = next_cursor
+        elif "start_cursor" in page_payload:
+            page_payload.pop("start_cursor", None)
+        page_result = query_notion_collection(
+            database_id=database_id,
+            token=token,
+            api_version=api_version,
+            payload=page_payload,
+            urlopen_fn=urlopen_fn,
+        )
+        if query_meta is None:
+            query_meta = page_result
+        result_payload = page_result.get("result") if isinstance(page_result, dict) else {}
+        if not isinstance(result_payload, dict):
+            break
+        batch = result_payload.get("results")
+        if isinstance(batch, list):
+            results.extend(item for item in batch if isinstance(item, dict))
+        has_more = bool(result_payload.get("has_more"))
+        next_cursor = str(result_payload.get("next_cursor") or "").strip()
+        if not has_more or not next_cursor:
+            break
+
+    base = dict(query_meta or {})
+    result_payload = dict(base.get("result") or {})
+    result_payload["results"] = results
+    result_payload["has_more"] = False
+    result_payload["next_cursor"] = None
+    base["result"] = result_payload
+    return base
+
+
+def list_notion_block_children(
+    *,
+    block_id: str,
+    token: str,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    start_cursor: str = "",
+    page_size: int = 100,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    target_id = extract_notion_space_id(block_id)
+    normalized_page_size = max(1, min(int(page_size or 100), 100))
+    suffix = f"?page_size={normalized_page_size}"
+    if str(start_cursor or "").strip():
+        suffix += "&start_cursor=" + parse.quote(str(start_cursor).strip(), safe="")
+    try:
+        return _request_json(
+            "GET",
+            f"/blocks/{target_id}/children{suffix}",
+            token=token,
+            api_version=api_version,
+            urlopen_fn=urlopen_fn,
+        )
+    except NotionApiError as exc:
+        raise _friendly_api_error(exc, target=f"block children {target_id}") from exc
+
+
+def list_notion_block_children_all(
+    *,
+    block_id: str,
+    token: str,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    page_size: int = 100,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    next_cursor = ""
+    while True:
+        payload = list_notion_block_children(
+            block_id=block_id,
+            token=token,
+            api_version=api_version,
+            start_cursor=next_cursor,
+            page_size=page_size,
+            urlopen_fn=urlopen_fn,
+        )
+        batch = payload.get("results")
+        if isinstance(batch, list):
+            results.extend(item for item in batch if isinstance(item, dict))
+        has_more = bool(payload.get("has_more"))
+        next_cursor = str(payload.get("next_cursor") or "").strip()
+        if not has_more or not next_cursor:
+            break
+    return results
+
+
 def retrieve_notion_page_markdown(
     *,
     page_id: str,

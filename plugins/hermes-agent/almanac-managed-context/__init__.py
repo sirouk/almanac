@@ -16,6 +16,7 @@ _MANAGED_KEYS = (
     "vault-ref",
     "resource-ref",
     "qmd-ref",
+    "notion-ref",
     "vault-topology",
     "notion-stub",
 )
@@ -30,6 +31,7 @@ _SECTION_LIMITS = {
     "vault-ref": 600,
     "resource-ref": 1000,
     "qmd-ref": 600,
+    "notion-ref": 900,
     "vault-topology": 900,
     "notion-stub": 1000,
     "resource-ref-live": 700,

@@ -44,6 +44,20 @@ Do not read `/home/almanac/almanac/almanac-priv/config/almanac.env`, `.almanac-o
 
 When the user asks a question that could plausibly be answered by shared private documents, team notes, uploaded PDFs, internal terminology, company-specific plans, codenames, or a follow-up grounded in the current discussion, query qmd before you search the public web or answer from general model memory.
 
+## Fast path on a deployed Almanac host
+
+If the agent is already running on the Almanac host and the task is topic lookup rather than Almanac debugging, do this exact sequence:
+
+1. read the current user's local Almanac routing state first:
+   - `$HERMES_HOME/state/almanac-vault-reconciler.json`
+   - `$HERMES_HOME/state/almanac-recent-events.json` when recent drift or fresh uploads may matter
+2. use `[managed:qmd-ref]` or the default local rail `http://127.0.0.1:8181/mcp`
+3. query qmd immediately
+4. only if the qmd path itself fails, inspect `docs/hermes-qmd-config.yaml`
+5. only if qmd still looks broken, inspect daemon/health files such as `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, or `bin/health.sh`
+
+Do not start with repo-wide searches for the topic, for `qmd`, for `/mcp`, or for generic deployment clues when the question is just asking for vault-backed knowledge.
+
 Subscriptions do not gate qmd retrieval. They only affect ambient-awareness stubs and Curator push behavior.
 
 So:
@@ -51,6 +65,65 @@ So:
 1. use qmd for deep retrieval
 2. use `almanac-vaults` for subscription / catalog work
 3. use `almanac-vault-reconciler` when the stub layer or sync rail is in doubt
+
+For a simple knowledge question like "what is MESH?" on a deployed host, step 1 should usually be the only discovery step before the first qmd query.
+
+## Minimal working qmd MCP recipe
+
+The local qmd server speaks MCP over JSON-RPC 2.0. If you need to call it directly, use this sequence instead of guessing the protocol:
+
+1. initialize the session
+2. capture the `mcp-session-id` response header from `initialize`
+3. send `notifications/initialized` with that same `mcp-session-id`
+4. optionally call `tools/list` with that same `mcp-session-id` to confirm the live tool surface
+5. call the `query` tool with that same `mcp-session-id` for retrieval
+
+Live qmd servers on this host expose at least these tool names:
+
+- `query`
+- `get`
+- `multi_get`
+- `status`
+
+Minimum working retrieval example:
+
+```http
+POST http://127.0.0.1:8181/mcp
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"almanac-probe","version":"1.0"}}}
+```
+
+Capture the `mcp-session-id` response header from that `initialize` reply and send it on every later request:
+
+```json
+{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
+```
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+```
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query","arguments":{"searches":[{"type":"lex","query":"MESH"}],"collections":["vault"],"intent":"Identify what MESH refers to in Almanac","rerank":false,"limit":5}}}
+```
+
+Expected response shape:
+
+```json
+{"result":{"content":[{"type":"text","text":"..."}],"structuredContent":{"results":[...]}}}
+```
+
+This is the minimal transport example, not the only good search shape. qmd's own live instructions say to always provide `intent`, and for normal knowledge lookups the best results often come from combining `lex` and `vec` searches in the same call. Use `collections: ["vault", "vault-pdf-ingest"]` when PDF-derived markdown may matter. The required query arguments are:
+
+- `searches`: one or more search objects such as `{"type":"lex","query":"MESH"}`
+- optional `collections`
+- optional `intent`
+- optional `limit`
+- optional `rerank`
+- optional `candidateLimit`
+- optional `minScore`
 
 ## Pairing with the reconciler skill
 
@@ -74,3 +147,4 @@ Expected handoff:
 - prefer MCP and qmd over direct filesystem scraping when the vault is meant to stay read-oriented
 - for private or shared-vault knowledge questions, prefer qmd before web search
 - if qmd has relevant hits, do not ignore them and answer from the public web instead
+- do not search the repo just to rediscover the qmd rail when `[managed:qmd-ref]`, `docs/hermes-qmd-config.yaml`, or the local default endpoint already give you the route

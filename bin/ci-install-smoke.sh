@@ -888,6 +888,7 @@ assert_agent_payload() {
     "$ALMANAC_REPO_DIR/skills/almanac-first-contact" \
     "$ALMANAC_REPO_DIR/skills/almanac-vaults" \
     "$ALMANAC_REPO_DIR/skills/almanac-ssot" \
+    "$ALMANAC_REPO_DIR/skills/almanac-notion-knowledge" \
     "$ALMANAC_REPO_DIR/skills/almanac-ssot-connect" \
     "$ALMANAC_REPO_DIR/skills/almanac-notion-mcp"
   do

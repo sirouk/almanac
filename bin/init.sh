@@ -289,6 +289,7 @@ install_default_skills() {
     almanac-first-contact \
     almanac-vaults \
     almanac-ssot \
+    almanac-notion-knowledge \
     almanac-ssot-connect \
     almanac-notion-mcp
 }

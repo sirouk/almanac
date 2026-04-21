@@ -31,8 +31,11 @@ from almanac_notion_ssot import (
     create_notion_page,
     DEFAULT_NOTION_API_VERSION,
     extract_notion_space_id,
+    list_notion_block_children_all,
+    normalize_notion_space_url,
     notion_database_data_source_id,
     query_notion_collection,
+    query_notion_collection_all,
     retrieve_notion_data_source,
     retrieve_notion_database,
     retrieve_notion_page,
@@ -43,6 +46,7 @@ from almanac_notion_ssot import (
     update_notion_page,
     resolve_notion_target,
 )
+from almanac_rpc_client import mcp_call
 from almanac_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host
 
 
@@ -784,6 +788,38 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS notion_index_documents (
+          doc_key TEXT PRIMARY KEY,
+          root_id TEXT NOT NULL,
+          source_page_id TEXT NOT NULL,
+          source_page_url TEXT NOT NULL DEFAULT '',
+          source_kind TEXT NOT NULL DEFAULT 'page',
+          file_path TEXT NOT NULL,
+          page_title TEXT NOT NULL DEFAULT '',
+          section_heading TEXT NOT NULL DEFAULT '',
+          section_ordinal INTEGER NOT NULL DEFAULT 0,
+          breadcrumb_json TEXT NOT NULL DEFAULT '[]',
+          owners_json TEXT NOT NULL DEFAULT '[]',
+          last_edited_time TEXT NOT NULL DEFAULT '',
+          content_hash TEXT NOT NULL DEFAULT '',
+          indexed_at TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'active'
+        );
+
+        CREATE TABLE IF NOT EXISTS notion_retrieval_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          agent_id TEXT NOT NULL,
+          unix_user TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          query_text TEXT NOT NULL DEFAULT '',
+          target_id TEXT NOT NULL DEFAULT '',
+          root_id TEXT NOT NULL DEFAULT '',
+          result_count INTEGER NOT NULL DEFAULT 0,
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        );
         """
     )
     _migrate_notion_identity_claims_remove_legacy_nonce(conn)
@@ -838,6 +874,18 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_overrides_email
         ON notion_identity_overrides (LOWER(notion_user_email))
         WHERE notion_user_email != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notion_index_documents_root_page
+        ON notion_index_documents (root_id, source_page_id, section_ordinal)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notion_retrieval_audit_agent_created
+        ON notion_retrieval_audit (agent_id, created_at)
         """
     )
     conn.execute(
@@ -7189,6 +7237,118 @@ def _require_shared_notion_settings() -> dict[str, str]:
     return settings
 
 
+def _split_config_list(raw_value: str) -> list[str]:
+    items: list[str] = []
+    for chunk in str(raw_value or "").replace("\r", "\n").split("\n"):
+        for value in chunk.split(","):
+            normalized = str(value or "").strip()
+            if normalized:
+                items.append(normalized)
+    return items
+
+
+def _notion_index_collection_name() -> str:
+    return str(config_env_value("ALMANAC_NOTION_INDEX_COLLECTION_NAME", "notion-shared") or "").strip() or "notion-shared"
+
+
+def _notion_index_dir(cfg: Config) -> Path:
+    raw_value = str(config_env_value("ALMANAC_NOTION_INDEX_DIR", str(cfg.state_dir / "notion-index")) or "").strip()
+    return Path(raw_value or (cfg.state_dir / "notion-index")).expanduser().resolve()
+
+
+def _notion_index_markdown_dir(cfg: Config) -> Path:
+    return _notion_index_dir(cfg) / "markdown"
+
+
+def _notion_index_full_sweep_interval_seconds() -> int:
+    raw = str(config_env_value("ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS", "14400") or "").strip()
+    try:
+        return max(300, int(raw))
+    except ValueError:
+        return 14400
+
+
+def _configured_notion_index_root_refs() -> list[str]:
+    explicit = _split_config_list(config_env_value("ALMANAC_NOTION_INDEX_ROOTS", ""))
+    if explicit:
+        return explicit
+    fallback = (
+        str(config_env_value("ALMANAC_SSOT_NOTION_ROOT_PAGE_URL", "") or "").strip()
+        or str(config_env_value("ALMANAC_SSOT_NOTION_SPACE_URL", "") or "").strip()
+    )
+    return [fallback] if fallback else []
+
+
+def _resolve_notion_index_root(
+    *,
+    root_ref: str,
+    settings: dict[str, str],
+    urlopen_fn=None,
+) -> dict[str, str]:
+    notion_kwargs: dict[str, Any] = {}
+    if urlopen_fn is not None:
+        notion_kwargs["urlopen_fn"] = urlopen_fn
+    target = resolve_notion_target(
+        target_id=root_ref,
+        token=settings["token"],
+        api_version=settings["api_version"],
+        **notion_kwargs,
+    )
+    kind = str(target.get("kind") or "").strip() or "page"
+    root_id = str(target.get("id") or "").strip()
+    root_url = normalize_notion_space_url(str(target.get("url") or root_ref).strip())
+    root_title = str(target.get("title") or "").strip()
+    root_page_id = root_id
+    root_page_url = root_url
+    root_page_title = root_title
+    if kind == "database":
+        database_payload = retrieve_notion_database(
+            database_id=root_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        parent = database_payload.get("parent") if isinstance(database_payload, dict) else {}
+        if not isinstance(parent, dict) or str(parent.get("type") or "").strip() != "page_id":
+            raise RuntimeError("Notion index roots that point at databases must live under a page parent")
+        root_page_id = str(parent.get("page_id") or "").strip()
+        page_payload = retrieve_notion_page(
+            page_id=root_page_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        root_page_url = normalize_notion_space_url(str(page_payload.get("url") or "").strip())
+        root_page_title = _notion_title_from_page(page_payload)
+    return {
+        "root_ref": str(root_ref or "").strip(),
+        "root_kind": kind,
+        "root_id": root_id,
+        "root_url": root_url,
+        "root_title": root_title,
+        "root_page_id": root_page_id,
+        "root_page_url": root_page_url,
+        "root_page_title": root_page_title,
+    }
+
+
+def _resolve_notion_index_roots(
+    *,
+    settings: dict[str, str],
+    urlopen_fn=None,
+) -> list[dict[str, str]]:
+    roots: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for root_ref in _configured_notion_index_root_refs():
+        root = _resolve_notion_index_root(root_ref=root_ref, settings=settings, urlopen_fn=urlopen_fn)
+        dedupe_key = f"{root['root_kind']}:{root['root_id']}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        roots.append(root)
+    return roots
+
+
 def _load_notion_collection_schema(
     *,
     target_id: str,
@@ -7429,6 +7589,849 @@ def _notion_team_summary(items: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def _notion_markdown_text(markdown_payload: dict[str, Any]) -> str:
+    if not isinstance(markdown_payload, dict):
+        return ""
+    return str(markdown_payload.get("markdown") or markdown_payload.get("content") or "").strip()
+
+
+def _split_large_markdown_section(heading: str, body: str, *, max_chars: int = 5000) -> list[tuple[str, str]]:
+    compact_body = str(body or "").strip()
+    normalized_heading = str(heading or "").strip() or "Overview"
+    if len(compact_body) <= max_chars:
+        return [(normalized_heading, compact_body)]
+    paragraphs = [chunk.strip() for chunk in compact_body.split("\n\n") if chunk.strip()]
+    if not paragraphs:
+        return [(normalized_heading, compact_body[:max_chars].strip())]
+    chunks: list[tuple[str, str]] = []
+    current: list[str] = []
+    current_size = 0
+    part = 1
+    for paragraph in paragraphs:
+        addition = len(paragraph) + (2 if current else 0)
+        if current and current_size + addition > max_chars:
+            suffix = f" (part {part})" if part > 1 else ""
+            chunks.append((normalized_heading + suffix, "\n\n".join(current).strip()))
+            current = [paragraph]
+            current_size = len(paragraph)
+            part += 1
+            continue
+        current.append(paragraph)
+        current_size += addition
+    if current:
+        suffix = f" (part {part})" if part > 1 else ""
+        chunks.append((normalized_heading + suffix, "\n\n".join(current).strip()))
+    return chunks or [(normalized_heading, compact_body)]
+
+
+def _sectionize_notion_markdown(markdown_text: str) -> list[tuple[str, str]]:
+    lines = str(markdown_text or "").splitlines()
+    sections: list[tuple[str, str]] = []
+    current_heading = "Overview"
+    current_lines: list[str] = []
+    saw_heading = False
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current_lines:
+                sections.extend(_split_large_markdown_section(current_heading, "\n".join(current_lines).strip()))
+            current_heading = stripped.lstrip("#").strip() or "Overview"
+            current_lines = [line]
+            saw_heading = True
+            continue
+        current_lines.append(line)
+    if current_lines or not saw_heading:
+        sections.extend(_split_large_markdown_section(current_heading, "\n".join(current_lines).strip()))
+    return [(heading, body) for heading, body in sections if body or heading]
+
+
+def _notion_index_doc_key(root_id: str, page_id: str, section_ordinal: int) -> str:
+    return f"{extract_notion_space_id(root_id)}:{extract_notion_space_id(page_id)}:{max(0, int(section_ordinal))}"
+
+
+def _notion_index_doc_relative_path(root_id: str, page_id: str, section_ordinal: int) -> Path:
+    root_slug = extract_notion_space_id(root_id).replace("-", "")
+    page_slug = extract_notion_space_id(page_id).replace("-", "")
+    return Path(root_slug) / f"{page_slug}--{max(0, int(section_ordinal)):03d}.md"
+
+
+def _render_notion_index_section_document(
+    *,
+    page_title: str,
+    page_url: str,
+    page_id: str,
+    root_title: str,
+    root_id: str,
+    breadcrumb: list[str],
+    section_heading: str,
+    owners: list[str],
+    last_edited_time: str,
+    body: str,
+) -> str:
+    heading = str(section_heading or "").strip() or "Overview"
+    breadcrumb_text = " > ".join(part for part in breadcrumb if str(part or "").strip())
+    owner_text = ", ".join(owners) if owners else "Unassigned"
+    title_text = str(page_title or "").strip() or page_id
+    lines = [
+        f"# {title_text}",
+        "",
+        f"- Notion page id: {page_id}",
+        f"- Notion page url: {page_url}",
+        f"- Indexed root: {str(root_title or '').strip() or root_id}",
+        f"- Root id: {root_id}",
+        f"- Breadcrumb: {breadcrumb_text or title_text}",
+        f"- Section: {heading}",
+        f"- Owners: {owner_text}",
+        f"- Last edited: {last_edited_time or 'unknown'}",
+        "",
+        body.strip(),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _log_notion_retrieval_audit(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    unix_user: str,
+    operation: str,
+    decision: str,
+    query_text: str = "",
+    target_id: str = "",
+    root_id: str = "",
+    result_count: int = 0,
+    note: str = "",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO notion_retrieval_audit (
+          agent_id, unix_user, operation, decision, query_text, target_id, root_id, result_count, note, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(agent_id or "").strip(),
+            str(unix_user or "").strip(),
+            str(operation or "").strip(),
+            str(decision or "").strip(),
+            str(query_text or "").strip(),
+            str(target_id or "").strip(),
+            str(root_id or "").strip(),
+            max(0, int(result_count or 0)),
+            str(note or "").strip()[:500],
+            utc_now_iso(),
+        ),
+    )
+    conn.commit()
+
+
+def _index_document_lookup_key(cfg: Config, raw_file: str) -> str:
+    text = str(raw_file or "").strip()
+    if not text:
+        return ""
+    if text.startswith("qmd://"):
+        text = text[len("qmd://"):]
+    collection_prefix = _notion_index_collection_name().strip("/") + "/"
+    if text.startswith(collection_prefix):
+        text = text[len(collection_prefix):]
+    path = Path(text)
+    if not path.is_absolute():
+        path = _notion_index_markdown_dir(cfg) / path
+    return str(path.resolve())
+
+
+def _upsert_notion_index_document(
+    conn: sqlite3.Connection,
+    *,
+    doc_key: str,
+    root_id: str,
+    source_page_id: str,
+    source_page_url: str,
+    source_kind: str,
+    file_path: Path,
+    page_title: str,
+    section_heading: str,
+    section_ordinal: int,
+    breadcrumb: list[str],
+    owners: list[str],
+    last_edited_time: str,
+    content: str,
+) -> bool:
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    existing = conn.execute(
+        "SELECT content_hash FROM notion_index_documents WHERE doc_key = ?",
+        (doc_key,),
+    ).fetchone()
+    changed = existing is None or str(existing["content_hash"] or "") != content_hash or not file_path.is_file()
+    if changed:
+        _atomic_write_text(file_path, content)
+    conn.execute(
+        """
+        INSERT INTO notion_index_documents (
+          doc_key, root_id, source_page_id, source_page_url, source_kind, file_path, page_title,
+          section_heading, section_ordinal, breadcrumb_json, owners_json, last_edited_time,
+          content_hash, indexed_at, state
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        ON CONFLICT(doc_key) DO UPDATE SET
+          root_id = excluded.root_id,
+          source_page_id = excluded.source_page_id,
+          source_page_url = excluded.source_page_url,
+          source_kind = excluded.source_kind,
+          file_path = excluded.file_path,
+          page_title = excluded.page_title,
+          section_heading = excluded.section_heading,
+          section_ordinal = excluded.section_ordinal,
+          breadcrumb_json = excluded.breadcrumb_json,
+          owners_json = excluded.owners_json,
+          last_edited_time = excluded.last_edited_time,
+          content_hash = excluded.content_hash,
+          indexed_at = excluded.indexed_at,
+          state = 'active'
+        """,
+        (
+            doc_key,
+            root_id,
+            source_page_id,
+            source_page_url,
+            source_kind,
+            str(file_path),
+            page_title,
+            section_heading,
+            int(section_ordinal),
+            json_dumps(breadcrumb),
+            json_dumps(owners),
+            last_edited_time,
+            content_hash,
+            utc_now_iso(),
+        ),
+    )
+    return changed
+
+
+def _delete_notion_index_doc(conn: sqlite3.Connection, *, doc_key: str) -> None:
+    row = conn.execute("SELECT file_path FROM notion_index_documents WHERE doc_key = ?", (doc_key,)).fetchone()
+    if row is not None:
+        file_path = Path(str(row["file_path"] or ""))
+        try:
+            if file_path.is_file():
+                file_path.unlink()
+        except OSError:
+            pass
+    conn.execute("DELETE FROM notion_index_documents WHERE doc_key = ?", (doc_key,))
+
+
+def _index_notion_page_payload(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    root: dict[str, str],
+    page_payload: dict[str, Any],
+    breadcrumb: list[str],
+    notion_kwargs: dict[str, Any],
+    active_doc_keys: set[str],
+) -> int:
+    page_id = str(page_payload.get("id") or "").strip()
+    if not page_id:
+        return 0
+    page_id = extract_notion_space_id(page_id)
+    page_title = _notion_title_from_page(page_payload) or str(page_payload.get("url") or page_id)
+    page_url = normalize_notion_space_url(str(page_payload.get("url") or "").strip())
+    owners = _notion_people_names(page_payload, "Owner") or _notion_people_names(page_payload, "Assignee")
+    last_edited_time = str(page_payload.get("last_edited_time") or "").strip()
+    markdown_payload = retrieve_notion_page_markdown(
+        page_id=page_id,
+        token=_require_shared_notion_settings()["token"],
+        api_version=_require_shared_notion_settings()["api_version"],
+        **notion_kwargs,
+    )
+    markdown_text = _notion_markdown_text(markdown_payload)
+    sections = _sectionize_notion_markdown(markdown_text) or [("Overview", page_title)]
+    page_doc_keys: set[str] = set()
+    changed = 0
+    for ordinal, (section_heading, section_body) in enumerate(sections):
+        doc_key = _notion_index_doc_key(root["root_id"], page_id, ordinal)
+        rel_path = _notion_index_doc_relative_path(root["root_id"], page_id, ordinal)
+        file_path = _notion_index_markdown_dir(cfg) / rel_path
+        content = _render_notion_index_section_document(
+            page_title=page_title,
+            page_url=page_url,
+            page_id=page_id,
+            root_title=str(root.get("root_title") or root.get("root_page_title") or ""),
+            root_id=root["root_id"],
+            breadcrumb=breadcrumb or [page_title],
+            section_heading=section_heading,
+            owners=owners,
+            last_edited_time=last_edited_time,
+            body=section_body,
+        )
+        if _upsert_notion_index_document(
+            conn,
+            doc_key=doc_key,
+            root_id=root["root_id"],
+            source_page_id=page_id,
+            source_page_url=page_url,
+            source_kind="page",
+            file_path=file_path,
+            page_title=page_title,
+            section_heading=section_heading,
+            section_ordinal=ordinal,
+            breadcrumb=breadcrumb or [page_title],
+            owners=owners,
+            last_edited_time=last_edited_time,
+            content=content,
+        ):
+            changed += 1
+        active_doc_keys.add(doc_key)
+        page_doc_keys.add(doc_key)
+    stale_rows = conn.execute(
+        """
+        SELECT doc_key
+        FROM notion_index_documents
+        WHERE root_id = ? AND source_page_id = ?
+        """,
+        (root["root_id"], page_id),
+    ).fetchall()
+    for row in stale_rows:
+        stale_key = str(row["doc_key"] or "")
+        if stale_key and stale_key not in page_doc_keys:
+            _delete_notion_index_doc(conn, doc_key=stale_key)
+            changed += 1
+    return changed
+
+
+def _crawl_notion_database_rows(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    root: dict[str, str],
+    database_id: str,
+    breadcrumb_prefix: list[str],
+    visited_databases: set[str],
+    active_doc_keys: set[str],
+    notion_kwargs: dict[str, Any],
+) -> int:
+    normalized_database_id = extract_notion_space_id(database_id)
+    verification_database_id = get_setting(conn, NOTION_VERIFICATION_DB_ID_SETTING, "").strip()
+    if verification_database_id and normalized_database_id == verification_database_id:
+        return 0
+    if normalized_database_id in visited_databases:
+        return 0
+    visited_databases.add(normalized_database_id)
+    database_payload = retrieve_notion_database(
+        database_id=normalized_database_id,
+        token=_require_shared_notion_settings()["token"],
+        api_version=_require_shared_notion_settings()["api_version"],
+        **notion_kwargs,
+    )
+    database_title = str(database_payload.get("title") or "")
+    if isinstance(database_payload.get("title"), list):
+        database_title = "".join(
+            str(item.get("plain_text") or "")
+            for item in database_payload.get("title")
+            if isinstance(item, dict)
+        ).strip()
+    query_payload = query_notion_collection_all(
+        database_id=normalized_database_id,
+        token=_require_shared_notion_settings()["token"],
+        api_version=_require_shared_notion_settings()["api_version"],
+        payload={"page_size": 100},
+        **notion_kwargs,
+    )
+    results = ((query_payload or {}).get("result") or {}).get("results") or []
+    changed = 0
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        row_title = _notion_title_from_page(item) or str(item.get("id") or "untitled")
+        breadcrumb = [part for part in [*breadcrumb_prefix, database_title, row_title] if str(part or "").strip()]
+        changed += _index_notion_page_payload(
+            conn,
+            cfg,
+            root=root,
+            page_payload=item,
+            breadcrumb=breadcrumb,
+            notion_kwargs=notion_kwargs,
+            active_doc_keys=active_doc_keys,
+        )
+    return changed
+
+
+def _crawl_notion_page_tree(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    root: dict[str, str],
+    page_id: str,
+    breadcrumb_prefix: list[str],
+    visited_pages: set[str],
+    visited_databases: set[str],
+    active_doc_keys: set[str],
+    notion_kwargs: dict[str, Any],
+) -> int:
+    normalized_page_id = extract_notion_space_id(page_id)
+    if normalized_page_id in visited_pages:
+        return 0
+    visited_pages.add(normalized_page_id)
+    page_payload = retrieve_notion_page(
+        page_id=normalized_page_id,
+        token=_require_shared_notion_settings()["token"],
+        api_version=_require_shared_notion_settings()["api_version"],
+        **notion_kwargs,
+    )
+    page_title = _notion_title_from_page(page_payload) or str(page_payload.get("id") or normalized_page_id)
+    breadcrumb = [part for part in [*breadcrumb_prefix, page_title] if str(part or "").strip()]
+    changed = _index_notion_page_payload(
+        conn,
+        cfg,
+        root=root,
+        page_payload=page_payload,
+        breadcrumb=breadcrumb,
+        notion_kwargs=notion_kwargs,
+        active_doc_keys=active_doc_keys,
+    )
+    for child in list_notion_block_children_all(
+        block_id=normalized_page_id,
+        token=_require_shared_notion_settings()["token"],
+        api_version=_require_shared_notion_settings()["api_version"],
+        **notion_kwargs,
+    ):
+        if not isinstance(child, dict):
+            continue
+        child_type = str(child.get("type") or "").strip()
+        child_id = str(child.get("id") or "").strip()
+        if child_type == "child_page" and child_id:
+            changed += _crawl_notion_page_tree(
+                conn,
+                cfg,
+                root=root,
+                page_id=child_id,
+                breadcrumb_prefix=breadcrumb,
+                visited_pages=visited_pages,
+                visited_databases=visited_databases,
+                active_doc_keys=active_doc_keys,
+                notion_kwargs=notion_kwargs,
+            )
+        elif child_type == "child_database" and child_id:
+            changed += _crawl_notion_database_rows(
+                conn,
+                cfg,
+                root=root,
+                database_id=child_id,
+                breadcrumb_prefix=breadcrumb,
+                visited_databases=visited_databases,
+                active_doc_keys=active_doc_keys,
+                notion_kwargs=notion_kwargs,
+            )
+    return changed
+
+
+def _clear_stale_notion_index_documents_for_root(
+    conn: sqlite3.Connection,
+    *,
+    root_id: str,
+    active_doc_keys: set[str],
+) -> int:
+    rows = conn.execute(
+        "SELECT doc_key FROM notion_index_documents WHERE root_id = ?",
+        (root_id,),
+    ).fetchall()
+    removed = 0
+    for row in rows:
+        doc_key = str(row["doc_key"] or "")
+        if doc_key and doc_key not in active_doc_keys:
+            _delete_notion_index_doc(conn, doc_key=doc_key)
+            removed += 1
+    return removed
+
+
+def _refresh_qmd_after_notion_sync(cfg: Config, *, embed: bool = False) -> None:
+    script_path = cfg.repo_dir / "bin" / "qmd-refresh.sh"
+    if not script_path.is_file():
+        raise RuntimeError(f"missing qmd refresh script at {script_path}")
+    command = [str(script_path), "--embed" if embed else "--skip-embed"]
+    env = os.environ.copy()
+    config_path = str(config_env_value("ALMANAC_CONFIG_FILE", "") or "").strip()
+    if config_path:
+        env["ALMANAC_CONFIG_FILE"] = config_path
+    result = subprocess.run(
+        command,
+        cwd=str(cfg.repo_dir),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"qmd refresh failed after Notion sync: {detail or result.returncode}")
+
+
+def sync_shared_notion_index(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    full: bool = False,
+    page_ids: list[str] | None = None,
+    database_ids: list[str] | None = None,
+    actor: str = "system",
+    urlopen_fn=None,
+) -> dict[str, Any]:
+    try:
+        settings = _require_shared_notion_settings()
+    except PermissionError as exc:
+        return {"ok": False, "status": "skipped", "reason": str(exc), "roots": []}
+    roots = _resolve_notion_index_roots(settings=settings, urlopen_fn=urlopen_fn)
+    if not roots:
+        return {"ok": False, "status": "skipped", "reason": "no Notion index roots configured", "roots": []}
+    notion_kwargs: dict[str, Any] = {}
+    if urlopen_fn is not None:
+        notion_kwargs["urlopen_fn"] = urlopen_fn
+    _notion_index_markdown_dir(cfg).mkdir(parents=True, exist_ok=True)
+    normalized_page_ids = sorted({extract_notion_space_id(page_id) for page_id in (page_ids or []) if str(page_id or "").strip()})
+    normalized_database_ids = sorted({extract_notion_space_id(database_id) for database_id in (database_ids or []) if str(database_id or "").strip()})
+    changed_docs = 0
+    removed_docs = 0
+    indexed_pages: set[str] = set()
+    unresolved_pages: list[str] = []
+    unresolved_databases: list[str] = []
+    processed_roots: list[str] = []
+
+    if full or (not normalized_page_ids and not normalized_database_ids):
+        for root in roots:
+            active_doc_keys: set[str] = set()
+            visited_pages: set[str] = set()
+            visited_databases: set[str] = set()
+            if root["root_kind"] == "database":
+                changed_docs += _crawl_notion_database_rows(
+                    conn,
+                    cfg,
+                    root=root,
+                    database_id=root["root_id"],
+                    breadcrumb_prefix=[part for part in [root.get("root_page_title"), root.get("root_title")] if str(part or "").strip()],
+                    visited_databases=visited_databases,
+                    active_doc_keys=active_doc_keys,
+                    notion_kwargs=notion_kwargs,
+                )
+            else:
+                changed_docs += _crawl_notion_page_tree(
+                    conn,
+                    cfg,
+                    root=root,
+                    page_id=root["root_id"],
+                    breadcrumb_prefix=[],
+                    visited_pages=visited_pages,
+                    visited_databases=visited_databases,
+                    active_doc_keys=active_doc_keys,
+                    notion_kwargs=notion_kwargs,
+                )
+            removed_docs += _clear_stale_notion_index_documents_for_root(
+                conn,
+                root_id=root["root_id"],
+                active_doc_keys=active_doc_keys,
+            )
+            indexed_pages.update(
+                {
+                    str(row["source_page_id"] or "")
+                    for row in conn.execute(
+                        "SELECT DISTINCT source_page_id FROM notion_index_documents WHERE root_id = ?",
+                        (root["root_id"],),
+                    ).fetchall()
+                }
+            )
+            processed_roots.append(root["root_id"])
+    else:
+        root_map = {root["root_id"]: root for root in roots}
+        page_rows = {}
+        for page_id in normalized_page_ids:
+            rows = conn.execute(
+                "SELECT DISTINCT root_id, breadcrumb_json FROM notion_index_documents WHERE source_page_id = ?",
+                (page_id,),
+            ).fetchall()
+            if not rows:
+                unresolved_pages.append(page_id)
+                continue
+            page_payload = retrieve_notion_page(
+                page_id=page_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                **notion_kwargs,
+            )
+            for row in rows:
+                root_id = str(row["root_id"] or "")
+                root = root_map.get(root_id)
+                if root is None:
+                    unresolved_pages.append(page_id)
+                    continue
+                breadcrumb = json_loads(row["breadcrumb_json"], [])
+                if not isinstance(breadcrumb, list):
+                    breadcrumb = []
+                changed_docs += _index_notion_page_payload(
+                    conn,
+                    cfg,
+                    root=root,
+                    page_payload=page_payload,
+                    breadcrumb=[str(part) for part in breadcrumb if str(part or "").strip()],
+                    notion_kwargs=notion_kwargs,
+                    active_doc_keys=set(),
+                )
+                page_rows.setdefault(page_id, set()).add(root_id)
+        for database_id in normalized_database_ids:
+            matched_root = next((root for root in roots if root["root_kind"] == "database" and root["root_id"] == database_id), None)
+            if matched_root is None:
+                unresolved_databases.append(database_id)
+                continue
+            changed_docs += _crawl_notion_database_rows(
+                conn,
+                cfg,
+                root=matched_root,
+                database_id=database_id,
+                breadcrumb_prefix=[part for part in [matched_root.get("root_page_title"), matched_root.get("root_title")] if str(part or "").strip()],
+                visited_databases=set(),
+                active_doc_keys=set(),
+                notion_kwargs=notion_kwargs,
+            )
+            processed_roots.append(matched_root["root_id"])
+        indexed_pages.update(page_rows.keys())
+
+    conn.commit()
+    if changed_docs or removed_docs or full:
+        _refresh_qmd_after_notion_sync(cfg, embed=False)
+    status = "ok"
+    if unresolved_pages or unresolved_databases:
+        status = "warn"
+    note_refresh_job(
+        conn,
+        job_name="notion-index-sync",
+        job_kind="notion-index-sync",
+        target_id="notion",
+        schedule="webhook + 4h full sweep",
+        status=status,
+        note=(
+            f"roots={len(roots)} changed_docs={changed_docs} removed_docs={removed_docs} "
+            f"indexed_pages={len(indexed_pages)} unresolved_pages={len(unresolved_pages)} "
+            f"unresolved_databases={len(unresolved_databases)} actor={actor}"
+        ),
+    )
+    return {
+        "ok": True,
+        "status": status,
+        "full": bool(full or (not normalized_page_ids and not normalized_database_ids)),
+        "roots": roots,
+        "changed_docs": changed_docs,
+        "removed_docs": removed_docs,
+        "indexed_pages": sorted(indexed_pages),
+        "unresolved_pages": unresolved_pages,
+        "unresolved_databases": unresolved_databases,
+        "collection": _notion_index_collection_name(),
+        "index_dir": str(_notion_index_dir(cfg)),
+        "processed_roots": processed_roots,
+    }
+
+
+def _queue_notion_reindex_notification(
+    conn: sqlite3.Connection,
+    *,
+    target_id: str,
+    source_kind: str,
+    message: str,
+) -> int:
+    normalized_target = str(target_id or "").strip() or "full"
+    now_iso = utc_now_iso()
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'curator'
+          AND channel_kind = 'notion-reindex'
+          AND target_id = ?
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (normalized_target,),
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET next_attempt_at = CASE
+                  WHEN next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at > ?
+                    THEN ?
+                  ELSE next_attempt_at
+                END,
+                message = CASE WHEN message = '' THEN ? ELSE message END,
+                extra_json = ?
+            WHERE id = ?
+            """,
+            (
+                now_iso,
+                now_iso,
+                str(message or "").strip(),
+                json_dumps({"source_kind": str(source_kind or "").strip() or "page"}),
+                int(existing["id"]),
+            ),
+        )
+        return int(existing["id"])
+    cursor = conn.execute(
+        """
+        INSERT INTO notification_outbox (
+          target_kind, target_id, channel_kind, message, extra_json, created_at,
+          attempt_count, last_attempt_at, next_attempt_at, delivered_at, delivery_error
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, NULL)
+        """,
+        (
+            "curator",
+            normalized_target,
+            "notion-reindex",
+            str(message or "").strip(),
+            json_dumps({"source_kind": str(source_kind or "").strip() or "page"}),
+            now_iso,
+            now_iso,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def _record_notion_reindex_retry(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    notification_ids: list[int],
+    error_message: str,
+) -> int:
+    normalized_ids = [int(value) for value in notification_ids]
+    if not normalized_ids:
+        return 0
+    placeholders = ",".join("?" for _ in normalized_ids)
+    rows = conn.execute(
+        f"SELECT id, attempt_count FROM notification_outbox WHERE id IN ({placeholders})",
+        tuple(normalized_ids),
+    ).fetchall()
+    now_iso = utc_now_iso()
+    max_attempts = 0
+    error_text = str(error_message or "").strip()[:500]
+    for row in rows:
+        attempts = int(row["attempt_count"] or 0) + 1
+        max_attempts = max(max_attempts, attempts)
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET attempt_count = ?,
+                last_attempt_at = ?,
+                next_attempt_at = ?,
+                delivery_error = ?
+            WHERE id = ?
+            """,
+            (
+                attempts,
+                now_iso,
+                utc_after_seconds_iso(curator_fanout_retry_delay_seconds(cfg, attempts)),
+                error_text,
+                int(row["id"]),
+            ),
+        )
+    conn.commit()
+    return max_attempts
+
+
+def _notion_index_full_sweep_due(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT last_run_at FROM refresh_jobs WHERE job_name = 'notion-index-sync'"
+    ).fetchone()
+    if row is None:
+        return True
+    last_run = parse_utc_iso(str(row["last_run_at"] or "").strip())
+    if last_run is None:
+        return True
+    return last_run <= utc_now() - dt.timedelta(seconds=_notion_index_full_sweep_interval_seconds())
+
+
+def consume_notion_reindex_queue(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    limit: int = 50,
+    actor: str = "curator-refresh",
+) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT id, target_id, message, extra_json, next_attempt_at
+        FROM notification_outbox
+        WHERE delivered_at IS NULL
+          AND target_kind = 'curator'
+          AND channel_kind = 'notion-reindex'
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    due_rows = [row for row in rows if _notification_due_now(str(row["next_attempt_at"] or ""))]
+    run_full = _notion_index_full_sweep_due(conn)
+    page_ids: list[str] = []
+    database_ids: list[str] = []
+    delivered_ids: list[int] = []
+    for row in due_rows:
+        delivered_ids.append(int(row["id"]))
+        target_id = str(row["target_id"] or "").strip()
+        extra = json_loads(str(row["extra_json"] or "{}"), {})
+        source_kind = str((extra or {}).get("source_kind") or "page").strip()
+        if target_id == "full":
+            run_full = True
+            continue
+        if source_kind == "database":
+            database_ids.append(target_id)
+        else:
+            page_ids.append(target_id)
+    if not run_full and not page_ids and not database_ids:
+        return {
+            "ok": True,
+            "status": "idle",
+            "full": False,
+            "processed_notifications": 0,
+            "page_ids": [],
+            "database_ids": [],
+        }
+    try:
+        result = sync_shared_notion_index(
+            conn,
+            cfg,
+            full=run_full,
+            page_ids=page_ids,
+            database_ids=database_ids,
+            actor=actor,
+        )
+    except Exception as exc:
+        if delivered_ids:
+            _record_notion_reindex_retry(conn, cfg, notification_ids=delivered_ids, error_message=str(exc))
+        note_refresh_job(
+            conn,
+            job_name="notion-index-sync",
+            job_kind="notion-index-sync",
+            target_id="notion",
+            schedule="webhook + 4h full sweep",
+            status="fail",
+            note=f"notion reindex failed: {exc}",
+        )
+        return {
+            "ok": False,
+            "status": "fail",
+            "error": str(exc),
+            "processed_notifications": len(delivered_ids),
+            "page_ids": sorted({*page_ids}),
+            "database_ids": sorted({*database_ids}),
+            "full": run_full,
+        }
+    for notification_id in delivered_ids:
+        mark_notification_delivered(conn, notification_id)
+    return {
+        **result,
+        "processed_notifications": len(delivered_ids),
+        "page_ids": sorted({*page_ids}),
+        "database_ids": sorted({*database_ids}),
+    }
+
+
 def _build_notion_stub(
     conn: sqlite3.Connection,
     *,
@@ -7552,6 +8555,286 @@ def _build_notion_stub(
         lines.append("- Current focus rows: none were scoped to you on the last Curator refresh.")
     lines.extend(_notion_team_summary(team_items))
     return "\n".join(lines)
+
+
+def notion_search(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    query_text: str,
+    limit: int = 5,
+    requested_by_actor: str,
+) -> dict[str, Any]:
+    agent_row = _active_user_agent_row(conn, agent_id)
+    settings = _require_shared_notion_settings()
+    roots = _resolve_notion_index_roots(settings=settings)
+    compact_query = str(query_text or "").strip()
+    if not compact_query:
+        raise ValueError("notion.search requires a non-empty query")
+    normalized_limit = max(1, min(int(limit or 5), 10))
+    collection_name = _notion_index_collection_name()
+    index_doc_count = int(
+        conn.execute("SELECT COUNT(*) AS c FROM notion_index_documents WHERE state = 'active'").fetchone()["c"]
+    )
+    structured = mcp_call(
+        cfg.qmd_url,
+        "query",
+        {
+            "searches": [
+                {"type": "lex", "query": compact_query},
+                {"type": "vec", "query": compact_query},
+            ],
+            "collections": [collection_name],
+            "intent": f"Search shared Notion knowledge for {compact_query}",
+            "rerank": True,
+            "limit": normalized_limit,
+        },
+    )
+    raw_results = structured.get("results") if isinstance(structured, dict) else []
+    hits: list[dict[str, Any]] = []
+    for raw in raw_results if isinstance(raw_results, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        file_key = _index_document_lookup_key(cfg, str(raw.get("file") or raw.get("path") or ""))
+        row = (
+            conn.execute(
+                """
+                SELECT root_id, source_page_id, source_page_url, file_path, page_title,
+                       section_heading, breadcrumb_json, owners_json, last_edited_time
+                FROM notion_index_documents
+                WHERE file_path = ?
+                """,
+                (file_key,),
+            ).fetchone()
+            if file_key
+            else None
+        )
+        snippet = ""
+        for field in ("snippet", "text", "excerpt", "preview", "content"):
+            value = str(raw.get(field) or "").strip()
+            if value:
+                snippet = value
+                break
+        breadcrumb = json_loads(str(row["breadcrumb_json"] or "[]"), []) if row is not None else []
+        owners = json_loads(str(row["owners_json"] or "[]"), []) if row is not None else []
+        if not isinstance(breadcrumb, list):
+            breadcrumb = []
+        if not isinstance(owners, list):
+            owners = []
+        hits.append(
+            {
+                "source": "index",
+                "root_id": str(row["root_id"] or "") if row is not None else "",
+                "page_id": str(row["source_page_id"] or "") if row is not None else "",
+                "page_url": str(row["source_page_url"] or "") if row is not None else "",
+                "page_title": str(row["page_title"] or "") if row is not None else "",
+                "section_heading": str(row["section_heading"] or "") if row is not None else "",
+                "breadcrumb": [str(part) for part in breadcrumb if str(part or "").strip()],
+                "owners": [str(owner) for owner in owners if str(owner or "").strip()],
+                "last_edited_time": str(row["last_edited_time"] or "") if row is not None else "",
+                "file": file_key,
+                "score": raw.get("score"),
+                "snippet": snippet,
+                "raw_result": raw,
+            }
+        )
+    _log_notion_retrieval_audit(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+        operation="search",
+        decision="allow",
+        query_text=compact_query,
+        result_count=len(hits),
+        note=f"collection={collection_name} docs={index_doc_count}",
+    )
+    return {
+        "ok": True,
+        "query": compact_query,
+        "collection": collection_name,
+        "index_ready": bool(roots),
+        "index_doc_count": index_doc_count,
+        "roots": roots,
+        "results": hits,
+    }
+
+
+def notion_fetch(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    target_id: str,
+    requested_by_actor: str,
+    urlopen_fn=None,
+) -> dict[str, Any]:
+    agent_row = _active_user_agent_row(conn, agent_id)
+    settings = _require_shared_notion_settings()
+    notion_kwargs: dict[str, Any] = {}
+    if urlopen_fn is not None:
+        notion_kwargs["urlopen_fn"] = urlopen_fn
+    normalized_target = str(target_id or "").strip()
+    if not normalized_target:
+        raise ValueError("notion.fetch requires a page or database id/url")
+    target_meta = resolve_notion_target(
+        target_id=normalized_target,
+        token=settings["token"],
+        api_version=settings["api_version"],
+        **notion_kwargs,
+    )
+    target_uuid = str(target_meta.get("id") or "").strip()
+    if str(target_meta.get("kind") or "") == "database":
+        database = retrieve_notion_database(
+            database_id=target_uuid,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        data_source_id = notion_database_data_source_id(database)
+        data_source = {}
+        if data_source_id:
+            data_source = retrieve_notion_data_source(
+                data_source_id=data_source_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                **notion_kwargs,
+            )
+        _log_notion_retrieval_audit(
+            conn,
+            agent_id=str(agent_row["agent_id"]),
+            unix_user=str(agent_row["unix_user"]),
+            operation="fetch",
+            decision="allow",
+            target_id=target_uuid,
+            result_count=1,
+            note="live database fetch",
+        )
+        return {
+            "ok": True,
+            "target_id": target_uuid,
+            "target_kind": "database",
+            "database": database,
+            "data_source_id": data_source_id,
+            "data_source": data_source,
+            "indexed": False,
+        }
+    page = retrieve_notion_page(
+        page_id=target_uuid,
+        token=settings["token"],
+        api_version=settings["api_version"],
+        **notion_kwargs,
+    )
+    markdown_payload = retrieve_notion_page_markdown(
+        page_id=target_uuid,
+        token=settings["token"],
+        api_version=settings["api_version"],
+        **notion_kwargs,
+    )
+    rows = conn.execute(
+        """
+        SELECT DISTINCT root_id, source_page_url, page_title, breadcrumb_json, owners_json, last_edited_time
+        FROM notion_index_documents
+        WHERE source_page_id = ?
+        ORDER BY root_id
+        """,
+        (target_uuid,),
+    ).fetchall()
+    indexed_roots = [str(row["root_id"] or "") for row in rows]
+    _log_notion_retrieval_audit(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+        operation="fetch",
+        decision="allow",
+        target_id=target_uuid,
+        root_id=indexed_roots[0] if indexed_roots else "",
+        result_count=1,
+        note="live page fetch",
+    )
+    return {
+        "ok": True,
+        "target_id": target_uuid,
+        "target_kind": "page",
+        "page": page,
+        "markdown": _notion_markdown_text(markdown_payload),
+        "indexed": bool(rows),
+        "indexed_roots": indexed_roots,
+    }
+
+
+def notion_query(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    target_id: str,
+    query: dict[str, Any] | None,
+    limit: int,
+    requested_by_actor: str,
+    urlopen_fn=None,
+) -> dict[str, Any]:
+    agent_row = _active_user_agent_row(conn, agent_id)
+    settings = _require_shared_notion_settings()
+    notion_kwargs: dict[str, Any] = {}
+    if urlopen_fn is not None:
+        notion_kwargs["urlopen_fn"] = urlopen_fn
+    roots = _resolve_notion_index_roots(settings=settings, urlopen_fn=urlopen_fn)
+    default_database_root = next((root for root in roots if root["root_kind"] == "database"), None)
+    notion_target = str(target_id or "").strip() or (
+        default_database_root["root_id"]
+        if default_database_root is not None
+        else (settings["space_id"] if settings["space_kind"] == "database" else "")
+    )
+    if not notion_target:
+        raise ValueError("notion.query requires a database id/url when no default shared database is configured")
+    target_meta = resolve_notion_target(
+        target_id=notion_target,
+        token=settings["token"],
+        api_version=settings["api_version"],
+        **notion_kwargs,
+    )
+    if str(target_meta.get("kind") or "") != "database":
+        raise ValueError("notion.query requires a database target")
+    normalized_limit = max(1, min(int(limit or 25), 100))
+    requested_query = dict(query or {})
+    if "page_size" not in requested_query:
+        requested_query["page_size"] = normalized_limit
+    result = query_notion_collection(
+        database_id=str(target_meta.get("id") or ""),
+        token=settings["token"],
+        api_version=settings["api_version"],
+        payload=requested_query,
+        **notion_kwargs,
+    )
+    entries = result.get("result") if isinstance(result, dict) else {}
+    items = entries.get("results") if isinstance(entries, dict) else []
+    items = [item for item in items if isinstance(item, dict)][:normalized_limit]
+    root_match = next((root for root in roots if root["root_id"] == str(target_meta.get("id") or "").strip()), None)
+    _log_notion_retrieval_audit(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+        operation="query",
+        decision="allow",
+        query_text=json_dumps(requested_query),
+        target_id=str(target_meta.get("id") or ""),
+        root_id=str((root_match or {}).get("root_id") or ""),
+        result_count=len(items),
+        note="live collection query",
+    )
+    return {
+        "ok": True,
+        "target_id": str(target_meta.get("id") or ""),
+        "target_kind": "database",
+        "query_kind": result.get("query_kind") if isinstance(result, dict) else "",
+        "data_source_id": result.get("data_source_id") if isinstance(result, dict) else "",
+        "database": result.get("database") if isinstance(result, dict) else {},
+        "results": items,
+        "has_more": bool(entries.get("has_more")) if isinstance(entries, dict) else False,
+        "next_cursor": str(entries.get("next_cursor") or "") if isinstance(entries, dict) else "",
+        "root": root_match or {},
+    }
 
 
 def read_ssot(
@@ -8515,6 +9798,7 @@ def build_managed_memory_payload(
       [managed:vault-ref]      active vault path and role
       [managed:resource-ref]   user-specific access rails + shared host rails
       [managed:qmd-ref]        how to query qmd for retrieval
+      [managed:notion-ref]     how to search/fetch/query shared Notion knowledge
       [managed:vault-topology] compact summary of subscribed vaults + briefs
       [managed:notion-stub]    Curator-produced shared Notion digest + verification state
     """
@@ -8587,14 +9871,16 @@ def build_managed_memory_payload(
         "- Use almanac-vaults for subscription, catalog, and curate-vaults work.\n"
         "- Use almanac-vault-reconciler for Almanac memory drift or repair.\n"
         "- Use almanac-ssot for organization-aware SSOT coordination in the shared Notion workspace.\n"
-        "- Use almanac-ssot-connect only when the user wants to link their own Notion through the official Notion MCP flow.\n"
-        "- Use almanac-notion-mcp only after that user-owned Notion MCP is actually live.\n"
+        "- Use almanac-notion-knowledge for shared Notion knowledge search, exact page fetches, and live structured database queries.\n"
+        "- Use almanac-ssot-connect only for optional user-owned Notion MCP setup; it is not the default shared Almanac Notion knowledge rail.\n"
+        "- Use almanac-notion-mcp only as an optional personal Notion helper after that user-owned Notion MCP is actually live; do not treat it as the default shared Almanac workspace-search lane.\n"
         "- Use almanac-first-contact for Almanac setup or diagnostic checks.\n"
         "- All vaults remain retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions only shape managed-memory awareness and Curator push behavior.\n"
         "- Curator publishes a shared Notion digest into managed memory so the agent has ambient SSOT orientation without live cross-user reads.\n"
         "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local managed-memory stubs and recent events.\n"
         "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
         "- Treat the skill as the workflow and guardrail layer, and the wired broker/MCP/tool as the actuation layer.\n"
+        "- For private/shared-vault questions, start with [managed:qmd-ref] and the current user's local Almanac state; do not rediscover the qmd rail by repo-wide search unless that rail actually fails.\n"
         "- Human-facing completion or onboarding messages may omit machine-facing MCP/control rails for simplicity; [managed:resource-ref] is the authoritative map of the rails that this agent can try.\n"
         "- Do not decide that a rail is unavailable just because raw env vars are absent in a chat turn; use the installed skills, managed stubs, and Almanac-provisioned rails as the source of truth.\n"
         "- When a brokered action is refused, explain whether the block is verification, ownership scope, or an unsupported archive/delete request instead of saying the skill is missing.\n"
@@ -8602,8 +9888,23 @@ def build_managed_memory_payload(
     )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
-        "Always query qmd before web for vault-relevant work, including the\n"
-        "'vault-pdf-ingest' collection when present for PDF-derived markdown.\n"
+        "For private/shared-vault questions or follow-ups from the current\n"
+        "discussion, start with this rail before searching repo files, docs,\n"
+        "or the public web. Include the 'vault-pdf-ingest' collection when\n"
+        "present for PDF-derived markdown.\n"
+        "Live qmd MCP tool surface: query, get, multi_get, status.\n"
+        "If you need routing confirmation, check [managed:resource-ref] and the\n"
+        "current user's local Almanac state before generic repo searches.\n"
+        "Minimum working MCP sequence: initialize -> capture mcp-session-id ->\n"
+        "notifications/initialized -> tools/list -> tools/call.\n"
+        "Example tools/call body:\n"
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":{"searches":[{"type":"lex","query":"MESH"}],"collections":["vault"],"intent":"Identify what MESH refers to in Almanac","rerank":false,"limit":5}}}\n'
+        "Expect result.content[].text and result.structuredContent.results[].\n"
+        "Send the same mcp-session-id header returned by initialize on later requests.\n"
+        "This minimal example uses one lex search for transport clarity; for normal\n"
+        "knowledge lookups, keep intent and consider combining lex and vec searches.\n"
+        "Only inspect docs/hermes-qmd-config.yaml or qmd daemon files if the\n"
+        "qmd path itself fails or the user is debugging Almanac.\n"
         "Use almanac-ssot when the task is about organization state, Notion,\n"
         "or user-scoped SSOT updates; use qmd when the task is about vault depth.\n"
         "Use the already wired MCP endpoints and agent-local Almanac state for\n"
@@ -8611,6 +9912,35 @@ def build_managed_memory_payload(
         "Never browse other users' home directories for Almanac context.\n"
         "Do not read central deployment secrets such as almanac.env or source\n"
         "common.sh from a user-agent session."
+    )
+    notion_ref = (
+        "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.\n"
+        "Use notion.search for shared documentation, meeting notes, project pages,\n"
+        "and user-generated knowledge that Almanac has indexed into qmd.\n"
+        "Use notion.fetch when you already know the exact page or database and need\n"
+        "the live body or schema right now.\n"
+        "Use notion.query for live structured state such as assignments, due dates,\n"
+        "or status views in a shared Notion database.\n"
+        "Search is fast and qmd-backed but may lag behind live edits by minutes.\n"
+        "Fetch/query are live Notion API reads.\n"
+        "This is a shared read rail, not the governed ssot.write approval path.\n"
+        "Budget guidance: one search, then zero-to-three fetches before summarizing.\n"
+        "Bootstrap-token wrapper examples:\n"
+        '{"tool":"notion.search","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","limit":5}}\n'
+        '{"tool":"notion.fetch","arguments":{"token":"<bootstrap token>","target_id":"https://www.notion.so/...page-id..."}}\n'
+        '{"tool":"notion.query","arguments":{"token":"<bootstrap token>","target_id":"<database-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}\n'
+        "The default indexed qmd collection for this rail is notion-shared.\n"
+        "Anything under the operator-configured shared Notion index roots becomes\n"
+        "searchable by enrolled agents on this host; do not assume per-user filtering\n"
+        "on this rail.\n"
+        "Do not fall back to repo-wide search just to rediscover this rail.\n"
+        "When using the skill wrapper, let the local script read the bootstrap token\n"
+        "from HERMES_HOME instead of copying secrets into chat.\n"
+        "If notion.search returns thin or zero results, distinguish:\n"
+        "- no indexed matches\n"
+        "- not indexed yet / backfill still catching up\n"
+        "- exact page is better served by notion.fetch\n"
+        "- live structured state is better served by notion.query\n"
     )
     resource_ref = managed_resource_ref(
         access=access_state,
@@ -8647,6 +9977,7 @@ def build_managed_memory_payload(
         "vault-ref": vault_ref,
         "resource-ref": resource_ref,
         "qmd-ref": qmd_ref,
+        "notion-ref": notion_ref,
         "vault-topology": topology,
         "notion-stub": notion_stub,
         "catalog": catalog,
@@ -8659,7 +9990,7 @@ def build_managed_memory_payload(
 
 
 _MEMORY_ENTRY_DELIMITER = "\n§\n"
-_MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "resource-ref", "qmd-ref", "vault-topology", "notion-stub")
+_MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "resource-ref", "qmd-ref", "notion-ref", "vault-topology", "notion-stub")
 _MANAGED_MEMORY_PREFIXES = tuple(f"[managed:{key}]" for key in _MANAGED_MEMORY_KEYS)
 _MANAGED_PAYLOAD_CACHE_KEYS = ("agent_id", *_MANAGED_MEMORY_KEYS, "catalog", "subscriptions", "active_subscriptions")
 
@@ -8770,9 +10101,10 @@ def write_managed_memory_stubs(
         " Use almanac-qmd-mcp for vault retrieval and follow-ups, almanac-vaults"
         " for subscription and catalog work, almanac-vault-reconciler for Almanac"
         " memory drift or repair, almanac-ssot for organization-aware SSOT"
-        " coordination, almanac-ssot-connect when the user wants to link their"
-        " own Notion through the official Notion MCP flow, almanac-notion-mcp"
-        " once that user-owned Notion MCP is live, and almanac-first-contact for"
+        " coordination, almanac-notion-knowledge for the shared Notion knowledge"
+        " rail, almanac-ssot-connect only for optional user-owned"
+        " Notion MCP setup, almanac-notion-mcp only as that separate personal"
+        " Notion helper once the MCP is live, and almanac-first-contact for"
         " Almanac setup or diagnostic checks. All vaults remain retrievable"
         " through Almanac/qmd even when a vault is unsubscribed; subscriptions"
         " only shape managed-memory awareness and Curator push behavior. On a"
@@ -8785,6 +10117,12 @@ def write_managed_memory_stubs(
         "Canonical user access rails and shared Almanac addresses:\n"
         "- Credentials are intentionally omitted from managed memory.\n"
         "- Ask Curator or the operator to reissue access if the user loses those credentials.",
+    )
+    payload.setdefault(
+        "notion-ref",
+        "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.\n"
+        "Use notion.search for indexed knowledge, notion.fetch for an exact live page,"
+        " and notion.query for live structured database state.",
     )
     payload.setdefault(
         "notion-stub",
@@ -9148,6 +10486,7 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
     processed = 0
     event_types: dict[str, int] = {}
     nudges_by_agent: dict[str, list[str]] = {}
+    reindex_entities: set[tuple[str, str]] = set()
     unresolved_events: list[str] = []
     failed_events: list[str] = []
     verified_claims = 0
@@ -9167,9 +10506,11 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
 
         payload = json_loads(row["payload_json"], {}) or {}
         entity_id, entity_type = _notion_event_entity_ref(payload)
+        claim_page_event = False
         if entity_id and entity_type == "page":
             claim = get_notion_identity_claim(conn, notion_page_id=entity_id)
             if claim is not None and str(claim.get("status") or "").strip() == "pending":
+                claim_page_event = True
                 hydrated_page, resolved_claim = _hydrate_notion_event_entity(payload)
                 if not resolved_claim:
                     unresolved_events.append(row["event_id"])
@@ -9201,6 +10542,8 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
                     (utc_now_iso(), row["id"]),
                 )
                 continue
+        if entity_id and entity_type in {"page", "database"} and not claim_page_event:
+            reindex_entities.add((entity_type, entity_id))
         affected, resolved = _map_event_to_affected_users(conn, payload)
         signal = _signal_kind(row["event_type"], payload)
 
@@ -9249,6 +10592,13 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
             channel_kind="brief-fanout",
             message=f"notion event refresh for {agent_id}",
         )
+    for entity_type, entity_id in sorted(reindex_entities):
+        _queue_notion_reindex_notification(
+            conn,
+            target_id=entity_id,
+            source_kind=entity_type,
+            message=f"notion {entity_type} reindex for {entity_id}",
+        )
 
     conn.commit()
     batch_status = "ok"
@@ -9274,6 +10624,7 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
         "verified_claims": verified_claims,
         "event_types": event_types,
         "nudges": {agent: len(v) for agent, v in nudges_by_agent.items()},
+        "reindex_entities": len(reindex_entities),
         "unresolved_event_ids": unresolved_events,
         "failed_event_ids": failed_events,
     }

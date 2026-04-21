@@ -212,6 +212,7 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
         "almanac-first-contact",
         "almanac-vaults",
         "almanac-ssot",
+        "almanac-notion-knowledge",
         "almanac-ssot-connect",
         "almanac-notion-mcp",
     ]
@@ -278,7 +279,11 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
                 "or MCP rail performs the actual read or write. Do not decide that a capability "
                 "is missing just because raw env vars are absent in a chat turn; rely on the "
                 "installed skills, managed stubs, and Almanac-provisioned rails first. Treat "
-                "[managed:resource-ref] and [managed:notion-stub] as the authoritative shared-rail "
+                "private/shared-vault questions as qmd-first work: start with [managed:qmd-ref] "
+                "and the current user's local Almanac state, not repo-wide searches to rediscover "
+                "the rail. Only inspect deployment docs or qmd daemon files if the qmd path "
+                "itself fails or the user is explicitly debugging Almanac. Treat "
+                "[managed:resource-ref], [managed:notion-ref], and [managed:notion-stub] as the authoritative shared-rail "
                 "snapshot even when human-facing setup copy leaves machine-facing rails out for "
                 "brevity. The almanac-managed-context plugin can inject refreshed local Almanac "
                 "context into future turns without requiring /reset or a gateway restart once it "

@@ -93,6 +93,10 @@ def _database_title(payload: dict[str, Any]) -> str:
     return _rich_text_to_plain_text(payload.get("title"))
 
 
+def _data_source_title(payload: dict[str, Any]) -> str:
+    return _rich_text_to_plain_text(payload.get("title"))
+
+
 def _retryable_notion_http_status(status: int) -> bool:
     return int(status) in {409, 429, 500, 502, 503, 504}
 
@@ -233,6 +237,7 @@ def _resolve_target(
     urlopen_fn: Callable[..., Any] = request.urlopen,
 ) -> dict[str, str]:
     page_error: NotionApiError | None = None
+    database_error: NotionApiError | None = None
     try:
         payload = _request_json(
             "GET",
@@ -269,8 +274,29 @@ def _resolve_target(
     except NotionApiError as exc:
         if exc.status not in {400, 404}:
             raise _friendly_api_error(exc, target=f"database {target_id}") from exc
+        database_error = exc
+
+    try:
+        payload = _request_json(
+            "GET",
+            f"/data_sources/{target_id}",
+            token=token,
+            api_version=api_version,
+            urlopen_fn=urlopen_fn,
+        )
+        return {
+            "kind": "data_source",
+            "id": str(payload.get("id") or target_id).strip() or target_id,
+            "title": _data_source_title(payload),
+            "url": str(payload.get("url") or "").strip(),
+        }
+    except NotionApiError as exc:
+        if exc.status not in {400, 404}:
+            raise _friendly_api_error(exc, target=f"data source {target_id}") from exc
         if page_error is not None:
             raise _friendly_api_error(page_error, target=f"Notion target {target_id}") from exc
+        if database_error is not None:
+            raise _friendly_api_error(database_error, target=f"Notion target {target_id}") from exc
         raise _friendly_api_error(exc, target=f"Notion target {target_id}") from exc
 
 
@@ -367,6 +393,26 @@ def retrieve_notion_data_source(
         )
     except NotionApiError as exc:
         raise _friendly_api_error(exc, target=f"data source {target_id}") from exc
+
+
+def retrieve_notion_file_upload(
+    *,
+    file_upload_id: str,
+    token: str,
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+) -> dict[str, Any]:
+    target_id = extract_notion_space_id(file_upload_id)
+    try:
+        return _request_json(
+            "GET",
+            f"/file_uploads/{target_id}",
+            token=token,
+            api_version=api_version,
+            urlopen_fn=urlopen_fn,
+        )
+    except NotionApiError as exc:
+        raise _friendly_api_error(exc, target=f"file upload {target_id}") from exc
 
 
 def update_notion_database(

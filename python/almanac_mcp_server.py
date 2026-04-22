@@ -67,7 +67,7 @@ TOOLS = {
     "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided.",
     "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for approval. Archive/delete are rejected.",
     "notion.search": "Search shared Notion knowledge through Almanac's qmd-backed indexed Notion rail.",
-    "notion.fetch": "Fetch the live body or schema of a shared Notion page/database by exact id or URL.",
+    "notion.fetch": "Fetch the live body or schema of a shared Notion page/database/data source by exact id or URL.",
     "notion.query": "Run a live structured query against a shared Notion database/data source.",
 }
 

@@ -29,8 +29,10 @@ Usage: scripts/curate-notion.sh [--json] [--rerank] <search|fetch|query> [args..
 
 Commands:
   search <query>                        Search shared Notion knowledge.
-  fetch <page-or-database-id-or-url>   Fetch one exact live page or database.
-  query <database-id-or-url> [json]    Run a live structured database query.
+  fetch <page-or-database-or-data-source-id-or-url>
+                                       Fetch one exact live page, database, or data source.
+  query <database-or-data-source-id-or-url> [json]
+                                       Run a live structured database/data source query.
 
 Flags:
   --json                                Emit raw JSON instead of human-readable.

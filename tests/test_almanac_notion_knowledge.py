@@ -214,6 +214,7 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
             page_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
             database_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+            data_source_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
             file_path = mod._notion_index_markdown_dir(cfg) / mod._notion_index_doc_relative_path(root_page_id, page_id, 0)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             body = mod._render_notion_index_section_document(
@@ -286,7 +287,11 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             mod.resolve_notion_target = lambda **kwargs: (
                 {"kind": "database", "id": database_id, "url": "https://www.notion.so/database-cccccccccccccccccccccccccccc", "title": "Project Tracker"}
                 if kwargs["target_id"] == database_id
-                else {"kind": "page", "id": page_id, "url": "https://www.notion.so/chutes-unicorn-bbbbbbbbbbbbbbbbbbbbbbbbbbbb", "title": "Chutes Unicorn"}
+                else (
+                    {"kind": "data_source", "id": data_source_id, "url": "", "title": "Project Tracker"}
+                    if kwargs["target_id"] == data_source_id
+                    else {"kind": "page", "id": page_id, "url": "https://www.notion.so/chutes-unicorn-bbbbbbbbbbbbbbbbbbbbbbbbbbbb", "title": "Chutes Unicorn"}
+                )
             )
             mod.retrieve_notion_page = lambda **kwargs: {
                 "id": page_id,
@@ -298,17 +303,32 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             mod.retrieve_notion_database = lambda **kwargs: {
                 "id": database_id,
                 "title": [{"plain_text": "Project Tracker"}],
-                "data_sources": [{"id": "dddddddd-dddd-dddd-dddd-dddddddddddd"}],
+                "data_sources": [{"id": data_source_id}],
                 "properties": {"Name": {"type": "title"}},
             }
             mod.retrieve_notion_data_source = lambda **kwargs: {
-                "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "id": data_source_id,
+                "parent": {"type": "database_id", "database_id": database_id},
+                "title": [{"plain_text": "Project Tracker"}],
                 "properties": {"Status": {"type": "status"}},
+            }
+            mod.query_notion_data_source = lambda **kwargs: {
+                "results": [
+                    {
+                        "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                        "properties": {
+                            **_title_property("Draft docs"),
+                            "Status": {"type": "status", "status": {"name": "In Progress"}},
+                        },
+                    }
+                ],
+                "has_more": False,
+                "next_cursor": None,
             }
             mod.query_notion_collection = lambda **kwargs: {
                 "query_kind": "data_source",
                 "database": {"id": database_id, "title": [{"plain_text": "Project Tracker"}]},
-                "data_source_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "data_source_id": data_source_id,
                 "result": {
                     "results": [
                         {
@@ -374,7 +394,17 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
                 requested_by_actor="test",
             )
             expect(fetch_db_result["target_kind"] == "database", str(fetch_db_result))
-            expect(fetch_db_result["data_source_id"] == "dddddddd-dddd-dddd-dddd-dddddddddddd", str(fetch_db_result))
+            expect(fetch_db_result["data_source_id"] == data_source_id, str(fetch_db_result))
+
+            fetch_data_source_result = mod.notion_fetch(
+                conn,
+                cfg,
+                agent_id="agent-test",
+                target_id=data_source_id,
+                requested_by_actor="test",
+            )
+            expect(fetch_data_source_result["target_kind"] == "data_source", str(fetch_data_source_result))
+            expect(fetch_data_source_result["database_id"] == database_id, str(fetch_data_source_result))
 
             query_result = mod.notion_query(
                 conn,
@@ -389,6 +419,20 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             expect(query_result["root"]["root_id"] == database_id, str(query_result))
             expect(query_result["results"][0]["properties"]["Status"]["status"]["name"] == "In Progress", str(query_result))
 
+            query_data_source_result = mod.notion_query(
+                conn,
+                cfg,
+                agent_id="agent-test",
+                target_id=data_source_id,
+                query={"filter": {"property": "Status", "status": {"equals": "In Progress"}}},
+                limit=25,
+                requested_by_actor="test",
+            )
+            expect(query_data_source_result["ok"] is True, str(query_data_source_result))
+            expect(query_data_source_result["target_kind"] == "data_source", str(query_data_source_result))
+            expect(query_data_source_result["data_source_id"] == data_source_id, str(query_data_source_result))
+            expect(query_data_source_result["results"][0]["properties"]["Status"]["status"]["name"] == "In Progress", str(query_data_source_result))
+
             audit_rows = conn.execute(
                 "SELECT operation, decision FROM notion_retrieval_audit ORDER BY id ASC"
             ).fetchall()
@@ -398,6 +442,8 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
                     ("search", "allow"),
                     ("fetch", "allow"),
                     ("fetch", "allow"),
+                    ("fetch", "allow"),
+                    ("query", "allow"),
                     ("query", "allow"),
                 ],
                 str([dict(row) for row in audit_rows]),
@@ -473,11 +519,59 @@ def test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_de
             os.environ.update(old_env)
 
 
+def test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_notion_event_pipeline_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.store_notion_event(
+                conn,
+                event_id="evt-data-source",
+                event_type="data_source.schema_updated",
+                payload={"id": "evt-data-source", "type": "data_source.schema_updated", "entity": {"id": "dddddddd-dddd-dddd-dddd-dddddddddddd", "type": "data_source"}},
+            )
+            mod.store_notion_event(
+                conn,
+                event_id="evt-file-upload",
+                event_type="file_upload.completed",
+                payload={"id": "evt-file-upload", "type": "file_upload.completed", "entity": {"id": "ffffffff-ffff-ffff-ffff-ffffffffffff", "type": "file_upload"}},
+            )
+            mod._map_event_to_affected_users = lambda conn_arg, payload: ([], True)
+
+            result = mod.process_pending_notion_events(conn)
+            expect(result["processed"] == 2, str(result))
+            expect(result["reindex_entities"] == 1, str(result))
+
+            queued = conn.execute(
+                """
+                SELECT target_id, channel_kind, extra_json
+                FROM notification_outbox
+                WHERE channel_kind = 'notion-reindex'
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            expect(len(queued) == 1, str([dict(row) for row in queued]))
+            expect(str(queued[0]["target_id"]) == "full", str(dict(queued[0])))
+            extra = json.loads(str(queued[0]["extra_json"] or "{}"))
+            expect(extra.get("source_kind") == "full", str(extra))
+            print("PASS test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs()
     test_notion_search_fetch_and_query_use_shared_index_and_live_reads()
     test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_delivered()
-    print("PASS all 3 shared notion knowledge regression tests")
+    test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload()
+    print("PASS all 4 shared notion knowledge regression tests")
     return 0
 
 

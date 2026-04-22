@@ -14,8 +14,8 @@ optional user-owned Notion MCP lane.
 ## Default Split
 
 - `search` for broad knowledge discovery over indexed shared Notion content
-- `fetch` for the live body of one exact page or the live schema of one exact database
-- `query` for live structured state in a shared Notion database
+- `fetch` for the live body of one exact page or the live schema of one exact database/data source
+- `query` for live structured state in a shared Notion database or data source
 
 Use that split literally:
 
@@ -56,7 +56,7 @@ Use the local wrapper so the script reads the bootstrap token from
 ```bash
 scripts/curate-notion.sh search "Chutes Unicorn"
 scripts/curate-notion.sh fetch "https://www.notion.so/...page-id..."
-scripts/curate-notion.sh query "<database-id-or-url>" '{"filter":{"property":"Status","status":{"equals":"In Progress"}}}'
+scripts/curate-notion.sh query "<database-or-data-source-id-or-url>" '{"filter":{"property":"Status","status":{"equals":"In Progress"}}}'
 ```
 
 Add `--json` for raw structured output.

@@ -36,8 +36,10 @@ from almanac_notion_ssot import (
     notion_database_data_source_id,
     query_notion_collection,
     query_notion_collection_all,
+    query_notion_data_source,
     retrieve_notion_data_source,
     retrieve_notion_database,
+    retrieve_notion_file_upload,
     retrieve_notion_page,
     retrieve_notion_page_markdown,
     retrieve_notion_user,
@@ -7066,6 +7068,24 @@ def _hydrate_notion_event_entity(payload: dict[str, Any]) -> tuple[dict[str, Any
                 ),
                 True,
             )
+        if entity_type == "data_source":
+            return (
+                retrieve_notion_data_source(
+                    data_source_id=entity_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                ),
+                True,
+            )
+        if entity_type == "file_upload":
+            return (
+                retrieve_notion_file_upload(
+                    file_upload_id=entity_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                ),
+                True,
+            )
         target_meta = resolve_notion_target(
             target_id=entity_id,
             token=settings["token"],
@@ -7084,6 +7104,15 @@ def _hydrate_notion_event_entity(payload: dict[str, Any]) -> tuple[dict[str, Any
             return (
                 retrieve_notion_database(
                     database_id=entity_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                ),
+                True,
+            )
+        if str(target_meta.get("kind") or "").strip() == "data_source":
+            return (
+                retrieve_notion_data_source(
+                    data_source_id=entity_id,
                     token=settings["token"],
                     api_version=settings["api_version"],
                 ),
@@ -8689,6 +8718,46 @@ def notion_fetch(
         **notion_kwargs,
     )
     target_uuid = str(target_meta.get("id") or "").strip()
+    if str(target_meta.get("kind") or "") == "data_source":
+        data_source = retrieve_notion_data_source(
+            data_source_id=target_uuid,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        parent = data_source.get("parent") if isinstance(data_source, dict) else {}
+        database_id = str(parent.get("database_id") or "").strip() if isinstance(parent, dict) else ""
+        database = (
+            retrieve_notion_database(
+                database_id=database_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                **notion_kwargs,
+            )
+            if database_id
+            else {}
+        )
+        _log_notion_retrieval_audit(
+            conn,
+            agent_id=str(agent_row["agent_id"]),
+            unix_user=str(agent_row["unix_user"]),
+            operation="fetch",
+            decision="allow",
+            target_id=target_uuid,
+            root_id=database_id,
+            result_count=1,
+            note="live data source fetch",
+        )
+        return {
+            "ok": True,
+            "target_id": target_uuid,
+            "target_kind": "data_source",
+            "data_source_id": target_uuid,
+            "data_source": data_source,
+            "database_id": database_id,
+            "database": database,
+            "indexed": bool(database_id),
+        }
     if str(target_meta.get("kind") or "") == "database":
         database = retrieve_notion_database(
             database_id=target_uuid,
@@ -8799,20 +8868,56 @@ def notion_query(
         api_version=settings["api_version"],
         **notion_kwargs,
     )
-    if str(target_meta.get("kind") or "") != "database":
-        raise ValueError("notion.query requires a database target")
+    target_kind = str(target_meta.get("kind") or "")
+    if target_kind not in {"database", "data_source"}:
+        raise ValueError("notion.query requires a database or data source target")
     normalized_limit = max(1, min(int(limit or 25), 100))
     requested_query = dict(query or {})
     if "page_size" not in requested_query:
         requested_query["page_size"] = normalized_limit
-    result = query_notion_collection(
-        database_id=str(target_meta.get("id") or ""),
-        token=settings["token"],
-        api_version=settings["api_version"],
-        payload=requested_query,
-        **notion_kwargs,
-    )
-    entries = result.get("result") if isinstance(result, dict) else {}
+    if target_kind == "data_source":
+        data_source_id = str(target_meta.get("id") or "")
+        data_source = retrieve_notion_data_source(
+            data_source_id=data_source_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            **notion_kwargs,
+        )
+        parent = data_source.get("parent") if isinstance(data_source, dict) else {}
+        database_id = str(parent.get("database_id") or "").strip() if isinstance(parent, dict) else ""
+        database = (
+            retrieve_notion_database(
+                database_id=database_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                **notion_kwargs,
+            )
+            if database_id
+            else {}
+        )
+        entries = query_notion_data_source(
+            data_source_id=data_source_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            payload=requested_query,
+            **notion_kwargs,
+        )
+        result = {
+            "query_kind": "data_source",
+            "data_source_id": data_source_id,
+            "data_source": data_source,
+            "database": database,
+            "result": entries,
+        }
+    else:
+        result = query_notion_collection(
+            database_id=str(target_meta.get("id") or ""),
+            token=settings["token"],
+            api_version=settings["api_version"],
+            payload=requested_query,
+            **notion_kwargs,
+        )
+        entries = result.get("result") if isinstance(result, dict) else {}
     items = entries.get("results") if isinstance(entries, dict) else []
     items = [item for item in items if isinstance(item, dict)][:normalized_limit]
     root_match = next((root for root in roots if root["root_id"] == str(target_meta.get("id") or "").strip()), None)
@@ -8831,9 +8936,10 @@ def notion_query(
     return {
         "ok": True,
         "target_id": str(target_meta.get("id") or ""),
-        "target_kind": "database",
+        "target_kind": target_kind,
         "query_kind": result.get("query_kind") if isinstance(result, dict) else "",
         "data_source_id": result.get("data_source_id") if isinstance(result, dict) else "",
+        "data_source": result.get("data_source") if isinstance(result, dict) else {},
         "database": result.get("database") if isinstance(result, dict) else {},
         "results": items,
         "has_more": bool(entries.get("has_more")) if isinstance(entries, dict) else False,
@@ -9922,10 +10028,10 @@ def build_managed_memory_payload(
         "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.\n"
         "Use notion.search for shared documentation, meeting notes, project pages,\n"
         "and user-generated knowledge that Almanac has indexed into qmd.\n"
-        "Use notion.fetch when you already know the exact page or database and need\n"
-        "the live body or schema right now.\n"
+        "Use notion.fetch when you already know the exact page, database, or data\n"
+        "source and need the live body or schema right now.\n"
         "Use notion.query for live structured state such as assignments, due dates,\n"
-        "or status views in a shared Notion database.\n"
+        "or status views in a shared Notion database or data source.\n"
         "Freshness depends on whether public webhook ingress is wired:\n"
         "- with ALMANAC_NOTION_WEBHOOK_PUBLIC_URL set and the webhook registered\n"
         "  in Notion, edits propagate to the index in minutes;\n"
@@ -9939,8 +10045,8 @@ def build_managed_memory_payload(
         "can absorb several seconds of latency per query.\n"
         "Bootstrap-token wrapper examples:\n"
         '{"tool":"notion.search","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","limit":5}}\n'
-        '{"tool":"notion.fetch","arguments":{"token":"<bootstrap token>","target_id":"https://www.notion.so/...page-id..."}}\n'
-        '{"tool":"notion.query","arguments":{"token":"<bootstrap token>","target_id":"<database-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}\n'
+        '{"tool":"notion.fetch","arguments":{"token":"<bootstrap token>","target_id":"https://www.notion.so/...page-id-or-data-source-id..."}}\n'
+        '{"tool":"notion.query","arguments":{"token":"<bootstrap token>","target_id":"<database-or-data-source-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}\n'
         "The default indexed qmd collection for this rail is notion-shared.\n"
         "Anything under the operator-configured shared Notion index roots becomes\n"
         "searchable by enrolled agents on this host; do not assume per-user filtering\n"
@@ -10559,8 +10665,15 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
                     (utc_now_iso(), row["id"]),
                 )
                 continue
-        if entity_id and entity_type in {"page", "database"} and not claim_page_event:
-            reindex_entities.add((entity_type, entity_id))
+        if entity_id and not claim_page_event:
+            if entity_type in {"page", "database"}:
+                reindex_entities.add((entity_type, entity_id))
+            elif entity_type in {"data_source", "file_upload"}:
+                # These events can materially change shared search freshness,
+                # but the webhook payload does not always give us a single
+                # page target we can reindex cheaply. Fall back to a full sync
+                # for correctness.
+                reindex_entities.add(("full", "full"))
         affected, resolved = _map_event_to_affected_users(conn, payload)
         signal = _signal_kind(row["event_type"], payload)
 
@@ -10628,7 +10741,7 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
         job_name="notion-ssot-batcher",
         job_kind="ssot-batcher",
         target_id="notion",
-        schedule="every 5m",
+        schedule="every 1m",
         status=batch_status,
         note=(
             f"processed {processed} event(s); verified_claims={verified_claims}; "

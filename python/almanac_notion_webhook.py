@@ -173,7 +173,10 @@ def handle_verification_token_post(conn, candidate_token: str) -> tuple[int, dic
         status="ok",
         note=f"verification token installed via webhook handshake; install window previously armed until {armed_until}",
     )
-    return HTTPStatus.ACCEPTED, {"status": "verification_token_stored"}
+    # Notion expects a 200 response once the verification token POST is
+    # received successfully. Returning 202 causes the Notion UI to treat the
+    # delivery as failed even though we stored the token.
+    return HTTPStatus.OK, {"status": "verification_token_stored"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -251,7 +254,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             store_notion_event(conn, event_id=event_id, event_type=event_type, payload=payload)
 
-        self._send_json({"status": "accepted", "event_id": event_id}, status=HTTPStatus.ACCEPTED)
+        # Notion expects webhook deliveries to acknowledge with HTTP 200.
+        self._send_json({"status": "accepted", "event_id": event_id}, status=HTTPStatus.OK)
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return

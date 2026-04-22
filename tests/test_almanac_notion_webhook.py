@@ -85,7 +85,7 @@ def test_handle_verification_token_post_refuses_overwrite_until_reset() -> None:
 
                 # Armed handshake stores the token and clears the arm window.
                 status, body = webhook.handle_verification_token_post(conn, "tok_initial_secret")
-                expect(status == HTTPStatus.ACCEPTED, f"expected ACCEPTED on first store, got {status} {body}")
+                expect(status == HTTPStatus.OK, f"expected OK on first store, got {status} {body}")
                 expect(body.get("status") == "verification_token_stored", str(body))
                 stored = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
                 expect(stored == "tok_initial_secret", f"expected token stored, got {stored!r}")
@@ -113,7 +113,7 @@ def test_handle_verification_token_post_refuses_overwrite_until_reset() -> None:
                 expect(cleared["armed"] is True, str(cleared))
                 expect(bool(cleared["armed_until"]), str(cleared))
                 status, body = webhook.handle_verification_token_post(conn, "tok_rotated_secret")
-                expect(status == HTTPStatus.ACCEPTED, f"expected ACCEPTED after reset, got {status} {body}")
+                expect(status == HTTPStatus.OK, f"expected OK after reset, got {status} {body}")
                 stored = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
                 expect(stored == "tok_rotated_secret", f"expected rotated token stored, got {stored!r}")
             print("PASS test_handle_verification_token_post_refuses_overwrite_until_reset")
@@ -140,7 +140,7 @@ def test_handle_verification_token_post_refuses_handshake_after_reset_without_re
                 armed = webhook.arm_verification_token_install(conn, ttl_seconds=600, actor="operator")
                 expect(armed["armed"] is True, str(armed))
                 status, body = webhook.handle_verification_token_post(conn, "tok_initial_secret")
-                expect(status == HTTPStatus.ACCEPTED, f"expected ACCEPTED on first store, got {status} {body}")
+                expect(status == HTTPStatus.OK, f"expected OK on first store, got {status} {body}")
 
                 cleared = webhook.reset_verification_token(conn, actor="operator", rearm_ttl_seconds=0)
                 expect(cleared["armed"] is False, str(cleared))

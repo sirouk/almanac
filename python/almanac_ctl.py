@@ -21,6 +21,11 @@ from almanac_notion_ssot import (
     retrieve_notion_user,
 )
 from almanac_nextcloud_access import delete_nextcloud_user_access
+from almanac_notion_webhook import (
+    arm_verification_token_install,
+    get_verification_token_state,
+    reset_verification_token,
+)
 from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
     Config,
@@ -214,7 +219,15 @@ def parse_args() -> argparse.Namespace:
     notion = subparsers.add_parser("notion")
     notion_sub = notion.add_subparsers(dest="action", required=True)
     notion_sub.add_parser("process-pending")
-    notion_sub.add_parser("webhook-reset-token")
+    notion_webhook_status = notion_sub.add_parser("webhook-status")
+    notion_webhook_status.add_argument("--show-public-url", action="store_true")
+    notion_webhook_arm = notion_sub.add_parser("webhook-arm-install")
+    notion_webhook_arm.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    notion_webhook_arm.add_argument("--minutes", type=int, default=10)
+    notion_webhook_reset = notion_sub.add_parser("webhook-reset-token")
+    notion_webhook_reset.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    notion_webhook_reset.add_argument("--minutes", type=int, default=10, help="Re-arm handshake install window for this many minutes after clearing the stored token. Use 0 to clear without arming.")
+    notion_webhook_reset.add_argument("--force", action="store_true", help="Required because this clears the active webhook verification token.")
     notion_handshake = notion_sub.add_parser("handshake")
     notion_handshake.add_argument("--space-url", default="")
     notion_handshake.add_argument("--token", default="")
@@ -2009,15 +2022,33 @@ def main() -> None:
         if args.domain == "notion" and args.action == "process-pending":
             dump_output(args, process_pending_notion_events(conn))
             return
+        if args.domain == "notion" and args.action == "webhook-status":
+            payload = get_verification_token_state(conn)
+            if args.show_public_url:
+                payload["public_url"] = str(config_env_value("ALMANAC_NOTION_WEBHOOK_PUBLIC_URL", "") or "").strip()
+            dump_output(args, payload)
+            return
+        if args.domain == "notion" and args.action == "webhook-arm-install":
+            dump_output(
+                args,
+                arm_verification_token_install(
+                    conn,
+                    ttl_seconds=max(1, int(args.minutes or 0)) * 60,
+                    actor=str(args.actor or "operator"),
+                ),
+            )
+            return
         if args.domain == "notion" and args.action == "webhook-reset-token":
-            previously_set = bool(str(get_setting(conn, "notion_webhook_verification_token", "") or "").strip())
-            upsert_setting(conn, "notion_webhook_verification_token", "")
-            conn.commit()
-            dump_output(args, {
-                "ok": True,
-                "previously_set": previously_set,
-                "note": "stored verification token cleared; next handshake POST from Notion will install a fresh secret",
-            })
+            if not bool(args.force):
+                raise SystemExit("refusing to clear the stored Notion webhook token without --force")
+            dump_output(
+                args,
+                reset_verification_token(
+                    conn,
+                    actor=str(args.actor or "operator"),
+                    rearm_ttl_seconds=max(0, int(args.minutes or 0)) * 60,
+                ),
+            )
             return
         if args.domain == "notion" and args.action == "handshake":
             try:

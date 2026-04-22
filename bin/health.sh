@@ -1433,6 +1433,16 @@ check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "a
 if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     pass "Notion webhook public URL configured: $ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"
+    if command -v sqlite3 >/dev/null 2>&1 && [[ -n "${ALMANAC_DB_PATH:-}" && -f "$ALMANAC_DB_PATH" ]]; then
+      notion_webhook_token_state="$(
+        sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verification_token' LIMIT 1;" 2>/dev/null || true
+      )"
+      if [[ -n "${notion_webhook_token_state//[[:space:]]/}" ]]; then
+        pass "Notion webhook verification token is installed in control-plane state"
+      else
+        warn "Notion webhook public URL is configured, but no verification token is installed yet: run \`almanac-ctl notion webhook-arm-install\` before completing the Notion webhook handshake"
+      fi
+    fi
   else
     warn "Notion webhook public URL not configured: the independent claim poller still covers self-serve verification, but shared Notion content freshness falls back to the 4-hour Curator sweep instead of webhook-driven minutes-scale updates"
   fi

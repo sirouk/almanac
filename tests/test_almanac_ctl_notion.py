@@ -539,6 +539,110 @@ def test_notion_preflight_root_cli_uses_root_page_id() -> None:
     print("PASS test_notion_preflight_root_cli_uses_root_page_id")
 
 
+def test_notion_webhook_cli_requires_force_and_tracks_arm_window() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = config_values(root)
+        values["ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"] = "https://hooks.example.com/notion/webhook"
+        write_config(config_path, values)
+        env = {
+            **os.environ,
+            "ALMANAC_CONFIG_FILE": str(config_path),
+            "PYTHONPATH": str(PYTHON_DIR),
+        }
+
+        arm = subprocess.run(
+            [
+                sys.executable,
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-arm-install",
+                "--actor",
+                "operator",
+                "--minutes",
+                "12",
+            ],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(arm.returncode == 0, arm.stderr or arm.stdout)
+        armed_payload = json.loads(arm.stdout)
+        expect(armed_payload["armed"] is True, str(armed_payload))
+        expect(bool(armed_payload["armed_until"]), str(armed_payload))
+
+        denied = subprocess.run(
+            [
+                sys.executable,
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-reset-token",
+                "--actor",
+                "operator",
+            ],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(denied.returncode != 0, f"expected webhook reset without --force to fail: {denied.stdout!r} {denied.stderr!r}")
+        expect("--force" in (denied.stderr or denied.stdout), denied.stderr or denied.stdout)
+
+        cleared = subprocess.run(
+            [
+                sys.executable,
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-reset-token",
+                "--actor",
+                "operator",
+                "--minutes",
+                "7",
+                "--force",
+            ],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(cleared.returncode == 0, cleared.stderr or cleared.stdout)
+        cleared_payload = json.loads(cleared.stdout)
+        expect(cleared_payload["armed"] is True, str(cleared_payload))
+        expect(bool(cleared_payload["armed_until"]), str(cleared_payload))
+
+        status = subprocess.run(
+            [
+                sys.executable,
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-status",
+                "--show-public-url",
+            ],
+            cwd=str(REPO),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(status.returncode == 0, status.stderr or status.stdout)
+        status_payload = json.loads(status.stdout)
+        expect(status_payload["configured"] is False, str(status_payload))
+        expect(status_payload["armed"] is True, str(status_payload))
+        expect(status_payload["last_armed_by"] == "operator", str(status_payload))
+        expect(status_payload["last_reset_by"] == "operator", str(status_payload))
+        expect(status_payload["public_url"] == "https://hooks.example.com/notion/webhook", str(status_payload))
+        print("PASS test_notion_webhook_cli_requires_force_and_tracks_arm_window")
+
+
 def main() -> int:
     test_redact_identity_rows_masks_emails_by_default()
     test_manual_verify_notion_user_fetches_and_validates_email()
@@ -548,7 +652,8 @@ def main() -> int:
     test_expire_stale_notion_identity_claims_marks_pending_claims_expired()
     test_notion_override_cli_round_trip()
     test_notion_preflight_root_cli_uses_root_page_id()
-    print("PASS all 8 almanac ctl notion tests")
+    test_notion_webhook_cli_requires_force_and_tracks_arm_window()
+    print("PASS all 9 almanac ctl notion tests")
     return 0
 
 

@@ -1604,6 +1604,8 @@ print_post_install_guide() {
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     echo "  Notion webhook URL (public HTTPS):"
     echo "    ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+    echo "  Notion webhook setup note:"
+    echo "    arm the install window with: almanac-ctl notion webhook-arm-install --actor <operator>"
   else
     echo "  Notion webhook URL (public HTTPS):"
     echo "    not configured; Notion cannot reach 127.0.0.1 without separate public ingress"

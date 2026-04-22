@@ -71,12 +71,28 @@ def test_handle_verification_token_post_refuses_overwrite_until_reset() -> None:
         try:
             cfg = control.Config.from_env()
             with control.connect_db(cfg) as conn:
-                # First handshake stores the token.
+                # First handshake is rejected until an operator arms the install window.
+                status, body = webhook.handle_verification_token_post(conn, "tok_initial_secret")
+                expect(
+                    status == HTTPStatus.PRECONDITION_FAILED,
+                    f"expected PRECONDITION_FAILED before arming, got {status} {body}",
+                )
+                expect("not armed" in str(body.get("error") or "").lower(), str(body))
+
+                armed = webhook.arm_verification_token_install(conn, ttl_seconds=600, actor="operator")
+                expect(armed["armed"] is True, str(armed))
+                expect(bool(armed["armed_until"]), str(armed))
+
+                # Armed handshake stores the token and clears the arm window.
                 status, body = webhook.handle_verification_token_post(conn, "tok_initial_secret")
                 expect(status == HTTPStatus.ACCEPTED, f"expected ACCEPTED on first store, got {status} {body}")
                 expect(body.get("status") == "verification_token_stored", str(body))
                 stored = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
                 expect(stored == "tok_initial_secret", f"expected token stored, got {stored!r}")
+                armed_after, armed_until_after = webhook._verification_token_install_armed(conn)
+                expect(not armed_after and armed_until_after == "", f"expected install window cleared, got {armed_after} {armed_until_after}")
+                installed_at = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_INSTALLED_AT_KEY, "")
+                expect(bool(installed_at), f"expected installed_at to be recorded, got {installed_at!r}")
 
                 # Second handshake from any local caller must NOT overwrite the secret.
                 status, body = webhook.handle_verification_token_post(conn, "tok_attacker_overwrite")
@@ -91,8 +107,11 @@ def test_handle_verification_token_post_refuses_overwrite_until_reset() -> None:
                 status, body = webhook.handle_verification_token_post(conn, "   \n  ")
                 expect(status == HTTPStatus.BAD_REQUEST, f"expected BAD_REQUEST on whitespace token, got {status} {body}")
 
-                # Operator clears the secret, then a fresh handshake can store a new one.
-                control.upsert_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
+                # Operator clears the secret and rearms the next install window.
+                cleared = webhook.reset_verification_token(conn, actor="operator", rearm_ttl_seconds=300)
+                expect(cleared["previously_set"] is True, str(cleared))
+                expect(cleared["armed"] is True, str(cleared))
+                expect(bool(cleared["armed_until"]), str(cleared))
                 status, body = webhook.handle_verification_token_post(conn, "tok_rotated_secret")
                 expect(status == HTTPStatus.ACCEPTED, f"expected ACCEPTED after reset, got {status} {body}")
                 stored = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")

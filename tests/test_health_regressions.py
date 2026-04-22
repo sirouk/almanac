@@ -174,12 +174,54 @@ ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
     print("PASS test_shared_notion_without_webhook_reports_sweep_fallback_warning")
 
 
+def test_shared_notion_with_public_webhook_but_no_token_warns_not_ready() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
+ALMANAC_DB_PATH="$(mktemp)"
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/sqlite3" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FAKEBIN/sqlite3"
+PATH="$FAKEBIN:$PATH"
+{snippet}
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"shared notion missing token case failed: {result.stderr}")
+    expect(
+        "PASS:Notion webhook public URL configured: https://hooks.example.com/notion/webhook" in result.stdout,
+        f"expected configured public URL pass, got: {result.stdout!r}",
+    )
+    expect(
+        "WARN:Notion webhook public URL is configured, but no verification token is installed yet" in result.stdout,
+        f"expected WARN about missing installed webhook token, got: {result.stdout!r}",
+    )
+    expect(
+        "webhook-arm-install" in result.stdout,
+        f"expected arm-install guidance in warning, got: {result.stdout!r}",
+    )
+    print("PASS test_shared_notion_with_public_webhook_but_no_token_warns_not_ready")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
     test_shared_notion_without_webhook_reports_sweep_fallback_warning()
-    print("PASS all 4 health regression tests")
+    test_shared_notion_with_public_webhook_but_no_token_warns_not_ready()
+    print("PASS all 5 health regression tests")
     return 0
 
 

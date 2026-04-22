@@ -685,6 +685,66 @@ def test_notion_webhook_cli_refuses_non_owner_control_caller() -> None:
             os.environ.update(old_env)
 
 
+def test_notion_webhook_status_show_secret_requires_owner_and_returns_token() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_notion_webhook_show_secret_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_notion_webhook_show_secret_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = config_values(root)
+        values["ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"] = "https://hooks.example.com/notion/webhook"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        original_argv = sys.argv[:]
+        original_geteuid = ctl.os.geteuid
+        try:
+            os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            control.upsert_setting(conn, "notion_webhook_verification_token", "tok_secret_value")
+
+            denied_uid = os.getuid() + 100000
+            ctl.os.geteuid = lambda: denied_uid
+            sys.argv = [
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-status",
+                "--show-secret",
+            ]
+            try:
+                ctl.main()
+            except SystemExit as exc:
+                expect("owner of the Almanac control files" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected non-owner webhook status --show-secret to be rejected")
+
+            ctl.os.geteuid = original_geteuid
+            sys.argv = [
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-status",
+                "--show-public-url",
+                "--show-secret",
+            ]
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                ctl.main()
+            payload = json.loads(buffer.getvalue())
+            expect(payload["verification_token"] == "tok_secret_value", str(payload))
+            expect(payload["public_url"] == "https://hooks.example.com/notion/webhook", str(payload))
+            print("PASS test_notion_webhook_status_show_secret_requires_owner_and_returns_token")
+        finally:
+            ctl.os.geteuid = original_geteuid
+            sys.argv = original_argv
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_redact_identity_rows_masks_emails_by_default()
     test_manual_verify_notion_user_fetches_and_validates_email()
@@ -696,7 +756,8 @@ def main() -> int:
     test_notion_preflight_root_cli_uses_root_page_id()
     test_notion_webhook_cli_requires_force_and_tracks_arm_window()
     test_notion_webhook_cli_refuses_non_owner_control_caller()
-    print("PASS all 10 almanac ctl notion tests")
+    test_notion_webhook_status_show_secret_requires_owner_and_returns_token()
+    print("PASS all 11 almanac ctl notion tests")
     return 0
 
 

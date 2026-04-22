@@ -8067,6 +8067,10 @@ def _refresh_qmd_after_notion_sync(cfg: Config, *, embed: bool = False) -> None:
         raise RuntimeError(f"qmd refresh failed after Notion sync: {detail or result.returncode}")
 
 
+def _notion_index_run_embed() -> bool:
+    return bool_env("ALMANAC_NOTION_INDEX_RUN_EMBED", default=True)
+
+
 def sync_shared_notion_index(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -8195,8 +8199,8 @@ def sync_shared_notion_index(
         indexed_pages.update(page_rows.keys())
 
     conn.commit()
-    if changed_docs or removed_docs or full:
-        _refresh_qmd_after_notion_sync(cfg, embed=False)
+    if changed_docs or removed_docs:
+        _refresh_qmd_after_notion_sync(cfg, embed=_notion_index_run_embed())
     status = "ok"
     if unresolved_pages or unresolved_databases:
         status = "warn"

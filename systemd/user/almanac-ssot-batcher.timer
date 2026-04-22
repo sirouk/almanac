@@ -1,9 +1,9 @@
 [Unit]
-Description=Process queued Almanac SSOT webhook events every 5 minutes
+Description=Process queued Almanac SSOT webhook events every minute
 
 [Timer]
-OnBootSec=3m
-OnUnitActiveSec=5m
+OnBootSec=30s
+OnUnitActiveSec=1m
 Unit=almanac-ssot-batcher.service
 
 [Install]

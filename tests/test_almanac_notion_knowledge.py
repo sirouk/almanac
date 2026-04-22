@@ -172,7 +172,7 @@ def test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs() -> 
             expect(result["changed_docs"] == 3, str(result))
             expect(result["collection"] == "notion-shared", str(result))
             expect(result["processed_roots"] == [root_page_id], str(result))
-            expect(refresh_calls == [False], str(refresh_calls))
+            expect(refresh_calls == [True], str(refresh_calls))
 
             rows = conn.execute(
                 """

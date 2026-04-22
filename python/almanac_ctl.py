@@ -22,6 +22,7 @@ from almanac_notion_ssot import (
 )
 from almanac_nextcloud_access import delete_nextcloud_user_access
 from almanac_notion_webhook import (
+    NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY,
     arm_verification_token_install,
     get_verification_token_state,
     reset_verification_token,
@@ -221,6 +222,7 @@ def parse_args() -> argparse.Namespace:
     notion_sub.add_parser("process-pending")
     notion_webhook_status = notion_sub.add_parser("webhook-status")
     notion_webhook_status.add_argument("--show-public-url", action="store_true")
+    notion_webhook_status.add_argument("--show-secret", action="store_true", help="Reveal the currently stored verification token. Requires root or ownership of the Almanac control files.")
     notion_webhook_arm = notion_sub.add_parser("webhook-arm-install")
     notion_webhook_arm.add_argument("--actor", default=os.environ.get("USER", "operator"))
     notion_webhook_arm.add_argument("--minutes", type=int, default=10)
@@ -2052,6 +2054,12 @@ def main() -> None:
             payload = get_verification_token_state(conn)
             if args.show_public_url:
                 payload["public_url"] = str(config_env_value("ALMANAC_NOTION_WEBHOOK_PUBLIC_URL", "") or "").strip()
+            if bool(args.show_secret):
+                require_control_file_owner(
+                    cfg,
+                    "almanac-ctl notion webhook-status --show-secret must run as root or the owner of the Almanac control files.",
+                )
+                payload["verification_token"] = str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip()
             dump_output(args, payload)
             return
         if args.domain == "notion" and args.action == "webhook-arm-install":

@@ -23,6 +23,7 @@ def shared_tailnet_host(
 def shared_resource_lines(
     *,
     host: str,
+    tailscale_serve_port: str = "443",
     nextcloud_enabled: bool,
     qmd_url: str,
     public_mcp_host: str,
@@ -33,16 +34,23 @@ def shared_resource_lines(
     notion_space_url: str = "",
 ) -> list[str]:
     lines: list[str] = []
+    serve_port = str(tailscale_serve_port or "443").strip() or "443"
+
+    def https_url(path: str) -> str:
+        normalized = "/" + str(path or "/").lstrip("/")
+        if serve_port == "443":
+            return f"https://{host}{normalized}"
+        return f"https://{host}:{serve_port}{normalized}"
 
     if nextcloud_enabled:
         if host:
-            lines.append(f"Vault access in Nextcloud: https://{host}/ (shared mount: /Vault)")
+            lines.append(f"Vault access in Nextcloud: {https_url('/')} (shared mount: /Vault)")
         else:
             lines.append("Vault access in Nextcloud: shared on this host (mounted as /Vault)")
 
     if host:
-        lines.append(f"QMD MCP retrieval rail: https://{host}{qmd_path}")
-        lines.append(f"Almanac MCP control rail: https://{host}{almanac_mcp_path}")
+        lines.append(f"QMD MCP retrieval rail: {https_url(qmd_path)}")
+        lines.append(f"Almanac MCP control rail: {https_url(almanac_mcp_path)}")
     else:
         lines.append(f"QMD MCP retrieval rail: {qmd_url}")
         lines.append(f"Almanac MCP control rail: http://{public_mcp_host}:{public_mcp_port}/mcp")

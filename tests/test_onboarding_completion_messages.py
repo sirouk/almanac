@@ -68,6 +68,7 @@ def config_values(root: Path) -> dict[str, str]:
         "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
         "ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE": "1",
         "ENABLE_TAILSCALE_SERVE": "1",
+        "TAILSCALE_SERVE_PORT": "8445",
         "ENABLE_NEXTCLOUD": "1",
         "TAILSCALE_DNS_NAME": "kor.tail77f45e.ts.net",
         "NEXTCLOUD_TRUSTED_DOMAIN": "kor.tail77f45e.ts.net",
@@ -159,7 +160,7 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("send the rest of your links" in full_text, full_text)
             expect(f"Nextcloud login: {unix_user} (same shared password)" in followup_text, followup_text)
             expect("Shared Almanac links:" in followup_text, followup_text)
-            expect("https://kor.tail77f45e.ts.net/" in followup_text, followup_text)
+            expect("https://kor.tail77f45e.ts.net:8445/" in followup_text, followup_text)
             expect("https://kor.tail77f45e.ts.net/mcp" not in followup_text, followup_text)
             expect("https://kor.tail77f45e.ts.net/almanac-mcp" not in followup_text, followup_text)
             expect("QMD MCP retrieval rail:" not in followup_text, followup_text)

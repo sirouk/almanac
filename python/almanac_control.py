@@ -9959,6 +9959,7 @@ def build_managed_memory_payload(
         workspace_root=workspace_root,
         shared_lines=shared_resource_lines(
             host=shared_host,
+            tailscale_serve_port=config_env_value("TAILSCALE_SERVE_PORT", "443").strip() or "443",
             nextcloud_enabled=(config_env_value("ENABLE_NEXTCLOUD", "1").strip() == "1"),
             qmd_url=cfg.qmd_url,
             public_mcp_host=cfg.public_mcp_host,

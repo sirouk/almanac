@@ -69,6 +69,7 @@ def render_runtime_config(
     dc_flag: str = "",
     *,
     enable_tailscale_serve: str = "0",
+    tailscale_serve_port: str = "443",
     enable_tailscale_notion_webhook_funnel: str = "0",
     agent_enable_tailscale_serve: str = "",
     tailscale_notion_webhook_funnel_port: str = "8443",
@@ -127,6 +128,7 @@ ALMANAC_ORG_TIMEZONE={shlex.quote(org_timezone)}
 ALMANAC_ORG_QUIET_HOURS={shlex.quote(org_quiet_hours)}
 ENABLE_NEXTCLOUD=0
 ENABLE_TAILSCALE_SERVE={shlex.quote(enable_tailscale_serve)}
+TAILSCALE_SERVE_PORT={shlex.quote(tailscale_serve_port)}
 ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL={shlex.quote(enable_tailscale_notion_webhook_funnel)}
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT={shlex.quote(tailscale_notion_webhook_funnel_port)}
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH={shlex.quote(tailscale_notion_webhook_funnel_path)}
@@ -192,6 +194,7 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
         "tui-only",
         "tui-only",
         enable_tailscale_notion_webhook_funnel="1",
+        tailscale_serve_port="8445",
         tailscale_notion_webhook_funnel_port="8443",
         tailscale_notion_webhook_funnel_path="/notion/webhook",
         notion_root_page_url="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
@@ -221,6 +224,7 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     expect(source_value(config, "ALMANAC_SSOT_NOTION_API_VERSION") == "2026-03-11", config)
     expect(source_value(config, "ALMANAC_SSOT_NOTION_TOKEN") == "secret_test", config)
     expect(source_value(config, "ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL") == "1", config)
+    expect(source_value(config, "TAILSCALE_SERVE_PORT") == "8445", config)
     expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT") == "8443", config)
     expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH") == "/notion/webhook", config)
     expect(

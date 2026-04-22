@@ -67,6 +67,7 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
     host = _shared_tailnet_host()
     shared_lines = shared_resource_lines(
         host=host,
+        tailscale_serve_port=config_env_value("TAILSCALE_SERVE_PORT", "443").strip() or "443",
         nextcloud_enabled=(config_env_value("ENABLE_NEXTCLOUD", "1").strip() == "1"),
         qmd_url=cfg.qmd_url,
         public_mcp_host=cfg.public_mcp_host,

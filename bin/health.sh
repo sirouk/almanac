@@ -459,6 +459,79 @@ PY
   fi
 }
 
+check_tailscale_serve_routes() {
+  local output=""
+  local ts_json=""
+
+  if ! command -v tailscale >/dev/null 2>&1; then
+    warn_or_fail "tailscale CLI is not installed; cannot verify the tailnet-only Tailscale Serve routes"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn_or_fail "python3 is unavailable; cannot verify the tailnet-only Tailscale Serve routes"
+    return 0
+  fi
+
+  ts_json="$(tailscale serve status --json 2>/dev/null || true)"
+  if [[ -z "$ts_json" ]]; then
+    warn_or_fail "tailscale serve status returned no JSON for the tailnet-only Almanac routes"
+    return 0
+  fi
+
+  if output="$(
+    TAILSCALE_SERVE_JSON="$ts_json" python3 - \
+      "${TAILSCALE_SERVE_PORT:-443}" \
+      "${TAILSCALE_QMD_PATH:-/mcp}" \
+      "${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}" \
+      "${NEXTCLOUD_PORT:-18080}" \
+      "${QMD_MCP_PORT:-8181}" \
+      "${ALMANAC_MCP_PORT:-8282}" <<'PY'
+import json
+import os
+import sys
+
+serve_port = str(sys.argv[1])
+qmd_path = sys.argv[2]
+almanac_mcp_path = sys.argv[3]
+nextcloud_port = str(sys.argv[4])
+qmd_port = str(sys.argv[5])
+almanac_mcp_port = str(sys.argv[6])
+
+try:
+    data = json.loads(os.environ["TAILSCALE_SERVE_JSON"])
+except Exception:
+    raise SystemExit(1)
+
+web = data.get("Web") or {}
+
+for hostport, entry in web.items():
+    host, sep, port = hostport.rpartition(":")
+    actual_port = port if sep and port.isdigit() else "443"
+    actual_host = host if sep and port.isdigit() else hostport
+    if actual_port != serve_port:
+        continue
+    handlers = (entry or {}).get("Handlers") or {}
+    root = handlers.get("/") or {}
+    qmd = handlers.get(qmd_path) or {}
+    almanac = handlers.get(almanac_mcp_path) or {}
+    if (
+        root.get("Proxy") == f"http://127.0.0.1:{nextcloud_port}"
+        and qmd.get("Proxy") == f"http://127.0.0.1:{qmd_port}/mcp"
+        and almanac.get("Proxy") == f"http://127.0.0.1:{almanac_mcp_port}/mcp"
+    ):
+        base = f"https://{actual_host}" if serve_port == "443" else f"https://{actual_host}:{serve_port}"
+        print(base)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+  )"; then
+    pass "Tailscale HTTPS proxy is configured (tailnet only): $output"
+  else
+    warn_or_fail "Tailscale HTTPS proxy is not configured on the expected tailnet-only port ${TAILSCALE_SERVE_PORT:-443}"
+  fi
+}
+
 check_activation_trigger_write_access() {
   local trigger_dir="$STATE_DIR/activation-triggers"
   local probe_path=""
@@ -1558,32 +1631,7 @@ if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
   fi
 
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    if command -v tailscale >/dev/null 2>&1; then
-      ts_status="$(tailscale serve status 2>/dev/null || true)"
-      if printf '%s\n' "$ts_status" | grep -q "proxy http://127.0.0.1:$NEXTCLOUD_PORT"; then
-        if printf '%s\n' "$ts_status" | grep -q "(tailnet only)"; then
-          pass "Tailscale HTTPS proxy is configured (tailnet only)"
-        else
-          warn_or_fail "Tailscale HTTPS proxy is configured, but exposure is not clearly tailnet-only"
-        fi
-      else
-        warn_or_fail "Tailscale HTTPS proxy is not configured for Nextcloud"
-      fi
-
-      if printf '%s\n' "$ts_status" | grep -q "proxy http://127.0.0.1:$QMD_MCP_PORT/mcp"; then
-        pass "Tailscale qmd MCP proxy is configured"
-      else
-        warn_or_fail "Tailscale qmd MCP proxy is not configured"
-      fi
-
-      if printf '%s\n' "$ts_status" | grep -q "proxy http://127.0.0.1:$ALMANAC_MCP_PORT/mcp"; then
-        pass "Tailscale Almanac MCP proxy is configured"
-      else
-        warn_or_fail "Tailscale Almanac MCP proxy is not configured"
-      fi
-    else
-      warn_or_fail "tailscale CLI is not installed"
-    fi
+    check_tailscale_serve_routes
   fi
 fi
 

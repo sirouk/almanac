@@ -26,6 +26,7 @@ NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.ne
 NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
 ENABLE_NEXTCLOUD="${ENABLE_NEXTCLOUD:-1}"
 ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
+TAILSCALE_SERVE_PORT="${TAILSCALE_SERVE_PORT:-443}"
 ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}"
 ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}"
 TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
@@ -732,7 +733,7 @@ detect_tailscale_serve() {
 
   local ts_info=""
   ts_info="$(
-    TAILSCALE_SERVE_JSON="$ts_json" python3 - "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" "$ALMANAC_MCP_PORT" "$TAILSCALE_ALMANAC_MCP_PATH" <<'PY'
+    TAILSCALE_SERVE_JSON="$ts_json" python3 - "${TAILSCALE_SERVE_PORT:-443}" "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" "$ALMANAC_MCP_PORT" "$TAILSCALE_ALMANAC_MCP_PATH" <<'PY'
 import json
 import os
 import sys
@@ -742,10 +743,11 @@ try:
 except Exception:
     raise SystemExit(0)
 
-qmd_port = sys.argv[1]
-qmd_path = sys.argv[2]
-almanac_mcp_port = sys.argv[3]
-almanac_mcp_path = sys.argv[4]
+serve_port = str(sys.argv[1])
+qmd_port = sys.argv[2]
+qmd_path = sys.argv[3]
+almanac_mcp_port = sys.argv[4]
+almanac_mcp_path = sys.argv[5]
 web = data.get("Web") or {}
 
 host = ""
@@ -754,8 +756,12 @@ has_qmd = False
 has_almanac_mcp = False
 
 for hostport, entry in web.items():
+    parsed_host, sep, parsed_port = hostport.rpartition(":")
+    actual_port = parsed_port if sep and parsed_port.isdigit() else "443"
+    if actual_port != serve_port:
+        continue
     if not host:
-        host = hostport.rsplit(":", 1)[0]
+        host = parsed_host if sep and parsed_port.isdigit() else hostport
     handlers = (entry or {}).get("Handlers") or {}
     if "/" in handlers:
         has_root = True
@@ -923,7 +929,7 @@ resolve_agent_qmd_endpoint() {
   AGENT_QMD_ROUTE_STATUS="local_only"
 
   if [[ -n "$AGENT_QMD_TAILNET_HOST" ]]; then
-    AGENT_QMD_TAILNET_URL="https://${AGENT_QMD_TAILNET_HOST}${TAILSCALE_QMD_PATH}"
+    AGENT_QMD_TAILNET_URL="$(build_public_https_url "$AGENT_QMD_TAILNET_HOST" "${TAILSCALE_SERVE_PORT:-443}" "${TAILSCALE_QMD_PATH}")"
   fi
 
   if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_SERVE_HOST" || "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
@@ -950,7 +956,7 @@ resolve_agent_control_plane_endpoint() {
   AGENT_ALMANAC_MCP_ROUTE_STATUS="local_only"
 
   if [[ -n "$AGENT_ALMANAC_MCP_TAILNET_HOST" ]]; then
-    AGENT_ALMANAC_MCP_TAILNET_URL="https://${AGENT_ALMANAC_MCP_TAILNET_HOST}${TAILSCALE_ALMANAC_MCP_PATH}"
+    AGENT_ALMANAC_MCP_TAILNET_URL="$(build_public_https_url "$AGENT_ALMANAC_MCP_TAILNET_HOST" "${TAILSCALE_SERVE_PORT:-443}" "${TAILSCALE_ALMANAC_MCP_PATH}")"
   fi
 
   if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_SERVE_HOST" || "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
@@ -1346,6 +1352,7 @@ emit_runtime_config() {
     write_kv ALMANAC_RELEASE_STATE_FILE "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
     write_kv ENABLE_NEXTCLOUD "$ENABLE_NEXTCLOUD"
     write_kv ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
+    write_kv TAILSCALE_SERVE_PORT "${TAILSCALE_SERVE_PORT:-443}"
     write_kv TAILSCALE_OPERATOR_USER "${TAILSCALE_OPERATOR_USER:-}"
     write_kv TAILSCALE_QMD_PATH "${TAILSCALE_QMD_PATH:-/mcp}"
     write_kv TAILSCALE_ALMANAC_MCP_PATH "${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
@@ -1693,7 +1700,7 @@ print_post_install_guide() {
     fi
     if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
       echo "  Tailnet HTTPS URL:"
-      echo "    https://${TAILSCALE_DNS_NAME:-$NEXTCLOUD_TRUSTED_DOMAIN}"
+      echo "    $(build_public_https_url "${TAILSCALE_DNS_NAME:-$NEXTCLOUD_TRUSTED_DOMAIN}" "${TAILSCALE_SERVE_PORT:-443}" "/")"
       echo "  Exposure:"
       echo "    tailnet only"
     else
@@ -2310,6 +2317,7 @@ collect_install_answers() {
   fi
   default_enable_nextcloud="${ENABLE_NEXTCLOUD:-1}"
   default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
+  default_tailscale_serve_port="${TAILSCALE_SERVE_PORT:-443}"
   default_enable_tailscale_notion_webhook_funnel="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
   default_tailscale_operator_user="${TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
   default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
@@ -2398,6 +2406,19 @@ collect_install_answers() {
     ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="0"
     TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
     TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
+  fi
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" == "$default_tailscale_serve_port" ]]; then
+      default_tailscale_serve_port="8445"
+    fi
+    TAILSCALE_SERVE_PORT="$(ask "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes" "$default_tailscale_serve_port")"
+  else
+    TAILSCALE_SERVE_PORT="$default_tailscale_serve_port"
+  fi
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" && "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_SERVE_PORT:-443}" == "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" ]]; then
+    echo "Tailscale Serve and the public Notion webhook Funnel cannot share the same HTTPS port." >&2
+    echo "Choose different values for the private tailnet port and the public webhook port." >&2
+    return 1
   fi
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     TAILSCALE_OPERATOR_USER="$(ask "Tailscale operator user for serve/funnel management" "$default_tailscale_operator_user")"

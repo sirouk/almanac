@@ -24,17 +24,19 @@ try:
 except Exception:
     raise SystemExit(0)
 
-expected_root = sys.argv[1]
-expected_qmd = sys.argv[2]
-expected_path = sys.argv[3]
-expected_almanac_mcp = sys.argv[4]
-expected_almanac_mcp_path = sys.argv[5]
+serve_port = str(sys.argv[1])
+expected_root = sys.argv[2]
+expected_qmd = sys.argv[3]
+expected_path = sys.argv[4]
+expected_almanac_mcp = sys.argv[5]
+expected_almanac_mcp_path = sys.argv[6]
 web = data.get("Web") or {}
 
-if len(web) != 1:
-    raise SystemExit(0)
-
-for host_cfg in web.values():
+for hostport, host_cfg in web.items():
+    host, sep, port = hostport.rpartition(":")
+    actual_port = port if sep and port.isdigit() else "443"
+    if actual_port != serve_port:
+        continue
     handlers = host_cfg.get("Handlers") or {}
     if set(handlers) != {"/", expected_path, expected_almanac_mcp_path}:
         raise SystemExit(0)
@@ -47,9 +49,9 @@ for host_cfg in web.values():
         and almanac_mcp.get("Proxy") == expected_almanac_mcp
     ):
         print("1")
-' "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" || true
+' "${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" || true
 )"
 
 if [[ "$owned_config" == "1" ]]; then
-  tailscale serve reset >/dev/null 2>&1 || true
+  tailscale serve --yes --https="${TAILSCALE_SERVE_PORT:-443}" off >/dev/null 2>&1 || true
 fi

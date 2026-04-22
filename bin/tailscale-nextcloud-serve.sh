@@ -80,16 +80,17 @@ verify_serve_config() {
     return 1
   fi
 
-  if TAILSCALE_SERVE_JSON="$ts_json" python3 - "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" <<'PY'
+  if TAILSCALE_SERVE_JSON="$ts_json" python3 - "${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" <<'PY'
 import json
 import os
 import sys
 
-expected_root = sys.argv[1]
-expected_qmd = sys.argv[2]
-expected_path = sys.argv[3]
-expected_almanac_mcp = sys.argv[4]
-expected_almanac_mcp_path = sys.argv[5]
+serve_port = str(sys.argv[1])
+expected_root = sys.argv[2]
+expected_qmd = sys.argv[3]
+expected_path = sys.argv[4]
+expected_almanac_mcp = sys.argv[5]
+expected_almanac_mcp_path = sys.argv[6]
 
 try:
     data = json.loads(os.environ["TAILSCALE_SERVE_JSON"])
@@ -98,7 +99,11 @@ except Exception:
 
 web = data.get("Web") or {}
 
-for host_cfg in web.values():
+for hostport, host_cfg in web.items():
+    host, sep, port = hostport.rpartition(":")
+    actual_port = port if sep and port.isdigit() else "443"
+    if actual_port != serve_port:
+        continue
     handlers = host_cfg.get("Handlers") or {}
     root = handlers.get("/") or {}
     qmd = handlers.get(expected_path) or {}
@@ -141,8 +146,8 @@ fi
 
 detect_tailscale_runtime || true
 
-run_serve_cmd tailscale serve --bg --yes "http://127.0.0.1:${NEXTCLOUD_PORT}"
-run_serve_cmd tailscale serve --bg --yes --set-path "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp"
-run_serve_cmd tailscale serve --bg --yes --set-path "${TAILSCALE_ALMANAC_MCP_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp"
+run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}"
+run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp"
+run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_ALMANAC_MCP_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp"
 verify_serve_config
 print_serve_summary

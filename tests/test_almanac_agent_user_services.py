@@ -106,7 +106,7 @@ def test_generated_web_service_units_follow_access_state() -> None:
                 "agent-test",
                 str(REPO),
                 str(hermes_home),
-                '["tui-only"]',
+                '["discord"]',
                 "",
                 str(hermes_bin),
             ],
@@ -124,17 +124,21 @@ def test_generated_web_service_units_follow_access_state() -> None:
         dashboard_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-dashboard.service"
         proxy_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-dashboard-proxy.service"
         code_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-code.service"
+        gateway_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-gateway.service"
         expect(dashboard_unit.is_file(), f"expected dashboard unit: {dashboard_unit}")
         expect(proxy_unit.is_file(), f"expected dashboard proxy unit: {proxy_unit}")
         expect(code_unit.is_file(), f"expected code unit: {code_unit}")
+        expect(gateway_unit.is_file(), f"expected gateway unit: {gateway_unit}")
 
         dashboard_text = dashboard_unit.read_text(encoding="utf-8")
         proxy_text = proxy_unit.read_text(encoding="utf-8")
         code_text = code_unit.read_text(encoding="utf-8")
+        gateway_text = gateway_unit.read_text(encoding="utf-8")
         expect("--port 19021" in dashboard_text, dashboard_text)
         expect("--listen-port 29021" in proxy_text, proxy_text)
         expect("run-agent-code-server.sh" in code_text, code_text)
         expect("almanac-agent-code-agent-test" in code_text, code_text)
+        expect("gateway run --replace" in gateway_text, gateway_text)
         print("PASS test_generated_web_service_units_follow_access_state")
 
 

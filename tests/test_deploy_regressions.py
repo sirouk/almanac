@@ -1152,9 +1152,22 @@ def test_shell_scripts_avoid_bash4_only_features() -> None:
 
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
+    helper = extract(text, "realign_active_enrolled_agents_root() {", "chown_managed_paths() {")
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     enrollment_align = extract(text, "run_enrollment_align() {", "run_enrollment_reset() {")
+    expect(
+        'user sync-access "$unix_user" --agent-id "$agent_id"' in helper,
+        "active-agent realignment should reapply per-user runtime access before running user-owned services",
+    )
+    expect(
+        'refresh-agent-install.sh' in helper,
+        "active-agent realignment should reinstall user-owned Hermes assets and services",
+    )
+    expect(
+        "update_agent_display_name" in helper,
+        "active-agent realignment should keep the stored agent display name aligned with the saved bot label",
+    )
     expect(
         "repair_active_agent_runtime_access" in install,
         "run_root_install should repair enrolled-user runtime access after syncing the shared repo",
@@ -1172,8 +1185,8 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "run_root_upgrade should use the scoped ownership helper instead of blanket chowning private state",
     )
     expect(
-        'user sync-access "$unix_user" --agent-id "$agent_id"' in enrollment_align,
-        "run_enrollment_align should reapply per-user runtime access before running user-owned services",
+        "realign_active_enrolled_agents_root" in enrollment_align,
+        "run_enrollment_align should reuse the shared active-agent realignment helper",
     )
     print("PASS test_deploy_reapplies_runtime_access_after_repo_sync")
 
@@ -1268,10 +1281,12 @@ def test_enrollment_reset_supports_full_forget_purge() -> None:
 
 def test_enrollment_align_reseeds_agent_identity() -> None:
     text = DEPLOY_SH.read_text()
+    helper = (REPO / "bin" / "refresh-agent-install.sh").read_text(encoding="utf-8")
     align = extract(text, "run_enrollment_align() {", "run_enrollment_reset() {")
-    expect("--identity-only" in align, "expected enrollment-align to run headless identity reseed")
-    expect("--user-name" in align, "expected enrollment-align identity reseed to pass the saved user name")
-    expect("SELECT linked_agent_id, answers_json, sender_display_name" in align, align)
+    expect("realign_active_enrolled_agents_root" in align, align)
+    expect("--identity-only" in helper, "expected refresh-agent-install to run headless identity reseed")
+    expect("--user-name" in helper, "expected refresh-agent-install identity reseed to pass the saved user name")
+    expect("SELECT linked_agent_id, answers_json, sender_display_name" in text, text)
     expect("ALMANAC_ORG_NAME" in text, "expected deploy config to persist org interview fields")
     print("PASS test_enrollment_align_reseeds_agent_identity")
 

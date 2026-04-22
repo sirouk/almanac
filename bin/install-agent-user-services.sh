@@ -36,6 +36,28 @@ if [[ -z "$PODMAN_BIN" ]]; then
   PODMAN_BIN="/usr/bin/podman"
 fi
 
+disable_native_hermes_gateway_units() {
+  local runtime_dir="$1"
+  local bus_path="$2"
+  local units=""
+
+  units="$(
+    env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" \
+      systemctl --user list-unit-files 'hermes-gateway*' --no-legend --plain 2>/dev/null | awk '{print $1}'
+  )"
+  if [[ -z "$units" ]]; then
+    return 0
+  fi
+
+  # Almanac owns the enrolled-agent user accounts and manages their gateway
+  # lifecycle via the almanac-user-agent-* units below. Disable any Hermes-
+  # native gateway services in the same user manager so we never have two
+  # service managers racing over one HERMES_HOME.
+  # shellcheck disable=SC2086
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" \
+    systemctl --user disable --now $units >/dev/null 2>&1 || true
+}
+
 enable_access_surfaces="0"
 dashboard_backend_port=""
 dashboard_proxy_port=""
@@ -126,7 +148,9 @@ Description=Almanac user-agent messaging gateway for $AGENT_ID
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
 WorkingDirectory=$HERMES_HOME
-ExecStart=$HERMES_BIN gateway
+# Use Hermes's replace semantics so stale PID files or pre-reboot gateway
+# ownership are reclaimed on startup rather than crash-looping on "race lost".
+ExecStart=$HERMES_BIN gateway run --replace
 Restart=always
 RestartSec=5
 
@@ -206,6 +230,7 @@ uid="$(id -u)"
 runtime_dir="/run/user/$uid"
 bus_path="$runtime_dir/bus"
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user daemon-reload
+disable_native_hermes_gateway_units "$runtime_dir" "$bus_path"
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-refresh.timer >/dev/null
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-refresh.timer >/dev/null
 

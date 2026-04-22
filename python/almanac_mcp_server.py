@@ -482,6 +482,7 @@ class Handler(BaseHTTPRequestHandler):
                     agent_id=str(token_row["agent_id"]),
                     query_text=str(arguments.get("query") or ""),
                     limit=int(arguments.get("limit") or 5),
+                    rerank=bool(arguments.get("rerank")),
                     requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
                 )
 

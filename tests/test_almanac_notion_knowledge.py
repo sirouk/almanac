@@ -268,15 +268,21 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
                     "root_page_title": "Workspace Root",
                 },
             ]
-            mod.mcp_call = lambda url, method, arguments: {
-                "results": [
-                    {
-                        "file": f"qmd://notion-shared/{file_path.relative_to(mod._notion_index_markdown_dir(cfg)).as_posix()}",
-                        "score": 0.92,
-                        "snippet": "Unicorn details",
-                    }
-                ]
-            }
+            mcp_search_calls: list[dict] = []
+
+            def fake_mcp_call(url, method, arguments):
+                mcp_search_calls.append({"url": url, "method": method, "arguments": dict(arguments)})
+                return {
+                    "results": [
+                        {
+                            "file": f"qmd://notion-shared/{file_path.relative_to(mod._notion_index_markdown_dir(cfg)).as_posix()}",
+                            "score": 0.92,
+                            "snippet": "Unicorn details",
+                        }
+                    ]
+                }
+
+            mod.mcp_call = fake_mcp_call
             mod.resolve_notion_target = lambda **kwargs: (
                 {"kind": "database", "id": database_id, "url": "https://www.notion.so/database-cccccccccccccccccccccccccccc", "title": "Project Tracker"}
                 if kwargs["target_id"] == database_id
@@ -329,6 +335,25 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             expect(search_result["results"][0]["page_title"] == "Chutes Unicorn", str(search_result))
             expect(search_result["results"][0]["breadcrumb"] == ["Workspace Root", "Projects", "Chutes Unicorn"], str(search_result))
             expect(search_result["results"][0]["source"] == "index", str(search_result))
+            expect(len(mcp_search_calls) == 1, str(mcp_search_calls))
+            expect(mcp_search_calls[0]["arguments"].get("rerank") is False, str(mcp_search_calls[0]))
+
+            reranked_result = mod.notion_search(
+                conn,
+                cfg,
+                agent_id="agent-test",
+                query_text="Unicorn",
+                rerank=True,
+                requested_by_actor="test",
+            )
+            expect(reranked_result["ok"] is True, str(reranked_result))
+            expect(len(mcp_search_calls) == 2, str(mcp_search_calls))
+            expect(mcp_search_calls[1]["arguments"].get("rerank") is True, str(mcp_search_calls[1]))
+            rerank_audit = conn.execute(
+                "SELECT note FROM notion_retrieval_audit WHERE operation = 'search' ORDER BY id ASC"
+            ).fetchall()
+            expect("rerank=false" in str(rerank_audit[0]["note"]), str(rerank_audit))
+            expect("rerank=true" in str(rerank_audit[1]["note"]), str(rerank_audit))
 
             fetch_page_result = mod.notion_fetch(
                 conn,
@@ -369,6 +394,7 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             ).fetchall()
             expect(
                 [(str(row["operation"]), str(row["decision"])) for row in audit_rows] == [
+                    ("search", "allow"),
                     ("search", "allow"),
                     ("fetch", "allow"),
                     ("fetch", "allow"),

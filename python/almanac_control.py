@@ -8564,6 +8564,7 @@ def notion_search(
     agent_id: str,
     query_text: str,
     limit: int = 5,
+    rerank: bool = False,
     requested_by_actor: str,
 ) -> dict[str, Any]:
     agent_row = _active_user_agent_row(conn, agent_id)
@@ -8587,7 +8588,7 @@ def notion_search(
             ],
             "collections": [collection_name],
             "intent": f"Search shared Notion knowledge for {compact_query}",
-            "rerank": True,
+            "rerank": bool(rerank),
             "limit": normalized_limit,
         },
     )
@@ -8647,7 +8648,7 @@ def notion_search(
         decision="allow",
         query_text=compact_query,
         result_count=len(hits),
-        note=f"collection={collection_name} docs={index_doc_count}",
+        note=f"collection={collection_name} docs={index_doc_count} rerank={str(bool(rerank)).lower()}",
     )
     return {
         "ok": True,
@@ -9925,6 +9926,9 @@ def build_managed_memory_payload(
         "Fetch/query are live Notion API reads.\n"
         "This is a shared read rail, not the governed ssot.write approval path.\n"
         "Budget guidance: one search, then zero-to-three fetches before summarizing.\n"
+        "notion.search defaults to hybrid BM25+vector scoring (rerank disabled) for\n"
+        "sub-second responses; pass rerank:true when you need LLM-quality ranking and\n"
+        "can absorb several seconds of latency per query.\n"
         "Bootstrap-token wrapper examples:\n"
         '{"tool":"notion.search","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","limit":5}}\n'
         '{"tool":"notion.fetch","arguments":{"token":"<bootstrap token>","target_id":"https://www.notion.so/...page-id..."}}\n'

@@ -5,17 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/common.sh"
 
-normalize_http_path() {
-  local path="${1:-/}"
-  if [[ -z "$path" ]]; then
-    path="/"
-  fi
-  if [[ "$path" != /* ]]; then
-    path="/$path"
-  fi
-  printf '%s\n' "$path"
-}
-
 detect_tailscale_runtime() {
   TAILSCALE_DNS_NAME=""
 
@@ -86,15 +75,13 @@ ensure_no_conflicting_funnel_service() {
   result="$(
     TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
       "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
-      "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" \
-      "$FUNNEL_PATH" <<'PY'
+      "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
 import sys
 
 port = str(sys.argv[1])
 backend_port = str(sys.argv[2])
-path = sys.argv[3]
 
 try:
     data = json.loads(os.environ["TAILSCALE_FUNNEL_JSON"])
@@ -103,7 +90,7 @@ except Exception:
 
 web = data.get("Web") or {}
 allow = data.get("AllowFunnel") or {}
-expected_proxy = f"http://127.0.0.1:{backend_port}{path}"
+expected_proxy = f"http://127.0.0.1:{backend_port}"
 
 for hostport, entry in web.items():
     if not hostport.endswith(f":{port}"):
@@ -113,8 +100,8 @@ for hostport, entry in web.items():
         continue
     owned = (
         len(handlers) == 1
-        and path in handlers
-        and (handlers.get(path) or {}).get("Proxy") == expected_proxy
+        and "/" in handlers
+        and (handlers.get("/") or {}).get("Proxy") == expected_proxy
         and bool(allow.get(hostport))
     )
     if owned:
@@ -144,15 +131,13 @@ verify_funnel_config() {
 
   if TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
     "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
-    "$FUNNEL_PATH" \
     "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
 import sys
 
 port = str(sys.argv[1])
-path = sys.argv[2]
-backend_port = str(sys.argv[3])
+backend_port = str(sys.argv[2])
 
 try:
     data = json.loads(os.environ["TAILSCALE_FUNNEL_JSON"])
@@ -161,7 +146,7 @@ except Exception:
 
 web = data.get("Web") or {}
 allow = data.get("AllowFunnel") or {}
-expected_proxy = f"http://127.0.0.1:{backend_port}{path}"
+expected_proxy = f"http://127.0.0.1:{backend_port}"
 
 for hostport, entry in web.items():
     if not hostport.endswith(f":{port}"):
@@ -169,7 +154,7 @@ for hostport, entry in web.items():
     handlers = (entry or {}).get("Handlers") or {}
     if len(handlers) != 1:
         continue
-    handler = handlers.get(path) or {}
+    handler = handlers.get("/") or {}
     if handler.get("Proxy") != expected_proxy:
         continue
     if not allow.get(hostport):
@@ -214,13 +199,12 @@ if ! tailscale status --json >/dev/null 2>&1; then
   exit 1
 fi
 
-FUNNEL_PATH="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
 detect_tailscale_runtime || {
   echo "tailscale DNS name could not be detected; cannot derive the public Notion webhook URL." >&2
   exit 1
 }
 ensure_no_conflicting_funnel_service
 run_funnel_cmd tailscale funnel --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" off >/dev/null 2>&1 || true
-run_funnel_cmd tailscale funnel --bg --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" --set-path "$FUNNEL_PATH" "http://127.0.0.1:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}${FUNNEL_PATH}" >/dev/null
+run_funnel_cmd tailscale funnel --bg --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" "http://127.0.0.1:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" >/dev/null
 verify_funnel_config
 print_funnel_summary

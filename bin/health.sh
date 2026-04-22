@@ -429,13 +429,13 @@ except Exception:
 
 web = data.get("Web") or {}
 allow = data.get("AllowFunnel") or {}
-expected_proxy = f"http://127.0.0.1:{backend_port}{path}"
+expected_proxy = f"http://127.0.0.1:{backend_port}"
 
 for hostport, entry in web.items():
     if not hostport.endswith(f":{port}"):
         continue
     handlers = (entry or {}).get("Handlers") or {}
-    handler = handlers.get(path) or {}
+    handler = handlers.get("/") or {}
     if handler.get("Proxy") != expected_proxy:
         continue
     if not allow.get(hostport):

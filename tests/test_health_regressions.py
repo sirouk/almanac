@@ -248,8 +248,8 @@ if [[ "$1" == "funnel" && "$2" == "status" && "$3" == "--json" ]]; then
   "Web": {{
     "kor.tail77f45e.ts.net:8443": {{
       "Handlers": {{
-        "/notion/webhook": {{
-          "Proxy": "http://127.0.0.1:8283/notion/webhook"
+        "/": {{
+          "Proxy": "http://127.0.0.1:8283"
         }}
       }}
     }}

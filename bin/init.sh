@@ -304,13 +304,10 @@ install_default_plugins() {
 
 register_default_mcps() {
   local hermes_home="$1"
-  local hermes_bin=""
-  hermes_bin="$(current_hermes_bin)"
-  HERMES_HOME="$hermes_home" "$hermes_bin" mcp add almanac-mcp --url "$ALMANAC_MCP_URL" >/dev/null 2>&1 || true
-  HERMES_HOME="$hermes_home" "$hermes_bin" mcp add almanac-qmd --url "$ALMANAC_QMD_URL" >/dev/null 2>&1 || true
-  if [[ -n "$CHUTES_MCP_URL" ]]; then
-    HERMES_HOME="$hermes_home" "$hermes_bin" mcp add chutes-kb --url "$CHUTES_MCP_URL" >/dev/null 2>&1 || true
-  fi
+  ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
+  ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
+  CHUTES_MCP_URL="$CHUTES_MCP_URL" \
+  "$SHARED_REPO_DIR/bin/upsert-hermes-mcps.sh" "$hermes_home"
 }
 
 write_enrollment_state() {

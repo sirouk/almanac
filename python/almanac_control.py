@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import mimetypes
 import os
 import pwd
 import re
@@ -20,6 +21,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
 _PYTHON_DIR = Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
@@ -7624,6 +7628,333 @@ def _notion_markdown_text(markdown_payload: dict[str, Any]) -> str:
     return str(markdown_payload.get("markdown") or markdown_payload.get("content") or "").strip()
 
 
+NOTION_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+NOTION_ATTACHMENT_TEXT_SUFFIXES = {
+    ".txt",
+    ".text",
+    ".md",
+    ".markdown",
+    ".mdx",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".tsv",
+    ".xml",
+    ".html",
+    ".htm",
+}
+NOTION_ATTACHMENT_TEXT_CONTENT_TYPES = {
+    "application/json",
+    "application/ld+json",
+    "application/xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/csv",
+}
+NOTION_ATTACHMENT_BLOCK_TYPES = ("file", "pdf", "image", "audio", "video")
+
+
+def _notion_rich_text_plain_text(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    return "".join(
+        str(item.get("plain_text") or "")
+        for item in value
+        if isinstance(item, dict)
+    ).strip()
+
+
+def _notion_attachment_filename(*, name: str, url: str, fallback: str = "attachment") -> str:
+    explicit = str(name or "").strip()
+    if explicit:
+        return explicit
+    parsed = urlparse.urlparse(str(url or "").strip())
+    candidate = Path(urlparse.unquote(parsed.path or "")).name.strip()
+    return candidate or fallback
+
+
+def _notion_attachment_suffix(*, filename: str, url: str, content_type: str) -> str:
+    for candidate in (str(filename or "").strip(), Path(urlparse.unquote(urlparse.urlparse(str(url or "")).path or "")).name):
+        suffix = Path(candidate).suffix.strip()
+        if suffix:
+            return suffix.lower()
+    guessed = mimetypes.guess_extension(str(content_type or "").split(";", 1)[0].strip().lower())
+    return str(guessed or "").lower()
+
+
+def _notion_attachment_block_ref(
+    block: dict[str, Any],
+    *,
+    page_id: str,
+) -> dict[str, Any] | None:
+    block_type = str(block.get("type") or "").strip().lower()
+    if block_type not in NOTION_ATTACHMENT_BLOCK_TYPES:
+        return None
+    payload = block.get(block_type)
+    if not isinstance(payload, dict):
+        return None
+    ref_type = str(payload.get("type") or "").strip().lower()
+    if ref_type not in {"file", "external"}:
+        return None
+    block_id = str(block.get("id") or "").strip()
+    source_payload = payload.get(ref_type)
+    if not isinstance(source_payload, dict):
+        return None
+    url = str(source_payload.get("url") or "").strip()
+    filename = _notion_attachment_filename(
+        name=str(payload.get("name") or "").strip(),
+        url=url,
+        fallback=f"{block_type}-attachment",
+    )
+    source_locator = f"block:{page_id}:{block_id or block_type}:{block_type}"
+    return {
+        "page_id": page_id,
+        "origin": "block",
+        "origin_id": block_id,
+        "origin_label": block_type,
+        "source_locator": source_locator,
+        "name": filename,
+        "url": url,
+        "content_type": "",
+        "external": ref_type == "external",
+        "caption": _notion_rich_text_plain_text(payload.get("caption")),
+        "attachment_key": hashlib.sha1(source_locator.encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def _notion_attachment_property_refs(page_payload: dict[str, Any], *, page_id: str) -> list[dict[str, Any]]:
+    properties = page_payload.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    refs: list[dict[str, Any]] = []
+    for property_name, prop in properties.items():
+        if not isinstance(prop, dict) or str(prop.get("type") or "").strip() != "files":
+            continue
+        values = prop.get("files")
+        if not isinstance(values, list):
+            continue
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                continue
+            ref_type = str(item.get("type") or "").strip().lower()
+            if ref_type not in {"file", "external"}:
+                continue
+            source_payload = item.get(ref_type)
+            if not isinstance(source_payload, dict):
+                continue
+            url = str(source_payload.get("url") or "").strip()
+            source_locator = f"property:{page_id}:{property_name}:{index}"
+            refs.append(
+                {
+                    "page_id": page_id,
+                    "origin": "property",
+                    "origin_id": property_name,
+                    "origin_label": property_name,
+                    "source_locator": source_locator,
+                    "name": _notion_attachment_filename(
+                        name=str(item.get("name") or "").strip(),
+                        url=url,
+                        fallback=f"{property_name or 'file'}-{index + 1}",
+                    ),
+                    "url": url,
+                    "content_type": "",
+                    "external": ref_type == "external",
+                    "caption": "",
+                    "attachment_key": hashlib.sha1(source_locator.encode("utf-8")).hexdigest()[:12],
+                }
+            )
+    return refs
+
+
+def _notion_page_attachment_refs(
+    *,
+    page_id: str,
+    page_payload: dict[str, Any],
+    notion_kwargs: dict[str, Any],
+) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        blocks = list_notion_block_children_all(
+            block_id=page_id,
+            token=_require_shared_notion_settings()["token"],
+            api_version=_require_shared_notion_settings()["api_version"],
+            **notion_kwargs,
+        )
+    except Exception:
+        blocks = []
+    queue = [block for block in blocks if isinstance(block, dict)]
+    visited_blocks: set[str] = {page_id}
+    while queue:
+        block = queue.pop(0)
+        ref = _notion_attachment_block_ref(block, page_id=page_id)
+        if ref is not None and ref["source_locator"] not in seen:
+            seen.add(ref["source_locator"])
+            refs.append(ref)
+        block_id = str(block.get("id") or "").strip()
+        block_type = str(block.get("type") or "").strip().lower()
+        if not block_id or block_id in visited_blocks or not bool(block.get("has_children")):
+            continue
+        if block_type in {"child_page", "child_database"}:
+            continue
+        visited_blocks.add(block_id)
+        try:
+            children = list_notion_block_children_all(
+                block_id=block_id,
+                token=_require_shared_notion_settings()["token"],
+                api_version=_require_shared_notion_settings()["api_version"],
+                **notion_kwargs,
+            )
+        except Exception:
+            continue
+        queue.extend(child for child in children if isinstance(child, dict))
+    for ref in _notion_attachment_property_refs(page_payload, page_id=page_id):
+        if ref["source_locator"] in seen:
+            continue
+        seen.add(ref["source_locator"])
+        refs.append(ref)
+    return refs
+
+
+def _download_notion_attachment(url: str, *, max_bytes: int = NOTION_ATTACHMENT_MAX_BYTES) -> tuple[bytes, str]:
+    req = urlrequest.Request(
+        str(url or "").strip(),
+        headers={"User-Agent": "almanac-notion-index/1.0"},
+        method="GET",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=30) as response:
+            raw_length = str(response.headers.get("Content-Length") or "").strip()
+            if raw_length:
+                try:
+                    if int(raw_length) > max_bytes:
+                        raise RuntimeError(f"attachment exceeds max ingest size ({raw_length} bytes)")
+                except ValueError:
+                    pass
+            body = response.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                raise RuntimeError(f"attachment exceeds max ingest size ({max_bytes} bytes)")
+            return body, str(response.headers.get("Content-Type") or "").strip()
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+        raise RuntimeError(f"attachment download failed: http {exc.code} {detail[:120].strip()}".strip())
+    except urlerror.URLError as exc:
+        raise RuntimeError(f"attachment download failed: {getattr(exc, 'reason', exc)}") from exc
+
+
+def _extract_pdf_text_from_path(source_path: Path) -> str:
+    if shutil.which("pdftotext"):
+        result = subprocess.run(
+            ["pdftotext", "-enc", "UTF-8", "-nopgbrk", str(source_path), "-"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and str(result.stdout or "").strip():
+            return str(result.stdout or "").strip()
+    if shutil.which("docling"):
+        with tempfile.TemporaryDirectory(prefix="almanac-notion-docling-") as tmpdir:
+            result = subprocess.run(
+                ["docling", "--from", "pdf", "--to", "md", "--output", tmpdir, str(source_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                error_text = (result.stderr or result.stdout or "docling failed").strip()
+                raise RuntimeError(error_text)
+            markdown_files = sorted(Path(tmpdir).rglob("*.md"))
+            if markdown_files:
+                text = markdown_files[0].read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    return text
+    raise RuntimeError("no PDF extractor available for Notion attachment")
+
+
+def _extract_notion_attachment_text(ref: dict[str, Any]) -> dict[str, Any]:
+    url = str(ref.get("url") or "").strip()
+    filename = str(ref.get("name") or "").strip()
+    caption = str(ref.get("caption") or "").strip()
+    if not url:
+        return {"status": "missing-url", "body": caption, "content_type": ""}
+    if bool(ref.get("external")):
+        body = caption or "External attachment linked from Notion."
+        return {"status": "external-link", "body": body, "content_type": ""}
+    data, content_type = _download_notion_attachment(url)
+    normalized_content_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    suffix = _notion_attachment_suffix(filename=filename, url=url, content_type=normalized_content_type)
+    if normalized_content_type == "application/pdf" or suffix == ".pdf":
+        with tempfile.TemporaryDirectory(prefix="almanac-notion-attachment-") as tmpdir:
+            source_path = Path(tmpdir) / (filename or "attachment.pdf")
+            source_path.write_bytes(data)
+            text = _extract_pdf_text_from_path(source_path).strip()
+        combined = "\n\n".join(part for part in [caption, text] if part.strip()).strip()
+        return {"status": "extracted", "body": combined, "content_type": normalized_content_type or "application/pdf"}
+    if normalized_content_type.startswith("text/") or normalized_content_type in NOTION_ATTACHMENT_TEXT_CONTENT_TYPES or suffix in NOTION_ATTACHMENT_TEXT_SUFFIXES:
+        text = data.decode("utf-8", errors="replace").strip()
+        combined = "\n\n".join(part for part in [caption, text] if part.strip()).strip()
+        return {"status": "extracted", "body": combined, "content_type": normalized_content_type}
+    body = caption or f"Attachment present but body extraction is not supported for {normalized_content_type or suffix or 'this file type'}."
+    return {"status": "metadata-only", "body": body, "content_type": normalized_content_type}
+
+
+def _notion_attachment_doc_key(root_id: str, page_id: str, attachment_key: str, part_ordinal: int) -> str:
+    return (
+        f"{extract_notion_space_id(root_id)}:{extract_notion_space_id(page_id)}:"
+        f"attachment:{str(attachment_key or '').strip() or 'attachment'}:{max(0, int(part_ordinal))}"
+    )
+
+
+def _notion_attachment_doc_relative_path(root_id: str, page_id: str, attachment_key: str, part_ordinal: int) -> Path:
+    root_slug = extract_notion_space_id(root_id).replace("-", "")
+    page_slug = extract_notion_space_id(page_id).replace("-", "")
+    attachment_slug = safe_slug(str(attachment_key or ""), fallback="attachment")
+    return Path(root_slug) / f"{page_slug}--attachment-{attachment_slug}--{max(0, int(part_ordinal)):03d}.md"
+
+
+def _render_notion_index_attachment_document(
+    *,
+    page_title: str,
+    page_url: str,
+    page_id: str,
+    root_title: str,
+    root_id: str,
+    breadcrumb: list[str],
+    owners: list[str],
+    last_edited_time: str,
+    attachment_name: str,
+    attachment_origin: str,
+    attachment_status: str,
+    attachment_content_type: str,
+    body: str,
+) -> str:
+    breadcrumb_text = " > ".join(part for part in breadcrumb if str(part or "").strip())
+    owner_text = ", ".join(owners) if owners else "Unassigned"
+    title_text = str(page_title or "").strip() or page_id
+    lines = [
+        f"# {title_text}",
+        "",
+        f"- Notion page id: {page_id}",
+        f"- Notion page url: {page_url}",
+        f"- Indexed root: {str(root_title or '').strip() or root_id}",
+        f"- Root id: {root_id}",
+        f"- Breadcrumb: {breadcrumb_text or title_text}",
+        f"- Section: Attachment: {attachment_name or 'attachment'}",
+        f"- Owners: {owner_text}",
+        f"- Last edited: {last_edited_time or 'unknown'}",
+        f"- Attachment name: {attachment_name or 'attachment'}",
+        f"- Attachment origin: {attachment_origin or 'attachment'}",
+        f"- Attachment extraction: {attachment_status or 'metadata-only'}",
+        f"- Attachment content type: {attachment_content_type or 'unknown'}",
+        "",
+        body.strip(),
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _split_large_markdown_section(heading: str, body: str, *, max_chars: int = 5000) -> list[tuple[str, str]]:
     compact_body = str(body or "").strip()
     normalized_heading = str(heading or "").strip() or "Overview"
@@ -7913,6 +8244,75 @@ def _index_notion_page_payload(
             changed += 1
         active_doc_keys.add(doc_key)
         page_doc_keys.add(doc_key)
+    for attachment_ref in _notion_page_attachment_refs(
+        page_id=page_id,
+        page_payload=page_payload,
+        notion_kwargs=notion_kwargs,
+    ):
+        attachment_name = str(attachment_ref.get("name") or "attachment").strip() or "attachment"
+        attachment_origin = str(attachment_ref.get("origin_label") or attachment_ref.get("origin") or "attachment").strip()
+        try:
+            attachment_result = _extract_notion_attachment_text(attachment_ref)
+            attachment_body = str(attachment_result.get("body") or "").strip() or attachment_name
+            attachment_status = str(attachment_result.get("status") or "").strip() or "metadata-only"
+            attachment_content_type = str(attachment_result.get("content_type") or attachment_ref.get("content_type") or "").strip()
+        except Exception as exc:
+            attachment_body = (
+                str(attachment_ref.get("caption") or "").strip()
+                or f"Attachment present but extraction failed: {str(exc or 'unknown error').strip()[:240]}"
+            )
+            attachment_status = "extract-error"
+            attachment_content_type = str(attachment_ref.get("content_type") or "").strip()
+        attachment_heading = f"Attachment: {attachment_name}"
+        attachment_sections = _split_large_markdown_section(attachment_heading, attachment_body)
+        for ordinal, (_, attachment_part_body) in enumerate(attachment_sections):
+            doc_key = _notion_attachment_doc_key(
+                root["root_id"],
+                page_id,
+                str(attachment_ref.get("attachment_key") or ""),
+                ordinal,
+            )
+            rel_path = _notion_attachment_doc_relative_path(
+                root["root_id"],
+                page_id,
+                str(attachment_ref.get("attachment_key") or ""),
+                ordinal,
+            )
+            file_path = _notion_index_markdown_dir(cfg) / rel_path
+            content = _render_notion_index_attachment_document(
+                page_title=page_title,
+                page_url=page_url,
+                page_id=page_id,
+                root_title=str(root.get("root_title") or root.get("root_page_title") or ""),
+                root_id=root["root_id"],
+                breadcrumb=breadcrumb or [page_title],
+                owners=owners,
+                last_edited_time=last_edited_time,
+                attachment_name=attachment_name,
+                attachment_origin=attachment_origin,
+                attachment_status=attachment_status,
+                attachment_content_type=attachment_content_type,
+                body=attachment_part_body,
+            )
+            if _upsert_notion_index_document(
+                conn,
+                doc_key=doc_key,
+                root_id=root["root_id"],
+                source_page_id=page_id,
+                source_page_url=page_url,
+                source_kind="attachment",
+                file_path=file_path,
+                page_title=page_title,
+                section_heading=attachment_heading,
+                section_ordinal=ordinal,
+                breadcrumb=breadcrumb or [page_title],
+                owners=owners,
+                last_edited_time=last_edited_time,
+                content=content,
+            ):
+                changed += 1
+            active_doc_keys.add(doc_key)
+            page_doc_keys.add(doc_key)
     stale_rows = conn.execute(
         """
         SELECT doc_key
@@ -8815,6 +9215,11 @@ def notion_fetch(
         (target_uuid,),
     ).fetchall()
     indexed_roots = [str(row["root_id"] or "") for row in rows]
+    attachments = _notion_page_attachment_refs(
+        page_id=target_uuid,
+        page_payload=page,
+        notion_kwargs=notion_kwargs,
+    )
     _log_notion_retrieval_audit(
         conn,
         agent_id=str(agent_row["agent_id"]),
@@ -8832,6 +9237,7 @@ def notion_fetch(
         "target_kind": "page",
         "page": page,
         "markdown": _notion_markdown_text(markdown_payload),
+        "attachments": attachments,
         "indexed": bool(rows),
         "indexed_roots": indexed_roots,
     }
@@ -10029,7 +10435,8 @@ def build_managed_memory_payload(
         "Use notion.search for shared documentation, meeting notes, project pages,\n"
         "and user-generated knowledge that Almanac has indexed into qmd.\n"
         "Use notion.fetch when you already know the exact page, database, or data\n"
-        "source and need the live body or schema right now.\n"
+        "source and need the live body or schema right now. Page fetches also\n"
+        "return live attachment refs for Notion-hosted files on that page.\n"
         "Use notion.query for live structured state such as assignments, due dates,\n"
         "or status views in a shared Notion database or data source.\n"
         "Freshness depends on whether public webhook ingress is wired:\n"
@@ -10049,8 +10456,9 @@ def build_managed_memory_payload(
         '{"tool":"notion.query","arguments":{"token":"<bootstrap token>","target_id":"<database-or-data-source-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}\n'
         "The default indexed qmd collection for this rail is notion-shared.\n"
         "Anything under the operator-configured shared Notion index roots becomes\n"
-        "searchable by enrolled agents on this host; do not assume per-user filtering\n"
-        "on this rail.\n"
+        "searchable by enrolled agents on this host; extractable Notion-hosted PDFs\n"
+        "and text-like attachments on indexed pages are folded into that rail too.\n"
+        "Do not assume per-user filtering on this rail.\n"
         "Do not fall back to repo-wide search just to rediscover this rail.\n"
         "When using the skill wrapper, let the local script read the bootstrap token\n"
         "from HERMES_HOME instead of copying secrets into chat.\n"

@@ -13,7 +13,7 @@ optional user-owned Notion MCP lane.
 
 ## Default Split
 
-- `search` for broad knowledge discovery over indexed shared Notion content
+- `search` for broad knowledge discovery over indexed shared Notion content, including extractable Notion-hosted PDF/text attachments on indexed pages
 - `fetch` for the live body of one exact page or the live schema of one exact database/data source
 - `query` for live structured state in a shared Notion database or data source
 
@@ -22,6 +22,7 @@ Use that split literally:
 - knowledge question -> `search`
 - "read this exact page" -> `fetch`
 - "what is assigned / due / in progress" -> `query`
+- a page `fetch` also returns live attachment refs for files currently attached there
 
 This split exists because search is qmd-backed, while `fetch` and `query` are
 live Notion reads.

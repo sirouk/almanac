@@ -43,6 +43,7 @@ def test_notion_knowledge_skill_teaches_shared_three_tool_split() -> None:
     expect('"read this exact page" -> `fetch`' in body, body)
     expect('"what is assigned / due / in progress" -> `query`' in body, body)
     expect("database/data source" in body or "database or data source" in body, body)
+    expect("attachment" in body.lower(), body)
     expect("search is qmd-backed" in body, body)
     expect("fetch` and `query` are live Notion reads" in body, body)
     expect("scripts/curate-notion.sh search" in body, body)

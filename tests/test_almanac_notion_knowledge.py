@@ -160,37 +160,62 @@ def test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs() -> 
                 }
             )
             mod.list_notion_block_children_all = lambda **kwargs: (
-                [{"type": "child_page", "id": child_page_id}] if kwargs["block_id"] == root_page_id else []
+                [{"type": "child_page", "id": child_page_id}]
+                if kwargs["block_id"] == root_page_id
+                else (
+                    [
+                        {
+                            "id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                            "type": "file",
+                            "has_children": False,
+                            "file": {
+                                "type": "file",
+                                "name": "roadmap.txt",
+                                "caption": [{"plain_text": "Roadmap attachment"}],
+                                "file": {"url": "https://files.example/roadmap.txt"},
+                            },
+                        }
+                    ]
+                    if kwargs["block_id"] == child_page_id
+                    else []
+                )
             )
             mod.retrieve_notion_page_markdown = lambda **kwargs: (
                 {"markdown": "# Overview\n\nRoot note"} if kwargs["page_id"] == root_page_id else {"markdown": "# Summary\n\nUnicorn details\n\n## Activity\n\nFresh updates"}
             )
+            mod._extract_notion_attachment_text = lambda ref: {
+                "status": "extracted",
+                "body": "Roadmap attachment\n\nDetailed milestones and owners",
+                "content_type": "text/plain",
+            }
             mod._refresh_qmd_after_notion_sync = lambda cfg, embed=False: refresh_calls.append(bool(embed))
 
             result = mod.sync_shared_notion_index(conn, cfg, full=True, actor="test")
             expect(result["ok"] is True and result["status"] == "ok", str(result))
-            expect(result["changed_docs"] == 3, str(result))
+            expect(result["changed_docs"] == 4, str(result))
             expect(result["collection"] == "notion-shared", str(result))
             expect(result["processed_roots"] == [root_page_id], str(result))
             expect(refresh_calls == [True], str(refresh_calls))
 
             rows = conn.execute(
                 """
-                SELECT source_page_id, page_title, section_heading, file_path
+                SELECT source_page_id, page_title, section_heading, source_kind, file_path
                 FROM notion_index_documents
                 ORDER BY source_page_id, section_ordinal
                 """
             ).fetchall()
-            expect(len(rows) == 3, str([dict(row) for row in rows]))
+            expect(len(rows) == 4, str([dict(row) for row in rows]))
             page_ids = [str(row["source_page_id"]) for row in rows]
             expect(page_ids.count(root_page_id) == 1, str(page_ids))
-            expect(page_ids.count(child_page_id) == 2, str(page_ids))
+            expect(page_ids.count(child_page_id) == 3, str(page_ids))
+            expect(any(str(row["source_kind"]) == "attachment" for row in rows), str([dict(row) for row in rows]))
 
-            indexed_file = Path(str(rows[-1]["file_path"]))
+            attachment_row = next(row for row in rows if str(row["source_kind"]) == "attachment")
+            indexed_file = Path(str(attachment_row["file_path"]))
             expect(indexed_file.is_file(), f"expected indexed markdown file at {indexed_file}")
             indexed_body = indexed_file.read_text(encoding="utf-8")
-            expect("Chutes Unicorn" in indexed_body, indexed_body)
-            expect("Section: Activity" in indexed_body, indexed_body)
+            expect("Roadmap attachment" in indexed_body, indexed_body)
+            expect("Attachment name: roadmap.txt" in indexed_body, indexed_body)
             expect("Breadcrumb: Workspace Root > Chutes Unicorn" in indexed_body, indexed_body)
             print("PASS test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs")
         finally:
@@ -300,6 +325,23 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
                 "properties": _title_property("Chutes Unicorn"),
             }
             mod.retrieve_notion_page_markdown = lambda **kwargs: {"markdown": "# Summary\n\nUnicorn details"}
+            mod.list_notion_block_children_all = lambda **kwargs: (
+                [
+                    {
+                        "id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                        "type": "file",
+                        "has_children": False,
+                        "file": {
+                            "type": "file",
+                            "name": "brief.txt",
+                            "caption": [{"plain_text": "Live file ref"}],
+                            "file": {"url": "https://files.example/brief.txt"},
+                        },
+                    }
+                ]
+                if kwargs["block_id"] == page_id
+                else []
+            )
             mod.retrieve_notion_database = lambda **kwargs: {
                 "id": database_id,
                 "title": [{"plain_text": "Project Tracker"}],
@@ -385,6 +427,8 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             expect(fetch_page_result["ok"] is True and fetch_page_result["target_kind"] == "page", str(fetch_page_result))
             expect(fetch_page_result["indexed"] is True, str(fetch_page_result))
             expect("Unicorn details" in fetch_page_result["markdown"], str(fetch_page_result))
+            expect(fetch_page_result["attachments"][0]["name"] == "brief.txt", str(fetch_page_result))
+            expect(fetch_page_result["attachments"][0]["caption"] == "Live file ref", str(fetch_page_result))
 
             fetch_db_result = mod.notion_fetch(
                 conn,

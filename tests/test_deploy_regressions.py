@@ -230,6 +230,19 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     print("PASS test_emit_runtime_config_persists_notion_ssot_fields")
 
 
+def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
+    text = DEPLOY_SH.read_text()
+    expect("If a subscription already exists for this exact URL, edit that subscription." in text, "expected explicit reuse guidance for existing Notion webhook subscription")
+    expect("Do not create a second webhook subscription for the same Almanac endpoint." in text, "expected explicit no-duplicate Notion webhook guidance")
+    expect("- Page: select all Page events" in text, "expected explicit Page event instruction")
+    expect("- Database: select all Database events" in text, "expected explicit Database event instruction")
+    expect("- Data source: select all Data source events" in text, "expected explicit Data source event instruction")
+    expect("- File uploads: select all File upload events" in text, "expected explicit File upload event instruction")
+    expect("- View: leave all View events unchecked" in text, "expected explicit View event exclusion")
+    expect("- Comment: leave all Comment events unchecked" in text, "expected explicit Comment event exclusion")
+    print("PASS test_deploy_guides_explicit_notion_webhook_event_selection")
+
+
 def test_emit_runtime_config_persists_org_interview_fields() -> None:
     config = render_runtime_config(
         "tui-only",
@@ -1354,6 +1367,7 @@ def main() -> int:
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
         test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag,
         test_emit_runtime_config_persists_notion_ssot_fields,
+        test_deploy_guides_explicit_notion_webhook_event_selection,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,
         test_org_interview_validators_reject_bad_values,

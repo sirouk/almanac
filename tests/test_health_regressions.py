@@ -215,13 +215,80 @@ PATH="$FAKEBIN:$PATH"
     print("PASS test_shared_notion_with_public_webhook_but_no_token_warns_not_ready")
 
 
+def test_shared_notion_with_tailscale_funnel_reports_live_public_route() -> None:
+    text = HEALTH_SH.read_text()
+    helper = extract(text, "check_notion_webhook_funnel() {", "check_activation_trigger_write_access() {")
+    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL=1
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT=8443
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH=/notion/webhook
+ALMANAC_NOTION_WEBHOOK_PORT=8283
+ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://kor.tail77f45e.ts.net:8443/notion/webhook"
+ALMANAC_DB_PATH="$(mktemp)"
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/sqlite3" <<'EOF'
+#!/usr/bin/env bash
+printf 'token-installed\\n'
+EOF
+cat >"$FAKEBIN/tailscale" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "funnel" && "$2" == "status" && "$3" == "--json" ]]; then
+  cat <<'JSON'
+{{
+  "Web": {{
+    "kor.tail77f45e.ts.net:8443": {{
+      "Handlers": {{
+        "/notion/webhook": {{
+          "Proxy": "http://127.0.0.1:8283/notion/webhook"
+        }}
+      }}
+    }}
+  }},
+  "AllowFunnel": {{
+    "kor.tail77f45e.ts.net:8443": true
+  }}
+}}
+JSON
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$FAKEBIN/sqlite3" "$FAKEBIN/tailscale"
+PATH="$FAKEBIN:$PATH"
+{helper}
+{snippet}
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"shared notion funnel case failed: {result.stderr}")
+    expect(
+        "PASS:Tailscale Funnel publishes only the configured Notion webhook route: https://kor.tail77f45e.ts.net:8443/notion/webhook" in result.stdout,
+        f"expected PASS about live webhook funnel route, got: {result.stdout!r}",
+    )
+    expect(
+        "PASS:Notion webhook verification token is installed in control-plane state" in result.stdout,
+        f"expected PASS about installed webhook token, got: {result.stdout!r}",
+    )
+    print("PASS test_shared_notion_with_tailscale_funnel_reports_live_public_route")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
     test_shared_notion_without_webhook_reports_sweep_fallback_warning()
     test_shared_notion_with_public_webhook_but_no_token_warns_not_ready()
-    print("PASS all 5 health regression tests")
+    test_shared_notion_with_tailscale_funnel_reports_live_public_route()
+    print("PASS all 6 health regression tests")
     return 0
 
 

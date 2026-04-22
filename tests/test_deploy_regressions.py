@@ -69,7 +69,10 @@ def render_runtime_config(
     dc_flag: str = "",
     *,
     enable_tailscale_serve: str = "0",
+    enable_tailscale_notion_webhook_funnel: str = "0",
     agent_enable_tailscale_serve: str = "",
+    tailscale_notion_webhook_funnel_port: str = "8443",
+    tailscale_notion_webhook_funnel_path: str = "/notion/webhook",
     notion_root_page_url: str = "",
     notion_root_page_id: str = "",
     notion_space_url: str = "",
@@ -124,6 +127,9 @@ ALMANAC_ORG_TIMEZONE={shlex.quote(org_timezone)}
 ALMANAC_ORG_QUIET_HOURS={shlex.quote(org_quiet_hours)}
 ENABLE_NEXTCLOUD=0
 ENABLE_TAILSCALE_SERVE={shlex.quote(enable_tailscale_serve)}
+ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL={shlex.quote(enable_tailscale_notion_webhook_funnel)}
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT={shlex.quote(tailscale_notion_webhook_funnel_port)}
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH={shlex.quote(tailscale_notion_webhook_funnel_path)}
 ENABLE_PRIVATE_GIT=1
 ENABLE_QUARTO=1
 SEED_SAMPLE_VAULT=1
@@ -185,6 +191,9 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     config = render_runtime_config(
         "tui-only",
         "tui-only",
+        enable_tailscale_notion_webhook_funnel="1",
+        tailscale_notion_webhook_funnel_port="8443",
+        tailscale_notion_webhook_funnel_path="/notion/webhook",
         notion_root_page_url="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
         notion_root_page_id="aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
         notion_space_url="https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
@@ -211,6 +220,9 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     expect(source_value(config, "ALMANAC_SSOT_NOTION_SPACE_KIND") == "database", config)
     expect(source_value(config, "ALMANAC_SSOT_NOTION_API_VERSION") == "2026-03-11", config)
     expect(source_value(config, "ALMANAC_SSOT_NOTION_TOKEN") == "secret_test", config)
+    expect(source_value(config, "ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL") == "1", config)
+    expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT") == "8443", config)
+    expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH") == "/notion/webhook", config)
     expect(
         source_value(config, "ALMANAC_NOTION_WEBHOOK_PUBLIC_URL") == "https://hooks.example.com/notion/webhook",
         config,

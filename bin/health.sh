@@ -383,6 +383,82 @@ PY
   fi
 }
 
+check_notion_webhook_funnel() {
+  local output=""
+  local ts_json=""
+  local funnel_path="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
+
+  if [[ "$funnel_path" != /* ]]; then
+    funnel_path="/$funnel_path"
+  fi
+
+  if ! command -v tailscale >/dev/null 2>&1; then
+    warn_or_fail "tailscale CLI is not installed; cannot verify the public Notion webhook Funnel"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn_or_fail "python3 is unavailable; cannot verify the public Notion webhook Funnel"
+    return 0
+  fi
+
+  ts_json="$(tailscale funnel status --json 2>/dev/null || true)"
+  if [[ -z "$ts_json" ]]; then
+    warn_or_fail "tailscale funnel status returned no JSON for the public Notion webhook route"
+    return 0
+  fi
+
+  if output="$(
+    TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
+      "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+      "$funnel_path" \
+      "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" \
+      "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" <<'PY'
+import json
+import os
+import sys
+
+port = str(sys.argv[1])
+path = sys.argv[2]
+backend_port = str(sys.argv[3])
+expected_url = sys.argv[4]
+
+try:
+    data = json.loads(os.environ["TAILSCALE_FUNNEL_JSON"])
+except Exception:
+    raise SystemExit(1)
+
+web = data.get("Web") or {}
+allow = data.get("AllowFunnel") or {}
+expected_proxy = f"http://127.0.0.1:{backend_port}{path}"
+
+for hostport, entry in web.items():
+    if not hostport.endswith(f":{port}"):
+        continue
+    handlers = (entry or {}).get("Handlers") or {}
+    handler = handlers.get(path) or {}
+    if handler.get("Proxy") != expected_proxy:
+        continue
+    if not allow.get(hostport):
+        continue
+    host = hostport.rsplit(":", 1)[0]
+    actual_url = f"https://{host}{path}" if port == "443" else f"https://{host}:{port}{path}"
+    if expected_url and actual_url != expected_url:
+        print(f"mismatch:{actual_url}")
+        raise SystemExit(2)
+    print(actual_url)
+    raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+  )"; then
+    pass "Tailscale Funnel publishes only the configured Notion webhook route: $output"
+  elif [[ "$output" == mismatch:* ]]; then
+    warn_or_fail "Tailscale Funnel is live for the Notion webhook, but it does not match ALMANAC_NOTION_WEBHOOK_PUBLIC_URL: ${output#mismatch:}"
+  else
+    warn_or_fail "Tailscale Funnel is enabled for the Notion webhook, but the expected public route is not live"
+  fi
+}
+
 check_activation_trigger_write_access() {
   local trigger_dir="$STATE_DIR/activation-triggers"
   local probe_path=""
@@ -1433,6 +1509,9 @@ check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "a
 if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     pass "Notion webhook public URL configured: $ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"
+    if [[ "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
+      check_notion_webhook_funnel
+    fi
     if command -v sqlite3 >/dev/null 2>&1 && [[ -n "${ALMANAC_DB_PATH:-}" && -f "$ALMANAC_DB_PATH" ]]; then
       notion_webhook_token_state="$(
         sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verification_token' LIMIT 1;" 2>/dev/null || true

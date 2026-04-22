@@ -31,6 +31,9 @@ ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}"
 TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
 TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
+ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
 VAULT_WATCH_DEBOUNCE_SECONDS="${VAULT_WATCH_DEBOUNCE_SECONDS:-5}"
 VAULT_WATCH_RUN_EMBED="${VAULT_WATCH_RUN_EMBED:-auto}"
 ENABLE_PRIVATE_GIT="${ENABLE_PRIVATE_GIT:-1}"
@@ -790,6 +793,125 @@ PY
   done <<<"$ts_info"
 }
 
+normalize_http_path() {
+  local path="${1:-/}"
+  if [[ -z "$path" ]]; then
+    path="/"
+  fi
+  if [[ "$path" != /* ]]; then
+    path="/$path"
+  fi
+  printf '%s\n' "$path"
+}
+
+build_public_https_url() {
+  local host="${1:-}"
+  local port="${2:-443}"
+  local path=""
+
+  path="$(normalize_http_path "${3:-/}")"
+  if [[ -z "$host" ]]; then
+    return 1
+  fi
+  if [[ -z "$port" || "$port" == "443" ]]; then
+    printf 'https://%s%s\n' "$host" "$path"
+  else
+    printf 'https://%s:%s%s\n' "$host" "$port" "$path"
+  fi
+}
+
+refresh_notion_webhook_public_url_from_tailscale() {
+  local derived_url=""
+  local funnel_path=""
+
+  funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
+  TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$funnel_path"
+
+  detect_tailscale
+  if [[ -n "${TAILSCALE_DNS_NAME:-}" ]]; then
+    derived_url="$(build_public_https_url "$TAILSCALE_DNS_NAME" "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" "$funnel_path" || true)"
+  fi
+
+  if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+    if [[ -n "$derived_url" ]]; then
+      ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="$derived_url"
+    fi
+  elif [[ -n "$derived_url" && "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" == "$derived_url" ]]; then
+    ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
+  fi
+}
+
+detect_tailscale_notion_webhook_funnel() {
+  TAILSCALE_FUNNEL_WEBHOOK_HOST=""
+  TAILSCALE_FUNNEL_WEBHOOK_URL=""
+  TAILSCALE_FUNNEL_HAS_NOTION_WEBHOOK="0"
+
+  if ! command -v tailscale >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local ts_json=""
+  ts_json="$(tailscale funnel status --json 2>/dev/null || true)"
+  if [[ -z "$ts_json" ]]; then
+    return 0
+  fi
+
+  local funnel_path=""
+  funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
+
+  local ts_info=""
+  ts_info="$(
+    TAILSCALE_FUNNEL_JSON="$ts_json" python3 - "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" "$funnel_path" "$ALMANAC_NOTION_WEBHOOK_PORT" <<'PY'
+import json
+import os
+import sys
+
+port = str(sys.argv[1])
+path = sys.argv[2]
+backend_port = str(sys.argv[3])
+
+try:
+    data = json.loads(os.environ["TAILSCALE_FUNNEL_JSON"])
+except Exception:
+    raise SystemExit(0)
+
+web = data.get("Web") or {}
+allow = data.get("AllowFunnel") or {}
+expected_proxy = f"http://127.0.0.1:{backend_port}{path}"
+
+for hostport, entry in web.items():
+    if not hostport.endswith(f":{port}"):
+        continue
+    handlers = (entry or {}).get("Handlers") or {}
+    handler = handlers.get(path) or {}
+    if handler.get("Proxy") != expected_proxy:
+        continue
+    if not allow.get(hostport):
+        continue
+    host = hostport.rsplit(":", 1)[0]
+    print(f"host={host}")
+    print("active=1")
+    raise SystemExit(0)
+PY
+  )"
+
+  while IFS='=' read -r key value; do
+    case "$key" in
+      host) TAILSCALE_FUNNEL_WEBHOOK_HOST="$value" ;;
+      active) TAILSCALE_FUNNEL_HAS_NOTION_WEBHOOK="$value" ;;
+    esac
+  done <<<"$ts_info"
+
+  if [[ "$TAILSCALE_FUNNEL_HAS_NOTION_WEBHOOK" == "1" && -n "$TAILSCALE_FUNNEL_WEBHOOK_HOST" ]]; then
+    TAILSCALE_FUNNEL_WEBHOOK_URL="$(
+      build_public_https_url \
+        "$TAILSCALE_FUNNEL_WEBHOOK_HOST" \
+        "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+        "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}" || true
+    )"
+  fi
+}
+
 resolve_agent_qmd_endpoint() {
   detect_tailscale
   detect_tailscale_serve
@@ -1102,10 +1224,20 @@ normalize_runtime_config_defaults() {
   if [[ -z "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
     ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="$(default_curator_discord_onboarding_enabled)"
   fi
+  if declare -F refresh_notion_webhook_public_url_from_tailscale >/dev/null 2>&1; then
+    refresh_notion_webhook_public_url_from_tailscale
+  fi
 }
 
 emit_runtime_config() {
+  local notion_funnel_path="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
+
   normalize_runtime_config_defaults
+  if declare -F normalize_http_path >/dev/null 2>&1; then
+    notion_funnel_path="$(normalize_http_path "$notion_funnel_path")"
+  elif [[ "$notion_funnel_path" != /* ]]; then
+    notion_funnel_path="/$notion_funnel_path"
+  fi
   {
     write_kv ALMANAC_NAME "$ALMANAC_NAME"
     write_kv ALMANAC_USER "$ALMANAC_USER"
@@ -1135,6 +1267,9 @@ emit_runtime_config() {
     write_kv ALMANAC_NOTION_WEBHOOK_HOST "$ALMANAC_NOTION_WEBHOOK_HOST"
     write_kv ALMANAC_NOTION_WEBHOOK_PORT "$ALMANAC_NOTION_WEBHOOK_PORT"
     write_kv ALMANAC_NOTION_WEBHOOK_PUBLIC_URL "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+    write_kv ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
+    write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+    write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH "$notion_funnel_path"
     write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_URL "${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
     write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_ID "${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
     write_kv ALMANAC_SSOT_NOTION_SPACE_URL "${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
@@ -1484,6 +1619,7 @@ print_post_install_guide() {
   detect_github_repo
   resolve_agent_qmd_endpoint
   resolve_agent_control_plane_endpoint
+  detect_tailscale_notion_webhook_funnel
   watch_embed_mode="$(lowercase "${VAULT_WATCH_RUN_EMBED:-}")"
 
   echo
@@ -1606,9 +1742,18 @@ print_post_install_guide() {
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     echo "  Notion webhook URL (public HTTPS):"
     echo "    ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+      echo "  Exposure:"
+      echo "    public internet via Tailscale Funnel on port ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+      if [[ "$TAILSCALE_FUNNEL_HAS_NOTION_WEBHOOK" != "1" ]]; then
+        echo "  Funnel route note:"
+        echo "    config expects ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}, but current tailscale funnel status does not show it yet"
+      fi
+    fi
     echo "  Notion webhook setup:"
     echo "    1. Open the Notion Developer Portal for this integration and go to the Webhooks tab."
-    echo "    2. Add the public URL above and subscribe to the page/database change events you want indexed."
+    echo "    2. Add the public URL above and subscribe to Page, Database, and Data source events."
+    echo "       Skip View and Comment unless you have a specific indexing reason for them."
     echo "    3. Arm the install window: almanac-ctl notion webhook-arm-install --actor <operator>"
     echo "    4. After Notion sends the verification POST, print the token:"
     echo "       almanac-ctl --json notion webhook-status --show-public-url --show-secret"
@@ -2158,7 +2303,10 @@ collect_install_answers() {
   fi
   default_enable_nextcloud="${ENABLE_NEXTCLOUD:-1}"
   default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
+  default_enable_tailscale_notion_webhook_funnel="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
   default_tailscale_operator_user="${TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
+  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+  default_tailscale_notion_webhook_funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
   if [[ -z "$default_tailscale_operator_user" || "$default_tailscale_operator_user" == "root" ]]; then
     default_tailscale_operator_user="$(id -un)"
   fi
@@ -2227,13 +2375,26 @@ collect_install_answers() {
   ENABLE_NEXTCLOUD="$(ask_yes_no "Enable Nextcloud" "$default_enable_nextcloud")"
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     ENABLE_TAILSCALE_SERVE="$(ask_yes_no "Enable Tailscale HTTPS proxy for Nextcloud (tailnet only)" "$default_enable_tailscale_serve")"
-    if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-      TAILSCALE_OPERATOR_USER="$(ask "Tailscale operator user for serve management" "$default_tailscale_operator_user")"
-    else
-      TAILSCALE_OPERATOR_USER=""
-    fi
   else
     ENABLE_TAILSCALE_SERVE="0"
+  fi
+  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
+    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
+    else
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
+    fi
+  else
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="0"
+    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
+    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
+  fi
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+    TAILSCALE_OPERATOR_USER="$(ask "Tailscale operator user for serve/funnel management" "$default_tailscale_operator_user")"
+  else
     TAILSCALE_OPERATOR_USER=""
   fi
   if [[ "$MODE" != "write-config" ]]; then
@@ -2717,11 +2878,17 @@ run_root_install() {
   restart_shared_user_services_root
   uid="$(id -u "$ALMANAC_USER")"
 
+  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]] || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
+    tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
+  fi
+
   if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1; then
-      tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
-    fi
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
+  fi
+  if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
+  elif [[ -x "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
   fi
 
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
@@ -2818,11 +2985,17 @@ run_root_upgrade() {
   restart_shared_user_services_root
   uid="$(id -u "$ALMANAC_USER")"
 
+  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]] || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
+    tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
+  fi
+
   if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1; then
-      tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
-    fi
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
+  fi
+  if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
+  elif [[ -x "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
   fi
 
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
@@ -2900,6 +3073,9 @@ run_root_remove() {
 
   if [[ "$REMOVE_PUBLIC_REPO" == "1" && -x "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" ]]; then
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true
+  fi
+  if [[ "$REMOVE_PUBLIC_REPO" == "1" && -x "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
   fi
 
   systemctl disable --now almanac-enrollment-provision.timer almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
@@ -4476,6 +4652,10 @@ PY
   echo "  ${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}"
   echo "Resolved URL:"
   echo "  ${target_url:-$notion_space_url}"
+  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    echo "Webhook URL:"
+    echo "  ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+  fi
   echo "Config persisted to:"
   echo "  $CONFIG_TARGET"
 

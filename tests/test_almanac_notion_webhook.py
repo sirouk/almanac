@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
+import threading
+import urllib.error
+import urllib.request
 from http import HTTPStatus
 from pathlib import Path
 
@@ -169,11 +173,65 @@ def test_webhook_module_exposes_setting_key_constant() -> None:
     print("PASS test_webhook_module_exposes_setting_key_constant")
 
 
+def test_signed_verification_token_post_is_accepted() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_notion_webhook_signed_post_test")
+    webhook = load_module(WEBHOOK_PY, "almanac_notion_webhook_signed_post_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        _write_config(config_path, _config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        server = None
+        thread = None
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                armed = webhook.arm_verification_token_install(conn, ttl_seconds=600, actor="operator")
+                expect(armed["armed"] is True, str(armed))
+
+            server = webhook.Server(("127.0.0.1", 0), webhook.Handler, cfg)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+
+            payload = {"verification_token": "tok_signed_secret"}
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/notion/webhook",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Notion-Signature": "sha256=bogus-for-handshake",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                expect(resp.status == HTTPStatus.OK, f"expected OK, got {resp.status} {body}")
+                expect(body.get("status") == "verification_token_stored", str(body))
+
+            with control.connect_db(cfg) as conn:
+                stored = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
+                expect(stored == "tok_signed_secret", f"expected signed handshake token stored, got {stored!r}")
+            print("PASS test_signed_verification_token_post_is_accepted")
+        finally:
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+            if thread is not None:
+                thread.join(timeout=5)
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_webhook_module_exposes_setting_key_constant()
     test_handle_verification_token_post_refuses_overwrite_until_reset()
     test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm()
-    print("PASS all 3 Almanac notion webhook regression tests")
+    test_signed_verification_token_post_is_accepted()
+    print("PASS all 4 Almanac notion webhook regression tests")
     return 0
 
 

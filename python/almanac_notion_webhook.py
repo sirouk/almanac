@@ -234,7 +234,11 @@ class Handler(BaseHTTPRequestHandler):
         with connect_db(self.server.cfg) as conn:
             verification_token = str(payload.get("verification_token") or "")
             signature = self.headers.get("X-Notion-Signature", "")
-            if verification_token and not signature:
+            # Notion's verification-token POST can still include
+            # X-Notion-Signature. Treat any request carrying a
+            # verification_token as the handshake path so first-time
+            # installs do not fall through to "token not configured".
+            if verification_token:
                 status, body = handle_verification_token_post(conn, verification_token)
                 self._send_json(body, status=status)
                 return

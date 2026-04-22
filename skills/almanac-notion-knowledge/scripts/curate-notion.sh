@@ -21,14 +21,22 @@ fi
 TOKEN_FILE="${ALMANAC_BOOTSTRAP_TOKEN_FILE:-${ALMANAC_BOOTSTRAP_TOKEN_PATH:-$HERMES_HOME/secrets/almanac-bootstrap-token}}"
 JSON_MODE="0"
 
+RERANK_MODE="0"
+
 usage() {
   cat <<'EOF'
-Usage: scripts/curate-notion.sh [--json] <search|fetch|query> [args...]
+Usage: scripts/curate-notion.sh [--json] [--rerank] <search|fetch|query> [args...]
 
 Commands:
   search <query>                        Search shared Notion knowledge.
   fetch <page-or-database-id-or-url>   Fetch one exact live page or database.
   query <database-id-or-url> [json]    Run a live structured database query.
+
+Flags:
+  --json                                Emit raw JSON instead of human-readable.
+  --rerank                              Opt notion.search into LLM reranking.
+                                        Higher quality, several seconds slower
+                                        per novel query. Default is fast hybrid.
 
 Environment:
   ALMANAC_MCP_URL                      Override control-plane MCP URL.
@@ -38,10 +46,21 @@ Environment:
 EOF
 }
 
-if [[ $# -gt 0 && "$1" == "--json" ]]; then
-  JSON_MODE="1"
-  shift
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json)
+      JSON_MODE="1"
+      shift
+      ;;
+    --rerank)
+      RERANK_MODE="1"
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 COMMAND="${1:-search}"
 shift || true
@@ -66,10 +85,15 @@ if [[ "$COMMAND" == "search" ]]; then
     exit 2
   fi
   payload="$(
-    python3 - "$TOKEN" "$QUERY" <<'PY'
+    python3 - "$TOKEN" "$QUERY" "$RERANK_MODE" <<'PY'
 import json
 import sys
-print(json.dumps({"token": sys.argv[1], "query": sys.argv[2], "limit": 5}))
+print(json.dumps({
+    "token": sys.argv[1],
+    "query": sys.argv[2],
+    "limit": 5,
+    "rerank": sys.argv[3] == "1",
+}))
 PY
   )"
   result="$(call_tool "notion.search" "$payload")"

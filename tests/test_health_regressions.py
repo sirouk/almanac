@@ -137,7 +137,7 @@ check_port_loopback_only 8282 "almanac-mcp backend port 8282"
     print("PASS test_loopback_bind_probe_reports_safe_and_unsafe_listeners")
 
 
-def test_shared_notion_without_webhook_reports_poller_fallback() -> None:
+def test_shared_notion_without_webhook_reports_sweep_fallback_warning() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
     script = f"""
@@ -154,16 +154,31 @@ ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
 {snippet}
 """
     result = bash(script)
-    expect(result.returncode == 0, f"shared notion poller fallback case failed: {result.stderr}")
-    expect("PASS:Notion webhook public URL not configured; the independent claim poller covers self-serve verification" in result.stdout, result.stdout)
-    print("PASS test_shared_notion_without_webhook_reports_poller_fallback")
+    expect(result.returncode == 0, f"shared notion sweep fallback case failed: {result.stderr}")
+    expect(
+        "WARN:Notion webhook public URL not configured" in result.stdout,
+        f"expected WARN about missing webhook URL when shared Notion is configured, got: {result.stdout!r}",
+    )
+    expect(
+        "4-hour Curator sweep" in result.stdout,
+        f"expected sweep-fallback explanation in warning, got: {result.stdout!r}",
+    )
+    expect(
+        "claim poller still covers self-serve verification" in result.stdout,
+        f"expected claim-poller carve-out in warning, got: {result.stdout!r}",
+    )
+    expect(
+        "PASS:Notion webhook public URL not configured" not in result.stdout,
+        f"missing webhook URL must not be a clean PASS when shared Notion is configured: {result.stdout!r}",
+    )
+    print("PASS test_shared_notion_without_webhook_reports_sweep_fallback_warning")
 
 
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
-    test_shared_notion_without_webhook_reports_poller_fallback()
+    test_shared_notion_without_webhook_reports_sweep_fallback_warning()
     print("PASS all 4 health regression tests")
     return 0
 

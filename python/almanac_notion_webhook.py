@@ -8,9 +8,39 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from almanac_control import Config, connect_db, get_setting, is_loopback_ip, notion_verify_signature, store_notion_event, upsert_setting
 
+NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY = "notion_webhook_verification_token"
+
 
 def backend_client_allowed(remote_ip: str) -> bool:
     return is_loopback_ip(str(remote_ip or "").strip())
+
+
+def handle_verification_token_post(conn, candidate_token: str) -> tuple[int, dict]:
+    """Policy for storing a Notion webhook verification token.
+
+    Notion's handshake POSTs the verification token exactly once during
+    integration setup. Refuse subsequent overwrites so that an unprivileged
+    process on a multi-user host cannot replace the secret and forge signed
+    events. Operators rotate via `almanac-ctl notion webhook-reset-token`,
+    which clears the stored token so the next handshake POST can store a
+    fresh one.
+    """
+    candidate = str(candidate_token or "").strip()
+    if not candidate:
+        return HTTPStatus.BAD_REQUEST, {"error": "verification_token is required"}
+    stored = str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip()
+    if stored:
+        return (
+            HTTPStatus.CONFLICT,
+            {
+                "error": (
+                    "verification token already configured; rotate via "
+                    "`almanac-ctl notion webhook-reset-token` before re-handshaking"
+                )
+            },
+        )
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, candidate)
+    return HTTPStatus.ACCEPTED, {"status": "verification_token_stored"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,11 +99,11 @@ class Handler(BaseHTTPRequestHandler):
             verification_token = str(payload.get("verification_token") or "")
             signature = self.headers.get("X-Notion-Signature", "")
             if verification_token and not signature:
-                upsert_setting(conn, "notion_webhook_verification_token", verification_token)
-                self._send_json({"status": "verification_token_stored"}, status=HTTPStatus.ACCEPTED)
+                status, body = handle_verification_token_post(conn, verification_token)
+                self._send_json(body, status=status)
                 return
 
-            stored_token = get_setting(conn, "notion_webhook_verification_token", "")
+            stored_token = get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
             if not stored_token:
                 self._send_json({"error": "verification token is not configured"}, status=HTTPStatus.PRECONDITION_FAILED)
                 return

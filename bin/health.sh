@@ -1434,7 +1434,7 @@ if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     pass "Notion webhook public URL configured: $ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"
   else
-    pass "Notion webhook public URL not configured; the independent claim poller covers self-serve verification"
+    warn "Notion webhook public URL not configured: the independent claim poller still covers self-serve verification, but shared Notion content freshness falls back to the 4-hour Curator sweep instead of webhook-driven minutes-scale updates"
   fi
 else
   pass "Notion webhook public URL not required because shared Notion SSOT is not configured"

@@ -214,6 +214,7 @@ def parse_args() -> argparse.Namespace:
     notion = subparsers.add_parser("notion")
     notion_sub = notion.add_subparsers(dest="action", required=True)
     notion_sub.add_parser("process-pending")
+    notion_sub.add_parser("webhook-reset-token")
     notion_handshake = notion_sub.add_parser("handshake")
     notion_handshake.add_argument("--space-url", default="")
     notion_handshake.add_argument("--token", default="")
@@ -2007,6 +2008,16 @@ def main() -> None:
 
         if args.domain == "notion" and args.action == "process-pending":
             dump_output(args, process_pending_notion_events(conn))
+            return
+        if args.domain == "notion" and args.action == "webhook-reset-token":
+            previously_set = bool(str(get_setting(conn, "notion_webhook_verification_token", "") or "").strip())
+            upsert_setting(conn, "notion_webhook_verification_token", "")
+            conn.commit()
+            dump_output(args, {
+                "ok": True,
+                "previously_set": previously_set,
+                "note": "stored verification token cleared; next handshake POST from Notion will install a fresh secret",
+            })
             return
         if args.domain == "notion" and args.action == "handshake":
             try:

@@ -685,6 +685,7 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
             "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Test User",
             "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Credentials are intentionally omitted from managed memory.",
             "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
+            "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
             "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on — Active project workspaces",
             "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
             "catalog": [{"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"}],
@@ -708,6 +709,9 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
         first_state = state_path.read_text(encoding="utf-8")
         first_stub = stub_path.read_text(encoding="utf-8")
         first_memory = memory_path.read_text(encoding="utf-8")
+        expect("notion-ref" in json.loads(first_state), first_state)
+        expect("[managed:notion-ref]" in first_stub, first_stub)
+        expect("[managed:notion-ref]" in first_memory, first_memory)
 
         second = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         expect(bool(second.get("changed")) is False, str(second))
@@ -716,6 +720,58 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
         expect(memory_path.read_text(encoding="utf-8") == first_memory, "MEMORY.md should not rewrite on cache hit")
         expect("Persistent preference" in first_memory, first_memory)
         print("PASS test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit")
+
+
+def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_memory_sync_state_drift_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp)
+        memory_path = hermes_home / "memories" / "MEMORY.md"
+        memory_path.parent.mkdir(parents=True, exist_ok=True)
+        memory_path.write_text("Persistent preference", encoding="utf-8")
+        payload = {
+            "agent_id": "agent-test",
+            "almanac-skill-ref": "Use almanac-qmd-mcp for retrieval.",
+            "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Test User",
+            "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Credentials are intentionally omitted from managed memory.",
+            "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
+            "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
+            "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on — Active project workspaces",
+            "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
+            "catalog": [{"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"}],
+            "subscriptions": [
+                {
+                    "vault_name": "Projects",
+                    "subscribed": 1,
+                    "default_subscribed": 1,
+                    "hierarchy_source": "catalog-default",
+                    "push_enabled": True,
+                    "subscription_state": "default-in",
+                }
+            ],
+            "active_subscriptions": ["Projects"],
+        }
+
+        first = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
+        state_path = Path(first["state_path"])
+        stub_path = Path(first["stub_path"])
+        original_stub = stub_path.read_text(encoding="utf-8")
+        original_memory = memory_path.read_text(encoding="utf-8")
+        drifted_state = json.loads(state_path.read_text(encoding="utf-8"))
+        drifted_state.pop("notion-ref", None)
+        state_path.write_text(json.dumps(drifted_state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        repaired = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
+        expect(bool(repaired.get("state_changed")) is True, str(repaired))
+        expect(bool(repaired.get("stub_changed")) is False, str(repaired))
+        expect(bool(repaired.get("memory_changed")) is False, str(repaired))
+
+        repaired_state = json.loads(state_path.read_text(encoding="utf-8"))
+        expect("notion-ref" in repaired_state, repaired_state)
+        expect("notion.search / notion.fetch / notion.query" in repaired_state["notion-ref"], repaired_state)
+        expect(stub_path.read_text(encoding="utf-8") == original_stub, "stub mirror should stay unchanged when only state drifted")
+        expect(memory_path.read_text(encoding="utf-8") == original_memory, "MEMORY.md should stay unchanged when only state drifted")
+        print("PASS test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift")
 
 
 def test_managed_notion_stub_stays_scoped_to_verified_user() -> None:
@@ -1279,12 +1335,13 @@ def main() -> int:
     test_curator_fanout_retries_failed_agent_without_dropping_work()
     test_curator_fanout_reuses_shared_notions_snapshot_cache_per_batch()
     test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit()
+    test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift()
     test_managed_notion_stub_stays_scoped_to_verified_user()
     test_managed_notion_stub_reports_pending_claim_status()
     test_managed_notion_stub_reports_pending_write_approvals()
     test_managed_notion_stub_reports_verified_page_scoped_write_access()
     test_managed_notion_stub_reports_verification_not_started()
-    print("PASS all 10 memory sync regression tests")
+    print("PASS all 11 memory sync regression tests")
     return 0
 
 

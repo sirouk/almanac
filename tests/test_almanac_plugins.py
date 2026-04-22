@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO / "bin" / "install-almanac-plugins.sh"
 PLUGIN_DIR = REPO / "plugins" / "hermes-agent" / "almanac-managed-context"
 PLUGIN_INIT = PLUGIN_DIR / "__init__.py"
+CONTROL_PY = REPO / "python" / "almanac_control.py"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -54,6 +55,70 @@ def test_install_almanac_plugins_installs_default_hermes_plugin() -> None:
         expect((installed_dir / "plugin.yaml").is_file(), f"expected installed plugin manifest at {installed_dir / 'plugin.yaml'}")
         expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
         print("PASS test_install_almanac_plugins_installs_default_hermes_plugin")
+
+
+def test_almanac_managed_context_reads_writer_materialized_notion_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        try:
+            control = load_module(CONTROL_PY, "almanac_control_plugin_writer_bridge_test")
+            payload = {
+                "agent_id": "agent-jeef",
+                "almanac-skill-ref": (
+                    "Current Almanac capability snapshot:\n"
+                    "- Use almanac-qmd-mcp for vault retrieval and follow-ups.\n"
+                    "- Use almanac-vaults for subscription, catalog, and curate-vaults work.\n"
+                    "- Use almanac-vault-reconciler for Almanac memory drift or repair.\n"
+                    "- Use almanac-ssot for organization-aware SSOT coordination.\n"
+                    "- Use almanac-notion-knowledge for shared Notion knowledge search, exact page fetches, and live structured database queries.\n"
+                    "- Use almanac-first-contact for Almanac setup or diagnostic checks.\n"
+                    "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns.\n"
+                ),
+                "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Jeef",
+                "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Hermes dashboard: https://kor.example/dashboard",
+                "qmd-ref": "qmd MCP (deep retrieval): https://kor.example/mcp",
+                "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
+                "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces",
+                "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
+                "catalog": [],
+                "subscriptions": [],
+                "active_subscriptions": [],
+            }
+            paths = control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
+            expect(bool(paths.get("changed")) is True, str(paths))
+
+            state_payload = json.loads((hermes_home / "state" / "almanac-vault-reconciler.json").read_text(encoding="utf-8"))
+            stub_body = (hermes_home / "memories" / "almanac-managed-stubs.md").read_text(encoding="utf-8")
+            expect("notion-ref" in state_payload, state_payload)
+            expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
+            expect("[managed:notion-ref]" in stub_body, stub_body)
+
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_writer_bridge_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_llm_call"][0]
+            result = hook(
+                session_id="session-bridge",
+                user_message="hello there",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            expect(isinstance(result, dict) and result.get("context"), f"expected injected context, got {result!r}")
+            context = result["context"]
+            expect("[managed:notion-ref]" in context, context)
+            expect("notion.search / notion.fetch / notion.query" in context, context)
+            expect("Use almanac-notion-knowledge" in context, context)
+            print("PASS test_almanac_managed_context_reads_writer_materialized_notion_state")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision() -> None:
@@ -166,6 +231,7 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
             expect("rev-111111111111" in first["context"], first["context"])
             expect("[managed:almanac-skill-ref]" in first["context"], first["context"])
             expect("[managed:qmd-ref]" in first["context"], first["context"])
+            expect("Use almanac-notion-knowledge" in first["context"], first["context"])
             expect("[managed:notion-ref]" in first["context"], first["context"])
             expect("notion.search / notion.fetch / notion.query" in first["context"], first["context"])
             expect("Projects" in first["context"], first["context"])
@@ -489,10 +555,11 @@ def test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
 
 def main() -> int:
     test_install_almanac_plugins_installs_default_hermes_plugin()
+    test_almanac_managed_context_reads_writer_materialized_notion_state()
     test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
     test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
     test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
-    print("PASS all 4 Almanac plugin tests")
+    print("PASS all 5 Almanac plugin tests")
     return 0
 
 

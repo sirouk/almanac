@@ -24,29 +24,32 @@ def write_fake_rpc_client(path: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
         "from __future__ import annotations\n"
-        "import argparse, json, os\n"
+        "import argparse\n"
+        "import json\n"
+        "import os\n"
+        "import sys\n"
         "from pathlib import Path\n"
-        "parser = argparse.ArgumentParser()\n"
-        "parser.add_argument('--url', required=True)\n"
-        "parser.add_argument('--tool', required=True)\n"
-        "parser.add_argument('--json-args', default='{}')\n"
-        "args = parser.parse_args()\n"
-        "payload = json.loads(args.json_args)\n"
-        "log_path = Path(os.environ['ALMANAC_FAKE_RPC_LOG'])\n"
-        "entries = []\n"
-        "if log_path.exists():\n"
-        "    entries = json.loads(log_path.read_text(encoding='utf-8'))\n"
-        "entries.append({'tool': args.tool, 'url': args.url, 'payload': payload})\n"
-        "log_path.write_text(json.dumps(entries, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
-        "if args.tool == 'vaults.refresh':\n"
-        "    result = {'active_subscriptions': ['Projects'], 'qmd_url': 'https://kor.tail77f45e.ts.net/mcp'}\n"
-        "elif args.tool == 'agents.managed-memory':\n"
-        "    result = {\n"
+        "\n"
+        "def _log_call(*, tool_name: str, url: str, payload: dict) -> None:\n"
+        "    log_path = Path(os.environ['ALMANAC_FAKE_RPC_LOG'])\n"
+        "    entries = []\n"
+        "    if log_path.exists():\n"
+        "        entries = json.loads(log_path.read_text(encoding='utf-8'))\n"
+        "    entries.append({'tool': tool_name, 'url': url, 'payload': payload})\n"
+        "    log_path.write_text(json.dumps(entries, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "\n"
+        "def _dispatch(*, url: str, tool_name: str, payload: dict) -> dict:\n"
+        "    _log_call(tool_name=tool_name, url=url, payload=payload)\n"
+        "    if tool_name == 'vaults.refresh':\n"
+        "        return {'active_subscriptions': ['Projects'], 'qmd_url': 'https://kor.tail77f45e.ts.net/mcp'}\n"
+        "    if tool_name == 'agents.managed-memory':\n"
+        "        return {\n"
         "        'agent_id': 'agent-jeef',\n"
         "        'almanac-skill-ref': 'Use almanac-qmd-mcp for retrieval and almanac-vault-reconciler for drift repair.',\n"
         "        'vault-ref': 'Vault root: /srv/almanac/vault\\nDedicated agent name: Jeef',\n"
         "        'resource-ref': 'Canonical user access rails and shared Almanac addresses:\\n- Hermes dashboard: https://kor.tail77f45e.ts.net:30011/\\n- Code workspace: https://kor.tail77f45e.ts.net:40011/\\n- Credentials are intentionally omitted from managed memory.',\n"
         "        'qmd-ref': 'qmd MCP (deep retrieval): https://kor.tail77f45e.ts.net/mcp',\n"
+        "        'notion-ref': 'Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
         "        'catalog': [\n"
         "            {'vault_name': 'Projects', 'default_subscribed': 1, 'description': 'Active project workspaces'},\n"
@@ -56,18 +59,33 @@ def write_fake_rpc_client(path: Path) -> None:
         "            {'vault_name': 'Projects', 'subscribed': 1, 'default_subscribed': 1},\n"
         "            {'vault_name': 'Teams', 'subscribed': 0, 'default_subscribed': 0},\n"
         "        ],\n"
-        "    }\n"
-        "elif args.tool == 'agents.consume-notifications':\n"
-        "    result = {\n"
+        "        }\n"
+        "    if tool_name == 'agents.consume-notifications':\n"
+        "        return {\n"
         "        'agent_id': 'agent-jeef',\n"
         "        'notifications': [\n"
         "            {'channel_kind': 'vault-change', 'message': 'Projects vault updated', 'created_at': '2026-04-19T19:00:00+00:00'},\n"
         "            {'channel_kind': 'subscription', 'message': 'Teams -> False', 'created_at': '2026-04-19T19:05:00+00:00'},\n"
         "        ],\n"
-        "    }\n"
-        "else:\n"
-        "    raise SystemExit(f'unsupported tool: {args.tool}')\n"
-        "print(json.dumps(result, indent=2, sort_keys=True))\n",
+        "        }\n"
+        "    raise RuntimeError(f'unsupported tool: {tool_name}')\n"
+        "\n"
+        "def mcp_call(url: str, tool_name: str, arguments: dict) -> dict:\n"
+        "    return _dispatch(url=url, tool_name=tool_name, payload=arguments)\n"
+        "\n"
+        "def main() -> None:\n"
+        "    parser = argparse.ArgumentParser()\n"
+        "    parser.add_argument('--url', required=True)\n"
+        "    parser.add_argument('--tool', required=True)\n"
+        "    parser.add_argument('--json-args', default='{}')\n"
+        "    args = parser.parse_args()\n"
+        "    payload = json.loads(args.json_args)\n"
+        "    result = _dispatch(url=args.url, tool_name=args.tool, payload=payload)\n"
+        "    json.dump(result, sys.stdout, indent=2, sort_keys=True)\n"
+        "    sys.stdout.write('\\n')\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -101,6 +119,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                     "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Jeef",
                     "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Hermes dashboard: https://kor.tail77f45e.ts.net:30011/\n- Code workspace: https://kor.tail77f45e.ts.net:40011/\n- Credentials are intentionally omitted from managed memory.",
                     "qmd-ref": "qmd MCP (deep retrieval): https://kor.tail77f45e.ts.net/mcp",
+                    "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
                     "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
                     "catalog": [
                         {"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"},
@@ -180,11 +199,15 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         expect(state_payload["agent_id"] == "agent-jeef", state_payload)
         expect(state_payload["catalog"][0]["vault_name"] == "Projects", state_payload)
         expect(state_payload["subscriptions"][0]["vault_name"] == "Projects", state_payload)
+        expect("notion-ref" in state_payload, state_payload)
+        expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
         expect(len(str(state_payload.get("managed_memory_revision") or "")) >= 12, state_payload)
 
         stub_body = stub_path.read_text(encoding="utf-8")
         expect("# Almanac managed memory stubs" in stub_body, stub_body)
         expect("[managed:almanac-skill-ref]" in stub_body, stub_body)
+        expect("[managed:notion-ref]" in stub_body, stub_body)
+        expect("notion.search / notion.fetch / notion.query" in stub_body, stub_body)
         expect("Dedicated agent name: Jeef" in stub_body, stub_body)
 
         memory_entries = [entry.strip() for entry in memory_path.read_text(encoding="utf-8").split("\n§\n") if entry.strip()]
@@ -197,6 +220,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
             "[managed:vault-ref]",
             "[managed:resource-ref]",
             "[managed:qmd-ref]",
+            "[managed:notion-ref]",
             "[managed:vault-topology]",
             "[managed:notion-stub]",
         ]

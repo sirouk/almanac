@@ -10149,23 +10149,26 @@ def write_managed_memory_stubs(
         "vault-ref": payload["vault-ref"],
         "resource-ref": payload["resource-ref"],
         "qmd-ref": payload["qmd-ref"],
+        "notion-ref": payload["notion-ref"],
         "vault-topology": payload["vault-topology"],
         "notion-stub": payload.get("notion-stub") or "",
-        "managed_memory_revision": str(payload["managed_memory_revision"]),
-        "managed_payload_cache_key": str(payload["managed_payload_cache_key"]),
         "catalog": payload["catalog"],
         "subscriptions": payload["subscriptions"],
         "active_subscriptions": payload.get("active_subscriptions") or [],
-        "updated_at": now,
+        "managed_memory_revision": str(payload["managed_memory_revision"]),
+        "managed_payload_cache_key": str(payload["managed_payload_cache_key"]),
     }
     existing_state = _read_json_dict(state_path)
-    existing_state_key = str(
-        existing_state.get("managed_payload_cache_key")
-        or (_compute_managed_payload_cache_key(existing_state) if existing_state else "")
-    )
-    state_changed = (not state_path.is_file()) or existing_state_key != state_payload["managed_payload_cache_key"]
+    comparable_existing_state = {
+        key: existing_state.get(key)
+        for key in state_payload
+    }
+    state_changed = (not state_path.is_file()) or comparable_existing_state != state_payload
     if state_changed:
-        _atomic_write_text(state_path, json.dumps(state_payload, indent=2, sort_keys=True) + "\n")
+        _atomic_write_text(
+            state_path,
+            json.dumps({**state_payload, "updated_at": now}, indent=2, sort_keys=True) + "\n",
+        )
 
     stub_path = memories_dir / "almanac-managed-stubs.md"
     body = (
@@ -10176,6 +10179,7 @@ def write_managed_memory_stubs(
         f"## [managed:vault-ref]\n\n{payload['vault-ref']}\n\n"
         f"## [managed:resource-ref]\n\n{payload['resource-ref']}\n\n"
         f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
+        f"## [managed:notion-ref]\n\n{payload['notion-ref']}\n\n"
         f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
         f"## [managed:notion-stub]\n\n{payload.get('notion-stub') or ''}\n"
     )

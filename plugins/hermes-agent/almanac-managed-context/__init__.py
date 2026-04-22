@@ -160,6 +160,7 @@ def _skill_snapshot(raw_value: object) -> str:
         "Use almanac-vaults",
         "Use almanac-vault-reconciler",
         "Use almanac-ssot",
+        "Use almanac-notion-knowledge",
         "Use almanac-ssot-connect",
         "Use almanac-notion-mcp",
         "Use almanac-first-contact",

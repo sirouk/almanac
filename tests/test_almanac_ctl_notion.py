@@ -643,6 +643,48 @@ def test_notion_webhook_cli_requires_force_and_tracks_arm_window() -> None:
         print("PASS test_notion_webhook_cli_requires_force_and_tracks_arm_window")
 
 
+def test_notion_webhook_cli_refuses_non_owner_control_caller() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_notion_webhook_cli_owner_gate_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_notion_webhook_cli_owner_gate_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        original_argv = sys.argv[:]
+        original_geteuid = ctl.os.geteuid
+        try:
+            os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+            denied_uid = os.getuid() + 100000
+            expect(denied_uid != os.stat(config_path).st_uid, f"expected synthetic uid to differ from config owner for {config_path}")
+            ctl.os.geteuid = lambda: denied_uid
+            sys.argv = [
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-arm-install",
+                "--actor",
+                "pretender",
+                "--minutes",
+                "10",
+            ]
+            try:
+                ctl.main()
+            except SystemExit as exc:
+                expect("owner of the Almanac control files" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected non-owner webhook arm command to be rejected")
+            print("PASS test_notion_webhook_cli_refuses_non_owner_control_caller")
+        finally:
+            ctl.os.geteuid = original_geteuid
+            sys.argv = original_argv
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_redact_identity_rows_masks_emails_by_default()
     test_manual_verify_notion_user_fetches_and_validates_email()
@@ -653,7 +695,8 @@ def main() -> int:
     test_notion_override_cli_round_trip()
     test_notion_preflight_root_cli_uses_root_page_id()
     test_notion_webhook_cli_requires_force_and_tracks_arm_window()
-    print("PASS all 9 almanac ctl notion tests")
+    test_notion_webhook_cli_refuses_non_owner_control_caller()
+    print("PASS all 10 almanac ctl notion tests")
     return 0
 
 

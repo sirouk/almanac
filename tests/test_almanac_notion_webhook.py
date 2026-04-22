@@ -122,6 +122,42 @@ def test_handle_verification_token_post_refuses_overwrite_until_reset() -> None:
             os.environ.update(old_env)
 
 
+def test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_notion_webhook_reset_without_rearm_test")
+    webhook = load_module(WEBHOOK_PY, "almanac_notion_webhook_reset_without_rearm_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        _write_config(config_path, _config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                armed = webhook.arm_verification_token_install(conn, ttl_seconds=600, actor="operator")
+                expect(armed["armed"] is True, str(armed))
+                status, body = webhook.handle_verification_token_post(conn, "tok_initial_secret")
+                expect(status == HTTPStatus.ACCEPTED, f"expected ACCEPTED on first store, got {status} {body}")
+
+                cleared = webhook.reset_verification_token(conn, actor="operator", rearm_ttl_seconds=0)
+                expect(cleared["armed"] is False, str(cleared))
+                expect(cleared["armed_until"] == "", str(cleared))
+
+                status, body = webhook.handle_verification_token_post(conn, "tok_should_be_refused")
+                expect(
+                    status == HTTPStatus.PRECONDITION_FAILED,
+                    f"expected PRECONDITION_FAILED after reset without rearm, got {status} {body}",
+                )
+                expect("not armed" in str(body.get("error") or "").lower(), str(body))
+            print("PASS test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_webhook_module_exposes_setting_key_constant() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -136,7 +172,8 @@ def test_webhook_module_exposes_setting_key_constant() -> None:
 def main() -> int:
     test_webhook_module_exposes_setting_key_constant()
     test_handle_verification_token_post_refuses_overwrite_until_reset()
-    print("PASS all 2 Almanac notion webhook regression tests")
+    test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm()
+    print("PASS all 3 Almanac notion webhook regression tests")
     return 0
 
 

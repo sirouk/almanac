@@ -307,6 +307,32 @@ def require_root(message: str) -> None:
         raise SystemExit(message)
 
 
+def require_control_file_owner(cfg: Config, message: str) -> None:
+    current_uid = os.geteuid()
+    if current_uid == 0:
+        return
+
+    candidate_paths: list[Path] = []
+    raw_config_path = str(os.environ.get("ALMANAC_CONFIG_FILE", "") or "").strip()
+    if raw_config_path:
+        candidate_paths.append(Path(raw_config_path).expanduser())
+    candidate_paths.extend((cfg.db_path, cfg.private_dir))
+
+    seen: set[str] = set()
+    for path in candidate_paths:
+        resolved = str(path.resolve(strict=False))
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        try:
+            if os.stat(resolved).st_uid == current_uid:
+                return
+        except OSError:
+            continue
+
+    raise SystemExit(message)
+
+
 def dump_output(args: argparse.Namespace, payload: object) -> None:
     if args.json:
         json.dump(payload, sys.stdout, indent=2, sort_keys=True)
@@ -2029,6 +2055,10 @@ def main() -> None:
             dump_output(args, payload)
             return
         if args.domain == "notion" and args.action == "webhook-arm-install":
+            require_control_file_owner(
+                cfg,
+                "almanac-ctl notion webhook-arm-install must run as root or the owner of the Almanac control files.",
+            )
             dump_output(
                 args,
                 arm_verification_token_install(
@@ -2039,6 +2069,10 @@ def main() -> None:
             )
             return
         if args.domain == "notion" and args.action == "webhook-reset-token":
+            require_control_file_owner(
+                cfg,
+                "almanac-ctl notion webhook-reset-token must run as root or the owner of the Almanac control files.",
+            )
             if not bool(args.force):
                 raise SystemExit("refusing to clear the stored Notion webhook token without --force")
             dump_output(

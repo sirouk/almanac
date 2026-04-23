@@ -12,6 +12,15 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOUL_TEMPLATE_PATH = REPO_ROOT / "templates" / "SOUL.md.tmpl"
 IDENTITY_STATE_FILENAME = "almanac-identity-context.json"
+UPSTREAM_SOUL_FALLBACK = (
+    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+    "range of tasks including answering questions, writing and editing code, "
+    "analyzing information, creative work, and executing actions via your tools. "
+    "You communicate clearly, admit uncertainty when appropriate, and prioritize "
+    "being genuinely useful over being verbose unless otherwise directed below. "
+    "Be targeted and efficient in your exploration and investigations."
+)
 
 
 def _load_provider_spec(raw_json: str) -> dict[str, Any]:
@@ -152,6 +161,16 @@ def _identity_value(value: str, default: str) -> str:
     return normalized or default
 
 
+def _upstream_soul_text() -> str:
+    try:
+        from hermes_cli.default_soul import DEFAULT_SOUL_MD
+    except Exception:
+        text = UPSTREAM_SOUL_FALLBACK
+    else:
+        text = str(DEFAULT_SOUL_MD or "").strip() or UPSTREAM_SOUL_FALLBACK
+    return " ".join(text.split())
+
+
 def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".almanac-identity-", suffix=".tmp")
@@ -178,6 +197,7 @@ def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
         return (
             Template(template).substitute(
                 {
+                    "upstream_soul": _upstream_soul_text(),
                     "agent_label": _identity_value(bot_name, "your Almanac agent"),
                     "unix_user": _identity_value(unix_user, "unknown"),
                     "user_name": _identity_value(user_name, "your enrolled user"),

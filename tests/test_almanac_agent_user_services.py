@@ -142,10 +142,74 @@ def test_generated_web_service_units_follow_access_state() -> None:
         print("PASS test_generated_web_service_units_follow_access_state")
 
 
+def test_generated_backup_units_follow_backup_state_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        systemctl_log = root / "systemctl.log"
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+
+        hermes_bin = root / "hermes"
+        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        hermes_bin.chmod(0o755)
+
+        home = root / "home"
+        hermes_home = home / ".local" / "share" / "almanac-agent" / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-agent-backup.env").write_text(
+            "AGENT_BACKUP_REMOTE='git@github.com:example/private.git'\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                str(SCRIPT),
+                "agent-test",
+                str(REPO),
+                str(hermes_home),
+                '["tui-only"]',
+                "",
+                str(hermes_bin),
+            ],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "SYSTEMCTL_LOG": str(systemctl_log),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"install-agent-user-services failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+
+        backup_service = home / ".config" / "systemd" / "user" / "almanac-user-agent-backup.service"
+        backup_timer = home / ".config" / "systemd" / "user" / "almanac-user-agent-backup.timer"
+        expect(backup_service.is_file(), f"expected backup service unit: {backup_service}")
+        expect(backup_timer.is_file(), f"expected backup timer unit: {backup_timer}")
+        backup_text = backup_service.read_text(encoding="utf-8")
+        expect("backup-agent-home.sh" in backup_text, backup_text)
+        expect(str(hermes_home) in backup_text, backup_text)
+
+        log = systemctl_log.read_text(encoding="utf-8")
+        expect("--user enable almanac-user-agent-backup.timer" in log, log)
+        expect("--user start almanac-user-agent-backup.service" in log, log)
+        print("PASS test_generated_backup_units_follow_backup_state_file")
+
+
 def main() -> int:
     test_generated_activate_path_watches_trigger_file_and_parent_directory()
     test_generated_web_service_units_follow_access_state()
-    print("PASS all 2 agent-user-services regression tests")
+    test_generated_backup_units_follow_backup_state_file()
+    print("PASS all 3 agent-user-services regression tests")
     return 0
 
 

@@ -272,6 +272,31 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     print("PASS test_emit_runtime_config_persists_notion_ssot_fields")
 
 
+def test_emit_runtime_config_persists_hermes_docs_sync_fields() -> None:
+    config = render_runtime_config("tui-only", "tui-only")
+    expect(
+        source_value(config, "ALMANAC_HERMES_DOCS_SYNC_ENABLED") == "1",
+        config,
+    )
+    expect(
+        source_value(config, "ALMANAC_HERMES_DOCS_REPO_URL") == "https://github.com/NousResearch/hermes-agent.git",
+        config,
+    )
+    expect(
+        source_value(config, "ALMANAC_HERMES_DOCS_REF") == "main",
+        config,
+    )
+    expect(
+        source_value(config, "ALMANAC_HERMES_DOCS_SOURCE_SUBDIR") == "website/docs",
+        config,
+    )
+    expect(
+        source_value(config, "ALMANAC_HERMES_DOCS_VAULT_DIR").endswith("/vault/Repos/hermes-agent-docs"),
+        config,
+    )
+    print("PASS test_emit_runtime_config_persists_hermes_docs_sync_fields")
+
+
 def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
     text = DEPLOY_SH.read_text()
     expect("If a subscription already exists for this exact URL, edit that subscription." in text, "expected explicit reuse guidance for existing Notion webhook subscription")
@@ -1610,6 +1635,7 @@ def main() -> int:
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
         test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag,
         test_emit_runtime_config_persists_notion_ssot_fields,
+        test_emit_runtime_config_persists_hermes_docs_sync_fields,
         test_deploy_guides_explicit_notion_webhook_event_selection,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,

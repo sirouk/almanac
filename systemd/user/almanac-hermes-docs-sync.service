@@ -1,0 +1,6 @@
+[Unit]
+Description=Sync Hermes documentation into the Almanac vault
+
+[Service]
+Type=oneshot
+ExecStart=%h/almanac/bin/sync-hermes-docs-into-vault.sh

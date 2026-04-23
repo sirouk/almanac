@@ -557,6 +557,14 @@ PY
     "$activation_trigger_path" \
     "$hermes_bin"
 
+  if [[ -z "$preseeded_request_id" && "${ALMANAC_INIT_SKIP_AGENT_BACKUP_SETUP:-0}" != "1" && -t 0 ]]; then
+    echo
+    read -r -p "Configure a private GitHub backup for this Hermes home now? [Y/n]: " configure_backup_answer
+    if [[ -z "$configure_backup_answer" ]] || is_yes "$configure_backup_answer"; then
+      HERMES_HOME="$hermes_home" "$SHARED_REPO_DIR/bin/configure-agent-backup.sh" "$hermes_home" || true
+    fi
+  fi
+
   if [[ -x "$SHARED_REPO_DIR/bin/activate-agent.sh" ]]; then
     HERMES_HOME="$hermes_home" \
     ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
@@ -622,6 +630,10 @@ Channels:
   $channels_csv
 Shared repo:
   $SHARED_REPO_DIR
+Local Hermes wrapper:
+  $HOME/.local/bin/almanac-agent-hermes
+Backup helper:
+  $HOME/.local/bin/almanac-agent-configure-backup
 Control plane:
   $ALMANAC_MCP_URL
 Bootstrap handshake:
@@ -653,6 +665,10 @@ Channels:
   $channels_csv
 Shared repo:
   $SHARED_REPO_DIR
+Local Hermes wrapper:
+  $HOME/.local/bin/almanac-agent-hermes
+Backup helper:
+  $HOME/.local/bin/almanac-agent-configure-backup
 Control plane:
   $ALMANAC_MCP_URL
 Bootstrap handshake:

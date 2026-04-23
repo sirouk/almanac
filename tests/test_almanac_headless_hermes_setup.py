@@ -32,6 +32,13 @@ def write_fake_hermes_cli(root: Path) -> Path:
     package_dir = root / "fakepkgs" / "hermes_cli"
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "default_soul.py").write_text(
+        "DEFAULT_SOUL_MD = (\n"
+        "    'You are Hermes Agent, an intelligent AI assistant created by Nous Research. '\n"
+        "    'Be direct and useful.'\n"
+        ")\n",
+        encoding="utf-8",
+    )
     (package_dir / "config.py").write_text(
         "from __future__ import annotations\n"
         "import json, os\n"
@@ -118,6 +125,9 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect(identity_state_path.is_file(), f"expected identity state file at {identity_state_path}")
 
         soul_text = soul_path.read_text(encoding="utf-8")
+        expect("Hermes runtime base:" in soul_text, soul_text)
+        expect("You are Hermes Agent, an intelligent AI assistant created by Nous Research. Be direct and useful." in soul_text, soul_text)
+        expect("Almanac identity overlay:" in soul_text, soul_text)
         expect("You are Kor" in soul_text, soul_text)
         expect("Kora Reed" in soul_text, soul_text)
         expect("Acme Labs" in soul_text, soul_text)

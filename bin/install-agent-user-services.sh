@@ -13,6 +13,7 @@ CHANNELS_JSON="${4:-[\"tui-only\"]}"
 ACTIVATION_TRIGGER_PATH="${5:-}"
 HERMES_BIN="${6:-${ALMANAC_HERMES_BIN:-$SHARED_REPO_DIR/bin/hermes-shell.sh}}"
 ACCESS_STATE_FILE="$HERMES_HOME/state/almanac-web-access.json"
+AGENT_BACKUP_STATE_FILE="$HERMES_HOME/state/almanac-agent-backup.env"
 TARGET_DIR="$HOME/.config/systemd/user"
 PYTHON3_BIN="$(command -v python3 || true)"
 PODMAN_BIN="$(command -v podman || true)"
@@ -105,6 +106,29 @@ Description=Run Almanac user-agent refresh for $AGENT_ID every 4 hours
 OnBootSec=2m
 OnUnitActiveSec=4h
 Unit=almanac-user-agent-refresh.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+cat >"$TARGET_DIR/almanac-user-agent-backup.service" <<EOF
+[Unit]
+Description=Back up Hermes home for $AGENT_ID to a private Git repository
+
+[Service]
+Type=oneshot
+Environment=HERMES_HOME=$HERMES_HOME
+ExecStart=$SHARED_REPO_DIR/bin/backup-agent-home.sh $HERMES_HOME
+EOF
+
+cat >"$TARGET_DIR/almanac-user-agent-backup.timer" <<EOF
+[Unit]
+Description=Back up Hermes home for $AGENT_ID every 4 hours
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=4h
+Unit=almanac-user-agent-backup.service
 
 [Install]
 WantedBy=timers.target
@@ -233,6 +257,14 @@ env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path
 disable_native_hermes_gateway_units "$runtime_dir" "$bus_path"
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-refresh.timer >/dev/null
 env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-refresh.timer >/dev/null
+
+if [[ -f "$AGENT_BACKUP_STATE_FILE" ]]; then
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-backup.timer >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart almanac-user-agent-backup.timer >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user start almanac-user-agent-backup.service >/dev/null
+else
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now almanac-user-agent-backup.timer >/dev/null 2>&1 || true
+fi
 
 if [[ -f "$TARGET_DIR/almanac-user-agent-activate.path" ]]; then
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable almanac-user-agent-activate.path >/dev/null

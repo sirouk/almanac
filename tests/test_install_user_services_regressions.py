@@ -90,6 +90,8 @@ def test_install_user_services_enables_and_starts_core_and_curator_units() -> No
         expect("almanac-qmd-mcp.service" in log and "--user restart" in log, f"expected qmd MCP restart, got: {log!r}")
         expect("almanac-vault-watch.service" in log and "--user restart" in log, f"expected vault watch restart, got: {log!r}")
         expect("almanac-notification-delivery.timer" in log and "--user restart" in log, f"expected notification delivery timer restart, got: {log!r}")
+        expect("--user enable almanac-hermes-docs-sync.timer" in log, f"expected Hermes docs sync timer enable, got: {log!r}")
+        expect("--user start almanac-hermes-docs-sync.service" in log, f"expected Hermes docs sync oneshot start, got: {log!r}")
         expect("--user restart almanac-curator-discord-onboarding.service" in log, f"expected Discord onboarding restart, got: {log!r}")
         print("PASS test_install_user_services_enables_and_starts_core_and_curator_units")
 

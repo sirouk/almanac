@@ -55,6 +55,11 @@ enable_user_units almanac-qmd-mcp.service
 enable_user_units almanac-qmd-update.timer
 enable_user_units almanac-vault-watch.service
 enable_user_units almanac-github-backup.timer
+if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
+  enable_user_units almanac-hermes-docs-sync.timer
+else
+  systemctl --user disable --now almanac-hermes-docs-sync.timer >/dev/null 2>&1 || true
+fi
 
 if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
   enable_user_units almanac-pdf-ingest.timer
@@ -109,6 +114,10 @@ restart_user_units \
   almanac-qmd-update.timer \
   almanac-vault-watch.service \
   almanac-github-backup.timer
+if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
+  restart_user_units almanac-hermes-docs-sync.timer
+  start_user_units almanac-hermes-docs-sync.service
+fi
 start_user_units almanac-curator-refresh.service
 
 if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then

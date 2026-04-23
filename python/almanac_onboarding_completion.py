@@ -10,6 +10,24 @@ from almanac_control import Config, config_env_value, get_agent, get_agent_ident
 from almanac_resource_map import shared_resource_lines, shared_tailnet_host
 
 
+def _remote_client_setup_url(cfg: Config) -> str:
+    raw_repo = str(cfg.upstream_repo_url or "").strip()
+    branch = str(cfg.upstream_branch or "main").strip() or "main"
+    prefix = ""
+    if raw_repo.startswith("https://github.com/"):
+        prefix = raw_repo.removeprefix("https://github.com/")
+    elif raw_repo.startswith("git@github.com:"):
+        prefix = raw_repo.removeprefix("git@github.com:")
+    elif raw_repo.startswith("ssh://git@github.com/"):
+        prefix = raw_repo.removeprefix("ssh://git@github.com/")
+    else:
+        return ""
+    prefix = prefix.removesuffix(".git").strip("/")
+    if not prefix:
+        return ""
+    return f"https://raw.githubusercontent.com/{prefix}/{branch}/bin/setup-remote-hermes-client.sh"
+
+
 def completion_ack_callback_data(session_id: str) -> str:
     return f"almanac:onboarding-complete:ack:{session_id.strip()}"
 
@@ -113,10 +131,20 @@ def completion_message_bundle(
         f"Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
         f"Code workspace: {access.get('code_url')}",
         f"Workspace root: {home}",
+        "Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes",
+        "Private Hermes-home backup helper on the host: ~/.local/bin/almanac-agent-configure-backup",
         *_shared_resource_lines(cfg),
         "The shared Vault and control rails are already wired into your agent by default.",
         notion_followup_line,
     ]
+    remote_setup_url = _remote_client_setup_url(cfg)
+    if remote_setup_url:
+        followup_lines.append(
+            f"Optional tailnet-only remote CLI from your own machine: curl -fsSL {remote_setup_url} | bash"
+        )
+        followup_lines.append(
+            "That helper creates a local SSH key and wrapper; send the printed public key back to Curator so it can be installed for your Unix user."
+        )
     first_lines = [line for line in first_lines if line]
     followup_lines = [line for line in followup_lines if line]
     if discord_note:

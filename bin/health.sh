@@ -1570,6 +1570,9 @@ if set_user_systemd_bus_env; then
   check_unit_state almanac-qmd-mcp.service required
   check_unit_state almanac-qmd-update.timer required
   check_unit_state almanac-vault-watch.service required
+  if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
+    check_unit_state almanac-hermes-docs-sync.timer required
+  fi
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     check_unit_state almanac-pdf-ingest.timer required
   else

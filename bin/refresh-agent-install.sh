@@ -76,7 +76,10 @@ TARGET_UID="$(id -u "$UNIX_USER")"
 TARGET_HERMES_HOME="${HERMES_HOME_ARG:-$HOME_DIR/.local/share/almanac-agent/hermes-home}"
 SOURCE_REPO_DIR="${REPO_DIR_ARG:-$ALMANAC_REPO_DIR}"
 RUNTIME_PYTHON="$(require_runtime_python)"
+RUNTIME_HERMES="$(require_runtime_hermes)"
 ALMANAC_QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
+TARGET_LOCAL_BIN_DIR="$HOME_DIR/.local/bin"
+TARGET_VAULT_LINK_PATH="${ALMANAC_USER_VAULT_LINK_PATH:-$HOME_DIR/Vault}"
 
 run_as_target() {
   local -a cmd=("$@")
@@ -153,6 +156,63 @@ fix_target_ownership() {
   fi
 }
 
+ensure_one_vault_link() {
+  local link_path="$1"
+  local target_path="$VAULT_DIR"
+  local parent_dir=""
+
+  parent_dir="$(dirname "$link_path")"
+  mkdir -p "$parent_dir"
+
+  if [[ -L "$link_path" ]]; then
+    local existing_target=""
+    existing_target="$(readlink "$link_path" || true)"
+    if [[ "$existing_target" == "$target_path" ]]; then
+      return 0
+    fi
+    rm -f "$link_path"
+  elif [[ -e "$link_path" ]]; then
+    echo "Vault shortcut path already exists and is not a symlink: $link_path" >&2
+    return 1
+  fi
+
+  ln -s "$target_path" "$link_path"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -h "$UNIX_USER:$UNIX_USER" "$link_path" >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_user_vault_link() {
+  ensure_one_vault_link "$TARGET_VAULT_LINK_PATH" || return 1
+  ensure_one_vault_link "$TARGET_HERMES_HOME/Vault" || return 1
+}
+
+install_local_user_wrappers() {
+  local wrapper_path="$TARGET_LOCAL_BIN_DIR/almanac-agent-hermes"
+  local backup_wrapper="$TARGET_LOCAL_BIN_DIR/almanac-agent-configure-backup"
+
+  mkdir -p "$TARGET_LOCAL_BIN_DIR"
+  cat >"$wrapper_path" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+HERMES_HOME="\${HERMES_HOME:-$TARGET_HERMES_HOME}"
+exec env HERMES_HOME="\$HERMES_HOME" "$RUNTIME_HERMES" "\$@"
+EOF
+  chmod 755 "$wrapper_path"
+
+  cat >"$backup_wrapper" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+HERMES_HOME="\${HERMES_HOME:-$TARGET_HERMES_HOME}"
+exec env HERMES_HOME="\$HERMES_HOME" "$SOURCE_REPO_DIR/bin/configure-agent-backup.sh" "\$HERMES_HOME" "\$@"
+EOF
+  chmod 755 "$backup_wrapper"
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "$UNIX_USER:$UNIX_USER" "$wrapper_path" "$backup_wrapper"
+  fi
+}
+
 if target_can_access_repo; then
   run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
@@ -181,6 +241,9 @@ else
     --user-name "${USER_NAME:-$UNIX_USER}"
   fix_target_ownership
 fi
+
+ensure_user_vault_link || true
+install_local_user_wrappers
 
 try_user_systemctl "managed-memory refresh service" start almanac-user-agent-refresh.service
 try_user_systemctl "Hermes gateway" restart almanac-user-agent-gateway.service

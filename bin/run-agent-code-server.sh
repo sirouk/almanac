@@ -49,6 +49,49 @@ PY
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 
+python3 - "$CONFIG_DIR" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+config_dir = Path(sys.argv[1])
+user_dir = config_dir / "User"
+settings_path = user_dir / "settings.json"
+user_dir.mkdir(parents=True, exist_ok=True)
+
+settings = {}
+if settings_path.is_file():
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        if not isinstance(settings, dict):
+            settings = {}
+    except Exception:
+        settings = {}
+
+changed = False
+if not str(settings.get("workbench.colorTheme") or "").strip():
+    settings["workbench.colorTheme"] = "Default Dark+"
+    changed = True
+
+if changed:
+    fd, tmp_path = tempfile.mkstemp(dir=str(user_dir), prefix=".settings-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(settings, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, settings_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+PY
+
 exec podman run \
   --rm \
   --replace \

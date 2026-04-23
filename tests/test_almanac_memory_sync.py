@@ -186,6 +186,9 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("agent-facing source of truth" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect("notion-stub" in managed_payload, managed_payload)
             expect("Shared Notion digest:" in managed_payload["notion-stub"], managed_payload["notion-stub"])
+            expect("today-plate" in managed_payload, managed_payload)
+            expect("Today plate:" in managed_payload["today-plate"], managed_payload["today-plate"])
+            expect("not ready for a structured work plate" in managed_payload["today-plate"], managed_payload["today-plate"])
             expect("managed_memory_revision" in managed_payload, managed_payload)
             expect(len(str(managed_payload["managed_memory_revision"])) >= 12, managed_payload)
             expect(
@@ -710,8 +713,11 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
         first_stub = stub_path.read_text(encoding="utf-8")
         first_memory = memory_path.read_text(encoding="utf-8")
         expect("notion-ref" in json.loads(first_state), first_state)
+        expect("today-plate" in json.loads(first_state), first_state)
         expect("[managed:notion-ref]" in first_stub, first_stub)
+        expect("[managed:today-plate]" in first_stub, first_stub)
         expect("[managed:notion-ref]" in first_memory, first_memory)
+        expect("[managed:today-plate]" in first_memory, first_memory)
 
         second = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         expect(bool(second.get("changed")) is False, str(second))
@@ -768,6 +774,7 @@ def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> 
 
         repaired_state = json.loads(state_path.read_text(encoding="utf-8"))
         expect("notion-ref" in repaired_state, repaired_state)
+        expect("today-plate" in repaired_state, repaired_state)
         expect("notion.search / notion.fetch / notion.query" in repaired_state["notion-ref"], repaired_state)
         expect(stub_path.read_text(encoding="utf-8") == original_stub, "stub mirror should stay unchanged when only state drifted")
         expect(memory_path.read_text(encoding="utf-8") == original_memory, "MEMORY.md should stay unchanged when only state drifted")
@@ -872,6 +879,8 @@ def test_managed_notion_stub_stays_scoped_to_verified_user() -> None:
                         "people": [{"id": "11111111-1111-1111-1111-111111111111", "name": "Chris"}]
                     },
                     "Due": {"type": "date", "date": {"start": "2026-04-21"}},
+                    "Status": {"type": "status", "status": {"name": "In Progress"}},
+                    "Priority": {"type": "select", "select": {"name": "High"}},
                 },
             }
             other_item = {
@@ -908,11 +917,23 @@ def test_managed_notion_stub_stays_scoped_to_verified_user() -> None:
                 "SELECT * FROM agents WHERE agent_id = 'agent-test'"
             ).fetchone()
             identity = mod.get_agent_identity(conn, agent_id="agent-test", unix_user="testuser")
-            stub = mod._build_notion_stub(conn, agent_row=agent_row, identity=identity)
+            notion_stub_cache: dict[str, object] = {}
+            stub = mod._build_notion_stub(conn, agent_row=agent_row, identity=identity, notion_stub_cache=notion_stub_cache)
             expect("Own Task" in stub, stub)
             expect("Other Task" not in stub, stub)
             expect("Alex" not in stub, stub)
             expect("Largest current owner loads:" in stub, stub)
+            plate = mod._build_today_plate(conn, agent_row=agent_row, identity=identity, notion_stub_cache=notion_stub_cache)
+            expect("Today plate:" in plate, plate)
+            expect("Verification: confirmed for chris@example.com" in plate, plate)
+            expect("Scoped work: 1 owned/assigned record(s)." in plate, plate)
+            expect("Due today/overdue: 1" in plate, plate)
+            expect("Own Task" in plate, plate)
+            expect("status In Progress" in plate, plate)
+            expect("priority High" in plate, plate)
+            expect("overdue 2026-04-21" in plate, plate)
+            expect("Other Task" not in plate, plate)
+            expect("Alex" not in plate, plate)
             print("PASS test_managed_notion_stub_stays_scoped_to_verified_user")
         finally:
             os.environ.clear()

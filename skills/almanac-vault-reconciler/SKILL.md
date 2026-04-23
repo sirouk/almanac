@@ -30,6 +30,7 @@ Managed memory entries must use these prefixes exactly:
 - `[managed:notion-ref]`
 - `[managed:vault-topology]`
 - `[managed:notion-stub]`
+- `[managed:today-plate]`
 
 Only touch memories with those prefixes.
 
@@ -88,6 +89,7 @@ The canonical payload should teach future sessions:
 - how to use the shared Notion knowledge rail for indexed search, exact live fetches, and structured live queries
 - which vaults are currently subscribed/default/unsubscribed at a compact level
 - the current shared Notion digest and verification state Curator has published for ambient orientation
+- the current user's compact today plate: owned/assigned SSOT records, due pressure, pending write approvals, and suggested work candidates
 
 ## Recommended workflow
 

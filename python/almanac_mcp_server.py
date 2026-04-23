@@ -60,7 +60,7 @@ TOOLS = {
     "vaults.refresh": "Run an authenticated subscription refresh for an agent.",
     "vaults.subscribe": "Subscribe or unsubscribe an authenticated agent to a vault.",
     "vaults.reload-defs": "Reload .vault definitions from disk. Requires operator-class token.",
-    "agents.managed-memory": "Fetch the caller's canonical managed-memory payload.",
+    "agents.managed-memory": "Fetch the caller's canonical managed-memory payload, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",

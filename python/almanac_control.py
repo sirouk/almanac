@@ -7539,6 +7539,63 @@ def _notion_date_property(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _notion_property_text(prop: dict[str, Any]) -> str:
+    prop_type = str(prop.get("type") or "").strip()
+    if prop_type in {"status", "select"}:
+        value = prop.get(prop_type)
+        return str(value.get("name") or "").strip() if isinstance(value, dict) else ""
+    if prop_type in {"title", "rich_text"}:
+        items = prop.get(prop_type)
+        if not isinstance(items, list):
+            return ""
+        return "".join(str(item.get("plain_text") or "").strip() for item in items if isinstance(item, dict)).strip()
+    if prop_type == "multi_select":
+        items = prop.get("multi_select")
+        if not isinstance(items, list):
+            return ""
+        return ", ".join(str(item.get("name") or "").strip() for item in items if isinstance(item, dict) and str(item.get("name") or "").strip())
+    if prop_type == "date":
+        value = prop.get("date")
+        return str(value.get("start") or "").strip() if isinstance(value, dict) else ""
+    if prop_type == "people":
+        people = prop.get("people")
+        if not isinstance(people, list):
+            return ""
+        names: list[str] = []
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            name = str(person.get("name") or "").strip()
+            if not name:
+                person_meta = person.get("person")
+                if isinstance(person_meta, dict):
+                    name = str(person_meta.get("email") or "").strip()
+            if name:
+                names.append(name)
+        return ", ".join(names)
+    if prop_type == "checkbox":
+        return "yes" if bool(prop.get("checkbox")) else "no"
+    if prop_type == "number":
+        value = prop.get("number")
+        return "" if value is None else str(value)
+    return ""
+
+
+def _notion_named_property_text(payload: dict[str, Any], preferred_names: tuple[str, ...]) -> str:
+    properties = payload.get("properties")
+    if not isinstance(properties, dict):
+        return ""
+    lowered = {str(name).strip().lower(): name for name in properties}
+    for preferred in preferred_names:
+        actual_name = lowered.get(preferred.lower())
+        prop = properties.get(actual_name) if actual_name else None
+        if isinstance(prop, dict):
+            text = _notion_property_text(prop)
+            if text:
+                return text
+    return ""
+
+
 def _notion_people_names(payload: dict[str, Any], property_name: str) -> list[str]:
     properties = payload.get("properties")
     prop = properties.get(property_name) if isinstance(properties, dict) else None
@@ -7577,6 +7634,24 @@ def _notion_due_within_days(date_value: str, days: int) -> bool:
         return False
     today = utc_now().date()
     return today <= due_date <= (today + dt.timedelta(days=days))
+
+
+def _notion_due_bucket(date_value: str) -> tuple[int, str]:
+    compact = str(date_value or "").strip()
+    if not compact:
+        return (4, "")
+    try:
+        due_date = dt.date.fromisoformat(compact[:10])
+    except ValueError:
+        return (4, compact[:10])
+    delta = (due_date - utc_now().date()).days
+    if delta < 0:
+        return (0, f"overdue {due_date.isoformat()}")
+    if delta == 0:
+        return (1, f"due today {due_date.isoformat()}")
+    if delta <= 7:
+        return (2, f"due {due_date.isoformat()}")
+    return (3, f"due {due_date.isoformat()}")
 
 
 def _notion_recently_updated(payload: dict[str, Any], *, days: int) -> bool:
@@ -8865,6 +8940,79 @@ def consume_notion_reindex_queue(
     }
 
 
+def _cached_shared_notion_digest(
+    *,
+    settings: dict[str, str],
+    notion_kwargs: dict[str, Any],
+    notion_stub_cache: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    shared_key = f"shared-notion:{settings['space_id']}"
+    shared_digest = notion_stub_cache.get(shared_key) if isinstance(notion_stub_cache, dict) else None
+    if isinstance(shared_digest, dict):
+        database_payload = shared_digest.get("database_payload") if isinstance(shared_digest.get("database_payload"), dict) else {}
+        schema_payload = shared_digest.get("schema_payload") if isinstance(shared_digest.get("schema_payload"), dict) else {}
+        team_result = shared_digest.get("team_result") if isinstance(shared_digest.get("team_result"), dict) else {}
+        return database_payload, schema_payload, team_result
+
+    database_payload, schema_payload = _load_notion_collection_schema(
+        target_id=settings["space_id"],
+        settings=settings,
+        notion_kwargs=notion_kwargs,
+    )
+    team_result = query_notion_collection(
+        database_id=settings["space_id"],
+        token=settings["token"],
+        api_version=settings["api_version"],
+        payload={"page_size": 100},
+        **notion_kwargs,
+    )
+    if isinstance(notion_stub_cache, dict):
+        notion_stub_cache[shared_key] = {
+            "database_payload": database_payload,
+            "schema_payload": schema_payload,
+            "team_result": team_result,
+        }
+    return database_payload, schema_payload, team_result
+
+
+def _cached_scoped_notion_items(
+    *,
+    settings: dict[str, str],
+    schema: dict[str, Any],
+    agent_row: sqlite3.Row,
+    identity: dict[str, Any],
+    notion_kwargs: dict[str, Any],
+    notion_stub_cache: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    scoped_key = f"scoped-notion:{settings['space_id']}:{agent_row['agent_id']}"
+    scoped_digest = notion_stub_cache.get(scoped_key) if isinstance(notion_stub_cache, dict) else None
+    if isinstance(scoped_digest, dict):
+        items = scoped_digest.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+
+    scoped_result = query_notion_collection(
+        database_id=settings["space_id"],
+        token=settings["token"],
+        api_version=settings["api_version"],
+        payload={
+            "page_size": 25,
+            "filter": _identity_people_filter(schema, identity),
+        },
+        **notion_kwargs,
+    )
+    scoped_entries = scoped_result.get("result") if isinstance(scoped_result, dict) else {}
+    scoped_items = scoped_entries.get("results") if isinstance(scoped_entries, dict) else []
+    user_items = [
+        item
+        for item in scoped_items
+        if isinstance(item, dict) and _page_access_matches_identity(item, agent_row=agent_row, identity=identity)[0]
+    ]
+    if isinstance(notion_stub_cache, dict):
+        notion_stub_cache[scoped_key] = {"items": user_items}
+    return user_items
+
+
 def _build_notion_stub(
     conn: sqlite3.Connection,
     *,
@@ -8903,31 +9051,11 @@ def _build_notion_stub(
         return "\n".join(lines)
     notion_kwargs: dict[str, Any] = {}
     try:
-        shared_key = f"shared-notion:{settings['space_id']}"
-        shared_digest = notion_stub_cache.get(shared_key) if isinstance(notion_stub_cache, dict) else None
-        if isinstance(shared_digest, dict):
-            database_payload = shared_digest.get("database_payload") if isinstance(shared_digest.get("database_payload"), dict) else {}
-            schema_payload = shared_digest.get("schema_payload") if isinstance(shared_digest.get("schema_payload"), dict) else {}
-            team_result = shared_digest.get("team_result") if isinstance(shared_digest.get("team_result"), dict) else {}
-        else:
-            database_payload, schema_payload = _load_notion_collection_schema(
-                target_id=settings["space_id"],
-                settings=settings,
-                notion_kwargs=notion_kwargs,
-            )
-            team_result = query_notion_collection(
-                database_id=settings["space_id"],
-                token=settings["token"],
-                api_version=settings["api_version"],
-                payload={"page_size": 100},
-                **notion_kwargs,
-            )
-            if isinstance(notion_stub_cache, dict):
-                notion_stub_cache[shared_key] = {
-                    "database_payload": database_payload,
-                    "schema_payload": schema_payload,
-                    "team_result": team_result,
-                }
+        database_payload, schema_payload, team_result = _cached_shared_notion_digest(
+            settings=settings,
+            notion_kwargs=notion_kwargs,
+            notion_stub_cache=notion_stub_cache,
+        )
         schema = schema_payload or database_payload
     except Exception as exc:
         return f"Shared Notion digest:\n- Curator could not refresh the shared Notion snapshot just now ({exc})."
@@ -8950,22 +9078,14 @@ def _build_notion_stub(
         lines.extend(_notion_team_summary(team_items))
         return "\n".join(lines)
     try:
-        scoped_result = query_notion_collection(
-            database_id=settings["space_id"],
-            token=settings["token"],
-            api_version=settings["api_version"],
-            payload={
-                "page_size": 25,
-                "filter": _identity_people_filter(schema, identity),
-            },
-            **notion_kwargs,
+        user_items = _cached_scoped_notion_items(
+            settings=settings,
+            schema=schema,
+            agent_row=agent_row,
+            identity=identity,
+            notion_kwargs=notion_kwargs,
+            notion_stub_cache=notion_stub_cache,
         )
-        scoped_entries = scoped_result.get("result") if isinstance(scoped_result, dict) else {}
-        scoped_items = scoped_entries.get("results") if isinstance(scoped_entries, dict) else []
-        user_items = [
-            item
-            for item in scoped_items if isinstance(item, dict) and _page_access_matches_identity(item, agent_row=agent_row, identity=identity)[0]
-        ]
     except Exception as exc:
         lines.append(f"- Verification: confirmed, but Curator could not refresh your scoped Notion digest right now ({exc}).")
         lines.extend(_notion_team_summary(team_items))
@@ -8987,6 +9107,117 @@ def _build_notion_stub(
     else:
         lines.append("- Current focus rows: none were scoped to you on the last Curator refresh.")
     lines.extend(_notion_team_summary(team_items))
+    return "\n".join(lines)
+
+
+def _today_plate_work_line(item: dict[str, Any]) -> str:
+    title = _notion_title_from_page(item) or str(item.get("id") or "untitled")
+    status = _notion_named_property_text(item, ("Status", "State", "Stage"))
+    priority = _notion_named_property_text(item, ("Priority", "Urgency", "Importance"))
+    due_rank, due_label = _notion_due_bucket(_notion_date_property(item))
+    parts = [title]
+    if status:
+        parts.append(f"status {status}")
+    if priority:
+        parts.append(f"priority {priority}")
+    if due_label:
+        parts.append(due_label)
+    if due_rank >= 4 and _notion_recently_updated(item, days=7):
+        parts.append("updated recently")
+    return " — ".join(parts)
+
+
+def _today_plate_sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
+    due_rank, due_label = _notion_due_bucket(_notion_date_property(item))
+    recently_updated_rank = 0 if _notion_recently_updated(item, days=7) else 1
+    title = _notion_title_from_page(item).lower()
+    return (due_rank, recently_updated_rank, due_label, title)
+
+
+def _build_today_plate(
+    conn: sqlite3.Connection,
+    *,
+    agent_row: sqlite3.Row,
+    identity: dict[str, Any] | None,
+    notion_stub_cache: dict[str, Any] | None = None,
+) -> str:
+    agent_id = str(agent_row["agent_id"] or "").strip()
+    lines = [
+        "Today plate:",
+        "- Purpose: compact working-context snapshot for the current user; use live MCP reads before acting on stale or high-impact state.",
+    ]
+    pending_count = count_ssot_pending_writes(conn, status="pending", agent_id=agent_id) if agent_id else 0
+    pending_lines = _agent_ssot_pending_stub_lines(conn, agent_id=agent_id, limit=2)
+
+    try:
+        settings = _require_shared_notion_settings()
+    except PermissionError as exc:
+        lines.append(f"- Shared Notion SSOT is not ready for a structured work plate yet ({exc}).")
+        if pending_lines:
+            lines.extend(pending_lines)
+        lines.append("- Use qmd/vault retrieval for background and ask the user for the current priority if no SSOT lane is live.")
+        return "\n".join(lines)
+
+    if settings["space_kind"] != "database":
+        lines.append("- Structured work plate unavailable: shared SSOT is page-scoped, not an owner/assignee database.")
+        if pending_lines:
+            lines.extend(pending_lines)
+        lines.append("- Use ssot.read for the scoped live page and ssot.write for permitted brokered page updates.")
+        return "\n".join(lines)
+
+    verification_status = str((identity or {}).get("verification_status") or "").strip()
+    verified_email = str((identity or {}).get("notion_user_email") or (identity or {}).get("claimed_notion_email") or "").strip()
+    claimed_email = _normalize_email(str((identity or {}).get("claimed_notion_email") or ""))
+    if identity is None or verification_status != "verified":
+        if claimed_email:
+            lines.append(f"- Verification: pending for {claimed_email}; scoped owner/assignee work cannot be trusted until verified.")
+        else:
+            lines.append("- Verification: not started; scoped owner/assignee work is unavailable until the user verifies their Notion identity.")
+        if pending_lines:
+            lines.extend(pending_lines)
+        lines.append("- Next action: help the user verify Notion or ask for the specific project/task they want to focus on.")
+        return "\n".join(lines)
+
+    notion_kwargs: dict[str, Any] = {}
+    try:
+        database_payload, schema_payload, _team_result = _cached_shared_notion_digest(
+            settings=settings,
+            notion_kwargs=notion_kwargs,
+            notion_stub_cache=notion_stub_cache,
+        )
+        schema = schema_payload or database_payload
+        user_items = _cached_scoped_notion_items(
+            settings=settings,
+            schema=schema,
+            agent_row=agent_row,
+            identity=identity or {},
+            notion_kwargs=notion_kwargs,
+            notion_stub_cache=notion_stub_cache,
+        )
+    except Exception as exc:
+        lines.append(f"- Verification: confirmed for {verified_email or 'the current user'}, but Curator could not refresh scoped work right now ({exc}).")
+        if pending_lines:
+            lines.extend(pending_lines)
+        lines.append("- Next action: use notion.query/ssot.read for a live check if the user needs this now.")
+        return "\n".join(lines)
+
+    due_now = sum(1 for item in user_items if _notion_due_bucket(_notion_date_property(item))[0] in {0, 1})
+    due_soon = sum(1 for item in user_items if _notion_due_bucket(_notion_date_property(item))[0] <= 2)
+    recently_updated = sum(1 for item in user_items if _notion_recently_updated(item, days=7))
+    lines.append(f"- Verification: confirmed for {verified_email or 'the current user'}.")
+    lines.append(
+        f"- Scoped work: {len(user_items)} owned/assigned record(s). Due today/overdue: {due_now}. Due within 7 days: {due_soon}. Updated in 7 days: {recently_updated}. Pending write approvals: {pending_count}."
+    )
+    if pending_lines:
+        lines.extend(pending_lines)
+    if user_items:
+        lines.append("- Work candidates:")
+        for item in sorted(user_items, key=_today_plate_sort_key)[:5]:
+            lines.append(f"  - {_today_plate_work_line(item)}")
+        lines.append("- Agent posture: orient from this plate, then use notion.query/ssot.read for live details before changing shared state.")
+    else:
+        lines.append("- Work candidates: none scoped to this user in the last Curator snapshot.")
+        lines.append("- Agent posture: ask what the user wants to prioritize, or use notion.query if they expect newer Notion assignments.")
     return "\n".join(lines)
 
 
@@ -10318,6 +10549,7 @@ def build_managed_memory_payload(
       [managed:notion-ref]     how to search/fetch/query shared Notion knowledge
       [managed:vault-topology] compact summary of subscribed vaults + briefs
       [managed:notion-stub]    Curator-produced shared Notion digest + verification state
+      [managed:today-plate]    compact user-scoped owned/assigned work snapshot
     """
     agent = conn.execute(
         "SELECT agent_id, role, unix_user, display_name, hermes_home FROM agents WHERE agent_id = ?",
@@ -10394,6 +10626,7 @@ def build_managed_memory_payload(
         "- Use almanac-first-contact for Almanac setup or diagnostic checks.\n"
         "- All vaults remain retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions only shape managed-memory awareness and Curator push behavior.\n"
         "- Curator publishes a shared Notion digest into managed memory so the agent has ambient SSOT orientation without live cross-user reads.\n"
+        "- Curator publishes [managed:today-plate] as the compact owned/assigned work snapshot for the current user; use it for orientation, then verify live details before changing shared state.\n"
         "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local managed-memory stubs and recent events.\n"
         "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
         "- Treat the skill as the workflow and guardrail layer, and the wired broker/MCP/tool as the actuation layer.\n"
@@ -10497,6 +10730,12 @@ def build_managed_memory_payload(
         identity=identity,
         notion_stub_cache=notion_stub_cache,
     )
+    today_plate = _build_today_plate(
+        conn,
+        agent_row=agent,
+        identity=identity,
+        notion_stub_cache=notion_stub_cache,
+    )
 
     payload = {
         "agent_id": agent_id,
@@ -10507,6 +10746,7 @@ def build_managed_memory_payload(
         "notion-ref": notion_ref,
         "vault-topology": topology,
         "notion-stub": notion_stub,
+        "today-plate": today_plate,
         "catalog": catalog,
         "subscriptions": subscriptions,
         "active_subscriptions": active_subscriptions,
@@ -10517,7 +10757,16 @@ def build_managed_memory_payload(
 
 
 _MEMORY_ENTRY_DELIMITER = "\n§\n"
-_MANAGED_MEMORY_KEYS = ("almanac-skill-ref", "vault-ref", "resource-ref", "qmd-ref", "notion-ref", "vault-topology", "notion-stub")
+_MANAGED_MEMORY_KEYS = (
+    "almanac-skill-ref",
+    "vault-ref",
+    "resource-ref",
+    "qmd-ref",
+    "notion-ref",
+    "vault-topology",
+    "notion-stub",
+    "today-plate",
+)
 _MANAGED_MEMORY_PREFIXES = tuple(f"[managed:{key}]" for key in _MANAGED_MEMORY_KEYS)
 _MANAGED_PAYLOAD_CACHE_KEYS = ("agent_id", *_MANAGED_MEMORY_KEYS, "catalog", "subscriptions", "active_subscriptions")
 
@@ -10655,6 +10904,10 @@ def write_managed_memory_stubs(
         "notion-stub",
         "Shared Notion digest:\n- Curator has not published a Notion digest into managed memory yet.",
     )
+    payload.setdefault(
+        "today-plate",
+        "Today plate:\n- Curator has not published a user-scoped work snapshot into managed memory yet.",
+    )
     payload.setdefault("managed_memory_revision", _compute_managed_memory_revision(payload))
     payload.setdefault("active_subscriptions", [
         str(row.get("vault_name") or "")
@@ -10679,6 +10932,7 @@ def write_managed_memory_stubs(
         "notion-ref": payload["notion-ref"],
         "vault-topology": payload["vault-topology"],
         "notion-stub": payload.get("notion-stub") or "",
+        "today-plate": payload.get("today-plate") or "",
         "catalog": payload["catalog"],
         "subscriptions": payload["subscriptions"],
         "active_subscriptions": payload.get("active_subscriptions") or [],
@@ -10708,7 +10962,8 @@ def write_managed_memory_stubs(
         f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
         f"## [managed:notion-ref]\n\n{payload['notion-ref']}\n\n"
         f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
-        f"## [managed:notion-stub]\n\n{payload.get('notion-stub') or ''}\n"
+        f"## [managed:notion-stub]\n\n{payload.get('notion-stub') or ''}\n\n"
+        f"## [managed:today-plate]\n\n{payload.get('today-plate') or ''}\n"
     )
     stub_changed = _read_text_file(stub_path) != body
     if stub_changed:

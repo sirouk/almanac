@@ -84,6 +84,7 @@ def test_almanac_managed_context_reads_writer_materialized_notion_state() -> Non
                 "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
                 "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces",
                 "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
+                "today-plate": "Today plate:\n- Scoped work: 1 owned/assigned record(s). Due today/overdue: 0.\n- Work candidates:\n  - Chutes Unicorn launch — status In Progress",
                 "catalog": [],
                 "subscriptions": [],
                 "active_subscriptions": [],
@@ -94,8 +95,11 @@ def test_almanac_managed_context_reads_writer_materialized_notion_state() -> Non
             state_payload = json.loads((hermes_home / "state" / "almanac-vault-reconciler.json").read_text(encoding="utf-8"))
             stub_body = (hermes_home / "memories" / "almanac-managed-stubs.md").read_text(encoding="utf-8")
             expect("notion-ref" in state_payload, state_payload)
+            expect("today-plate" in state_payload, state_payload)
             expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
+            expect("Chutes Unicorn launch" in state_payload["today-plate"], state_payload)
             expect("[managed:notion-ref]" in stub_body, stub_body)
+            expect("[managed:today-plate]" in stub_body, stub_body)
 
             module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_writer_bridge_test")
             ctx = FakeCtx()
@@ -113,7 +117,9 @@ def test_almanac_managed_context_reads_writer_materialized_notion_state() -> Non
             expect(isinstance(result, dict) and result.get("context"), f"expected injected context, got {result!r}")
             context = result["context"]
             expect("[managed:notion-ref]" in context, context)
+            expect("[managed:today-plate]" in context, context)
             expect("notion.search / notion.fetch / notion.query" in context, context)
+            expect("Chutes Unicorn launch" in context, context)
             expect("Use almanac-notion-knowledge" in context, context)
             print("PASS test_almanac_managed_context_reads_writer_materialized_notion_state")
         finally:

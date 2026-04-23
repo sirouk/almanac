@@ -1411,6 +1411,24 @@ def test_ssot_pending_write_approval_applies_queued_update() -> None:
             expect(approved["status"] == "applied", approved)
             expect(len(update_calls) == 1, str(update_calls))
             expect(update_calls[0]["page_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", str(update_calls))
+            user_notification = conn.execute(
+                """
+                SELECT target_kind, target_id, channel_kind, message
+                FROM notification_outbox
+                WHERE target_kind = 'user-agent'
+                  AND target_id = 'agent-sirouk'
+                  AND channel_kind = 'ssot-approval'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            expect(user_notification is not None, "expected approval to notify the user agent")
+            expect("approved" in str(user_notification["message"]).lower(), str(dict(user_notification)))
+            trigger_path = root / "state" / "activation-triggers" / "agent-sirouk.json"
+            expect(trigger_path.is_file(), f"expected user-agent refresh trigger at {trigger_path}")
+            trigger_payload = json.loads(trigger_path.read_text(encoding="utf-8"))
+            expect(trigger_payload["status"] == "refresh", trigger_payload)
+            expect(str(queued["pending_id"]) in trigger_payload["note"], trigger_payload)
             decisions = [
                 str(row["decision"])
                 for row in conn.execute(
@@ -1578,6 +1596,24 @@ def test_ssot_pending_write_denial_marks_pending_row() -> None:
             )
             expect(denied["status"] == "denied", denied)
             expect(str(denied["decision_note"]) == "leave this with the owner", denied)
+            user_notification = conn.execute(
+                """
+                SELECT target_kind, target_id, channel_kind, message
+                FROM notification_outbox
+                WHERE target_kind = 'user-agent'
+                  AND target_id = 'agent-sirouk'
+                  AND channel_kind = 'ssot-approval'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            expect(user_notification is not None, "expected denial to notify the user agent")
+            expect("denied" in str(user_notification["message"]).lower(), str(dict(user_notification)))
+            trigger_path = root / "state" / "activation-triggers" / "agent-sirouk.json"
+            expect(trigger_path.is_file(), f"expected user-agent refresh trigger at {trigger_path}")
+            trigger_payload = json.loads(trigger_path.read_text(encoding="utf-8"))
+            expect(trigger_payload["status"] == "refresh", trigger_payload)
+            expect(str(queued["pending_id"]) in trigger_payload["note"], trigger_payload)
             audit = conn.execute(
                 "SELECT decision, reason FROM ssot_access_audit ORDER BY id DESC LIMIT 1"
             ).fetchone()

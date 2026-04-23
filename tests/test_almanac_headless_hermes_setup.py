@@ -152,6 +152,7 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("not repo-wide searches to rediscover the rail" in prefill_messages[0]["content"], prefill_messages)
         expect("[managed:notion-ref]" in prefill_messages[0]["content"], prefill_messages)
         expect("[managed:notion-stub]" in prefill_messages[0]["content"], prefill_messages)
+        expect("[managed:today-plate]" in prefill_messages[0]["content"], prefill_messages)
         expect("almanac-managed-context plugin can inject refreshed local Almanac context into future turns" in prefill_messages[0]["content"], prefill_messages)
         expect("the next session, /reset, or a gateway restart" not in prefill_messages[0]["content"], prefill_messages)
         expect("almanac-qmd-mcp for vault retrieval" not in prefill_messages[0]["content"], prefill_messages)

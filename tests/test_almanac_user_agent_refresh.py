@@ -51,6 +51,7 @@ def write_fake_rpc_client(path: Path) -> None:
         "        'qmd-ref': 'qmd MCP (deep retrieval): https://kor.tail77f45e.ts.net/mcp',\n"
         "        'notion-ref': 'Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
+        "        'today-plate': 'Today plate:\\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\\n- Work candidates:\\n  - Chutes Unicorn launch — status In Progress — due today 2026-04-23',\n"
         "        'catalog': [\n"
         "            {'vault_name': 'Projects', 'default_subscribed': 1, 'description': 'Active project workspaces'},\n"
         "            {'vault_name': 'Teams', 'default_subscribed': 0, 'description': 'Team coordination'},\n"
@@ -121,6 +122,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                     "qmd-ref": "qmd MCP (deep retrieval): https://kor.tail77f45e.ts.net/mcp",
                     "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
                     "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
+                    "today-plate": "Today plate:\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\n- Work candidates:\n  - Chutes Unicorn launch — status In Progress — due today 2026-04-23",
                     "catalog": [
                         {"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"},
                         {"vault_name": "Teams", "default_subscribed": 0, "description": "Team coordination"},
@@ -200,14 +202,18 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         expect(state_payload["catalog"][0]["vault_name"] == "Projects", state_payload)
         expect(state_payload["subscriptions"][0]["vault_name"] == "Projects", state_payload)
         expect("notion-ref" in state_payload, state_payload)
+        expect("today-plate" in state_payload, state_payload)
         expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
+        expect("Chutes Unicorn launch" in state_payload["today-plate"], state_payload)
         expect(len(str(state_payload.get("managed_memory_revision") or "")) >= 12, state_payload)
 
         stub_body = stub_path.read_text(encoding="utf-8")
         expect("# Almanac managed memory stubs" in stub_body, stub_body)
         expect("[managed:almanac-skill-ref]" in stub_body, stub_body)
         expect("[managed:notion-ref]" in stub_body, stub_body)
+        expect("[managed:today-plate]" in stub_body, stub_body)
         expect("notion.search / notion.fetch / notion.query" in stub_body, stub_body)
+        expect("Chutes Unicorn launch" in stub_body, stub_body)
         expect("Dedicated agent name: Jeef" in stub_body, stub_body)
 
         memory_entries = [entry.strip() for entry in memory_path.read_text(encoding="utf-8").split("\n§\n") if entry.strip()]
@@ -223,6 +229,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
             "[managed:notion-ref]",
             "[managed:vault-topology]",
             "[managed:notion-stub]",
+            "[managed:today-plate]",
         ]
         for prefix in managed_prefixes:
             expect(any(entry.startswith(prefix) for entry in memory_entries), f"missing {prefix} in {memory_entries}")

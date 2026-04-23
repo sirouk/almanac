@@ -343,6 +343,11 @@ else:
 PY
 }
 
+nextcloud_mount_option_lowercase() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+
 ensure_nextcloud_vault_mount() {
   local mount_json="" mount_id="" mount_point="" mount_datadir="" mount_readonly="" mount_enable_sharing=""
   local users_count=0 groups_count=0
@@ -380,10 +385,10 @@ ensure_nextcloud_vault_mount() {
     nextcloud_occ files_external:applicable "$mount_id" --remove-all >/dev/null
   fi
 
-  if [[ "$(lowercase "$mount_readonly")" != "false" ]]; then
+  if [[ "$(nextcloud_mount_option_lowercase "$mount_readonly")" != "false" ]]; then
     nextcloud_occ files_external:option "$mount_id" readonly false >/dev/null || true
   fi
-  if [[ "$(lowercase "$mount_enable_sharing")" != "true" ]]; then
+  if [[ "$(nextcloud_mount_option_lowercase "$mount_enable_sharing")" != "true" ]]; then
     nextcloud_occ files_external:option "$mount_id" enable_sharing true >/dev/null || true
   fi
 

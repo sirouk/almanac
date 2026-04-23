@@ -19,6 +19,7 @@ _MANAGED_KEYS = (
     "notion-ref",
     "vault-topology",
     "notion-stub",
+    "today-plate",
 )
 _LOCAL_KEYS = (
     "resource-ref-live",
@@ -34,6 +35,7 @@ _SECTION_LIMITS = {
     "notion-ref": 2200,
     "vault-topology": 900,
     "notion-stub": 1400,
+    "today-plate": 1400,
     "resource-ref-live": 700,
     "recent-events": 1200,
     "identity": 900,

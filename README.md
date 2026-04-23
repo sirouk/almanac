@@ -744,6 +744,10 @@ git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
 - when a user is verified, that managed-memory digest may also include titles
   for up to five of their own scoped current-focus rows, so operators should
   treat those titles as part of the user's local agent memory surface
+- Curator also publishes `[managed:today-plate]`, a compact user-scoped
+  snapshot of owned/assigned SSOT work, due pressure, pending write approvals,
+  and up to five suggested work candidates; agents use it for orientation and
+  verify live details before changing shared state
 - the delivery model is two-pipe: managed-memory stubs are the ambient map,
   while webhook notifications are the hot event stream that nudges agents to
   refresh and react

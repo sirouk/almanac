@@ -34,9 +34,9 @@ def write_config(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def init_git_repo(path: Path) -> None:
+def init_git_repo(path: Path, branch: str = "main") -> None:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-b", branch, str(path)], check=True, capture_output=True, text=True)
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Almanac Test"], check=True, capture_output=True, text=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
 
@@ -101,21 +101,54 @@ def write_repos_vault(root: Path) -> Path:
     return repos_dir
 
 
-def test_discover_vault_repo_sources_skips_managed_mirror_content() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_repo_discovery_test")
+def make_clone_with_remote(
+    root: Path, *, clone_path: Path, branch: str = "main", seed_content: dict[str, str] | None = None
+) -> tuple[Path, Path]:
+    """Build a bare remote and a vault-side clone for sync tests. Returns
+    (bare_remote, seed_repo) so a test can push new commits to bare_remote
+    and then exercise the rail against clone_path."""
+    bare_remote = root / f"{clone_path.name}-remote.git"
+    seed_repo = root / f"{clone_path.name}-seed"
+    init_bare_git_repo(bare_remote)
+    init_git_repo(seed_repo, branch=branch)
+    subprocess.run(
+        ["git", "-C", str(seed_repo), "remote", "add", "origin", str(bare_remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for rel, content in (seed_content or {"README.md": "seed\n"}).items():
+        target = seed_repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    commit_all(seed_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(seed_repo), "push", "-u", "origin", branch],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "clone", "-b", branch, str(bare_remote), str(clone_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return bare_remote, seed_repo
+
+
+def test_discover_vault_repo_sources_ignores_markdown_url_mentions() -> None:
+    """The rail no longer scans markdown for github URLs. A note mentioning
+    a repo URL must NOT cause that repo to appear as a sync source."""
+    mod = load_module(CONTROL_PY, "almanac_control_repo_discovery_no_urlmining")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         config_path = make_config(root)
         repos_dir = write_repos_vault(root)
         human_note = repos_dir / "almanac.md"
         human_note.write_text(
-            "# Almanac\n\nRepository URL: https://github.com/example/almanac\n",
-            encoding="utf-8",
-        )
-        managed_dir = repos_dir / "_mirrors" / "example-almanac"
-        managed_dir.mkdir(parents=True, exist_ok=True)
-        (managed_dir / "REPO-SYNC.md").write_text(
-            "<!-- managed: almanac-repo-sync -->\nhttps://github.com/example/ignored\n",
+            "# Almanac\n\nUseful reference: https://github.com/example/almanac\n"
+            "See also git@github.com:example/other.git for something else.\n",
             encoding="utf-8",
         )
 
@@ -124,19 +157,17 @@ def test_discover_vault_repo_sources_skips_managed_mirror_content() -> None:
         try:
             cfg = mod.Config.from_env()
             discovered = mod.discover_vault_repo_sources(cfg)
-            expect(len(discovered) == 1, f"expected one discovered repo source, got {discovered}")
-            source = discovered[0]
-            expect(source["canonical_url"] == "https://github.com/example/almanac", str(source))
-            expect(source["source_paths"] == [str(human_note)], str(source))
-            expect(source["local_repo_paths"] == [], str(source))
+            expect(discovered == [], f"expected zero discovered sources; URL-mining is retired, got {discovered}")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
 
-        print("PASS test_discover_vault_repo_sources_skips_managed_mirror_content")
+        print("PASS test_discover_vault_repo_sources_ignores_markdown_url_mentions")
 
 
-def test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault() -> None:
+def test_discover_vault_repo_sources_finds_local_git_checkouts() -> None:
+    """Operator clones a repo into the vault; discovery returns that path
+    with its origin URL (canonical-normalized for github)."""
     mod = load_module(CONTROL_PY, "almanac_control_repo_local_discovery_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -159,114 +190,128 @@ def test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault() -> None:
             expect(len(discovered) == 1, f"expected one discovered repo source, got {discovered}")
             source = discovered[0]
             expect(source["canonical_url"] == "https://github.com/example/demo-repo", str(source))
+            expect(source["remote_url"] == "https://github.com/example/demo-repo.git", str(source))
             expect(source["source_paths"] == [], str(source))
             expect(source["local_repo_paths"] == [str(local_repo)], str(source))
         finally:
             os.environ.clear()
             os.environ.update(old_env)
 
-        print("PASS test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault")
+        print("PASS test_discover_vault_repo_sources_finds_local_git_checkouts")
 
 
-def test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_repo_sync_test")
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        config_path = make_config(root)
-        repos_dir = write_repos_vault(root)
-        repo_note = repos_dir / "almanac.md"
-        repo_note.write_text(
-            "# Almanac\n\nRepository URL: https://github.com/example/almanac\n",
-            encoding="utf-8",
-        )
-
-        source_repo = root / "source-repo"
-        init_git_repo(source_repo)
-        (source_repo / "README.md").write_text("first sync\n", encoding="utf-8")
-        (source_repo / "docs").mkdir(parents=True, exist_ok=True)
-        (source_repo / "docs" / "guide.md").write_text("guide v1\n", encoding="utf-8")
-        (source_repo / "src").mkdir(parents=True, exist_ok=True)
-        (source_repo / "src" / "main.py").write_text("print('not mirrored')\n", encoding="utf-8")
-        commit_all(source_repo, "initial")
-
-        old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
-        try:
-            cfg = mod.Config.from_env()
-            conn = mod.connect_db(cfg)
-            mod.reload_vault_definitions(conn, cfg)
-
-            result = mod.sync_vault_repo_mirrors(
-                conn,
-                cfg,
-                repo_sources=[
-                    {
-                        "canonical_url": "https://github.com/example/almanac",
-                        "remote_url": str(source_repo),
-                        "source_paths": [str(repo_note)],
-                        "local_repo_paths": [],
-                    }
-                ],
-            )
-            mirror_root = root / "vault" / "Repos" / "_mirrors" / "example-almanac"
-            expect((mirror_root / "README.md").is_file(), f"expected README mirror in {mirror_root}")
-            expect((mirror_root / "docs" / "guide.md").is_file(), f"expected docs mirror in {mirror_root}")
-            expect(not (mirror_root / "src" / "main.py").exists(), f"unexpected source mirror in {mirror_root}")
-            status_note = (mirror_root / "REPO-SYNC.md").read_text(encoding="utf-8")
-            expect("https://github.com/example/almanac" in status_note, status_note)
-            expect(str(repo_note) in status_note, status_note)
-            expect(any(path.endswith("Repos/_mirrors/example-almanac/README.md") for path in result["changed_paths"]), str(result))
-            expect(result["repos_total"] == 1, str(result))
-
-            (source_repo / "README.md").write_text("second sync\n", encoding="utf-8")
-            (source_repo / "docs" / "guide.md").unlink()
-            commit_all(source_repo, "update docs")
-
-            second = mod.sync_vault_repo_mirrors(
-                conn,
-                cfg,
-                repo_sources=[
-                    {
-                        "canonical_url": "https://github.com/example/almanac",
-                        "remote_url": str(source_repo),
-                        "source_paths": [str(repo_note)],
-                        "local_repo_paths": [],
-                    }
-                ],
-            )
-            expect((mirror_root / "README.md").read_text(encoding="utf-8") == "second sync\n", "expected updated README content")
-            expect(not (mirror_root / "docs" / "guide.md").exists(), "expected removed guide mirror")
-            expect(any(path.endswith("Repos/_mirrors/example-almanac/README.md") for path in second["changed_paths"]), str(second))
-            expect(any(path.endswith("Repos/_mirrors/example-almanac/docs/guide.md") for path in second["changed_paths"]), str(second))
-
-            job = conn.execute(
-                "SELECT last_status, last_note FROM refresh_jobs WHERE job_name = 'vault-github-sync'"
-            ).fetchone()
-            expect(job is not None, "expected vault-github-sync refresh job row")
-            expect(str(job["last_status"]) == "ok", str(dict(job)))
-        finally:
-            os.environ.clear()
-            os.environ.update(old_env)
-
-        print("PASS test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes")
-
-
-def test_sync_vault_repo_mirrors_pulls_local_repo_in_place() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_local_repo_sync_test")
+def test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors() -> None:
+    """Discovery must not pull checkouts under pinned-sync trees (identified
+    by .almanac-source.json) or inside the legacy Repos/_mirrors/ subtree,
+    even if they happen to contain a .git/ directory."""
+    mod = load_module(CONTROL_PY, "almanac_control_repo_discovery_skips_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         config_path = make_config(root)
         write_repos_vault(root)
-        local_repo = root / "vault" / "Projects" / "roadmap" / "demo-repo"
-        remote_bare = root / "remote.git"
-        source_repo = root / "source-repo"
-        init_bare_git_repo(remote_bare)
-        init_git_repo(source_repo)
-        subprocess.run(["git", "-C", str(source_repo), "remote", "add", "origin", str(remote_bare)], check=True, capture_output=True, text=True)
-        (source_repo / "README.md").write_text("first local sync\n", encoding="utf-8")
-        commit_all(source_repo, "initial")
-        subprocess.run(["git", "-C", str(source_repo), "push", "-u", "origin", "main"], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "clone", "-b", "main", str(remote_bare), str(local_repo)], check=True, capture_output=True, text=True)
+
+        # A legitimate operator checkout — must be found.
+        legit_repo = root / "vault" / "Projects" / "demo"
+        init_git_repo(legit_repo)
+        subprocess.run(
+            ["git", "-C", str(legit_repo), "remote", "add", "origin", "https://github.com/example/demo.git"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # A pinned-sync tree — must be skipped.
+        pinned_dir = root / "vault" / "Repos" / "hermes-agent-docs"
+        pinned_dir.mkdir(parents=True, exist_ok=True)
+        (pinned_dir / ".almanac-source.json").write_text("{\n  \"repo_ref\": \"abc123\"\n}\n", encoding="utf-8")
+        hidden_repo_in_pinned = pinned_dir / "nested-checkout"
+        init_git_repo(hidden_repo_in_pinned)
+        subprocess.run(
+            ["git", "-C", str(hidden_repo_in_pinned), "remote", "add", "origin", "https://github.com/example/leaked.git"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # Legacy mirrors subtree — must be skipped.
+        legacy_mirror = root / "vault" / "Repos" / "_mirrors" / "example-legacy"
+        init_git_repo(legacy_mirror)
+        subprocess.run(
+            ["git", "-C", str(legacy_mirror), "remote", "add", "origin", "https://github.com/example/legacy.git"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            discovered = mod.discover_vault_repo_sources(cfg)
+            expect(len(discovered) == 1, f"expected exactly one repo (legit only), got {discovered}")
+            expect(discovered[0]["local_repo_paths"] == [str(legit_repo)], str(discovered[0]))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        print("PASS test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors")
+
+
+def test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes() -> None:
+    """Pulling a vault checkout must match origin/<branch> exactly:
+      - remote updates applied (README: seed -> updated)
+      - local uncommitted edits are overwritten
+      - local commits ahead of origin are dropped
+      - untracked non-gitignored files are cleaned
+      - gitignored files (build caches etc.) are preserved
+    """
+    mod = load_module(CONTROL_PY, "almanac_control_hard_reset_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = make_config(root)
+        write_repos_vault(root)
+        local_repo = root / "vault" / "Projects" / "demo"
+        bare_remote, seed_repo = make_clone_with_remote(
+            root,
+            clone_path=local_repo,
+            seed_content={
+                "README.md": "seed\n",
+                ".gitignore": "build/\n",
+            },
+        )
+
+        # Advance origin.
+        (seed_repo / "README.md").write_text("updated\n", encoding="utf-8")
+        (seed_repo / "docs.md").write_text("new doc\n", encoding="utf-8")
+        commit_all(seed_repo, "upstream update")
+        subprocess.run(["git", "-C", str(seed_repo), "push", "origin", "main"], check=True, capture_output=True, text=True)
+
+        # Muck up the local checkout in every way that should be overwritten.
+        (local_repo / "README.md").write_text("MY LOCAL HACK\n", encoding="utf-8")           # uncommitted edit
+        (local_repo / "scratch.md").write_text("untracked\n", encoding="utf-8")              # untracked file
+        (local_repo / "build").mkdir(parents=True, exist_ok=True)
+        (local_repo / "build" / "artifact.bin").write_text("binary\n", encoding="utf-8")     # gitignored file — MUST survive
+
+        # And a local commit ahead of origin that should also be dropped.
+        (local_repo / "local-only.md").write_text("local only commit\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(local_repo), "add", "local-only.md"], check=True, capture_output=True, text=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(local_repo),
+                "-c",
+                "user.name=Local Hack",
+                "-c",
+                "user.email=local@example.com",
+                "commit",
+                "-m",
+                "will be dropped",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
         old_env = os.environ.copy()
         os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
@@ -275,42 +320,132 @@ def test_sync_vault_repo_mirrors_pulls_local_repo_in_place() -> None:
             conn = mod.connect_db(cfg)
             mod.reload_vault_definitions(conn, cfg)
 
-            (source_repo / "README.md").write_text("second local sync\n", encoding="utf-8")
-            commit_all(source_repo, "update local repo")
-            subprocess.run(["git", "-C", str(source_repo), "push", "origin", "main"], check=True, capture_output=True, text=True)
-
             result = mod.sync_vault_repo_mirrors(
                 conn,
                 cfg,
                 repo_sources=[
                     {
-                        "canonical_url": "https://github.com/example/demo-repo",
-                        "remote_url": str(remote_bare),
+                        "canonical_url": "https://github.com/example/demo",
+                        "remote_url": str(bare_remote),
                         "source_paths": [],
                         "local_repo_paths": [str(local_repo)],
                     }
                 ],
             )
-            expect((local_repo / "README.md").read_text(encoding="utf-8") == "second local sync\n", "expected in-place repo pull to update README")
-            expect((root / "vault" / "Repos" / "_mirrors" / "example-demo-repo").exists() is False, "did not expect mirror dir for in-place repo sync")
-            expect(any(path.endswith("Projects/roadmap/demo-repo/README.md") for path in result["changed_paths"]), str(result))
+
+            # Remote state wins.
+            expect((local_repo / "README.md").read_text(encoding="utf-8") == "updated\n", "README must match origin")
+            expect((local_repo / "docs.md").read_text(encoding="utf-8") == "new doc\n", "new upstream file must land")
+            # Local-only commit was dropped: local-only.md no longer exists.
+            expect(not (local_repo / "local-only.md").exists(), "local commit ahead of origin must be dropped")
+            # Untracked non-ignored file was cleaned.
+            expect(not (local_repo / "scratch.md").exists(), "untracked non-gitignored files must be cleaned")
+            # Gitignored files survive (dev state preserved).
+            expect(
+                (local_repo / "build" / "artifact.bin").read_text(encoding="utf-8") == "binary\n",
+                "gitignored build/ must survive — git clean -fd not -fdx",
+            )
+
+            # No managed mirror dir under Repos/_mirrors should be created.
+            expect(
+                not (root / "vault" / "Repos" / "_mirrors").exists()
+                or not any((root / "vault" / "Repos" / "_mirrors").iterdir()),
+                "legacy mirror dir must not be created by the new rail",
+            )
+
             expect(result["repos_total"] == 1, str(result))
             expect(result["repos_failed"] == [], str(result))
             status = result["repo_statuses"][0]
-            expect(status["mode"] == "in-place", str(status))
+            expect(status["mode"] == "in-place-pull", str(status))
+            expect(status["syncs"][0]["branch"] == "main", str(status))
+            expect(
+                any(path.endswith("Projects/demo/README.md") for path in result["changed_paths"]),
+                str(result),
+            )
         finally:
             os.environ.clear()
             os.environ.update(old_env)
 
-        print("PASS test_sync_vault_repo_mirrors_pulls_local_repo_in_place")
+        print("PASS test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes")
+
+
+def test_sync_vault_repo_mirrors_reports_failure_on_detached_head_and_keeps_going() -> None:
+    """A detached HEAD or missing origin must not crash the rail; the faulty
+    repo is recorded as a failure while other repos still sync cleanly."""
+    mod = load_module(CONTROL_PY, "almanac_control_detached_head_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = make_config(root)
+        write_repos_vault(root)
+
+        good_repo = root / "vault" / "Projects" / "good"
+        bad_repo = root / "vault" / "Projects" / "bad"
+        good_bare, _ = make_clone_with_remote(root, clone_path=good_repo)
+
+        # bad_repo: detached HEAD, no upstream branch to pull.
+        init_git_repo(bad_repo)
+        (bad_repo / "README.md").write_text("x\n", encoding="utf-8")
+        commit_all(bad_repo, "one")
+        commit_sha = subprocess.run(
+            ["git", "-C", str(bad_repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "-C", str(bad_repo), "remote", "add", "origin", str(good_bare)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(["git", "-C", str(bad_repo), "checkout", "--detach", commit_sha], check=True, capture_output=True, text=True)
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.reload_vault_definitions(conn, cfg)
+            result = mod.sync_vault_repo_mirrors(
+                conn,
+                cfg,
+                repo_sources=[
+                    {
+                        "canonical_url": "https://github.com/example/good",
+                        "remote_url": str(good_bare),
+                        "source_paths": [],
+                        "local_repo_paths": [str(good_repo)],
+                    },
+                    {
+                        "canonical_url": "https://github.com/example/bad",
+                        "remote_url": str(good_bare),
+                        "source_paths": [],
+                        "local_repo_paths": [str(bad_repo)],
+                    },
+                ],
+            )
+            expect(result["repos_total"] == 2, str(result))
+            expect(len(result["repos_synced"]) == 1, str(result))
+            expect(len(result["repos_failed"]) == 1, str(result))
+            expect("no active branch" in result["repos_failed"][0], str(result))
+            expect(
+                any(status.get("errors") for status in result["repo_statuses"]),
+                str(result),
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        print("PASS test_sync_vault_repo_mirrors_reports_failure_on_detached_head_and_keeps_going")
 
 
 def main() -> int:
-    test_discover_vault_repo_sources_skips_managed_mirror_content()
-    test_discover_vault_repo_sources_finds_git_repo_anywhere_in_vault()
-    test_sync_vault_repo_mirrors_exports_markdown_and_tracks_changes()
-    test_sync_vault_repo_mirrors_pulls_local_repo_in_place()
-    print("PASS all 4 repo sync regression tests")
+    test_discover_vault_repo_sources_ignores_markdown_url_mentions()
+    test_discover_vault_repo_sources_finds_local_git_checkouts()
+    test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors()
+    test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes()
+    test_sync_vault_repo_mirrors_reports_failure_on_detached_head_and_keeps_going()
+    print("PASS all 5 repo sync regression tests")
     return 0
 
 

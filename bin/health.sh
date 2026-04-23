@@ -1278,18 +1278,27 @@ PY
 check_nextcloud_vault_mount() {
   local mounts_json=""
 
+  podman_for_current_user() {
+    local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [[ -d "$runtime_dir" ]]; then
+      env XDG_RUNTIME_DIR="$runtime_dir" podman "$@"
+    else
+      podman "$@"
+    fi
+  }
+
   if command -v podman >/dev/null 2>&1; then
-    if ! podman container inspect "$(nextcloud_app_container_name)" >/dev/null 2>&1; then
+    if ! podman_for_current_user container inspect "$(nextcloud_app_container_name)" >/dev/null 2>&1; then
       warn_or_fail "Nextcloud app container is not present"
       return 0
     fi
 
-    if ! mounts_json="$(podman exec -u 33:33 "$(nextcloud_app_container_name)" php /var/www/html/occ files_external:list --output=json 2>/dev/null)"; then
+    if ! mounts_json="$(podman_for_current_user exec -u 33:33 "$(nextcloud_app_container_name)" php /var/www/html/occ files_external:list --output=json 2>/dev/null)"; then
       warn_or_fail "could not inspect Nextcloud external-storage mounts"
       return 0
     fi
 
-    if podman exec -u 33:33 "$(nextcloud_app_container_name)" sh -lc "test -w '$NEXTCLOUD_VAULT_CONTAINER_PATH'" >/dev/null 2>&1; then
+    if podman_for_current_user exec -u 33:33 "$(nextcloud_app_container_name)" sh -lc "test -w '$NEXTCLOUD_VAULT_CONTAINER_PATH'" >/dev/null 2>&1; then
       pass "Nextcloud can write the shared vault mount"
     else
       warn_or_fail "Nextcloud cannot write the shared vault mount at $NEXTCLOUD_VAULT_CONTAINER_PATH"

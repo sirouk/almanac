@@ -407,6 +407,17 @@ PATH="$FAKEBIN:$PATH"
     print("PASS test_shared_notion_with_tailscale_funnel_reports_live_public_route")
 
 
+def test_nextcloud_health_uses_rootless_podman_runtime_dir() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_nextcloud_vault_mount() {", "check_pdf_ingest_status() {")
+    expect("podman_for_current_user()" in snippet, snippet)
+    expect('local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in snippet, snippet)
+    expect('env XDG_RUNTIME_DIR="$runtime_dir" podman "$@"' in snippet, snippet)
+    expect("podman container inspect" not in snippet, snippet)
+    expect("podman exec" not in snippet, snippet)
+    print("PASS test_nextcloud_health_uses_rootless_podman_runtime_dir")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_backup_timer_job_result_reports_success_and_failure()
@@ -417,7 +428,8 @@ def main() -> int:
     test_shared_notion_with_installed_token_but_unconfirmed_verification_warns()
     test_shared_notion_with_confirmed_verification_reports_ready()
     test_shared_notion_with_tailscale_funnel_reports_live_public_route()
-    print("PASS all 9 health regression tests")
+    test_nextcloud_health_uses_rootless_podman_runtime_dir()
+    print("PASS all 10 health regression tests")
     return 0
 
 

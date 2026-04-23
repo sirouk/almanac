@@ -28,7 +28,7 @@ Common calls:
 ```json
 {"tool":"ssot.read","arguments":{"token":"<bootstrap token>","target_id":"<optional-page-or-database-id-or-url>","query":{},"include_markdown":false}}
 {"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"append","target_id":"<page-id-or-url>","payload":{"children":[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":"Awesome alternatives include marshmallows and roasted chestnuts."}}]}}]}}}
-{"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"update","target_id":"<page-id-or-url>","payload":{"properties":{"Status":{"status":{"name":"In Progress"}}}},"read_after":true}}
+{"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"update","target_id":"<page-id-or-url>","payload":{"properties":{"Status":{"status":{"name":"In Progress"}}}}}}
 {"tool":"ssot.pending","arguments":{"token":"<bootstrap token>","status":"pending","limit":10}}
 {"tool":"ssot.status","arguments":{"token":"<bootstrap token>","pending_id":"ssotw_..."}}
 ```

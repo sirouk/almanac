@@ -130,12 +130,64 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
     print("PASS test_hot_tool_descriptions_carry_when_to_call_guidance")
 
 
+def test_runtime_helpers_close_schema_bypass_gaps() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_runtime_helper_test")
+    expect(mod._clamp_int(0, default=2, minimum=0, maximum=3) == 0, "fetch_limit=0 must stay zero")
+    expect(mod._clamp_int("250", default=25, minimum=1, maximum=100) == 100, "limits should clamp high strings")
+    expect(mod._bool_arg({"subscribed": False}, "subscribed", required=True) is False, "false boolean should stay false")
+    try:
+        mod._bool_arg({"subscribed": "false"}, "subscribed", required=True)
+    except ValueError as exc:
+        expect("must be a boolean" in str(exc), str(exc))
+    else:
+        raise AssertionError("string 'false' should not pass boolean runtime validation")
+    try:
+        mod._dict_arg({"payload": []}, "payload", required=True)
+    except ValueError as exc:
+        expect("must be an object" in str(exc), str(exc))
+    else:
+        raise AssertionError("list payload should not pass object runtime validation")
+    print("PASS test_runtime_helpers_close_schema_bypass_gaps")
+
+
+def test_search_and_fetch_compacts_search_payloads() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_compact_search_test")
+    compact = mod._compact_notion_search_result(
+        {
+            "ok": True,
+            "query": "Chutes Unicorn",
+            "collection": "notion",
+            "index_ready": True,
+            "index_doc_count": 1,
+            "roots": [{"id": "root"}],
+            "results": [
+                {
+                    "source": "index",
+                    "page_id": "page-1",
+                    "page_url": "https://notion.so/page-1",
+                    "page_title": "Chutes Unicorn",
+                    "snippet": "x" * 900,
+                    "raw_result": {"content": "y" * 5000},
+                }
+            ],
+        },
+        snippet_char_limit=120,
+    )
+    hit = compact["results"][0]
+    expect("raw_result" not in hit, str(compact))
+    expect(len(hit["snippet"]) <= 120, str(compact))
+    expect(hit["snippet_truncated"] is True, str(compact))
+    print("PASS test_search_and_fetch_compacts_search_payloads")
+
+
 def main() -> int:
     test_almanac_mcp_tools_advertise_actionable_input_schemas()
     test_high_value_sample_calls_match_advertised_schemas()
     test_tools_list_serves_rich_schemas_not_empty_objects()
     test_hot_tool_descriptions_carry_when_to_call_guidance()
-    print("PASS all 4 Almanac MCP schema tests")
+    test_runtime_helpers_close_schema_bypass_gaps()
+    test_search_and_fetch_compacts_search_payloads()
+    print("PASS all 6 Almanac MCP schema tests")
     return 0
 
 

@@ -149,8 +149,9 @@ _SESSION_REVISIONS: dict[str, str] = {}
 # MCP rail, the plugin inlines the literal JSON-call shape into context so the
 # agent does not need to read SKILL.md or reverse-engineer argument names from
 # repo Python. Cards are compact by design; at most _MAX_RECIPES_PER_TURN are
-# injected per turn, and they sit alongside (not instead of) the existing
-# reference stubs.
+# injected per turn. When a recipe is the only reason to inject, the plugin
+# sends just the compact recipe card so generic turns do not churn the larger
+# managed-memory context.
 _MAX_RECIPES_PER_TURN = 2
 _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     (
@@ -218,13 +219,18 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         "notion.search-and-fetch",
         (
             "search notion",
-            "find a page",
-            "find the page",
-            "look up",
-            "what does the page say",
-            "knowledge about",
-            "information about",
-            "what do we know about",
+            "search shared notion",
+            "find a notion page",
+            "find the notion page",
+            "find the page in notion",
+            "look up in notion",
+            "look up the notion page",
+            "what does the notion page say",
+            "shared notion knowledge",
+            "almanac knowledge about",
+            "notion knowledge about",
+            "what does almanac know about",
+            "what do we know in notion about",
         ),
         (
             "notion.search-and-fetch — one-shot \"find and read\". Required: token, query. "
@@ -598,46 +604,46 @@ def _render_context(
     managed_revision: str,
     context_revision: str,
     recipes: list[dict[str, str]] | None = None,
+    include_sections: bool = True,
 ) -> str:
-    lines = [
-        f"[Plugin: {PLUGIN_NAME} — refreshed local Almanac context]",
-        f"managed revision: {managed_revision}",
-    ]
-    if context_revision != managed_revision:
+    label = "refreshed local Almanac context" if include_sections else "turn tool recipe"
+    lines = [f"[Plugin: {PLUGIN_NAME} — {label}]", f"managed revision: {managed_revision}"]
+    if include_sections and context_revision != managed_revision:
         lines.append(f"live revision: {context_revision}")
 
-    for key in _SECTION_ORDER:
-        value = sections.get(key)
-        if not value:
-            continue
-        prefix = "managed" if key in _MANAGED_KEYS else "local"
-        if key in _MANAGED_KEYS:
-            raw = str(value).strip()
-        elif key == "resource-ref-live":
-            raw = _render_local_json_block(
-                "Live access rail overlay",
-                value,
-                as_of=freshness.get(key, ""),
+    if include_sections:
+        for key in _SECTION_ORDER:
+            value = sections.get(key)
+            if not value:
+                continue
+            prefix = "managed" if key in _MANAGED_KEYS else "local"
+            if key in _MANAGED_KEYS:
+                raw = str(value).strip()
+            elif key == "resource-ref-live":
+                raw = _render_local_json_block(
+                    "Live access rail overlay",
+                    value,
+                    as_of=freshness.get(key, ""),
+                )
+            elif key == "recent-events":
+                raw = _render_local_json_block(
+                    "Recent Almanac event nudges",
+                    value,
+                    as_of=freshness.get(key, ""),
+                )
+            else:
+                raw = _render_local_json_block(
+                    "Live identity / org snapshot",
+                    value,
+                    as_of=freshness.get(key, ""),
+                )
+            lines.extend(
+                [
+                    "",
+                    f"[{prefix}:{key}]",
+                    _trim(raw, _SECTION_LIMITS.get(key, 800)),
+                ]
             )
-        elif key == "recent-events":
-            raw = _render_local_json_block(
-                "Recent Almanac event nudges",
-                value,
-                as_of=freshness.get(key, ""),
-            )
-        else:
-            raw = _render_local_json_block(
-                "Live identity / org snapshot",
-                value,
-                as_of=freshness.get(key, ""),
-            )
-        lines.extend(
-            [
-                "",
-                f"[{prefix}:{key}]",
-                _trim(raw, _SECTION_LIMITS.get(key, 800)),
-            ]
-        )
 
     if recipes:
         lines.append("")
@@ -695,7 +701,21 @@ def _pre_llm_call(
     context_relevant = _is_relevant(user_message)
     context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)
     recipes = _matching_recipes(user_message)
-    if not (is_first_turn or revision_changed or context_relevant or context_followup or recipes):
+    full_context_gate = is_first_turn or revision_changed or context_relevant or context_followup
+    if not (full_context_gate or recipes):
+        _emit_telemetry(
+            {
+                "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "session_id": session_key,
+                "injected": False,
+                "gate": [],
+                "recipes": [],
+                "context_chars": 0,
+                "managed_revision": managed_revision,
+                "platform": str(platform or ""),
+                "reason": "no_gate",
+            }
+        )
         return None
 
     context = _render_context(
@@ -704,6 +724,7 @@ def _pre_llm_call(
         managed_revision=managed_revision,
         context_revision=revision,
         recipes=recipes,
+        include_sections=full_context_gate,
     )
     if not context:
         return None
@@ -727,6 +748,7 @@ def _pre_llm_call(
             "gate": gate,
             "recipes": [entry["tool"] for entry in recipes],
             "context_chars": len(context),
+            "context_mode": "full" if full_context_gate else "recipe_only",
             "managed_revision": managed_revision,
             "platform": str(platform or ""),
         }

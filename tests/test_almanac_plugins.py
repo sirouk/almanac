@@ -688,6 +688,8 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             expect(isinstance(status_turn, dict) and status_turn.get("context"), f"expected context on status-trigger, got {status_turn!r}")
             expect("- ssot.status:" in status_turn["context"], status_turn["context"])
             expect("pending_id lookup" in status_turn["context"], status_turn["context"])
+            expect("[Plugin: almanac-managed-context — turn tool recipe]" in status_turn["context"], status_turn["context"])
+            expect("[managed:" not in status_turn["context"], status_turn["context"])
 
             neutral_turn = hook(
                 session_id="session-recipes-3",
@@ -699,6 +701,17 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
                 sender_id="user-1",
             )
             expect(neutral_turn is None, f"expected no injection on neutral turn without gate, got {neutral_turn!r}")
+
+            generic_lookup_turn = hook(
+                session_id="session-recipes-lookup",
+                user_message="please look up the weather tomorrow",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(generic_lookup_turn is None, f"expected no Almanac injection for generic lookup, got {generic_lookup_turn!r}")
 
             first_turn = hook(
                 session_id="session-recipes-4",
@@ -753,7 +766,25 @@ def test_almanac_managed_context_emits_telemetry_and_respects_opt_out() -> None:
             expect(record.get("recipes") == ["ssot.write"], record)
             expect(record.get("platform") == "discord", record)
             expect(isinstance(record.get("context_chars"), int) and record["context_chars"] > 0, record)
+            expect(record.get("context_mode") == "full", record)
             expect("user_message" not in record, record)
+
+            hook(
+                session_id="session-tel-2",
+                user_message="tell me a joke",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            expect(len(lines) == 2, lines)
+            suppressed = lines[1]
+            expect(suppressed.get("injected") is False, suppressed)
+            expect(suppressed.get("reason") == "no_gate", suppressed)
+            expect(suppressed.get("context_chars") == 0, suppressed)
+            expect("user_message" not in suppressed, suppressed)
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -786,6 +817,22 @@ def test_almanac_managed_context_emits_telemetry_and_respects_opt_out() -> None:
                 os.environ.update(old_env2)
 
 
+def test_almanac_managed_context_recipe_tools_match_mcp_surface() -> None:
+    plugin = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_recipe_surface_test")
+    python_dir = str(REPO / "python")
+    if python_dir not in sys.path:
+        sys.path.insert(0, python_dir)
+    mcp_server = load_module(REPO / "python" / "almanac_mcp_server.py", "almanac_mcp_server_recipe_surface_test")
+    recipe_tools = [entry[0] for entry in plugin._TOOL_RECIPES]
+    expect(recipe_tools, "expected plugin recipe tools")
+    missing = sorted(set(recipe_tools) - set(mcp_server.TOOLS))
+    expect(not missing, f"recipe tools missing from MCP server: {missing}")
+    for tool_name, _, recipe in plugin._TOOL_RECIPES:
+        expect(tool_name in recipe, f"recipe for {tool_name} should name its tool: {recipe}")
+        expect(tool_name in mcp_server.TOOL_SCHEMAS, f"recipe tool missing schema: {tool_name}")
+    print("PASS test_almanac_managed_context_recipe_tools_match_mcp_surface")
+
+
 def main() -> int:
     test_install_almanac_plugins_installs_default_hermes_plugin()
     test_almanac_managed_context_reads_writer_materialized_notion_state()
@@ -795,7 +842,8 @@ def main() -> int:
     test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails()
     test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()
     test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
-    print("PASS all 8 Almanac plugin tests")
+    test_almanac_managed_context_recipe_tools_match_mcp_surface()
+    print("PASS all 9 Almanac plugin tests")
     return 0
 
 

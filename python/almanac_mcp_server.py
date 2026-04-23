@@ -373,17 +373,80 @@ def _tool_schema(name: str) -> dict[str, Any]:
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
     try:
-        parsed = int(value or default)
+        if value is None or value == "":
+            parsed = default
+        else:
+            parsed = int(value)
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(parsed, maximum))
+
+
+def _bool_arg(arguments: dict, name: str, *, default: bool = False, required: bool = False) -> bool:
+    if name not in arguments or arguments.get(name) is None:
+        if required:
+            raise ValueError(f"{name} must be a boolean")
+        return default
+    value = arguments.get(name)
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{name} must be a boolean, not {type(value).__name__}")
+
+
+def _dict_arg(arguments: dict, name: str, *, default_empty: bool = True, required: bool = False) -> dict:
+    if name not in arguments or arguments.get(name) is None:
+        if required:
+            raise ValueError(f"{name} must be an object")
+        return {} if default_empty else None  # type: ignore[return-value]
+    value = arguments.get(name)
+    if isinstance(value, dict):
+        return value
+    raise ValueError(f"{name} must be an object, not {type(value).__name__}")
 
 
 def _trim_text(value: object, limit: int) -> tuple[str, bool]:
     text = str(value or "")
     if len(text) <= limit:
         return text, False
-    return text[: max(0, limit - 1)].rstrip() + "...", True
+    suffix = "..."
+    return text[: max(0, limit - len(suffix))].rstrip() + suffix, True
+
+
+def _compact_notion_search_hit(hit: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
+    snippet, snippet_truncated = _trim_text(hit.get("snippet"), snippet_char_limit)
+    result = {
+        "source": str(hit.get("source") or ""),
+        "root_id": str(hit.get("root_id") or ""),
+        "page_id": str(hit.get("page_id") or ""),
+        "page_url": str(hit.get("page_url") or ""),
+        "page_title": str(hit.get("page_title") or ""),
+        "section_heading": str(hit.get("section_heading") or ""),
+        "breadcrumb": hit.get("breadcrumb") if isinstance(hit.get("breadcrumb"), list) else [],
+        "owners": hit.get("owners") if isinstance(hit.get("owners"), list) else [],
+        "last_edited_time": str(hit.get("last_edited_time") or ""),
+        "file": str(hit.get("file") or ""),
+        "score": hit.get("score"),
+        "snippet": snippet,
+        "snippet_truncated": snippet_truncated,
+    }
+    return result
+
+
+def _compact_notion_search_result(result: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
+    hits = result.get("results") if isinstance(result.get("results"), list) else []
+    return {
+        "ok": bool(result.get("ok")),
+        "query": str(result.get("query") or ""),
+        "collection": str(result.get("collection") or ""),
+        "index_ready": bool(result.get("index_ready")),
+        "index_doc_count": int(result.get("index_doc_count") or 0),
+        "roots": result.get("roots") if isinstance(result.get("roots"), list) else [],
+        "results": [
+            _compact_notion_search_hit(hit, snippet_char_limit=snippet_char_limit)
+            for hit in hits
+            if isinstance(hit, dict)
+        ],
+    }
 
 
 def _compact_notion_fetch_result(result: dict[str, Any], *, body_char_limit: int) -> dict[str, Any]:
@@ -693,7 +756,7 @@ class Handler(BaseHTTPRequestHandler):
                     source_ip=source_ip,
                     tailnet_identity=ts_identity,
                     issue_pending_token=(tool_name == "bootstrap.handshake"),
-                    auto_provision=bool(arguments.get("auto_provision")),
+                    auto_provision=_bool_arg(arguments, "auto_provision"),
                     requested_model_preset=str(arguments.get("model_preset") or ""),
                     requested_channels=list(arguments.get("channels") or []),
                 )
@@ -767,11 +830,12 @@ class Handler(BaseHTTPRequestHandler):
                 return refresh_agent_context(conn, cfg, raw_token=str(arguments.get("token") or ""))
 
             if tool_name == "vaults.subscribe":
+                subscribed = _bool_arg(arguments, "subscribed", required=True)
                 result = set_subscription_from_token(
                     conn,
                     raw_token=str(arguments.get("token") or ""),
                     vault_name=str(arguments.get("vault_name") or ""),
-                    subscribed=bool(arguments.get("subscribed")),
+                    subscribed=subscribed,
                 )
                 note_refresh_job(
                     conn,
@@ -806,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if tool_name == "agents.consume-notifications":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
-                limit = int(arguments.get("limit") or 100)
+                limit = _clamp_int(arguments.get("limit"), default=100, minimum=1, maximum=200)
                 return {
                     "agent_id": str(token_row["agent_id"]),
                     "notifications": consume_agent_notifications(
@@ -824,7 +888,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn,
                     target_kind=arguments.get("target_kind"),
                     target_id=arguments.get("target_id"),
-                    undelivered_only=bool(arguments.get("undelivered_only")),
+                    undelivered_only=_bool_arg(arguments, "undelivered_only"),
                 )
                 return {"notifications": notifications}
 
@@ -835,8 +899,8 @@ class Handler(BaseHTTPRequestHandler):
                     cfg,
                     agent_id=str(token_row["agent_id"]),
                     query_text=str(arguments.get("query") or ""),
-                    limit=int(arguments.get("limit") or 5),
-                    rerank=bool(arguments.get("rerank")),
+                    limit=_clamp_int(arguments.get("limit"), default=5, minimum=1, maximum=10),
+                    rerank=_bool_arg(arguments, "rerank"),
                     requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
                 )
 
@@ -855,13 +919,14 @@ class Handler(BaseHTTPRequestHandler):
                     agent_id=str(token_row["agent_id"]),
                     query_text=str(arguments.get("query") or ""),
                     limit=_clamp_int(arguments.get("search_limit"), default=5, minimum=1, maximum=10),
-                    rerank=bool(arguments.get("rerank")),
+                    rerank=_bool_arg(arguments, "rerank"),
                     requested_by_actor=actor,
                 )
                 fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=2, minimum=0, maximum=3)
                 fetched: list[dict[str, Any]] = []
                 seen_targets: set[str] = set()
-                for hit in search_result.get("results") if isinstance(search_result.get("results"), list) else []:
+                raw_hits = search_result.get("results") if isinstance(search_result.get("results"), list) and fetch_limit > 0 else []
+                for hit in raw_hits:
                     if not isinstance(hit, dict):
                         continue
                     target_id = str(hit.get("page_id") or hit.get("page_url") or "").strip()
@@ -890,14 +955,19 @@ class Handler(BaseHTTPRequestHandler):
                             }
                         )
                     except Exception as exc:  # noqa: BLE001
-                        fetched.append({"search_hit": hit, "fetch_error": str(exc)})
+                        fetched.append(
+                            {
+                                "search_hit": _compact_notion_search_hit(hit),
+                                "fetch_error": str(exc),
+                            }
+                        )
                     if len(fetched) >= fetch_limit:
                         break
                 return {
                     "ok": True,
                     "query": search_result.get("query"),
                     "collection": search_result.get("collection"),
-                    "search": search_result,
+                    "search": _compact_notion_search_result(search_result),
                     "fetched": fetched,
                     "fetch_limit": fetch_limit,
                     "body_char_limit": body_char_limit,
@@ -915,36 +985,36 @@ class Handler(BaseHTTPRequestHandler):
 
             if tool_name == "notion.query":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
-                raw_query = arguments.get("query")
-                query = raw_query if isinstance(raw_query, dict) else {}
+                query = _dict_arg(arguments, "query")
                 return notion_query(
                     conn,
                     cfg,
                     agent_id=str(token_row["agent_id"]),
                     target_id=str(arguments.get("target_id") or ""),
                     query=query,
-                    limit=int(arguments.get("limit") or 25),
+                    limit=_clamp_int(arguments.get("limit"), default=25, minimum=1, maximum=100),
                     requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
                 )
 
             if tool_name == "ssot.read":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
-                raw_query = arguments.get("query")
-                query = raw_query if isinstance(raw_query, dict) else {}
+                query = _dict_arg(arguments, "query")
                 return read_ssot(
                     conn,
                     cfg,
                     agent_id=str(token_row["agent_id"]),
                     target_id=str(arguments.get("target_id") or ""),
                     query=query,
-                    include_markdown=bool(arguments.get("include_markdown")),
+                    include_markdown=_bool_arg(arguments, "include_markdown"),
                     requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
                 )
 
             if tool_name == "ssot.pending":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
                 status = str(arguments.get("status") or "pending").strip().lower()
-                limit = int(arguments.get("limit") or 25)
+                if status not in {"pending", "applied", "denied", "expired"}:
+                    raise ValueError("status must be one of pending, applied, denied, expired")
+                limit = _clamp_int(arguments.get("limit"), default=25, minimum=1, maximum=100)
                 agent_id = str(token_row["agent_id"])
                 return {
                     "agent_id": agent_id,
@@ -997,22 +1067,25 @@ class Handler(BaseHTTPRequestHandler):
                         agent_id=agent_id,
                         operation=str(arguments.get("operation") or "").strip().lower(),
                         target_id=str(arguments.get("target_id") or ""),
-                        payload=arguments.get("payload") or {},
+                        payload=_dict_arg(arguments, "payload", required=True),
                         requested_by_actor=actor,
                     )
                 )
-                if bool(arguments.get("read_after")) and result.get("final_state") == "applied":
+                if _bool_arg(arguments, "read_after") and result.get("final_state") == "applied":
                     target_id = str(result.get("target_id") or "").strip()
                     if target_id:
-                        result["read_after"] = read_ssot(
-                            conn,
-                            cfg,
-                            agent_id=agent_id,
-                            target_id=target_id,
-                            query={},
-                            include_markdown=bool(arguments.get("read_after_include_markdown")),
-                            requested_by_actor=actor,
-                        )
+                        try:
+                            result["read_after"] = read_ssot(
+                                conn,
+                                cfg,
+                                agent_id=agent_id,
+                                target_id=target_id,
+                                query={},
+                                include_markdown=_bool_arg(arguments, "read_after_include_markdown"),
+                                requested_by_actor=actor,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            result["read_after_error"] = str(exc)
                 return result
 
             raise ValueError(f"unknown tool: {tool_name}")

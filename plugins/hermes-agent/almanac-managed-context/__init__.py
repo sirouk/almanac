@@ -151,6 +151,9 @@ _TOKEN_TOOL_SUFFIXES = {
     "catalog_vaults": "catalog.vaults",
     "vaults_refresh": "vaults.refresh",
     "vaults_subscribe": "vaults.subscribe",
+    "vault_search": "vault.search",
+    "vault_fetch": "vault.fetch",
+    "vault_search_and_fetch": "vault.search-and-fetch",
     "agents_managed_memory": "agents.managed-memory",
     "agents_consume_notifications": "agents.consume-notifications",
     "ssot_read": "ssot.read",
@@ -241,6 +244,27 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         (
             "ssot.pending — list own queued or decided writes. The plugin injects token automatically; omit token. "
             "Optional status in {pending|applied|denied|expired} (default pending); optional limit ≤ 100."
+        ),
+    ),
+    (
+        "vault.search-and-fetch",
+        (
+            "search the vault",
+            "search shared vault knowledge",
+            "look in the vault",
+            "look in shared vault",
+            "vault knowledge about",
+            "shared vault knowledge about",
+            "what does the vault say about",
+            "what do we know in the vault about",
+            "what do our notes say about",
+            "what do the notes say about",
+            "what does the pdf say about",
+        ),
+        (
+            "vault.search-and-fetch — one-shot vault/PDF retrieval. The plugin injects token automatically; omit token. Required: query. "
+            "Bounded: search_limit ≤ 5, fetch_limit ≤ 2, maxLines ≤ 500, body_char_limit ≤ 12000. "
+            "Includes vault-pdf-ingest by default and is the preferred first call for shared vault knowledge."
         ),
     ),
     (

@@ -828,6 +828,22 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
                 f"expected notion.search-and-fetch recipe for Almanac knowledge lookup, got {almanac_lookup_turn!r}",
             )
 
+            vault_lookup_turn = hook(
+                session_id="session-recipes-vault-lookup",
+                user_message="what does the vault say about Chutes MESH?",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(
+                isinstance(vault_lookup_turn, dict)
+                and "- vault.search-and-fetch:" in vault_lookup_turn.get("context", ""),
+                f"expected vault.search-and-fetch recipe for vault lookup, got {vault_lookup_turn!r}",
+            )
+            expect("Bounded: search_limit ≤ 5" in vault_lookup_turn["context"], vault_lookup_turn["context"])
+
             page_say_turn = hook(
                 session_id="session-recipes-page-say",
                 user_message="what does the Chutes Unicorn page say about alternatives?",
@@ -931,6 +947,16 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             expect(result is None, result)
             expect(wrapped_args["token"] == "tok_live_test", wrapped_args)
 
+            vault_args = {"query": "Chutes MESH", "fetch_limit": 1}
+            hook(
+                tool_name="mcp_almanac_mcp_vault_search_and_fetch",
+                args=vault_args,
+                session_id="session-token",
+                task_id="task-2",
+                tool_call_id="call-2",
+            )
+            expect(vault_args["token"] == "tok_live_test", vault_args)
+
             canonical_args = {"pending_id": "ssotw_123"}
             hook(tool_name="ssot.status", args=canonical_args, session_id="session-token")
             expect(canonical_args["token"] == "tok_live_test", canonical_args)
@@ -962,10 +988,14 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
 
             os.environ["HERMES_HOME"] = str(hermes_home)
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            expect(len(lines) == 1, lines)
+            expect(len(lines) == 2, lines)
             expect(all(record.get("tool_token_injected") is True for record in lines), lines)
-            expect(lines[0].get("tool_name") == "mcp_almanac_mcp_notion_search_and_fetch", lines)
-            expect(lines[0].get("task_id") == "task-1", lines)
+            expect(
+                {record.get("tool_name") for record in lines}
+                == {"mcp_almanac_mcp_notion_search_and_fetch", "mcp_almanac_mcp_vault_search_and_fetch"},
+                lines,
+            )
+            expect({record.get("task_id") for record in lines} == {"task-1", "task-2"}, lines)
             telemetry_body = telemetry_path.read_text(encoding="utf-8")
             expect("tok_live_test" not in telemetry_body, telemetry_body)
             print("PASS test_almanac_managed_context_pre_tool_call_injects_bootstrap_token")
@@ -1070,6 +1100,7 @@ def test_almanac_managed_context_recipe_tools_match_mcp_surface() -> None:
     expect(recipe_tools, "expected plugin recipe tools")
     missing = sorted(set(recipe_tools) - set(mcp_server.TOOLS))
     expect(not missing, f"recipe tools missing from MCP server: {missing}")
+    expect("vault.search-and-fetch" in recipe_tools, recipe_tools)
     for tool_name, _, recipe in plugin._TOOL_RECIPES:
         expect(tool_name in recipe, f"recipe for {tool_name} should name its tool: {recipe}")
         expect(tool_name in mcp_server.TOOL_SCHEMAS, f"recipe tool missing schema: {tool_name}")

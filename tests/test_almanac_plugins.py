@@ -263,6 +263,7 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
             ctx = FakeCtx()
             module.register(ctx)
             expect("pre_llm_call" in ctx.hooks, f"expected pre_llm_call hook registration, got {ctx.hooks}")
+            expect("pre_tool_call" in ctx.hooks, f"expected pre_tool_call hook registration, got {ctx.hooks}")
             hook = ctx.hooks["pre_llm_call"][0]
 
             first = hook(
@@ -719,6 +720,8 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             write_context = write_turn["context"]
             expect("[turn:tool-recipes]" in write_context, write_context)
             expect("- ssot.write:" in write_context, write_context)
+            expect("plugin injects token automatically; omit token" in write_context, write_context)
+            expect("Required: token" not in write_context, write_context)
             expect("archive/delete are rejected" in write_context, write_context)
             expect("final_state" in write_context, write_context)
             expect("- ssot.status:" not in write_context, write_context)
@@ -748,6 +751,22 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
                 and "- notion.search-and-fetch:" in almanac_lookup_turn.get("context", ""),
                 f"expected notion.search-and-fetch recipe for Almanac knowledge lookup, got {almanac_lookup_turn!r}",
             )
+
+            page_say_turn = hook(
+                session_id="session-recipes-page-say",
+                user_message="what does the Chutes Unicorn page say about alternatives?",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(
+                isinstance(page_say_turn, dict)
+                and "- notion.search-and-fetch:" in page_say_turn.get("context", ""),
+                f"expected notion.search-and-fetch recipe for page-say language, got {page_say_turn!r}",
+            )
+            expect("[managed:" not in page_say_turn["context"], page_say_turn["context"])
 
             status_turn = hook(
                 session_id="session-recipes-2",
@@ -799,6 +818,81 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             expect("[turn:tool-recipes]" not in first_turn["context"], first_turn["context"])
 
             print("PASS test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        token_path = hermes_home / "secrets" / "almanac-bootstrap-token"
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("tok_live_test\n", encoding="utf-8")
+        telemetry_path = hermes_home / "state" / "almanac-context-telemetry.jsonl"
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ.pop("ALMANAC_BOOTSTRAP_TOKEN_FILE", None)
+        os.environ.pop("ALMANAC_BOOTSTRAP_TOKEN_PATH", None)
+        os.environ.pop("ALMANAC_CONTEXT_TELEMETRY", None)
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_pre_tool_token_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            expect("pre_tool_call" in ctx.hooks, f"expected pre_tool_call hook registration, got {ctx.hooks}")
+            hook = ctx.hooks["pre_tool_call"][0]
+
+            wrapped_args = {"query": "Chutes Unicorn", "fetch_limit": 2}
+            result = hook(
+                tool_name="mcp_almanac_mcp_notion_search_and_fetch",
+                args=wrapped_args,
+                session_id="session-token",
+                task_id="task-1",
+                tool_call_id="call-1",
+            )
+            expect(result is None, result)
+            expect(wrapped_args["token"] == "tok_live_test", wrapped_args)
+
+            canonical_args = {"pending_id": "ssotw_123"}
+            hook(tool_name="ssot.status", args=canonical_args, session_id="session-token")
+            expect(canonical_args["token"] == "tok_live_test", canonical_args)
+
+            qmd_args = {"query": "Almanac"}
+            hook(tool_name="mcp_almanac_qmd_query", args=qmd_args, session_id="session-token")
+            expect("token" not in qmd_args, qmd_args)
+
+            operator_args = {"request_id": "req_1"}
+            hook(tool_name="mcp_almanac_mcp_bootstrap_approve", args=operator_args, session_id="session-token")
+            expect("token" not in operator_args, operator_args)
+
+            bad_args = ["not", "a", "dict"]
+            blocked = hook(tool_name="mcp_almanac_mcp_notion_search", args=bad_args, session_id="session-token")
+            expect(isinstance(blocked, dict) and blocked.get("action") == "block", blocked)
+            expect("arguments were not an object" in blocked.get("message", ""), blocked)
+
+            missing_home = root / "missing-home"
+            os.environ["HERMES_HOME"] = str(missing_home)
+            missing_args = {"query": "Chutes Unicorn"}
+            blocked_missing = hook(
+                tool_name="mcp_almanac_mcp_notion_search",
+                args=missing_args,
+                session_id="session-token",
+            )
+            expect(isinstance(blocked_missing, dict) and blocked_missing.get("action") == "block", blocked_missing)
+            expect("bootstrap token is missing" in blocked_missing.get("message", ""), blocked_missing)
+            expect("token" not in missing_args, missing_args)
+
+            os.environ["HERMES_HOME"] = str(hermes_home)
+            lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            expect(len(lines) == 1, lines)
+            expect(all(record.get("tool_token_injected") is True for record in lines), lines)
+            expect(lines[0].get("tool_name") == "mcp_almanac_mcp_notion_search_and_fetch", lines)
+            expect(lines[0].get("task_id") == "task-1", lines)
+            telemetry_body = telemetry_path.read_text(encoding="utf-8")
+            expect("tok_live_test" not in telemetry_body, telemetry_body)
+            print("PASS test_almanac_managed_context_pre_tool_call_injects_bootstrap_token")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -915,9 +1009,10 @@ def main() -> int:
     test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
     test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails()
     test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()
+    test_almanac_managed_context_pre_tool_call_injects_bootstrap_token()
     test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
     test_almanac_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 10 Almanac plugin tests")
+    print("PASS all 11 Almanac plugin tests")
     return 0
 
 

@@ -90,10 +90,15 @@ def _schema(
     }
 
 
-TOKEN_PROP = {
+AGENT_TOKEN_PROP = {
     "type": "string",
     "minLength": 1,
-    "description": "Agent bootstrap token. Prefer reading it from HERMES_HOME/secrets/almanac-bootstrap-token; do not paste secrets into chat.",
+    "description": "Harness-injected agent bootstrap token. Hermes agents should omit this field; almanac-managed-context fills it before dispatch. Legacy/operator CLIs may still pass it explicitly.",
+}
+REGISTRATION_TOKEN_PROP = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Enrollment or bootstrap token for registration flows. Normal enrolled-agent tools use a harness-injected token instead.",
 }
 OPERATOR_TOKEN_PROP = {
     "type": "string",
@@ -199,7 +204,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "agents.register": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": REGISTRATION_TOKEN_PROP,
             "unix_user": {"type": "string"},
             "display_name": {"type": "string"},
             "role": {"type": "string", "enum": ["user", "curator"], "default": "user"},
@@ -212,24 +217,23 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         },
         required=("token", "unix_user", "hermes_home"),
     ),
-    "catalog.vaults": _schema({"token": TOKEN_PROP}, required=("token",)),
-    "vaults.refresh": _schema({"token": TOKEN_PROP}, required=("token",)),
+    "catalog.vaults": _schema({"token": AGENT_TOKEN_PROP}),
+    "vaults.refresh": _schema({"token": AGENT_TOKEN_PROP}),
     "vaults.subscribe": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "vault_name": {"type": "string"},
             "subscribed": {"type": "boolean", "description": "true subscribes; false unsubscribes."},
         },
-        required=("token", "vault_name", "subscribed"),
+        required=("vault_name", "subscribed"),
     ),
     "vaults.reload-defs": _operator_schema({}),
-    "agents.managed-memory": _schema({"token": TOKEN_PROP}, required=("token",)),
+    "agents.managed-memory": _schema({"token": AGENT_TOKEN_PROP}),
     "agents.consume-notifications": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
         },
-        required=("token",),
     ),
     "curator.fanout": _operator_schema({}),
     "notifications.list": _operator_schema(
@@ -241,32 +245,30 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "ssot.read": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "target_id": {"type": "string", "description": "Optional page/database/data-source id or URL. Omit for the configured shared SSOT database."},
             "query": NOTION_QUERY_PROP,
             "include_markdown": {"type": "boolean", "default": False, "description": "For page reads, include live markdown body."},
             "actor": ACTOR_PROP,
         },
-        required=("token",),
     ),
     "ssot.pending": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "status": {"type": "string", "enum": ["pending", "applied", "denied", "expired"], "default": "pending"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
         },
-        required=("token",),
     ),
     "ssot.status": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "pending_id": {"type": "string", "minLength": 1, "description": "Pending id returned by ssot.write when final_state is queued."},
         },
-        required=("token", "pending_id"),
+        required=("pending_id",),
     ),
     "ssot.write": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "operation": {"type": "string", "enum": ["insert", "update", "append"], "description": "Mutating SSOT operation. Archive/delete/trash/destroy are intentionally unsupported and rejected by the broker."},
             "target_id": {"type": "string", "description": "Required for append/update. For insert, use the parent page/database/data-source id or URL when the configured SSOT target is not enough."},
             "payload": SSOT_PAYLOAD_PROP,
@@ -274,39 +276,38 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "read_after_include_markdown": {"type": "boolean", "default": False, "description": "When read_after is true, include live markdown for page targets."},
             "actor": ACTOR_PROP,
         },
-        required=("token", "operation", "payload"),
+        required=("operation", "payload"),
     ),
     "notion.search": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "query": {"type": "string", "minLength": 1, "description": "Search text for shared Notion knowledge. Indexed/qmd-backed and may lag recent edits."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
             "rerank": {"type": "boolean", "default": False, "description": "Use only when quality matters more than latency."},
             "actor": ACTOR_PROP,
         },
-        required=("token", "query"),
+        required=("query",),
     ),
     "notion.fetch": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "target_id": {"type": "string", "minLength": 1, "description": "Exact Notion page/database/data-source id or URL. Live read; prefer for recent or exact pages."},
             "actor": ACTOR_PROP,
         },
-        required=("token", "target_id"),
+        required=("target_id",),
     ),
     "notion.query": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "target_id": {"type": "string", "description": "Database/data-source id or URL. Optional only when a default shared database is configured."},
             "query": NOTION_QUERY_PROP,
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
             "actor": ACTOR_PROP,
         },
-        required=("token",),
     ),
     "notion.search-and-fetch": _schema(
         {
-            "token": TOKEN_PROP,
+            "token": AGENT_TOKEN_PROP,
             "query": {"type": "string", "minLength": 1, "description": "Search text for shared Notion knowledge. The search step is indexed/qmd-backed and may lag recent edits."},
             "search_limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
             "fetch_limit": {"type": "integer", "minimum": 0, "maximum": 3, "default": 2},
@@ -314,7 +315,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "rerank": {"type": "boolean", "default": False},
             "actor": ACTOR_PROP,
         },
-        required=("token", "query"),
+        required=("query",),
     ),
 }
 

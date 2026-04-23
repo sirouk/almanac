@@ -52,21 +52,42 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
         expect(not found, f"{name} uses top-level OpenAI-incompatible JSONSchema keys {found}: {schema}")
 
     ssot_write = mod._tool_schema("ssot.write")
-    expect(ssot_write["required"] == ["token", "operation", "payload"], str(ssot_write))
+    expect(ssot_write["required"] == ["operation", "payload"], str(ssot_write))
     expect(ssot_write["properties"]["operation"]["enum"] == ["insert", "update", "append"], str(ssot_write))
     expect(ssot_write["properties"]["read_after"]["default"] is False, str(ssot_write))
     expect("archive" not in ssot_write["properties"]["operation"]["enum"], str(ssot_write))
     expect("delete" not in ssot_write["properties"]["operation"]["enum"], str(ssot_write))
     expect("Required for append/update" in ssot_write["properties"]["target_id"]["description"], str(ssot_write))
     expect("children" in ssot_write["properties"]["payload"]["description"], str(ssot_write))
+    expect("Harness-injected" in ssot_write["properties"]["token"]["description"], str(ssot_write))
 
     notion_combo = mod._tool_schema("notion.search-and-fetch")
-    expect(notion_combo["required"] == ["token", "query"], str(notion_combo))
+    expect(notion_combo["required"] == ["query"], str(notion_combo))
     expect(notion_combo["properties"]["fetch_limit"]["maximum"] == 3, str(notion_combo))
     expect(notion_combo["properties"]["body_char_limit"]["maximum"] == 12000, str(notion_combo))
 
     ssot_status = mod._tool_schema("ssot.status")
-    expect(ssot_status["required"] == ["token", "pending_id"], str(ssot_status))
+    expect(ssot_status["required"] == ["pending_id"], str(ssot_status))
+
+    agent_token_tools = {
+        "catalog.vaults",
+        "vaults.refresh",
+        "vaults.subscribe",
+        "agents.managed-memory",
+        "agents.consume-notifications",
+        "ssot.read",
+        "ssot.pending",
+        "ssot.status",
+        "ssot.write",
+        "notion.search",
+        "notion.fetch",
+        "notion.query",
+        "notion.search-and-fetch",
+    }
+    for tool_name in agent_token_tools:
+        schema = mod._tool_schema(tool_name)
+        expect("token" in schema["properties"], str(schema))
+        expect("token" not in schema["required"], f"{tool_name} should rely on harness token injection: {schema}")
 
     operator_schema = mod._tool_schema("bootstrap.approve")
     expect(operator_schema["properties"]["surface"]["enum"] == ["curator-channel", "curator-tui", "ctl"], str(operator_schema))
@@ -77,11 +98,10 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
 def test_high_value_sample_calls_match_advertised_schemas() -> None:
     mod = load_module(MCP_SERVER, "almanac_mcp_server_sample_schema_test")
     samples = {
-        "notion.search": {"token": "tok", "query": "Chutes Unicorn", "limit": 5, "rerank": False},
-        "notion.fetch": {"token": "tok", "target_id": "https://www.notion.so/example"},
-        "notion.query": {"token": "tok", "target_id": "database-id", "query": {"filter": {}}, "limit": 25},
+        "notion.search": {"query": "Chutes Unicorn", "limit": 5, "rerank": False},
+        "notion.fetch": {"target_id": "https://www.notion.so/example"},
+        "notion.query": {"target_id": "database-id", "query": {"filter": {}}, "limit": 25},
         "notion.search-and-fetch": {
-            "token": "tok",
             "query": "Chutes Unicorn",
             "search_limit": 5,
             "fetch_limit": 2,
@@ -89,13 +109,12 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "rerank": False,
         },
         "ssot.write": {
-            "token": "tok",
             "operation": "append",
             "target_id": "page-id",
             "payload": {"children": [{"type": "paragraph"}]},
             "read_after": True,
         },
-        "ssot.status": {"token": "tok", "pending_id": "ssotw_123"},
+        "ssot.status": {"pending_id": "ssotw_123"},
     }
     for name, sample in samples.items():
         assert_sample_matches_outer_schema(mod._tool_schema(name), sample, name)

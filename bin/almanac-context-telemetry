@@ -59,6 +59,9 @@ def summarize(paths: list[Path]) -> dict[str, Any]:
     modes: Counter[str] = Counter()
     platforms: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
+    events: Counter[str] = Counter()
+    token_tools: Counter[str] = Counter()
+    token_injections = 0
     context_chars: list[int] = []
     revisions: set[str] = set()
     timestamps: list[str] = []
@@ -72,11 +75,19 @@ def summarize(paths: list[Path]) -> dict[str, Any]:
             revisions.add(revision)
         platform = str(record.get("platform") or "unknown").strip() or "unknown"
         platforms[platform] += 1
+        event = str(record.get("event") or "").strip()
+        if event:
+            events[event] += 1
+        if record.get("tool_token_injected") is True:
+            token_injections += 1
+            tool_name = str(record.get("tool_name") or "unknown").strip() or "unknown"
+            token_tools[tool_name] += 1
         reason = str(record.get("reason") or "").strip()
         if reason:
             reasons[reason] += 1
-        mode = str(record.get("context_mode") or ("suppressed" if record.get("injected") is False else "unknown")).strip()
-        modes[mode] += 1
+        if "injected" in record:
+            mode = str(record.get("context_mode") or ("suppressed" if record.get("injected") is False else "unknown")).strip()
+            modes[mode] += 1
         chars = record.get("context_chars")
         if isinstance(chars, int):
             context_chars.append(chars)
@@ -105,6 +116,9 @@ def summarize(paths: list[Path]) -> dict[str, Any]:
         "recipes": _counter_to_dict(recipes),
         "platforms": _counter_to_dict(platforms),
         "reasons": _counter_to_dict(reasons),
+        "events": _counter_to_dict(events),
+        "tool_token_injections": token_injections,
+        "token_injected_tools": _counter_to_dict(token_tools),
         "avg_context_chars": round(sum(context_chars) / len(context_chars), 1) if context_chars else 0,
         "max_context_chars": max(context_chars) if context_chars else 0,
         "managed_revisions": len(revisions),
@@ -140,6 +154,9 @@ def render_human(summary: dict[str, Any]) -> str:
     lines.extend(_format_counter("gates", summary["gates"]))
     lines.extend(_format_counter("recipes", summary["recipes"]))
     lines.extend(_format_counter("platforms", summary["platforms"]))
+    lines.append(f"tool token injections: {summary['tool_token_injections']}")
+    lines.extend(_format_counter("token-injected tools", summary["token_injected_tools"]))
+    lines.extend(_format_counter("events", summary["events"]))
     lines.extend(_format_counter("suppression reasons", summary["reasons"]))
     return "\n".join(lines)
 

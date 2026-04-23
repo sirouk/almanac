@@ -146,6 +146,25 @@ _FOLLOWUP_TERMS = (
 )
 _HISTORY_RELEVANCE_LOOKBACK = 8
 _SESSION_REVISIONS: dict[str, str] = {}
+_TOKEN_CACHE: dict[str, object] = {}
+_TOKEN_TOOL_SUFFIXES = {
+    "catalog_vaults": "catalog.vaults",
+    "vaults_refresh": "vaults.refresh",
+    "vaults_subscribe": "vaults.subscribe",
+    "agents_managed_memory": "agents.managed-memory",
+    "agents_consume_notifications": "agents.consume-notifications",
+    "ssot_read": "ssot.read",
+    "ssot_pending": "ssot.pending",
+    "ssot_status": "ssot.status",
+    "ssot_write": "ssot.write",
+    "notion_search": "notion.search",
+    "notion_fetch": "notion.fetch",
+    "notion_query": "notion.query",
+    "notion_search_and_fetch": "notion.search-and-fetch",
+}
+_TOKEN_TOOL_NAMES = set(_TOKEN_TOOL_SUFFIXES.values()) | {
+    f"mcp_almanac_mcp_{suffix}" for suffix in _TOKEN_TOOL_SUFFIXES
+}
 
 # Per-turn tool recipe cards. When the user's message clearly implies a specific
 # MCP rail, the plugin inlines the literal JSON-call shape into context so the
@@ -182,7 +201,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "revise that page",
         ),
         (
-            "ssot.write — one call. Required: token, operation, payload. "
+            "ssot.write — one call. The plugin injects token automatically; omit token. Required: operation, payload. "
             "operation is one of insert|update|append (archive/delete are rejected). "
             "For append, payload MUST be {\"children\":[...]} with no 'after'. "
             "For update/insert, use {\"properties\":{...}}. target_id is required for append/update. "
@@ -204,7 +223,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "check pending",
         ),
         (
-            "ssot.status — pending_id lookup. Required: token, pending_id. "
+            "ssot.status — pending_id lookup. The plugin injects token automatically; omit token. Required: pending_id. "
             "Returns final_state: applied|queued|denied|expired. "
             "Prefer over ssot.pending when you already have the pending_id from a prior ssot.write."
         ),
@@ -220,7 +239,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "what is in my queue",
         ),
         (
-            "ssot.pending — list own queued or decided writes. Required: token. "
+            "ssot.pending — list own queued or decided writes. The plugin injects token automatically; omit token. "
             "Optional status in {pending|applied|denied|expired} (default pending); optional limit ≤ 100."
         ),
     ),
@@ -244,9 +263,16 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "notion knowledge about",
             "what does almanac know about",
             "what do we know in notion about",
+            "page say",
+            "page says",
+            "what's on the page",
+            "what is on the page",
+            "what's in the page",
+            "what is in the page",
+            "page about",
         ),
         (
-            "notion.search-and-fetch — one-shot \"find and read\". Required: token, query. "
+            "notion.search-and-fetch — one-shot \"find and read\". The plugin injects token automatically; omit token. Required: query. "
             "Bounded: search_limit ≤ 10, fetch_limit ≤ 3, body_char_limit ≤ 12000. "
             "Prefer over separate notion.search + fetch loops."
         ),
@@ -263,7 +289,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "from this url",
         ),
         (
-            "notion.fetch — live read of one exact page/database/data source. Required: token, target_id (id or URL). "
+            "notion.fetch — live read of one exact page/database/data source. The plugin injects token automatically; omit token. Required: target_id (id or URL). "
             "Prefer over notion.search when the user already gave a URL or id."
         ),
     ),
@@ -280,7 +306,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "status is in progress",
         ),
         (
-            "notion.query — live structured query. Required: token. "
+            "notion.query — live structured query. The plugin injects token automatically; omit token. "
             "Optional target_id (database or data source id/URL) — omit for the configured shared SSOT database. "
             "query follows the Notion API (filter/sorts/page_size). Prefer for owner/status/due/assignee filters."
         ),
@@ -293,6 +319,47 @@ _TELEMETRY_MAX_BYTES = 1_000_000
 
 def _hermes_home() -> Path:
     return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
+
+
+def _bootstrap_token_path() -> Path:
+    override = (
+        os.environ.get("ALMANAC_BOOTSTRAP_TOKEN_FILE")
+        or os.environ.get("ALMANAC_BOOTSTRAP_TOKEN_PATH")
+        or ""
+    )
+    if override:
+        return Path(override).expanduser()
+    return _hermes_home() / "secrets" / "almanac-bootstrap-token"
+
+
+def _bootstrap_token() -> str:
+    path = _bootstrap_token_path()
+    try:
+        stat = path.stat()
+    except OSError:
+        _TOKEN_CACHE.clear()
+        return ""
+
+    cache_key = str(path)
+    cached_path = str(_TOKEN_CACHE.get("path") or "")
+    cached_mtime = _TOKEN_CACHE.get("mtime_ns")
+    cached_token = str(_TOKEN_CACHE.get("token") or "")
+    if cached_path == cache_key and cached_mtime == stat.st_mtime_ns and cached_token:
+        return cached_token
+
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        _TOKEN_CACHE.clear()
+        return ""
+    _TOKEN_CACHE.clear()
+    if token:
+        _TOKEN_CACHE.update({"path": cache_key, "mtime_ns": stat.st_mtime_ns, "token": token})
+    return token
+
+
+def _tool_needs_agent_token(tool_name: str) -> bool:
+    return str(tool_name or "").strip() in _TOKEN_TOOL_NAMES
 
 
 def _state_path() -> Path:
@@ -769,5 +836,53 @@ def _pre_llm_call(
     return {"context": context}
 
 
+def _pre_tool_call(
+    *,
+    tool_name: str = "",
+    args=None,
+    session_id: str = "",
+    task_id: str = "",
+    tool_call_id: str = "",
+    **kwargs,
+):
+    if not _tool_needs_agent_token(tool_name):
+        return None
+    if not isinstance(args, dict):
+        return {
+            "action": "block",
+            "message": "Almanac MCP call was blocked because tool arguments were not an object.",
+        }
+
+    token = _bootstrap_token()
+    if not token:
+        return {
+            "action": "block",
+            "message": (
+                "Almanac MCP call was blocked because the agent bootstrap token is missing. "
+                "Refresh the agent install before retrying."
+            ),
+        }
+
+    args["token"] = token
+    # Hermes may fire pre_tool_call once during the block-check path without a
+    # tool_call_id, then again immediately before dispatch with the real call
+    # id. Mutate both times, but only count the dispatch event so telemetry maps
+    # to actual model-visible tool calls instead of double-counting preflight.
+    if tool_call_id:
+        _emit_telemetry(
+            {
+                "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "session_id": str(session_id or "__global__"),
+                "event": "tool_token_injected",
+                "tool_token_injected": True,
+                "tool_name": str(tool_name or ""),
+                "task_id": str(task_id or ""),
+                "tool_call_id": str(tool_call_id or ""),
+            }
+        )
+    return None
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", _pre_llm_call)
+    ctx.register_hook("pre_tool_call", _pre_tool_call)

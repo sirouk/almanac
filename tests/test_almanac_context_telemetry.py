@@ -53,6 +53,14 @@ def test_context_telemetry_summarizes_jsonl_for_humans_and_machines() -> None:
                 "platform": "telegram",
                 "reason": "no_gate",
             },
+            {
+                "ts": "2026-04-23T10:03:00+00:00",
+                "session_id": "c",
+                "event": "tool_token_injected",
+                "tool_token_injected": True,
+                "tool_name": "mcp_almanac_mcp_notion_search_and_fetch",
+                "platform": "discord",
+            },
         ]
         path.write_text(
             "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\nnot-json\n",
@@ -67,14 +75,18 @@ def test_context_telemetry_summarizes_jsonl_for_humans_and_machines() -> None:
         )
         expect(machine.returncode == 0, machine.stderr)
         summary = json.loads(machine.stdout)
-        expect(summary["records"] == 3, summary)
+        expect(summary["records"] == 4, summary)
         expect(summary["invalid_lines"] == 1, summary)
         expect(summary["injected"] == 2, summary)
         expect(summary["suppressed"] == 1, summary)
         expect(summary["context_modes"]["recipe_only"] == 1, summary)
+        expect(summary["context_modes"]["suppressed"] == 1, summary)
         expect(summary["gates"]["recipe"] == 2, summary)
         expect(summary["recipes"]["ssot.write"] == 2, summary)
         expect(summary["reasons"]["no_gate"] == 1, summary)
+        expect(summary["events"]["tool_token_injected"] == 1, summary)
+        expect(summary["tool_token_injections"] == 1, summary)
+        expect(summary["token_injected_tools"]["mcp_almanac_mcp_notion_search_and_fetch"] == 1, summary)
         expect(summary["managed_revisions"] == 2, summary)
 
         human = subprocess.run(
@@ -87,6 +99,9 @@ def test_context_telemetry_summarizes_jsonl_for_humans_and_machines() -> None:
         expect("Almanac context telemetry" in human.stdout, human.stdout)
         expect("injected: 2; suppressed: 1" in human.stdout, human.stdout)
         expect("recipes: ssot.write=2" in human.stdout, human.stdout)
+        expect("tool token injections: 1" in human.stdout, human.stdout)
+        expect("token-injected tools: mcp_almanac_mcp_notion_search_and_fetch=1" in human.stdout, human.stdout)
+        expect("events: tool_token_injected=1" in human.stdout, human.stdout)
         print("PASS test_context_telemetry_summarizes_jsonl_for_humans_and_machines")
 
 

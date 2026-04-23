@@ -20,17 +20,17 @@ Preferred agent path: call the `almanac-mcp` MCP tools directly. Do not inspect
 repo Python source, run `python3 - <<'PY'` heredocs, or use internal functions
 to enqueue writes from a normal Hermes turn.
 
-Read the bootstrap token from `HERMES_HOME/secrets/almanac-bootstrap-token`;
-never paste it into chat.
+The `almanac-managed-context` plugin injects local auth into Almanac MCP calls
+before dispatch. Leave `token` out of normal Hermes tool calls.
 
 Common calls:
 
 ```json
-{"tool":"ssot.read","arguments":{"token":"<bootstrap token>","target_id":"<optional-page-or-database-id-or-url>","query":{},"include_markdown":false}}
-{"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"append","target_id":"<page-id-or-url>","payload":{"children":[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":"Awesome alternatives include marshmallows and roasted chestnuts."}}]}}]}}}
-{"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"update","target_id":"<page-id-or-url>","payload":{"properties":{"Status":{"status":{"name":"In Progress"}}}}}}
-{"tool":"ssot.pending","arguments":{"token":"<bootstrap token>","status":"pending","limit":10}}
-{"tool":"ssot.status","arguments":{"token":"<bootstrap token>","pending_id":"ssotw_..."}}
+{"tool":"ssot.read","arguments":{"target_id":"<optional-page-or-database-id-or-url>","query":{},"include_markdown":false}}
+{"tool":"ssot.write","arguments":{"operation":"append","target_id":"<page-id-or-url>","payload":{"children":[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":"Awesome alternatives include marshmallows and roasted chestnuts."}}]}}]}}}
+{"tool":"ssot.write","arguments":{"operation":"update","target_id":"<page-id-or-url>","payload":{"properties":{"Status":{"status":{"name":"In Progress"}}}}}}
+{"tool":"ssot.pending","arguments":{"status":"pending","limit":10}}
+{"tool":"ssot.status","arguments":{"pending_id":"ssotw_..."}}
 ```
 
 Decision tree:

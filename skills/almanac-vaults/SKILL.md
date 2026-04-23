@@ -13,16 +13,16 @@ Preferred agent path: call the `almanac-mcp` MCP tools directly. Do not use
 `scripts/curate-vaults.sh` from a Hermes turn unless MCP transport itself is
 broken and you are debugging the harness.
 
-Read the bootstrap token from `HERMES_HOME/secrets/almanac-bootstrap-token`;
-never paste it into chat.
+The `almanac-managed-context` plugin injects local auth into Almanac MCP calls
+before dispatch. Leave `token` out of normal Hermes tool calls.
 
 Common calls:
 
 ```json
-{"tool":"catalog.vaults","arguments":{"token":"<bootstrap token>"}}
-{"tool":"vaults.refresh","arguments":{"token":"<bootstrap token>"}}
-{"tool":"agents.managed-memory","arguments":{"token":"<bootstrap token>"}}
-{"tool":"vaults.subscribe","arguments":{"token":"<bootstrap token>","vault_name":"Teams","subscribed":false}}
+{"tool":"catalog.vaults","arguments":{}}
+{"tool":"vaults.refresh","arguments":{}}
+{"tool":"agents.managed-memory","arguments":{}}
+{"tool":"vaults.subscribe","arguments":{"vault_name":"Teams","subscribed":false}}
 ```
 
 Decision tree:
@@ -48,8 +48,8 @@ Decision tree:
 ## Human CLI Fallback
 
 These wrappers are for humans and operator debugging, not the preferred Hermes
-agent path. They exercise the same MCP rails while reading the bootstrap token
-from `HERMES_HOME`:
+agent path. They exercise the same MCP rails while resolving local auth from
+the installed Hermes home:
 
 ```bash
 scripts/curate-vaults.sh curate
@@ -87,12 +87,6 @@ The script expects the same user-agent environment used by the existing Almanac 
 - `ALMANAC_MCP_URL` — defaults to `http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp`
 - `ALMANAC_BOOTSTRAP_TOKEN_FILE` or `ALMANAC_BOOTSTRAP_TOKEN_PATH`
 - `HERMES_HOME` — defaults to the user-agent Hermes home
-
-By default it reads the bootstrap token from:
-
-```text
-$HERMES_HOME/secrets/almanac-bootstrap-token
-```
 
 ## Trigger model
 

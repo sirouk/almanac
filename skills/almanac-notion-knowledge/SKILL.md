@@ -17,16 +17,16 @@ Preferred agent path: call the `almanac-mcp` MCP tools directly. Do not use
 `scripts/curate-notion.sh` from a Hermes turn unless MCP transport itself is
 broken and you are debugging the harness.
 
-Read the bootstrap token from `HERMES_HOME/secrets/almanac-bootstrap-token`;
-never paste it into chat.
+The `almanac-managed-context` plugin injects local auth into Almanac MCP calls
+before dispatch. Leave `token` out of normal Hermes tool calls.
 
 Common calls:
 
 ```json
-{"tool":"notion.search","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","limit":5,"rerank":false}}
-{"tool":"notion.fetch","arguments":{"token":"<bootstrap token>","target_id":"<page-or-database-id-or-url>"}}
-{"tool":"notion.query","arguments":{"token":"<bootstrap token>","target_id":"<database-or-data-source-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}
-{"tool":"notion.search-and-fetch","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","search_limit":5,"fetch_limit":2,"body_char_limit":4000,"rerank":false}}
+{"tool":"notion.search","arguments":{"query":"Chutes Unicorn","limit":5,"rerank":false}}
+{"tool":"notion.fetch","arguments":{"target_id":"<page-or-database-id-or-url>"}}
+{"tool":"notion.query","arguments":{"target_id":"<database-or-data-source-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}
+{"tool":"notion.search-and-fetch","arguments":{"query":"Chutes Unicorn","search_limit":5,"fetch_limit":2,"body_char_limit":4000,"rerank":false}}
 ```
 
 Call budget:
@@ -85,7 +85,7 @@ live Notion reads.
 
 These wrappers are for humans and operator debugging, not the preferred Hermes
 agent path. They exist so a shell user can exercise the same MCP rail while the
-script reads the bootstrap token from `HERMES_HOME`:
+wrapper resolves local auth from the installed Hermes home:
 
 ```bash
 scripts/curate-notion.sh search "Chutes Unicorn"

@@ -33,6 +33,12 @@ STATE_FILE="$HERMES_HOME_TARGET/state/almanac-agent-backup.env"
 LOCAL_REPO_DIR="${AGENT_BACKUP_REPO_DIR:-$HERMES_HOME_TARGET/state/agent-home-backup/repo}"
 GITHUB_API_BASE="${AGENT_BACKUP_GITHUB_API_BASE:-https://api.github.com}"
 
+if [[ "${GITHUB_API_BASE%/}" != "https://api.github.com" && "${ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
+  echo "Refusing non-default GitHub API base for backup visibility checks: $GITHUB_API_BASE" >&2
+  echo "This override is reserved for tests; production backup safety must verify against https://api.github.com." >&2
+  exit 1
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --remote)

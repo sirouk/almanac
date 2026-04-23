@@ -107,6 +107,16 @@ def test_hermes_docs_ref_defaults_to_hermes_agent_ref() -> None:
         "deploy.sh must not write 'main' as the default docs ref (silent-drift regression)",
     )
 
+    sync_text = SCRIPT.read_text(encoding="utf-8")
+    expect(
+        'repo_ref="${ALMANAC_HERMES_DOCS_REF:-${ALMANAC_HERMES_AGENT_REF:-main}}"' in sync_text,
+        "sync-hermes-docs-into-vault.sh must fall back to ALMANAC_HERMES_AGENT_REF before main",
+    )
+    expect(
+        'repo_ref="${ALMANAC_HERMES_DOCS_REF:-main}"' not in sync_text,
+        "sync-hermes-docs-into-vault.sh must not directly default docs to main",
+    )
+
     example_text = (REPO / "config" / "almanac.env.example").read_text(encoding="utf-8")
     expect(
         "ALMANAC_HERMES_DOCS_REF=main" not in example_text,

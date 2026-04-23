@@ -51,6 +51,7 @@ def test_configure_agent_backup_refuses_public_github_repo() -> None:
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": api_base,
+                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             },
         )
         expect(result.returncode != 0, "expected public GitHub repo to be refused")
@@ -81,6 +82,7 @@ def test_configure_agent_backup_defaults_to_core_snapshot_without_sessions() -> 
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": api_base,
+                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             },
         )
         expect(result.returncode == 0, f"expected private backup config to succeed: stdout={result.stdout!r} stderr={result.stderr!r}")
@@ -114,11 +116,36 @@ def test_configure_agent_backup_refuses_when_visibility_check_errors() -> None:
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": "https://api.github.invalid",
+                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             },
         )
         expect(result.returncode != 0, "expected visibility-check error to be refused")
         expect("Could not verify GitHub visibility" in result.stderr, result.stderr)
         print("PASS test_configure_agent_backup_refuses_when_visibility_check_errors")
+
+
+def test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        (hermes_home / "state").mkdir(parents=True, exist_ok=True)
+
+        result = run(
+            [
+                str(CONFIGURE_SCRIPT),
+                str(hermes_home),
+                "--remote",
+                "git@github.com:example/private-repo.git",
+            ],
+            env={
+                **os.environ,
+                "HOME": str(root),
+                "AGENT_BACKUP_GITHUB_API_BASE": "https://api.github.invalid",
+            },
+        )
+        expect(result.returncode != 0, "expected non-default GitHub API base to be refused")
+        expect("Refusing non-default GitHub API base" in result.stderr, result.stderr)
+        print("PASS test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag")
 
 
 def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
@@ -183,6 +210,7 @@ def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": api_base,
+                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
                 "GIT_CONFIG_GLOBAL": str(git_global),
             },
         )
@@ -204,8 +232,9 @@ def main() -> int:
     test_configure_agent_backup_refuses_public_github_repo()
     test_configure_agent_backup_defaults_to_core_snapshot_without_sessions()
     test_configure_agent_backup_refuses_when_visibility_check_errors()
+    test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag()
     test_backup_agent_home_pushes_curated_snapshot_to_private_repo()
-    print("PASS all 4 agent backup regression tests")
+    print("PASS all 5 agent backup regression tests")
     return 0
 
 

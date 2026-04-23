@@ -19,6 +19,12 @@ STATE_FILE="$HERMES_HOME_TARGET/state/almanac-agent-backup.env"
 GITHUB_API_BASE="${AGENT_BACKUP_GITHUB_API_BASE:-https://api.github.com}"
 BACKUP_RECONCILE_PUSH_REQUIRED=1
 
+if [[ "${GITHUB_API_BASE%/}" != "https://api.github.com" && "${ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
+  echo "Refusing non-default GitHub API base for backup visibility checks: $GITHUB_API_BASE" >&2
+  echo "This override is reserved for tests; production backup safety must verify against https://api.github.com." >&2
+  exit 1
+fi
+
 if [[ ! -f "$STATE_FILE" ]]; then
   echo "Agent backup is not configured for $HERMES_HOME_TARGET" >&2
   exit 1

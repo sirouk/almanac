@@ -14,7 +14,7 @@ if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" != "1" ]]; then
 fi
 
 repo_url="${ALMANAC_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
-repo_ref="${ALMANAC_HERMES_DOCS_REF:-main}"
+repo_ref="${ALMANAC_HERMES_DOCS_REF:-${ALMANAC_HERMES_AGENT_REF:-main}}"
 source_subdir="${ALMANAC_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
 checkout_dir="${ALMANAC_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
 target_dir="${ALMANAC_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Repos/hermes-agent-docs}"

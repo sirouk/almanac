@@ -8,6 +8,8 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "vault backup"
 ensure_layout
 
+BACKUP_RECONCILE_PUSH_REQUIRED=1
+
 reconcile_backup_git_remote_branch() {
   local repo_dir="$1"
   local branch="$2"
@@ -18,6 +20,7 @@ reconcile_backup_git_remote_branch() {
   local timestamp=""
   local remote_short=""
 
+  BACKUP_RECONCILE_PUSH_REQUIRED=1
   git -C "$repo_dir" fetch origin "$branch" >/dev/null 2>&1 || return 0
 
   if ! git -C "$repo_dir" show-ref --verify --quiet "$remote_tracking_ref"; then
@@ -30,6 +33,7 @@ reconcile_backup_git_remote_branch() {
 
   if git -C "$repo_dir" merge-base --is-ancestor "$branch" "$remote_ref" >/dev/null 2>&1; then
     git -C "$repo_dir" merge --ff-only "$remote_ref" >/dev/null
+    BACKUP_RECONCILE_PUSH_REQUIRED=0
     return 0
   fi
 
@@ -46,6 +50,7 @@ reconcile_backup_git_remote_branch() {
   echo "Backup remote branch '$remote_ref' has unrelated history; archiving it to '$archive_branch' before aligning '$branch' to local state." >&2
   git -C "$repo_dir" push origin "$remote_ref:refs/heads/$archive_branch" >/dev/null
   git -C "$repo_dir" push --force-with-lease="refs/heads/$branch:$remote_head" origin "$branch" >/dev/null
+  BACKUP_RECONCILE_PUSH_REQUIRED=0
 }
 
 if [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then
@@ -92,5 +97,9 @@ if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
   ensure_backup_git_origin_remote "$ALMANAC_PRIV_DIR"
   prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
   reconcile_backup_git_remote_branch "$ALMANAC_PRIV_DIR" "$BACKUP_GIT_BRANCH"
-  git -C "$ALMANAC_PRIV_DIR" push origin "$BACKUP_GIT_BRANCH"
+  if [[ "$BACKUP_RECONCILE_PUSH_REQUIRED" == "1" ]]; then
+    # The steady-state backup path is a single-writer timer on this host, so a
+    # normal non-force push is the right default after reconciliation.
+    git -C "$ALMANAC_PRIV_DIR" push origin "$BACKUP_GIT_BRANCH"
+  fi
 fi

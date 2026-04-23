@@ -419,6 +419,15 @@ def test_install_and_upgrade_run_live_agent_tool_smoke_after_health() -> None:
     print("PASS test_install_and_upgrade_run_live_agent_tool_smoke_after_health")
 
 
+def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
+    body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
+    expect("import re" in body, body)
+    expect(r"python(?:3)?\s*-\s*<<\s*\S+" in body, body)
+    expect("tool_token_injected" in body, body)
+    expect("almanac-bootstrap-token" in body, body)
+    print("PASS test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants")
+
+
 def test_agent_install_payload_tracks_current_agent_contract() -> None:
     payload = render_agent_install_payload()
     expected_skills = [
@@ -1608,6 +1617,7 @@ def main() -> int:
         test_path_is_within_and_safe_remove_use_canonical_paths,
         test_run_health_check_falls_back_when_user_bus_is_missing,
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
+        test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,

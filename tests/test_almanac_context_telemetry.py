@@ -59,7 +59,6 @@ def test_context_telemetry_summarizes_jsonl_for_humans_and_machines() -> None:
                 "event": "tool_token_injected",
                 "tool_token_injected": True,
                 "tool_name": "mcp_almanac_mcp_notion_search_and_fetch",
-                "platform": "discord",
             },
         ]
         path.write_text(
@@ -87,6 +86,7 @@ def test_context_telemetry_summarizes_jsonl_for_humans_and_machines() -> None:
         expect(summary["events"]["tool_token_injected"] == 1, summary)
         expect(summary["tool_token_injections"] == 1, summary)
         expect(summary["token_injected_tools"]["mcp_almanac_mcp_notion_search_and_fetch"] == 1, summary)
+        expect(summary["platforms"]["(tool-call)"] == 1, summary)
         expect(summary["managed_revisions"] == 2, summary)
 
         human = subprocess.run(
@@ -101,6 +101,7 @@ def test_context_telemetry_summarizes_jsonl_for_humans_and_machines() -> None:
         expect("recipes: ssot.write=2" in human.stdout, human.stdout)
         expect("tool token injections: 1" in human.stdout, human.stdout)
         expect("token-injected tools: mcp_almanac_mcp_notion_search_and_fetch=1" in human.stdout, human.stdout)
+        expect("(tool-call)=1" in human.stdout, human.stdout)
         expect("events: tool_token_injected=1" in human.stdout, human.stdout)
         print("PASS test_context_telemetry_summarizes_jsonl_for_humans_and_machines")
 

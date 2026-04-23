@@ -161,23 +161,96 @@ BACKUP_GIT_AUTHOR_EMAIL='backup@example.com'
 reconcile_backup_git_remote_branch {local_repo} "$BACKUP_GIT_BRANCH"
 printf 'local=%s\\n' "$(git -C {shlex.quote(str(local_repo))} rev-parse main)"
 printf 'remote=%s\\n' "$(git -C {shlex.quote(str(bare_remote))} rev-parse refs/heads/main)"
+printf 'needs_push=%s\\n' "$BACKUP_RECONCILE_PUSH_REQUIRED"
 printf 'archives=%s\\n' "$(git -C {shlex.quote(str(bare_remote))} for-each-ref --format='%(refname:short)' refs/heads/archive/)"
 """
         result = bash(script)
         expect(result.returncode == 0, f"backup unrelated-history reconcile failed: {result.stderr}")
         local_head = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("local="))
         remote_head = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("remote="))
+        needs_push = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("needs_push="))
         archives = [line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("archives=")]
         expect(local_head == remote_head, f"expected remote main to align to local head, got {result.stdout!r}")
+        expect(needs_push == "0", f"expected unrelated-history reconcile to satisfy the push, got {result.stdout!r}")
         expect(any(item.startswith("archive/main-pre-align-") for item in archives), f"expected archive branch, got {result.stdout!r}")
     print("PASS test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main")
+
+
+def test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push() -> None:
+    backup_text = BACKUP_SH.read_text()
+    snippet = extract(backup_text, "reconcile_backup_git_remote_branch() {", '\nif [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then')
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        local_repo = tmp_path / "local"
+        seed_repo = tmp_path / "seed"
+        bare_remote = tmp_path / "remote.git"
+
+        run(["git", "init", "-b", "main", str(local_repo)])
+        (local_repo / "vault").mkdir(parents=True)
+        (local_repo / "vault" / "note.md").write_text("shared-root\n", encoding="utf-8")
+        run(["git", "-C", str(local_repo), "add", "."])
+        run(
+            [
+                "git",
+                "-C",
+                str(local_repo),
+                "-c",
+                "user.name=Backup Bot",
+                "-c",
+                "user.email=backup@example.com",
+                "commit",
+                "-m",
+                "root",
+            ]
+        )
+
+        run(["git", "init", "--bare", str(bare_remote)])
+        run(["git", "-C", str(local_repo), "remote", "add", "origin", str(bare_remote)])
+        run(["git", "-C", str(local_repo), "push", "origin", "main"])
+
+        run(["git", "clone", "--branch", "main", str(bare_remote), str(seed_repo)])
+        (seed_repo / "vault" / "remote.md").write_text("remote-ahead\n", encoding="utf-8")
+        run(["git", "-C", str(seed_repo), "add", "."])
+        run(
+            [
+                "git",
+                "-C",
+                str(seed_repo),
+                "-c",
+                "user.name=Backup Bot",
+                "-c",
+                "user.email=backup@example.com",
+                "commit",
+                "-m",
+                "remote ahead",
+            ]
+        )
+        run(["git", "-C", str(seed_repo), "push", "origin", "main"])
+
+        script = f"""
+{snippet}
+BACKUP_GIT_BRANCH=main
+reconcile_backup_git_remote_branch {local_repo} "$BACKUP_GIT_BRANCH"
+printf 'local=%s\\n' "$(git -C {shlex.quote(str(local_repo))} rev-parse main)"
+printf 'remote=%s\\n' "$(git -C {shlex.quote(str(bare_remote))} rev-parse --verify refs/heads/main)"
+printf 'needs_push=%s\\n' "$BACKUP_RECONCILE_PUSH_REQUIRED"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"backup fast-forward reconcile failed: {result.stderr}")
+        local_head = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("local="))
+        remote_head = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("remote="))
+        needs_push = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("needs_push="))
+        expect(local_head == remote_head, f"expected local main to fast-forward to remote head, got {result.stdout!r}")
+        expect(needs_push == "0", f"expected fast-forward reconcile to skip a follow-up push, got {result.stdout!r}")
+    print("PASS test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push")
 
 
 def main() -> int:
     test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts()
     test_backup_to_github_excludes_repo_local_key_material()
     test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main()
-    print("PASS all 3 backup git regression tests")
+    test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push()
+    print("PASS all 4 backup git regression tests")
     return 0
 
 

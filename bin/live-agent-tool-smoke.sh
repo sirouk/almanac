@@ -125,6 +125,7 @@ fi
 
 python3 - "$session_file" "$telemetry_path" "$session_id" <<'PY'
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -173,7 +174,7 @@ joined = "\n".join(texts)
 errors: list[str] = []
 if not tool_token_event:
     errors.append("no tool_token_injected telemetry event was recorded for the smoke session")
-if "python3 - <<'PY'" in joined or "python3 - <<PY" in joined:
+if re.search(r"python(?:3)?\s*-\s*<<\s*\S+", joined):
     errors.append("session content still mentions a python heredoc")
 if "almanac-bootstrap-token" in joined:
     errors.append("session content still mentions the bootstrap token path")

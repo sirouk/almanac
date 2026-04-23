@@ -73,7 +73,9 @@ def summarize(paths: list[Path]) -> dict[str, Any]:
         revision = str(record.get("managed_revision") or "").strip()
         if revision:
             revisions.add(revision)
-        platform = str(record.get("platform") or "unknown").strip() or "unknown"
+        platform = str(record.get("platform") or "").strip()
+        if not platform:
+            platform = "(tool-call)" if record.get("tool_token_injected") is True else "unknown"
         platforms[platform] += 1
         event = str(record.get("event") or "").strip()
         if event:

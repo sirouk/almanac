@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from almanac_control import (
@@ -79,20 +81,13 @@ def _schema(
     properties: dict[str, dict],
     *,
     required: list[str] | tuple[str, ...] = (),
-    any_of: list[dict[str, Any]] | None = None,
-    all_of: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    schema: dict[str, Any] = {
+    return {
         "type": "object",
         "properties": properties,
         "required": list(required),
         "additionalProperties": False,
     }
-    if any_of:
-        schema["anyOf"] = any_of
-    if all_of:
-        schema["allOf"] = all_of
-    return schema
 
 
 TOKEN_PROP = {
@@ -134,50 +129,8 @@ def _operator_schema(properties: dict[str, dict], *, required: list[str] | tuple
             "token": OPERATOR_TOKEN_PROP,
             **properties,
         },
-        required=required,
-        any_of=[{"required": ["operator_token"]}, {"required": ["token"]}],
+        required=tuple(dict.fromkeys(("operator_token", *required))),
     )
-
-
-SSOT_APPEND_PAYLOAD_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "children": {
-            "type": "array",
-            "minItems": 1,
-            "description": "Notion block children to append at the end of the page/block.",
-        },
-    },
-    "required": ["children"],
-    "additionalProperties": False,
-    "not": {"required": ["after"]},
-}
-
-SSOT_WRITE_ALLOF = [
-    {
-        "if": {"properties": {"operation": {"const": "append"}}},
-        "then": {
-            "required": ["target_id"],
-            "properties": {"payload": SSOT_APPEND_PAYLOAD_SCHEMA},
-        },
-    },
-    {
-        "if": {"properties": {"operation": {"const": "update"}}},
-        "then": {"required": ["target_id"]},
-    },
-    {
-        "if": {"properties": {"operation": {"const": "insert"}}},
-        "then": {
-            "properties": {
-                "payload": {
-                    "type": "object",
-                    "description": "Insert payload for Notion page creation. It must assign Owner or Assignee to the verified caller, or the broker rejects it.",
-                    "additionalProperties": True,
-                },
-            }
-        },
-    },
-]
 
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -315,14 +268,13 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         {
             "token": TOKEN_PROP,
             "operation": {"type": "string", "enum": ["insert", "update", "append"], "description": "Mutating SSOT operation. Archive/delete/trash/destroy are intentionally unsupported and rejected by the broker."},
-            "target_id": {"type": "string", "description": "Page id/URL for update/append; parent page/database/data-source id/URL for insert."},
+            "target_id": {"type": "string", "description": "Required for append/update. For insert, use the parent page/database/data-source id or URL when the configured SSOT target is not enough."},
             "payload": SSOT_PAYLOAD_PROP,
             "read_after": {"type": "boolean", "default": False, "description": "When true and the write applies immediately, include a brokered ssot.read of the resulting target. Leave false unless the user asked to verify live state."},
             "read_after_include_markdown": {"type": "boolean", "default": False, "description": "When read_after is true, include live markdown for page targets."},
             "actor": ACTOR_PROP,
         },
         required=("token", "operation", "payload"),
-        all_of=SSOT_WRITE_ALLOF,
     ),
     "notion.search": _schema(
         {
@@ -412,12 +364,30 @@ def _trim_text(value: object, limit: int) -> tuple[str, bool]:
     return text[: max(0, limit - len(suffix))].rstrip() + suffix, True
 
 
+def _notion_search_hit_target_id(hit: dict[str, Any]) -> str:
+    for key in ("page_id", "page_url", "target_id", "id", "url"):
+        value = str(hit.get(key) or "").strip()
+        if value:
+            return value
+
+    # qmd-backed Notion index hits may only expose the markdown path. Those
+    # files are named <notion-page-id>-000.md, so recover the id from there.
+    file_value = str(hit.get("file") or "").strip()
+    if file_value:
+        stem = Path(file_value).stem
+        match = re.search(r"([0-9a-fA-F]{32})(?:-\d+)?$", stem)
+        if match:
+            return match.group(1)
+    return ""
+
+
 def _compact_notion_search_hit(hit: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
     snippet, snippet_truncated = _trim_text(hit.get("snippet"), snippet_char_limit)
+    target_id = _notion_search_hit_target_id(hit)
     result = {
         "source": str(hit.get("source") or ""),
         "root_id": str(hit.get("root_id") or ""),
-        "page_id": str(hit.get("page_id") or ""),
+        "page_id": str(hit.get("page_id") or target_id),
         "page_url": str(hit.get("page_url") or ""),
         "page_title": str(hit.get("page_title") or ""),
         "section_heading": str(hit.get("section_heading") or ""),
@@ -929,7 +899,7 @@ class Handler(BaseHTTPRequestHandler):
                 for hit in raw_hits:
                     if not isinstance(hit, dict):
                         continue
-                    target_id = str(hit.get("page_id") or hit.get("page_url") or "").strip()
+                    target_id = _notion_search_hit_target_id(hit)
                     if not target_id or target_id in seen_targets:
                         continue
                     seen_targets.add(target_id)

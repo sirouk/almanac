@@ -54,7 +54,48 @@ def test_install_almanac_plugins_installs_default_hermes_plugin() -> None:
         installed_dir = hermes_home / "plugins" / "almanac-managed-context"
         expect((installed_dir / "plugin.yaml").is_file(), f"expected installed plugin manifest at {installed_dir / 'plugin.yaml'}")
         expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
+        config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        expect("plugins:\n" in config_body, config_body)
+        expect("enabled:\n  - almanac-managed-context" in config_body, config_body)
+        expect("disabled:\n  - almanac-managed-context" not in config_body, config_body)
         print("PASS test_install_almanac_plugins_installs_default_hermes_plugin")
+
+
+def test_install_almanac_plugins_preserves_existing_plugin_config_and_enables_default() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "config.yaml").write_text(
+            "model: gpt-5.4\n"
+            "plugins:\n"
+            "  disabled:\n"
+            "  - almanac-managed-context\n"
+            "  - noisy-plugin\n"
+            "  enabled:\n"
+            "  - existing-plugin\n"
+            "mcp_servers:\n"
+            "  almanac-mcp:\n"
+            "    url: http://127.0.0.1:8282/mcp\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [str(INSTALL_SCRIPT), str(REPO), str(hermes_home)],
+            env={**os.environ},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected install-almanac-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        expect("model: gpt-5.4" in config_body, config_body)
+        expect("mcp_servers:\n  almanac-mcp:" in config_body, config_body)
+        expect("  - existing-plugin" in config_body, config_body)
+        expect("  - almanac-managed-context" in config_body, config_body)
+        expect("  - noisy-plugin" in config_body, config_body)
+        disabled_block = config_body.split("  disabled:\n", 1)[1].split("  enabled:\n", 1)[0]
+        expect("almanac-managed-context" not in disabled_block, config_body)
+        print("PASS test_install_almanac_plugins_preserves_existing_plugin_config_and_enables_default")
 
 
 def test_almanac_managed_context_reads_writer_materialized_notion_state() -> None:
@@ -867,6 +908,7 @@ def test_almanac_managed_context_recipe_tools_match_mcp_surface() -> None:
 
 def main() -> int:
     test_install_almanac_plugins_installs_default_hermes_plugin()
+    test_install_almanac_plugins_preserves_existing_plugin_config_and_enables_default()
     test_almanac_managed_context_reads_writer_materialized_notion_state()
     test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
     test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
@@ -875,7 +917,7 @@ def main() -> int:
     test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()
     test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
     test_almanac_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 9 Almanac plugin tests")
+    print("PASS all 10 Almanac plugin tests")
     return 0
 
 

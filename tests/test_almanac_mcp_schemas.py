@@ -42,11 +42,14 @@ def assert_sample_matches_outer_schema(schema: dict, sample: dict, name: str) ->
 def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
     mod = load_module(MCP_SERVER, "almanac_mcp_server_schema_test")
     expect(set(mod.TOOLS) == set(mod.TOOL_SCHEMAS), f"schema/tool drift: {set(mod.TOOLS) ^ set(mod.TOOL_SCHEMAS)}")
+    disallowed_top_level = {"oneOf", "anyOf", "allOf", "enum", "not"}
     for name in mod.TOOLS:
         schema = mod._tool_schema(name)
         expect(schema.get("type") == "object", f"{name} schema must be object: {schema}")
         expect("properties" in schema, f"{name} missing properties: {schema}")
         expect(schema.get("additionalProperties") is False, f"{name} should not be open-ended: {schema}")
+        found = sorted(disallowed_top_level & set(schema))
+        expect(not found, f"{name} uses top-level OpenAI-incompatible JSONSchema keys {found}: {schema}")
 
     ssot_write = mod._tool_schema("ssot.write")
     expect(ssot_write["required"] == ["token", "operation", "payload"], str(ssot_write))
@@ -54,11 +57,8 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
     expect(ssot_write["properties"]["read_after"]["default"] is False, str(ssot_write))
     expect("archive" not in ssot_write["properties"]["operation"]["enum"], str(ssot_write))
     expect("delete" not in ssot_write["properties"]["operation"]["enum"], str(ssot_write))
-    expect(ssot_write.get("allOf"), str(ssot_write))
-    append_then = ssot_write["allOf"][0]["then"]
-    expect("target_id" in append_then["required"], str(ssot_write))
-    expect(append_then["properties"]["payload"]["additionalProperties"] is False, str(ssot_write))
-    expect(append_then["properties"]["payload"]["required"] == ["children"], str(ssot_write))
+    expect("Required for append/update" in ssot_write["properties"]["target_id"]["description"], str(ssot_write))
+    expect("children" in ssot_write["properties"]["payload"]["description"], str(ssot_write))
 
     notion_combo = mod._tool_schema("notion.search-and-fetch")
     expect(notion_combo["required"] == ["token", "query"], str(notion_combo))
@@ -70,8 +70,7 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
 
     operator_schema = mod._tool_schema("bootstrap.approve")
     expect(operator_schema["properties"]["surface"]["enum"] == ["curator-channel", "curator-tui", "ctl"], str(operator_schema))
-    expect(operator_schema["anyOf"] == [{"required": ["operator_token"]}, {"required": ["token"]}], str(operator_schema))
-    expect(operator_schema["required"] == ["request_id"], str(operator_schema))
+    expect(operator_schema["required"] == ["operator_token", "request_id"], str(operator_schema))
     print("PASS test_almanac_mcp_tools_advertise_actionable_input_schemas")
 
 
@@ -152,6 +151,10 @@ def test_runtime_helpers_close_schema_bypass_gaps() -> None:
 
 def test_search_and_fetch_compacts_search_payloads() -> None:
     mod = load_module(MCP_SERVER, "almanac_mcp_server_compact_search_test")
+    indexed_file = (
+        "/home/almanac/almanac/almanac-priv/state/notion-index/markdown/root/"
+        "3497afdeade580e2a3ade527c8b42249-000.md"
+    )
     compact = mod._compact_notion_search_result(
         {
             "ok": True,
@@ -163,9 +166,10 @@ def test_search_and_fetch_compacts_search_payloads() -> None:
             "results": [
                 {
                     "source": "index",
-                    "page_id": "page-1",
-                    "page_url": "https://notion.so/page-1",
+                    "page_id": "",
+                    "page_url": "",
                     "page_title": "Chutes Unicorn",
+                    "file": indexed_file,
                     "snippet": "x" * 900,
                     "raw_result": {"content": "y" * 5000},
                 }
@@ -175,6 +179,8 @@ def test_search_and_fetch_compacts_search_payloads() -> None:
     )
     hit = compact["results"][0]
     expect("raw_result" not in hit, str(compact))
+    expect(hit["page_id"] == "3497afdeade580e2a3ade527c8b42249", str(compact))
+    expect(mod._notion_search_hit_target_id({"file": indexed_file}) == "3497afdeade580e2a3ade527c8b42249", str(compact))
     expect(len(hit["snippet"]) <= 120, str(compact))
     expect(hit["snippet_truncated"] is True, str(compact))
     print("PASS test_search_and_fetch_compacts_search_payloads")

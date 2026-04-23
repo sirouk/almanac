@@ -585,6 +585,11 @@ def test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events() -
                         {"channel_kind": "vault-change", "created_at": "2026-04-21T12:02:00+00:00", "message": "Vault content changed: Skills (2 path(s)): almanac-ssot.md, README.md"},
                         {"channel_kind": "almanac-upgrade", "created_at": "2026-04-21T12:03:00+00:00", "message": "Curator reports an Almanac host update is available: aaa -> bbb."},
                         {"channel_kind": "almanac-upgrade", "created_at": "2026-04-21T12:04:00+00:00", "message": "Curator reports an Almanac host update is available: bbb -> ccc."},
+                        {
+                            "channel_kind": "vault-change",
+                            "created_at": "2026-04-21T12:05:00+00:00",
+                            "message": "Hermes documentation refreshed in the Repos vault: 120 doc file(s) changed. Use qmd/Hermes docs for current operating details before editing skills, plugins, or config.",
+                        },
                     ],
                 },
                 indent=2,

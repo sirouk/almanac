@@ -588,6 +588,14 @@ def _normalize_recent_event_message(message: str) -> str:
     return text
 
 
+def _recent_event_dedupe_marker(channel_kind: str, message: str) -> tuple[str, str]:
+    if channel_kind == "almanac-upgrade":
+        return (channel_kind, "__latest__")
+    if channel_kind == "vault-change" and message.startswith("Hermes documentation refreshed in the Repos vault"):
+        return (channel_kind, "hermes-docs")
+    return (channel_kind, message)
+
+
 def _recent_events_payload(payload: dict[str, object]) -> list[dict[str, str]]:
     raw_events = payload.get("events")
     if not isinstance(raw_events, list):
@@ -605,7 +613,7 @@ def _recent_events_payload(payload: dict[str, object]) -> list[dict[str, str]]:
             continue
         message = _trim(message, _MAX_EVENT_MESSAGE_CHARS)
         channel_kind = _clean_text(event.get("channel_kind") or "event", limit=64) or "event"
-        marker = (channel_kind, "__latest__") if channel_kind == "almanac-upgrade" else (channel_kind, message)
+        marker = _recent_event_dedupe_marker(channel_kind, message)
         if marker in seen:
             continue
         seen.add(marker)

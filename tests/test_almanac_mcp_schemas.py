@@ -68,9 +68,12 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
 
     vault_combo = mod._tool_schema("vault.search-and-fetch")
     expect(vault_combo["required"] == ["query"], str(vault_combo))
-    expect(vault_combo["properties"]["fetch_limit"]["maximum"] == 5, str(vault_combo))
-    expect(vault_combo["properties"]["body_char_limit"]["maximum"] == 20000, str(vault_combo))
+    expect(vault_combo["properties"]["search_limit"]["maximum"] == 5, str(vault_combo))
+    expect(vault_combo["properties"]["fetch_limit"]["maximum"] == 2, str(vault_combo))
+    expect(vault_combo["properties"]["fetch_limit"]["default"] == 1, str(vault_combo))
+    expect(vault_combo["properties"]["body_char_limit"]["maximum"] == 12000, str(vault_combo))
     expect(vault_combo["properties"]["lineNumbers"]["default"] is False, str(vault_combo))
+    expect("rerank" not in vault_combo["properties"], str(vault_combo))
 
     ssot_status = mod._tool_schema("ssot.status")
     expect(ssot_status["required"] == ["pending_id"], str(ssot_status))
@@ -121,7 +124,6 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "query": "Chutes MESH",
             "collections": ["vault", "vault-pdf-ingest"],
             "limit": 5,
-            "rerank": False,
         },
         "vault.fetch": {
             "file": "vault-pdf-ingest/projects/chutes/mesh/mesh-paper-1-pdf.md",
@@ -133,9 +135,8 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "query": "Chutes MESH",
             "collections": ["vault", "vault-pdf-ingest"],
             "search_limit": 5,
-            "fetch_limit": 2,
-            "body_char_limit": 8000,
-            "rerank": False,
+            "fetch_limit": 1,
+            "body_char_limit": 6000,
         },
         "ssot.write": {
             "operation": "append",
@@ -171,7 +172,7 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "notion.search-and-fetch": ("One-shot replacement", "search_limit", "fetch_limit"),
         "vault.search": ("Prefer vault.search-and-fetch when you need the body",),
         "vault.fetch": ("return plain structured text", "Prefer over raw qmd.get"),
-        "vault.search-and-fetch": ("One-shot replacement for qmd.query followed by qmd.get", "vault-pdf-ingest"),
+        "vault.search-and-fetch": ("One-shot replacement for qmd.query followed by qmd.get", "vault-pdf-ingest", "does not rerank"),
     }
     for tool, needles in expectations.items():
         description = mod.TOOLS[tool]
@@ -269,6 +270,9 @@ def test_vault_qmd_helpers_normalize_resource_content() -> None:
     expect(search_args["collections"] == ["vault", "vault-pdf-ingest"], str(search_args))
     expect(search_args["searches"][0] == {"type": "lex", "query": "Chutes MESH"}, str(search_args))
     expect(search_args["searches"][1] == {"type": "vec", "query": "Chutes MESH"}, str(search_args))
+    expect(search_args["rerank"] is False, str(search_args))
+    expect(mod._qmd_query_arguments({"query": "Chutes MESH", "rerank": True})["rerank"] is False, "vault bridge must ignore rerank")
+    expect(len(mod._qmd_query_arguments({"query": "Chutes MESH"}, include_vec=False)["searches"]) == 1, "lex fallback should be possible")
     print("PASS test_vault_qmd_helpers_normalize_resource_content")
 
 

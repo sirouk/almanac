@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import secrets
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -51,6 +53,7 @@ from almanac_control import (
     validate_token,
 )
 
+LOGGER = logging.getLogger("almanac-mcp")
 
 TOOLS = {
     "status": "Return control-plane status and vault warnings.",
@@ -66,9 +69,9 @@ TOOLS = {
     "vaults.refresh": "Run an authenticated subscription refresh for an agent.",
     "vaults.subscribe": "Subscribe or unsubscribe an authenticated agent to a vault.",
     "vaults.reload-defs": "Reload .vault definitions from disk. Requires operator-class token.",
-    "vault.search": "Search shared/private vault knowledge through Almanac's qmd-backed vault rail. Prefer vault.search-and-fetch when you need the body to answer, especially for PDFs.",
+    "vault.search": "Fast search of shared/private vault knowledge through Almanac's qmd-backed vault rail. Prefer vault.search-and-fetch when you need the body to answer, especially for PDFs.",
     "vault.fetch": "Fetch a qmd vault hit by exact file/docid and return plain structured text. Prefer over raw qmd.get when the agent needs readable content instead of MCP resource objects.",
-    "vault.search-and-fetch": "Search shared/private vault knowledge and fetch bounded text for top hits in one call. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default.",
+    "vault.search-and-fetch": "Fast bounded search of shared/private vault knowledge and fetched text for top hits. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default and does not rerank.",
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
@@ -248,8 +251,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "description": "Optional qmd collections. Defaults to ['vault', 'vault-pdf-ingest'] so uploaded PDFs are included.",
             },
             "intent": {"type": "string", "description": "Optional retrieval intent passed to qmd."},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
-            "rerank": {"type": "boolean", "default": False},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 5, "default": 5},
             "actor": ACTOR_PROP,
         },
         required=("query",),
@@ -276,13 +278,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "description": "Optional qmd collections. Defaults to ['vault', 'vault-pdf-ingest'] so uploaded PDFs are included.",
             },
             "intent": {"type": "string", "description": "Optional retrieval intent passed to qmd."},
-            "search_limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
-            "fetch_limit": {"type": "integer", "minimum": 0, "maximum": 5, "default": 2},
+            "search_limit": {"type": "integer", "minimum": 1, "maximum": 5, "default": 5},
+            "fetch_limit": {"type": "integer", "minimum": 0, "maximum": 2, "default": 1},
             "fromLine": {"type": "integer", "minimum": 1, "default": 1},
             "maxLines": {"type": "integer", "minimum": 1, "maximum": 500, "default": 160},
             "lineNumbers": {"type": "boolean", "default": False},
-            "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 20000, "default": 8000},
-            "rerank": {"type": "boolean", "default": False},
+            "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 12000, "default": 6000},
             "actor": ACTOR_PROP,
         },
         required=("query",),
@@ -465,7 +466,7 @@ def _qmd_default_collections() -> list[str]:
     return ["vault", "vault-pdf-ingest"]
 
 
-def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeout: int = 25) -> dict[str, Any]:
+def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeout: int = 12) -> dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -520,20 +521,23 @@ def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeo
     return result
 
 
-def _qmd_query_arguments(arguments: dict, *, limit_key: str = "limit") -> dict[str, Any]:
+def _qmd_query_arguments(arguments: dict, *, limit_key: str = "limit", include_vec: bool = True) -> dict[str, Any]:
     query = str(arguments.get("query") or "").strip()
     if not query:
         raise ValueError("query required")
-    search_limit = _clamp_int(arguments.get(limit_key), default=5, minimum=1, maximum=10)
+    search_limit = _clamp_int(arguments.get(limit_key), default=5, minimum=1, maximum=5)
     intent = str(arguments.get("intent") or "").strip() or f"Answer from Almanac vault knowledge: {query}"
+    searches: list[dict[str, str]] = [{"type": "lex", "query": query}]
+    if include_vec:
+        searches.append({"type": "vec", "query": query})
     return {
-        "searches": [
-            {"type": "lex", "query": query},
-            {"type": "vec", "query": query},
-        ],
+        "searches": searches,
         "collections": _string_list_arg(arguments, "collections", default=_qmd_default_collections()),
         "intent": intent,
-        "rerank": _bool_arg(arguments, "rerank"),
+        # Rerank can be expensive on CPU-only qmd hosts and has caused
+        # user-facing 120s Hermes MCP timeouts. The agent-facing vault bridge is
+        # deliberately a fast path; use raw qmd directly for advanced reranking.
+        "rerank": False,
         "limit": search_limit,
     }
 
@@ -887,12 +891,15 @@ class Handler(BaseHTTPRequestHandler):
         tool_name = params.get("name")
         arguments = params.get("arguments") or {}
 
+        started_at = time.monotonic()
         try:
             result = self._dispatch_tool(str(tool_name), arguments)
         except PermissionError as exc:
+            LOGGER.warning("tool %s permission_denied in %.3fs", tool_name, time.monotonic() - started_at)
             self._rpc_error(str(exc), request_id, code=-32001, status=403)
             return
         except RateLimitError as exc:
+            LOGGER.warning("tool %s rate_limited in %.3fs", tool_name, time.monotonic() - started_at)
             self._rpc_error(
                 str(exc),
                 request_id,
@@ -903,12 +910,15 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         except RuntimeError as exc:
+            LOGGER.warning("tool %s runtime_error in %.3fs: %s", tool_name, time.monotonic() - started_at, exc)
             self._rpc_error(str(exc), request_id, code=-32029, status=429)
             return
         except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("tool %s failed in %.3fs: %s", tool_name, time.monotonic() - started_at, exc)
             self._rpc_error(str(exc), request_id, status=400)
             return
 
+        LOGGER.info("tool %s ok in %.3fs", tool_name, time.monotonic() - started_at)
         self._rpc_success(
             {
                 "content": [{"type": "text", "text": json.dumps(result, sort_keys=True)}],
@@ -1135,9 +1145,19 @@ class Handler(BaseHTTPRequestHandler):
             if tool_name == "vault.search-and-fetch":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
                 query_args = _qmd_query_arguments(arguments, limit_key="search_limit")
-                search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
+                try:
+                    search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
+                    search_fallback_used = False
+                except Exception:
+                    # Keep the user-facing bridge snappy even if vector search is
+                    # unhealthy. A lex-only pass still finds exact internal terms
+                    # like "Chutes MESH" and beats falling back to filesystem
+                    # scraping in the agent.
+                    query_args = _qmd_query_arguments(arguments, limit_key="search_limit", include_vec=False)
+                    search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args, timeout=8)
+                    search_fallback_used = True
                 search = _compact_qmd_search_result(search_result)
-                fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=2, minimum=0, maximum=5)
+                fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=1, minimum=0, maximum=2)
                 fetched: list[dict[str, Any]] = []
                 seen_files: set[str] = set()
                 for hit in search.get("results", []):
@@ -1167,6 +1187,8 @@ class Handler(BaseHTTPRequestHandler):
                     "search": search,
                     "fetched": fetched,
                     "fetch_limit": fetch_limit,
+                    "rerank": False,
+                    "search_fallback_used": search_fallback_used,
                 }
 
             if tool_name == "agents.managed-memory":
@@ -1451,6 +1473,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = parse_args()
     cfg = Config.from_env()
     host = args.host or cfg.public_mcp_host

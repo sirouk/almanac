@@ -232,6 +232,16 @@ def _session_bot_label(session: dict[str, Any]) -> str:
     ).strip() or "your bot"
 
 
+def _session_runtime_model(cfg: Config, session: dict[str, Any], provider_runtime: dict[str, Any]) -> tuple[str, str]:
+    answers = session.get("answers", {})
+    model_preset = str(answers.get("model_preset") or "codex").strip().lower() or "codex"
+    provider = str(provider_runtime.get("provider") or "").strip()
+    model = str(provider_runtime.get("model") or "").strip()
+    if provider and model:
+        return model_preset, f"{provider}:{model}"
+    return model_preset, str(cfg.model_presets.get(model_preset) or "").strip()
+
+
 def _run_as_user(
     *,
     unix_user: str,
@@ -924,6 +934,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"failed to chown {env_path}: {exc}") from exc
 
+    model_preset, model_string = _session_runtime_model(cfg, session, provider_runtime)
     update_agent_channels(
         conn,
         cfg,
@@ -931,6 +942,8 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         channels=["tui-only", "telegram"],
         home_channel={"platform": "telegram", "channel_id": chat_id},
         display_name=_session_bot_label(session),
+        model_preset=model_preset,
+        model_string=model_string,
     )
     upsert_agent_identity(
         conn,
@@ -1049,6 +1062,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"failed to chown {env_path}: {exc}") from exc
 
+    model_preset, model_string = _session_runtime_model(cfg, session, provider_runtime)
     update_agent_channels(
         conn,
         cfg,
@@ -1059,6 +1073,8 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             "channel_id": str(session.get("chat_id") or ""),
         },
         display_name=_session_bot_label(session),
+        model_preset=model_preset,
+        model_string=model_string,
     )
     upsert_agent_identity(
         conn,

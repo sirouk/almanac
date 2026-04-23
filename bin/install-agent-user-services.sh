@@ -44,7 +44,7 @@ disable_native_hermes_gateway_units() {
 
   units="$(
     env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" \
-      systemctl --user list-unit-files 'hermes-gateway*' --no-legend --plain 2>/dev/null | awk '{print $1}'
+      systemctl --user list-unit-files 'hermes-gateway*' --no-legend --plain 2>/dev/null | awk '{print $1}' || true
   )"
   if [[ -z "$units" ]]; then
     return 0

@@ -123,6 +123,21 @@ def test_onboarding_paths_enter_notion_phase_before_final_completion() -> None:
     print("PASS test_onboarding_paths_enter_notion_phase_before_final_completion")
 
 
+def test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed() -> None:
+    text = PROVISIONER_PY.read_text(encoding="utf-8")
+    telegram = extract(text, "def _configure_user_telegram_gateway", "def _configure_user_discord_gateway")
+    discord = extract(text, "def _configure_user_discord_gateway", "def _run_pending_onboarding_gateway_configs")
+
+    expect("def _session_runtime_model(" in text, "provisioner should derive the final provider/model after seeding Hermes")
+    expect("model_preset, model_string = _session_runtime_model(cfg, session, provider_runtime)" in telegram, telegram)
+    expect("model_preset=model_preset" in telegram, telegram)
+    expect("model_string=model_string" in telegram, telegram)
+    expect("model_preset, model_string = _session_runtime_model(cfg, session, provider_runtime)" in discord, discord)
+    expect("model_preset=model_preset" in discord, discord)
+    expect("model_string=model_string" in discord, discord)
+    print("PASS test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed")
+
+
 def test_completion_bundle_send_is_idempotent() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -445,11 +460,12 @@ def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None
 def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
+    test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed()
     test_completion_bundle_send_is_idempotent()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
     test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
-    print("PASS all 6 enrollment provisioner regression tests")
+    print("PASS all 7 enrollment provisioner regression tests")
     return 0
 
 

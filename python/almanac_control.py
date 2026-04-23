@@ -6299,6 +6299,8 @@ def update_agent_channels(
     channels: list[str],
     home_channel: dict[str, Any] | None = None,
     display_name: str | None = None,
+    model_preset: str | None = None,
+    model_string: str | None = None,
 ) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM agents WHERE agent_id = ?",
@@ -6316,14 +6318,31 @@ def update_agent_channels(
         else:
             resolved_home_channel = {"platform": "tui", "channel_id": ""}
     resolved_display_name = str(display_name or row["display_name"]).strip() or str(row["display_name"])
+    resolved_model_preset = (
+        str(model_preset).strip() if model_preset is not None else str(row["model_preset"] or "").strip()
+    )
+    resolved_model_string = (
+        str(model_string).strip() if model_string is not None else str(row["model_string"] or "").strip()
+    )
 
     conn.execute(
         """
         UPDATE agents
-        SET channels_json = ?, home_channel_json = ?, display_name = ?
+        SET channels_json = ?,
+            home_channel_json = ?,
+            display_name = ?,
+            model_preset = ?,
+            model_string = ?
         WHERE agent_id = ?
         """,
-        (json_dumps(channels_value), json_dumps(resolved_home_channel), resolved_display_name, agent_id),
+        (
+            json_dumps(channels_value),
+            json_dumps(resolved_home_channel),
+            resolved_display_name,
+            resolved_model_preset,
+            resolved_model_string,
+            agent_id,
+        ),
     )
     conn.commit()
 
@@ -6335,8 +6354,8 @@ def update_agent_channels(
         unix_user=str(row["unix_user"]),
         display_name=resolved_display_name,
         hermes_home=str(row["hermes_home"]),
-        model_preset=str(row["model_preset"] or ""),
-        model_string=str(row["model_string"] or ""),
+        model_preset=resolved_model_preset,
+        model_string=resolved_model_string,
         channels=channels_value,
         allowed_mcps=json_loads(str(row["allowed_mcps_json"] or ""), []),
         subscriptions=subscriptions,

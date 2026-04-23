@@ -209,11 +209,68 @@ def test_generated_backup_units_follow_backup_state_file() -> None:
         print("PASS test_generated_backup_units_follow_backup_state_file")
 
 
+def test_missing_native_hermes_gateway_units_do_not_abort_install() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        systemctl_log = root / "systemctl.log"
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+            "if [[ \"$*\" == *\"list-unit-files hermes-gateway\"* ]]; then\n"
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+
+        hermes_bin = root / "hermes"
+        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        hermes_bin.chmod(0o755)
+
+        home = root / "home"
+        hermes_home = home / ".local" / "share" / "almanac-agent" / "hermes-home"
+        hermes_home.mkdir(parents=True, exist_ok=True)
+
+        result = subprocess.run(
+            [
+                str(SCRIPT),
+                "agent-test",
+                str(REPO),
+                str(hermes_home),
+                '["tui-only","discord"]',
+                "",
+                str(hermes_bin),
+            ],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "SYSTEMCTL_LOG": str(systemctl_log),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(
+            result.returncode == 0,
+            f"install-agent-user-services should tolerate no native Hermes gateway units: stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
+        gateway_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-gateway.service"
+        expect(gateway_unit.is_file(), f"expected Almanac gateway unit despite missing native units: {gateway_unit}")
+        log = systemctl_log.read_text(encoding="utf-8")
+        expect("enable almanac-user-agent-gateway.service" in log, log)
+        print("PASS test_missing_native_hermes_gateway_units_do_not_abort_install")
+
+
 def main() -> int:
     test_generated_activate_path_watches_trigger_file_and_parent_directory()
     test_generated_web_service_units_follow_access_state()
     test_generated_backup_units_follow_backup_state_file()
-    print("PASS all 3 agent-user-services regression tests")
+    test_missing_native_hermes_gateway_units_do_not_abort_install()
+    print("PASS all 4 agent-user-services regression tests")
     return 0
 
 

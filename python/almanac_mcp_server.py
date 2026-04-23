@@ -19,6 +19,7 @@ from almanac_control import (
     consume_curator_brief_fanout,
     deny_request,
     enqueue_ssot_write,
+    get_ssot_pending_write,
     is_loopback_ip,
     is_tailnet_ip,
     list_notifications,
@@ -63,13 +64,366 @@ TOOLS = {
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
-    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering.",
-    "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided.",
-    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for approval. Archive/delete are rejected.",
-    "notion.search": "Search shared Notion knowledge through Almanac's qmd-backed indexed Notion rail.",
-    "notion.fetch": "Fetch the live body or schema of a shared Notion page/database/data source by exact id or URL.",
-    "notion.query": "Run a live structured query against a shared Notion database/data source.",
+    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering. Use for scoped shared-database reads (org rows owned/assigned to the caller). For broad knowledge lookup by phrase, call notion.search or notion.search-and-fetch instead.",
+    "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided. Use when the user asks about their queue in general; for a specific pending_id, call ssot.status instead.",
+    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for approval; surface the returned pending_id. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status with the pending_id.",
+    "ssot.status": "Check one previously queued SSOT write by pending_id for the calling agent. Prefer over ssot.pending when the pending_id is already known.",
+    "notion.search": "Search shared Notion knowledge through Almanac's qmd-backed indexed Notion rail. Call when the user wants a phrase/title discovery only; prefer notion.search-and-fetch when you also need the body to answer.",
+    "notion.fetch": "Fetch the live body or schema of a shared Notion page/database/data source by exact id or URL. Prefer over notion.search when the user already gave a URL or id, or says they just edited the page.",
+    "notion.query": "Run a live structured query against a shared Notion database/data source. Prefer for owner/status/due/assignee filters instead of page-by-page search.",
+    "notion.search-and-fetch": "Search shared Notion knowledge and fetch bounded live page bodies for the top matching pages. One-shot replacement for \"search, pick, fetch\" loops; bounded by search_limit ≤10, fetch_limit ≤3, body_char_limit ≤12000.",
 }
+
+
+def _schema(
+    properties: dict[str, dict],
+    *,
+    required: list[str] | tuple[str, ...] = (),
+    any_of: list[dict[str, Any]] | None = None,
+    all_of: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+    if any_of:
+        schema["anyOf"] = any_of
+    if all_of:
+        schema["allOf"] = all_of
+    return schema
+
+
+TOKEN_PROP = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Agent bootstrap token. Prefer reading it from HERMES_HOME/secrets/almanac-bootstrap-token; do not paste secrets into chat.",
+}
+OPERATOR_TOKEN_PROP = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Operator-class token for admin-only tools. The server also accepts this value as token for legacy callers, but operator_token is preferred.",
+}
+ACTOR_PROP = {
+    "type": "string",
+    "description": "Optional audit actor label. Defaults to the authenticated agent_id.",
+}
+SURFACE_PROP = {
+    "type": "string",
+    "enum": ["curator-channel", "curator-tui", "ctl"],
+    "default": "curator-channel",
+    "description": "Operator decision surface. Invalid values normalize to the default in the server.",
+}
+NOTION_QUERY_PROP = {
+    "type": "object",
+    "description": "Notion API query payload, such as filter, sorts, start_cursor, or page_size.",
+    "additionalProperties": True,
+}
+SSOT_PAYLOAD_PROP = {
+    "type": "object",
+    "description": "Notion write payload. update/insert usually use properties. For append, pass exactly {'children': [...]} with no 'after'. Almanac strips/stamps Changed By, Author, and Requested By attribution fields.",
+    "additionalProperties": True,
+}
+
+
+def _operator_schema(properties: dict[str, dict], *, required: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+    return _schema(
+        {
+            "operator_token": OPERATOR_TOKEN_PROP,
+            "token": OPERATOR_TOKEN_PROP,
+            **properties,
+        },
+        required=required,
+        any_of=[{"required": ["operator_token"]}, {"required": ["token"]}],
+    )
+
+
+SSOT_APPEND_PAYLOAD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "children": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Notion block children to append at the end of the page/block.",
+        },
+    },
+    "required": ["children"],
+    "additionalProperties": False,
+    "not": {"required": ["after"]},
+}
+
+SSOT_WRITE_ALLOF = [
+    {
+        "if": {"properties": {"operation": {"const": "append"}}},
+        "then": {
+            "required": ["target_id"],
+            "properties": {"payload": SSOT_APPEND_PAYLOAD_SCHEMA},
+        },
+    },
+    {
+        "if": {"properties": {"operation": {"const": "update"}}},
+        "then": {"required": ["target_id"]},
+    },
+    {
+        "if": {"properties": {"operation": {"const": "insert"}}},
+        "then": {
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "description": "Insert payload for Notion page creation. It must assign Owner or Assignee to the verified caller, or the broker rejects it.",
+                    "additionalProperties": True,
+                },
+            }
+        },
+    },
+]
+
+
+TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "status": _schema({}),
+    "bootstrap.request": _schema(
+        {
+            "requester_identity": {"type": "string", "description": "Human or system requesting enrollment."},
+            "unix_user": {"type": "string", "description": "Requested Unix account/user name."},
+            "source_ip": {"type": "string", "description": "Optional caller IP override accepted only from loopback."},
+            "auto_provision": {"type": "boolean", "description": "Queue an operator-approved auto-provision flow instead of a manual request."},
+            "model_preset": {"type": "string", "description": "Optional requested Almanac model preset."},
+            "channels": {"type": "array", "items": {"type": "string"}, "description": "Requested delivery channels, e.g. tui-only, discord, telegram."},
+        },
+        required=("unix_user",),
+    ),
+    "bootstrap.handshake": _schema(
+        {
+            "requester_identity": {"type": "string", "description": "Human or system requesting enrollment."},
+            "unix_user": {"type": "string", "description": "Requested Unix account/user name."},
+            "source_ip": {"type": "string", "description": "Optional caller IP override accepted only from loopback."},
+            "auto_provision": {"type": "boolean", "description": "Queue an operator-approved auto-provision flow."},
+            "model_preset": {"type": "string", "description": "Optional requested Almanac model preset."},
+            "channels": {"type": "array", "items": {"type": "string"}, "description": "Requested delivery channels, e.g. tui-only, discord, telegram."},
+        },
+        required=("unix_user",),
+    ),
+    "bootstrap.status": _schema(
+        {
+            "request_id": {"type": "string", "description": "Bootstrap request id returned by bootstrap.request or bootstrap.handshake."},
+            "source_ip": {"type": "string", "description": "Optional original source IP when polling through loopback."},
+        },
+        required=("request_id",),
+    ),
+    "bootstrap.approve": _operator_schema(
+        {
+            "request_id": {"type": "string"},
+            "surface": SURFACE_PROP,
+            "actor": {"type": "string"},
+        },
+        required=("request_id",),
+    ),
+    "bootstrap.deny": _operator_schema(
+        {
+            "request_id": {"type": "string"},
+            "surface": SURFACE_PROP,
+            "actor": {"type": "string"},
+        },
+        required=("request_id",),
+    ),
+    "bootstrap.revoke": _operator_schema(
+        {
+            "target": {"type": "string", "description": "Token id or agent id to revoke."},
+            "surface": SURFACE_PROP,
+            "actor": {"type": "string"},
+            "reason": {"type": "string", "default": "revoked"},
+        },
+        required=("target",),
+    ),
+    "bootstrap.reinstate": _operator_schema(
+        {
+            "token_id": {"type": "string"},
+            "surface": SURFACE_PROP,
+            "actor": {"type": "string"},
+        },
+        required=("token_id",),
+    ),
+    "agents.register": _schema(
+        {
+            "token": TOKEN_PROP,
+            "unix_user": {"type": "string"},
+            "display_name": {"type": "string"},
+            "role": {"type": "string", "enum": ["user", "curator"], "default": "user"},
+            "hermes_home": {"type": "string", "description": "Absolute HERMES_HOME path for this agent."},
+            "model_preset": {"type": "string"},
+            "model_string": {"type": "string"},
+            "channels": {"type": "array", "items": {"type": "string"}},
+            "home_channel": {"type": "object", "additionalProperties": True},
+            "operator_notify_channel": {"type": "object", "additionalProperties": True},
+        },
+        required=("token", "unix_user", "hermes_home"),
+    ),
+    "catalog.vaults": _schema({"token": TOKEN_PROP}, required=("token",)),
+    "vaults.refresh": _schema({"token": TOKEN_PROP}, required=("token",)),
+    "vaults.subscribe": _schema(
+        {
+            "token": TOKEN_PROP,
+            "vault_name": {"type": "string"},
+            "subscribed": {"type": "boolean", "description": "true subscribes; false unsubscribes."},
+        },
+        required=("token", "vault_name", "subscribed"),
+    ),
+    "vaults.reload-defs": _operator_schema({}),
+    "agents.managed-memory": _schema({"token": TOKEN_PROP}, required=("token",)),
+    "agents.consume-notifications": _schema(
+        {
+            "token": TOKEN_PROP,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+        },
+        required=("token",),
+    ),
+    "curator.fanout": _operator_schema({}),
+    "notifications.list": _operator_schema(
+        {
+            "target_kind": {"type": "string", "description": "Optional target kind filter."},
+            "target_id": {"type": "string", "description": "Optional target id filter."},
+            "undelivered_only": {"type": "boolean", "default": False},
+        },
+    ),
+    "ssot.read": _schema(
+        {
+            "token": TOKEN_PROP,
+            "target_id": {"type": "string", "description": "Optional page/database/data-source id or URL. Omit for the configured shared SSOT database."},
+            "query": NOTION_QUERY_PROP,
+            "include_markdown": {"type": "boolean", "default": False, "description": "For page reads, include live markdown body."},
+            "actor": ACTOR_PROP,
+        },
+        required=("token",),
+    ),
+    "ssot.pending": _schema(
+        {
+            "token": TOKEN_PROP,
+            "status": {"type": "string", "enum": ["pending", "applied", "denied", "expired"], "default": "pending"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+        },
+        required=("token",),
+    ),
+    "ssot.status": _schema(
+        {
+            "token": TOKEN_PROP,
+            "pending_id": {"type": "string", "minLength": 1, "description": "Pending id returned by ssot.write when final_state is queued."},
+        },
+        required=("token", "pending_id"),
+    ),
+    "ssot.write": _schema(
+        {
+            "token": TOKEN_PROP,
+            "operation": {"type": "string", "enum": ["insert", "update", "append"], "description": "Mutating SSOT operation. Archive/delete/trash/destroy are intentionally unsupported and rejected by the broker."},
+            "target_id": {"type": "string", "description": "Page id/URL for update/append; parent page/database/data-source id/URL for insert."},
+            "payload": SSOT_PAYLOAD_PROP,
+            "read_after": {"type": "boolean", "default": False, "description": "When true and the write applies immediately, include a brokered ssot.read of the resulting target. Leave false unless the user asked to verify live state."},
+            "read_after_include_markdown": {"type": "boolean", "default": False, "description": "When read_after is true, include live markdown for page targets."},
+            "actor": ACTOR_PROP,
+        },
+        required=("token", "operation", "payload"),
+        all_of=SSOT_WRITE_ALLOF,
+    ),
+    "notion.search": _schema(
+        {
+            "token": TOKEN_PROP,
+            "query": {"type": "string", "minLength": 1, "description": "Search text for shared Notion knowledge. Indexed/qmd-backed and may lag recent edits."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+            "rerank": {"type": "boolean", "default": False, "description": "Use only when quality matters more than latency."},
+            "actor": ACTOR_PROP,
+        },
+        required=("token", "query"),
+    ),
+    "notion.fetch": _schema(
+        {
+            "token": TOKEN_PROP,
+            "target_id": {"type": "string", "minLength": 1, "description": "Exact Notion page/database/data-source id or URL. Live read; prefer for recent or exact pages."},
+            "actor": ACTOR_PROP,
+        },
+        required=("token", "target_id"),
+    ),
+    "notion.query": _schema(
+        {
+            "token": TOKEN_PROP,
+            "target_id": {"type": "string", "description": "Database/data-source id or URL. Optional only when a default shared database is configured."},
+            "query": NOTION_QUERY_PROP,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+            "actor": ACTOR_PROP,
+        },
+        required=("token",),
+    ),
+    "notion.search-and-fetch": _schema(
+        {
+            "token": TOKEN_PROP,
+            "query": {"type": "string", "minLength": 1, "description": "Search text for shared Notion knowledge. The search step is indexed/qmd-backed and may lag recent edits."},
+            "search_limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+            "fetch_limit": {"type": "integer", "minimum": 0, "maximum": 3, "default": 2},
+            "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 12000, "default": 4000},
+            "rerank": {"type": "boolean", "default": False},
+            "actor": ACTOR_PROP,
+        },
+        required=("token", "query"),
+    ),
+}
+
+
+def _tool_schema(name: str) -> dict[str, Any]:
+    return TOOL_SCHEMAS.get(name, {"type": "object", "properties": {}, "additionalProperties": False})
+
+
+def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value or default)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _trim_text(value: object, limit: int) -> tuple[str, bool]:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text, False
+    return text[: max(0, limit - 1)].rstrip() + "...", True
+
+
+def _compact_notion_fetch_result(result: dict[str, Any], *, body_char_limit: int) -> dict[str, Any]:
+    target_kind = str(result.get("target_kind") or "")
+    if target_kind != "page":
+        return {
+            "ok": bool(result.get("ok")),
+            "target_id": str(result.get("target_id") or ""),
+            "target_kind": target_kind,
+            "indexed": bool(result.get("indexed")),
+            "database_id": str(result.get("database_id") or ""),
+            "data_source_id": str(result.get("data_source_id") or ""),
+        }
+    markdown, truncated = _trim_text(result.get("markdown"), body_char_limit)
+    page = result.get("page") if isinstance(result.get("page"), dict) else {}
+    return {
+        "ok": bool(result.get("ok")),
+        "target_id": str(result.get("target_id") or ""),
+        "target_kind": "page",
+        "indexed": bool(result.get("indexed")),
+        "indexed_roots": result.get("indexed_roots") if isinstance(result.get("indexed_roots"), list) else [],
+        "page_url": str(page.get("url") or ""),
+        "markdown": markdown,
+        "markdown_truncated": truncated,
+        "attachments": result.get("attachments") if isinstance(result.get("attachments"), list) else [],
+    }
+
+
+def _ssot_final_state(payload: dict[str, Any]) -> str:
+    if bool(payload.get("applied")):
+        return "applied"
+    if bool(payload.get("queued")) or bool(payload.get("approval_required")):
+        return "queued"
+    return str(payload.get("status") or "unknown")
+
+
+def _normalize_ssot_write_result(payload: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    result.setdefault("final_state", _ssot_final_state(result))
+    return result
 
 
 def backend_client_allowed(remote_ip: str) -> bool:
@@ -205,7 +559,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "name": name,
                     "description": description,
-                    "inputSchema": {"type": "object"},
+                    "inputSchema": _tool_schema(name),
                 }
                 for name, description in TOOLS.items()
             ]
@@ -486,6 +840,69 @@ class Handler(BaseHTTPRequestHandler):
                     requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
                 )
 
+            if tool_name == "notion.search-and-fetch":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                actor = str(arguments.get("actor") or token_row["agent_id"])
+                body_char_limit = _clamp_int(
+                    arguments.get("body_char_limit"),
+                    default=4000,
+                    minimum=200,
+                    maximum=12000,
+                )
+                search_result = notion_search(
+                    conn,
+                    cfg,
+                    agent_id=str(token_row["agent_id"]),
+                    query_text=str(arguments.get("query") or ""),
+                    limit=_clamp_int(arguments.get("search_limit"), default=5, minimum=1, maximum=10),
+                    rerank=bool(arguments.get("rerank")),
+                    requested_by_actor=actor,
+                )
+                fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=2, minimum=0, maximum=3)
+                fetched: list[dict[str, Any]] = []
+                seen_targets: set[str] = set()
+                for hit in search_result.get("results") if isinstance(search_result.get("results"), list) else []:
+                    if not isinstance(hit, dict):
+                        continue
+                    target_id = str(hit.get("page_id") or hit.get("page_url") or "").strip()
+                    if not target_id or target_id in seen_targets:
+                        continue
+                    seen_targets.add(target_id)
+                    try:
+                        fetch_result = notion_fetch(
+                            conn,
+                            cfg,
+                            agent_id=str(token_row["agent_id"]),
+                            target_id=target_id,
+                            requested_by_actor=actor,
+                        )
+                        fetched.append(
+                            {
+                                "search_hit": {
+                                    "page_id": str(hit.get("page_id") or ""),
+                                    "page_url": str(hit.get("page_url") or ""),
+                                    "page_title": str(hit.get("page_title") or ""),
+                                    "section_heading": str(hit.get("section_heading") or ""),
+                                    "score": hit.get("score"),
+                                    "snippet": str(hit.get("snippet") or ""),
+                                },
+                                "fetch": _compact_notion_fetch_result(fetch_result, body_char_limit=body_char_limit),
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        fetched.append({"search_hit": hit, "fetch_error": str(exc)})
+                    if len(fetched) >= fetch_limit:
+                        break
+                return {
+                    "ok": True,
+                    "query": search_result.get("query"),
+                    "collection": search_result.get("collection"),
+                    "search": search_result,
+                    "fetched": fetched,
+                    "fetch_limit": fetch_limit,
+                    "body_char_limit": body_char_limit,
+                }
+
             if tool_name == "notion.fetch":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
                 return notion_fetch(
@@ -545,17 +962,58 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 }
 
+            if tool_name == "ssot.status":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                pending_id = str(arguments.get("pending_id") or "").strip()
+                if not pending_id:
+                    raise ValueError("pending_id required")
+                agent_id = str(token_row["agent_id"])
+                row = get_ssot_pending_write(conn, pending_id)
+                if row is None:
+                    return {
+                        "agent_id": agent_id,
+                        "pending_id": pending_id,
+                        "found": False,
+                        "final_state": "unknown",
+                    }
+                if str(row.get("agent_id") or "") != agent_id:
+                    raise PermissionError("pending SSOT write is outside this agent's scope")
+                return {
+                    "agent_id": agent_id,
+                    "pending_id": pending_id,
+                    "found": True,
+                    "final_state": _ssot_final_state(row),
+                    "pending_write": row,
+                }
+
             if tool_name == "ssot.write":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
-                return enqueue_ssot_write(
-                    conn,
-                    cfg,
-                    agent_id=str(token_row["agent_id"]),
-                    operation=str(arguments.get("operation") or "").strip().lower(),
-                    target_id=str(arguments.get("target_id") or ""),
-                    payload=arguments.get("payload") or {},
-                    requested_by_actor=str(arguments.get("actor") or token_row["agent_id"]),
+                agent_id = str(token_row["agent_id"])
+                actor = str(arguments.get("actor") or token_row["agent_id"])
+                result = _normalize_ssot_write_result(
+                    enqueue_ssot_write(
+                        conn,
+                        cfg,
+                        agent_id=agent_id,
+                        operation=str(arguments.get("operation") or "").strip().lower(),
+                        target_id=str(arguments.get("target_id") or ""),
+                        payload=arguments.get("payload") or {},
+                        requested_by_actor=actor,
+                    )
                 )
+                if bool(arguments.get("read_after")) and result.get("final_state") == "applied":
+                    target_id = str(result.get("target_id") or "").strip()
+                    if target_id:
+                        result["read_after"] = read_ssot(
+                            conn,
+                            cfg,
+                            agent_id=agent_id,
+                            target_id=target_id,
+                            query={},
+                            include_markdown=bool(arguments.get("read_after_include_markdown")),
+                            requested_by_actor=actor,
+                        )
+                return result
 
             raise ValueError(f"unknown tool: {tool_name}")
 

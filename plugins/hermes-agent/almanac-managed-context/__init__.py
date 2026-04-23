@@ -145,6 +145,132 @@ _FOLLOWUP_TERMS = (
 _HISTORY_RELEVANCE_LOOKBACK = 8
 _SESSION_REVISIONS: dict[str, str] = {}
 
+# Per-turn tool recipe cards. When the user's message clearly implies a specific
+# MCP rail, the plugin inlines the literal JSON-call shape into context so the
+# agent does not need to read SKILL.md or reverse-engineer argument names from
+# repo Python. Cards are compact by design; at most _MAX_RECIPES_PER_TURN are
+# injected per turn, and they sit alongside (not instead of) the existing
+# reference stubs.
+_MAX_RECIPES_PER_TURN = 2
+_TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "ssot.write",
+        (
+            "update the page",
+            "update this page",
+            "update that page",
+            "append to",
+            "add to the page",
+            "add to this page",
+            "add to that page",
+            "insert into",
+            "change the status",
+            "mark as done",
+            "mark as complete",
+            "set the owner",
+            "edit the page",
+            "write to the page",
+        ),
+        (
+            "ssot.write — one call. Required: token, operation, payload. "
+            "operation is one of insert|update|append (archive/delete are rejected). "
+            "For append, payload MUST be {\"children\":[...]} with no 'after'. "
+            "For update/insert, use {\"properties\":{...}}. target_id is required for append/update. "
+            "Set read_after:true only if the user asked you to verify live state. "
+            "Response has final_state:\"applied\"|\"queued\"; when queued, surface pending_id to the user."
+        ),
+    ),
+    (
+        "ssot.status",
+        (
+            "was it written",
+            "was it applied",
+            "did it apply",
+            "is it approved",
+            "is it there yet",
+            "did the write go through",
+            "status of pending",
+            "status of the write",
+            "check pending",
+        ),
+        (
+            "ssot.status — pending_id lookup. Required: token, pending_id. "
+            "Returns final_state: applied|queued|denied|expired. "
+            "Prefer over ssot.pending when you already have the pending_id from a prior ssot.write."
+        ),
+    ),
+    (
+        "ssot.pending",
+        (
+            "my pending",
+            "pending writes",
+            "pending approvals",
+            "queued writes",
+            "what's in my queue",
+            "what is in my queue",
+        ),
+        (
+            "ssot.pending — list own queued or decided writes. Required: token. "
+            "Optional status in {pending|applied|denied|expired} (default pending); optional limit ≤ 100."
+        ),
+    ),
+    (
+        "notion.search-and-fetch",
+        (
+            "search notion",
+            "find a page",
+            "find the page",
+            "look up",
+            "what does the page say",
+            "knowledge about",
+            "information about",
+            "what do we know about",
+        ),
+        (
+            "notion.search-and-fetch — one-shot \"find and read\". Required: token, query. "
+            "Bounded: search_limit ≤ 10, fetch_limit ≤ 3, body_char_limit ≤ 12000. "
+            "Prefer over separate notion.search + fetch loops."
+        ),
+    ),
+    (
+        "notion.fetch",
+        (
+            "fetch this page",
+            "read this page",
+            "read the page",
+            "this exact page",
+            "this notion page",
+            "this link",
+            "from this url",
+        ),
+        (
+            "notion.fetch — live read of one exact page/database/data source. Required: token, target_id (id or URL). "
+            "Prefer over notion.search when the user already gave a URL or id."
+        ),
+    ),
+    (
+        "notion.query",
+        (
+            "what's due",
+            "what is due",
+            "assigned to me",
+            "my assignments",
+            "my tasks",
+            "tasks in progress",
+            "rows where",
+            "status is in progress",
+        ),
+        (
+            "notion.query — live structured query. Required: token. "
+            "Optional target_id (database or data source id/URL) — omit for the configured shared SSOT database. "
+            "query follows the Notion API (filter/sorts/page_size). Prefer for owner/status/due/assignee filters."
+        ),
+    ),
+)
+
+_TELEMETRY_FILENAME = "almanac-context-telemetry.jsonl"
+_TELEMETRY_MAX_BYTES = 1_000_000
+
 
 def _hermes_home() -> Path:
     return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
@@ -240,6 +366,72 @@ def _history_was_relevant(conversation_history: object) -> bool:
         return False
     recent = conversation_history[-_HISTORY_RELEVANCE_LOOKBACK:]
     return any(_is_relevant(_history_message_text(item)) for item in recent)
+
+
+def _matching_recipes(user_message: str) -> list[dict[str, str]]:
+    lowered = str(user_message or "").lower()
+    matches: list[tuple[int, str, str]] = []
+    for tool_name, triggers, recipe in _TOOL_RECIPES:
+        earliest = -1
+        for trigger in triggers:
+            idx = lowered.find(trigger)
+            if idx >= 0 and (earliest < 0 or idx < earliest):
+                earliest = idx
+        if earliest >= 0:
+            matches.append((earliest, tool_name, recipe))
+    matches.sort(key=lambda pair: pair[0])
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for _, name, recipe in matches:
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append({"tool": name, "recipe": recipe})
+        if len(result) >= _MAX_RECIPES_PER_TURN:
+            break
+    return result
+
+
+def _telemetry_enabled() -> bool:
+    raw = str(os.environ.get("ALMANAC_CONTEXT_TELEMETRY") or "").strip().lower()
+    return raw not in {"0", "off", "false", "no", "disable", "disabled"}
+
+
+def _telemetry_path() -> Path:
+    return _hermes_home() / "state" / _TELEMETRY_FILENAME
+
+
+def _rotate_telemetry_if_large(path: Path) -> None:
+    try:
+        if path.stat().st_size <= _TELEMETRY_MAX_BYTES:
+            return
+    except OSError:
+        return
+    backup = path.with_suffix(path.suffix + ".1")
+    try:
+        if backup.exists():
+            backup.unlink()
+        path.rename(backup)
+    except OSError:
+        return
+
+
+def _emit_telemetry(event: dict[str, object]) -> None:
+    if not _telemetry_enabled():
+        return
+    path = _telemetry_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    _rotate_telemetry_if_large(path)
+    line = json.dumps(event, ensure_ascii=False, sort_keys=True)
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.write("\n")
+    except OSError:
+        return
 
 
 def _skill_snapshot(raw_value: object) -> str:
@@ -405,6 +597,7 @@ def _render_context(
     freshness: dict[str, str],
     managed_revision: str,
     context_revision: str,
+    recipes: list[dict[str, str]] | None = None,
 ) -> str:
     lines = [
         f"[Plugin: {PLUGIN_NAME} — refreshed local Almanac context]",
@@ -445,6 +638,17 @@ def _render_context(
                 _trim(raw, _SECTION_LIMITS.get(key, 800)),
             ]
         )
+
+    if recipes:
+        lines.append("")
+        lines.append("[turn:tool-recipes]")
+        lines.append(
+            "Use these Almanac MCP tools directly for this turn's action; "
+            "do not shell out, heredoc python, or read repo Python source for argument names."
+        )
+        for entry in recipes:
+            lines.append(f"- {entry['tool']}: {entry['recipe']}")
+
     return "\n".join(lines).strip()
 
 
@@ -490,7 +694,8 @@ def _pre_llm_call(
 
     context_relevant = _is_relevant(user_message)
     context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)
-    if not (is_first_turn or revision_changed or context_relevant or context_followup):
+    recipes = _matching_recipes(user_message)
+    if not (is_first_turn or revision_changed or context_relevant or context_followup or recipes):
         return None
 
     context = _render_context(
@@ -498,9 +703,34 @@ def _pre_llm_call(
         freshness=freshness,
         managed_revision=managed_revision,
         context_revision=revision,
+        recipes=recipes,
     )
     if not context:
         return None
+
+    gate: list[str] = []
+    if is_first_turn:
+        gate.append("first_turn")
+    if revision_changed:
+        gate.append("revision_changed")
+    if context_relevant:
+        gate.append("relevant")
+    if context_followup:
+        gate.append("followup")
+    if recipes:
+        gate.append("recipe")
+    _emit_telemetry(
+        {
+            "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "session_id": session_key,
+            "injected": True,
+            "gate": gate,
+            "recipes": [entry["tool"] for entry in recipes],
+            "context_chars": len(context),
+            "managed_revision": managed_revision,
+            "platform": str(platform or ""),
+        }
+    )
     return {"context": context}
 
 

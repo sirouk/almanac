@@ -14,6 +14,39 @@ on behalf of one user. Use this skill to stay aware of the organization,
 current work, and user-scoped responsibilities without treating the SSOT as a
 free-for-all edit surface.
 
+## Hermes Recipe Card
+
+Preferred agent path: call the `almanac-mcp` MCP tools directly. Do not inspect
+repo Python source, run `python3 - <<'PY'` heredocs, or use internal functions
+to enqueue writes from a normal Hermes turn.
+
+Read the bootstrap token from `HERMES_HOME/secrets/almanac-bootstrap-token`;
+never paste it into chat.
+
+Common calls:
+
+```json
+{"tool":"ssot.read","arguments":{"token":"<bootstrap token>","target_id":"<optional-page-or-database-id-or-url>","query":{},"include_markdown":false}}
+{"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"append","target_id":"<page-id-or-url>","payload":{"children":[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":"Awesome alternatives include marshmallows and roasted chestnuts."}}]}}]}}}
+{"tool":"ssot.write","arguments":{"token":"<bootstrap token>","operation":"update","target_id":"<page-id-or-url>","payload":{"properties":{"Status":{"status":{"name":"In Progress"}}}},"read_after":true}}
+{"tool":"ssot.pending","arguments":{"token":"<bootstrap token>","status":"pending","limit":10}}
+{"tool":"ssot.status","arguments":{"token":"<bootstrap token>","pending_id":"ssotw_..."}}
+```
+
+Decision tree:
+
+- For live scoped organizational state, call `ssot.read` once before answering.
+- For append/update/insert, call `ssot.write` once; never archive or delete.
+- Set `read_after:true` only when the user asks you to verify the live state
+  immediately after an applied write.
+- If `ssot.write` returns `final_state:"applied"` or `applied:true`, tell the
+  user it was written and summarize the target.
+- If it returns `final_state:"queued"`, `queued:true`, or `approval_required:true`,
+  report the `pending_id`, owner/scope reason, and that approval is required.
+- For “did it land?” follow-ups, call `ssot.status` with the `pending_id` when
+  known; otherwise call `ssot.pending` with status `applied`, `pending`,
+  `denied`, or `expired` as needed.
+
 ## Default Rails
 
 - allow read / insert / update

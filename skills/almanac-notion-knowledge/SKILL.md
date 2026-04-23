@@ -11,6 +11,35 @@ enrolled agent can use.
 This is not the governed `ssot.read` / `ssot.write` lane and it is not the
 optional user-owned Notion MCP lane.
 
+## Hermes Recipe Card
+
+Preferred agent path: call the `almanac-mcp` MCP tools directly. Do not use
+`scripts/curate-notion.sh` from a Hermes turn unless MCP transport itself is
+broken and you are debugging the harness.
+
+Read the bootstrap token from `HERMES_HOME/secrets/almanac-bootstrap-token`;
+never paste it into chat.
+
+Common calls:
+
+```json
+{"tool":"notion.search","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","limit":5,"rerank":false}}
+{"tool":"notion.fetch","arguments":{"token":"<bootstrap token>","target_id":"<page-or-database-id-or-url>"}}
+{"tool":"notion.query","arguments":{"token":"<bootstrap token>","target_id":"<database-or-data-source-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}
+{"tool":"notion.search-and-fetch","arguments":{"token":"<bootstrap token>","query":"Chutes Unicorn","search_limit":5,"fetch_limit":2,"body_char_limit":4000,"rerank":false}}
+```
+
+Call budget:
+
+- If the user asks a simple knowledge question by title or phrase, use
+  `notion.search-and-fetch` once and answer from the fetched body.
+- If the user gives an exact page/database URL or id, skip search and call
+  `notion.fetch` once.
+- If the user asks for assignments, status, due dates, or rows in a shared
+  database, call `notion.query` once.
+- Only fall back to separate `notion.search` then up to 3 `notion.fetch` calls
+  when you need more control than `notion.search-and-fetch` provides.
+
 ## Default Split
 
 - `search` for broad knowledge discovery over indexed shared Notion content, including extractable Notion-hosted PDF/text attachments on indexed pages
@@ -52,10 +81,11 @@ live Notion reads.
   do not assume private per-user filtering on this rail
 - do not use the optional personal Notion MCP lane unless the user explicitly wants their separate personal workspace
 
-## Wrapper
+## Human CLI Fallback
 
-Use the local wrapper so the script reads the bootstrap token from
-`HERMES_HOME` instead of copying secrets into chat:
+These wrappers are for humans and operator debugging, not the preferred Hermes
+agent path. They exist so a shell user can exercise the same MCP rail while the
+script reads the bootstrap token from `HERMES_HOME`:
 
 ```bash
 scripts/curate-notion.sh search "Chutes Unicorn"

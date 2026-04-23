@@ -9,6 +9,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_SCRIPT = REPO / "skills" / "almanac-vaults" / "scripts" / "curate-vaults.sh"
+SKILL = REPO / "skills" / "almanac-vaults" / "SKILL.md"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -77,9 +78,26 @@ def test_installed_curate_vaults_uses_repo_env_fallback() -> None:
         print("PASS test_installed_curate_vaults_uses_repo_env_fallback")
 
 
+def test_vaults_skill_prefers_mcp_recipe_over_shell_wrapper() -> None:
+    body = SKILL.read_text(encoding="utf-8")
+    expect("## Hermes Recipe Card" in body, body)
+    expect(body.index("## Hermes Recipe Card") < body.index("## Contract"), body)
+    expect('"tool":"catalog.vaults"' in body, body)
+    expect('"tool":"vaults.refresh"' in body, body)
+    expect('"tool":"agents.managed-memory"' in body, body)
+    expect('"tool":"vaults.subscribe"' in body, body)
+    expect("Preferred agent path: call the `almanac-mcp` MCP tools directly." in body, body)
+    expect("## Human CLI Fallback" in body, body)
+    expect("not the preferred Hermes" in body, body)
+    expect(body.index("## Human CLI Fallback") < body.index("scripts/curate-vaults.sh curate"), body)
+    expect("Run the script first" not in body, body)
+    print("PASS test_vaults_skill_prefers_mcp_recipe_over_shell_wrapper")
+
+
 def main() -> int:
     test_installed_curate_vaults_uses_repo_env_fallback()
-    print("PASS all 1 almanac-vaults skill regression tests")
+    test_vaults_skill_prefers_mcp_recipe_over_shell_wrapper()
+    print("PASS all 2 almanac-vaults skill regression tests")
     return 0
 
 

@@ -620,6 +620,172 @@ def test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails() -> N
             os.environ.update(old_env)
 
 
+def _write_minimal_managed_state(hermes_home: Path) -> None:
+    state_dir = hermes_home / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "almanac-vault-reconciler.json").write_text(
+        json.dumps(
+            {
+                "agent_id": "agent-jeef",
+                "managed_memory_revision": "rev-recipes",
+                "almanac-skill-ref": (
+                    "Current Almanac capability snapshot:\n"
+                    "- Use almanac-ssot for organization-aware SSOT coordination.\n"
+                    "- Use almanac-notion-knowledge for shared Notion knowledge.\n"
+                ),
+                "vault-ref": "Vault root: /srv/almanac/vault",
+                "qmd-ref": "qmd MCP (deep retrieval): https://kor.example/mcp",
+                "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp) / "hermes-home"
+        _write_minimal_managed_state(hermes_home)
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["ALMANAC_CONTEXT_TELEMETRY"] = "0"
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_recipes_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_llm_call"][0]
+
+            write_turn = hook(
+                session_id="session-recipes-1",
+                user_message="please update the page to include marshmallows",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(write_turn, dict) and write_turn.get("context"), f"expected context on recipe-triggered turn, got {write_turn!r}")
+            write_context = write_turn["context"]
+            expect("[turn:tool-recipes]" in write_context, write_context)
+            expect("- ssot.write:" in write_context, write_context)
+            expect("archive/delete are rejected" in write_context, write_context)
+            expect("final_state" in write_context, write_context)
+            expect("- ssot.status:" not in write_context, write_context)
+
+            status_turn = hook(
+                session_id="session-recipes-2",
+                user_message="was it written yet?",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(status_turn, dict) and status_turn.get("context"), f"expected context on status-trigger, got {status_turn!r}")
+            expect("- ssot.status:" in status_turn["context"], status_turn["context"])
+            expect("pending_id lookup" in status_turn["context"], status_turn["context"])
+
+            neutral_turn = hook(
+                session_id="session-recipes-3",
+                user_message="hello there",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(neutral_turn is None, f"expected no injection on neutral turn without gate, got {neutral_turn!r}")
+
+            first_turn = hook(
+                session_id="session-recipes-4",
+                user_message="hello there",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(first_turn, dict) and first_turn.get("context"), f"expected first-turn context, got {first_turn!r}")
+            expect("[turn:tool-recipes]" not in first_turn["context"], first_turn["context"])
+
+            print("PASS test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_almanac_managed_context_emits_telemetry_and_respects_opt_out() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp) / "hermes-home"
+        _write_minimal_managed_state(hermes_home)
+        telemetry_path = hermes_home / "state" / "almanac-context-telemetry.jsonl"
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ.pop("ALMANAC_CONTEXT_TELEMETRY", None)
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_telemetry_on_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_llm_call"][0]
+
+            hook(
+                session_id="session-tel-1",
+                user_message="update the page to include chocolate",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(telemetry_path.is_file(), f"expected telemetry file at {telemetry_path}")
+            lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            expect(len(lines) == 1, lines)
+            record = lines[0]
+            expect(record.get("injected") is True, record)
+            expect(record.get("session_id") == "session-tel-1", record)
+            expect("first_turn" in record.get("gate", []), record)
+            expect("recipe" in record.get("gate", []), record)
+            expect(record.get("recipes") == ["ssot.write"], record)
+            expect(record.get("platform") == "discord", record)
+            expect(isinstance(record.get("context_chars"), int) and record["context_chars"] > 0, record)
+            expect("user_message" not in record, record)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            hermes_home2 = Path(tmp2) / "hermes-home"
+            _write_minimal_managed_state(hermes_home2)
+            telemetry_path2 = hermes_home2 / "state" / "almanac-context-telemetry.jsonl"
+            old_env2 = os.environ.copy()
+            os.environ["HERMES_HOME"] = str(hermes_home2)
+            os.environ["ALMANAC_CONTEXT_TELEMETRY"] = "0"
+            try:
+                module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_telemetry_off_test")
+                ctx = FakeCtx()
+                module.register(ctx)
+                hook = ctx.hooks["pre_llm_call"][0]
+                hook(
+                    session_id="session-tel-off",
+                    user_message="update the page to include marshmallows",
+                    conversation_history=[],
+                    is_first_turn=True,
+                    model="test-model",
+                    platform="discord",
+                    sender_id="user-1",
+                )
+                expect(not telemetry_path2.exists(), f"telemetry should not be written when opted out, but found {telemetry_path2}")
+                print("PASS test_almanac_managed_context_emits_telemetry_and_respects_opt_out")
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env2)
+
+
 def main() -> int:
     test_install_almanac_plugins_installs_default_hermes_plugin()
     test_almanac_managed_context_reads_writer_materialized_notion_state()
@@ -627,7 +793,9 @@ def main() -> int:
     test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
     test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
     test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails()
-    print("PASS all 6 Almanac plugin tests")
+    test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()
+    test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
+    print("PASS all 8 Almanac plugin tests")
     return 0
 
 

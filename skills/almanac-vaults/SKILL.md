@@ -7,6 +7,36 @@ description: Use to inspect the active Almanac vault catalog, curate subscribed 
 
 Use this skill when an enrolled user wants to manage Almanac vault subscriptions and understand which vaults are represented in the agent's managed-memory routing stubs.
 
+## Hermes Recipe Card
+
+Preferred agent path: call the `almanac-mcp` MCP tools directly. Do not use
+`scripts/curate-vaults.sh` from a Hermes turn unless MCP transport itself is
+broken and you are debugging the harness.
+
+Read the bootstrap token from `HERMES_HOME/secrets/almanac-bootstrap-token`;
+never paste it into chat.
+
+Common calls:
+
+```json
+{"tool":"catalog.vaults","arguments":{"token":"<bootstrap token>"}}
+{"tool":"vaults.refresh","arguments":{"token":"<bootstrap token>"}}
+{"tool":"agents.managed-memory","arguments":{"token":"<bootstrap token>"}}
+{"tool":"vaults.subscribe","arguments":{"token":"<bootstrap token>","vault_name":"Teams","subscribed":false}}
+```
+
+Decision tree:
+
+- “What vaults am I subscribed to?” -> call `catalog.vaults` once.
+- “Refresh my context/stubs” -> call `vaults.refresh`, then
+  `agents.managed-memory` only if you need to inspect the canonical payload.
+- “Which stubs or rails do I know about?” -> call `agents.managed-memory`.
+- “Subscribe/unsubscribe me” -> call `vaults.subscribe` once with
+  `subscribed:true` or `false`, then explain that Curator fanout refreshes the
+  local memory stubs.
+- For deep content retrieval, use `almanac-qmd-mcp`; vault subscriptions shape
+  ambient awareness and push behavior, not qmd access.
+
 ## Contract
 
 - all approved users may retrieve from any active vault through qmd
@@ -15,9 +45,11 @@ Use this skill when an enrolled user wants to manage Almanac vault subscriptions
 - missing or malformed `.vault` files fail safe and should be surfaced as warnings
 - the canonical managed-memory payload comes from `agents.managed-memory`, not from hand-editing local memory files
 
-## Command surface
+## Human CLI Fallback
 
-Use the skill script:
+These wrappers are for humans and operator debugging, not the preferred Hermes
+agent path. They exercise the same MCP rails while reading the bootstrap token
+from `HERMES_HOME`:
 
 ```bash
 scripts/curate-vaults.sh curate
@@ -95,4 +127,5 @@ When the user asks things like:
 - "refresh my Almanac vault context"
 - "why did Curator notify me about this vault?"
 
-Run the script first, then explain the result using the catalog + managed payload + trigger rail.
+Use the MCP recipe card first, then explain the result using the catalog,
+managed payload, and trigger rail.

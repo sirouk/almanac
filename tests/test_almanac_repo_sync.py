@@ -365,6 +365,62 @@ def test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes
         print("PASS test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes")
 
 
+def test_sync_vault_repo_mirrors_honors_explicit_remote_override() -> None:
+    """The preflight/explicit-source path can pass a remote_url that differs
+    from the checkout's current origin. The sync primitive must honor that
+    remote instead of trying to fetch a placeholder GitHub origin."""
+    mod = load_module(CONTROL_PY, "almanac_control_remote_override_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = make_config(root)
+        write_repos_vault(root)
+        local_repo = root / "vault" / "Projects" / "demo-override"
+        bare_remote, seed_repo = make_clone_with_remote(root, clone_path=local_repo)
+
+        subprocess.run(
+            ["git", "-C", str(local_repo), "remote", "set-url", "origin", "https://github.com/example/demo-override.git"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (seed_repo / "README.md").write_text("override remote update\n", encoding="utf-8")
+        commit_all(seed_repo, "upstream override update")
+        subprocess.run(["git", "-C", str(seed_repo), "push", "origin", "main"], check=True, capture_output=True, text=True)
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.reload_vault_definitions(conn, cfg)
+            result = mod.sync_vault_repo_mirrors(
+                conn,
+                cfg,
+                repo_sources=[
+                    {
+                        "canonical_url": "https://github.com/example/demo-override",
+                        "remote_url": str(bare_remote),
+                        "source_paths": [],
+                        "local_repo_paths": [str(local_repo)],
+                    }
+                ],
+            )
+            expect(result["repos_failed"] == [], str(result))
+            expect((local_repo / "README.md").read_text(encoding="utf-8") == "override remote update\n", "expected explicit remote update")
+            origin = subprocess.run(
+                ["git", "-C", str(local_repo), "remote", "get-url", "origin"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            expect(origin == str(bare_remote), f"expected origin to be reset to explicit remote, got {origin!r}")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        print("PASS test_sync_vault_repo_mirrors_honors_explicit_remote_override")
+
+
 def test_sync_vault_repo_mirrors_reports_failure_on_detached_head_and_keeps_going() -> None:
     """A detached HEAD or missing origin must not crash the rail; the faulty
     repo is recorded as a failure while other repos still sync cleanly."""
@@ -440,8 +496,9 @@ def main() -> int:
     test_discover_vault_repo_sources_finds_local_git_checkouts()
     test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors()
     test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes()
+    test_sync_vault_repo_mirrors_honors_explicit_remote_override()
     test_sync_vault_repo_mirrors_reports_failure_on_detached_head_and_keeps_going()
-    print("PASS all 5 repo sync regression tests")
+    print("PASS all 6 repo sync regression tests")
     return 0
 
 

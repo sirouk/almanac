@@ -4261,6 +4261,16 @@ def _repo_sync_pull_local_repo(repo_dir: Path, remote_url: str = "") -> dict[str
     if not remote_url:
         raise RuntimeError(f"local repo has no origin remote at {repo_dir}")
 
+    try:
+        current_origin = _repo_sync_git("remote", "get-url", "origin", cwd=repo_dir).stdout.strip()
+    except RuntimeError:
+        current_origin = ""
+    if current_origin:
+        if current_origin != remote_url:
+            _repo_sync_git("remote", "set-url", "origin", remote_url, cwd=repo_dir)
+    else:
+        _repo_sync_git("remote", "add", "origin", remote_url, cwd=repo_dir)
+
     before_commit = _repo_sync_git("rev-parse", "HEAD", cwd=repo_dir).stdout.strip()
 
     _repo_sync_git("fetch", "--prune", "origin", branch, cwd=repo_dir, timeout=300)

@@ -262,8 +262,7 @@ def test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes
       - remote updates applied (README: seed -> updated)
       - local uncommitted edits are overwritten
       - local commits ahead of origin are dropped
-      - untracked non-gitignored files are cleaned
-      - gitignored files (build caches etc.) are preserved
+      - untracked files are cleaned, including gitignored build caches
     """
     mod = load_module(CONTROL_PY, "almanac_control_hard_reset_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -290,7 +289,7 @@ def test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes
         (local_repo / "README.md").write_text("MY LOCAL HACK\n", encoding="utf-8")           # uncommitted edit
         (local_repo / "scratch.md").write_text("untracked\n", encoding="utf-8")              # untracked file
         (local_repo / "build").mkdir(parents=True, exist_ok=True)
-        (local_repo / "build" / "artifact.bin").write_text("binary\n", encoding="utf-8")     # gitignored file — MUST survive
+        (local_repo / "build" / "artifact.bin").write_text("binary\n", encoding="utf-8")     # gitignored file — MUST be cleaned
 
         # And a local commit ahead of origin that should also be dropped.
         (local_repo / "local-only.md").write_text("local only commit\n", encoding="utf-8")
@@ -340,11 +339,8 @@ def test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes
             expect(not (local_repo / "local-only.md").exists(), "local commit ahead of origin must be dropped")
             # Untracked non-ignored file was cleaned.
             expect(not (local_repo / "scratch.md").exists(), "untracked non-gitignored files must be cleaned")
-            # Gitignored files survive (dev state preserved).
-            expect(
-                (local_repo / "build" / "artifact.bin").read_text(encoding="utf-8") == "binary\n",
-                "gitignored build/ must survive — git clean -fd not -fdx",
-            )
+            # Gitignored files are also cleaned; the vault mirror should match upstream, not local dev state.
+            expect(not (local_repo / "build").exists(), "gitignored build/ must be cleaned by git clean -fdx")
 
             # No managed mirror dir under Repos/_mirrors should be created.
             expect(

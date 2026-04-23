@@ -4243,8 +4243,9 @@ def _repo_sync_pull_local_repo(repo_dir: Path, remote_url: str = "") -> dict[str
 
     Mirrors the remote: fetches the current branch, discards local commits and
     uncommitted changes via `git reset --hard origin/<branch>`, and cleans
-    untracked files. Gitignored files (node_modules/, .venv/, build caches)
-    survive because we pass `git clean -fd` rather than `-fdx`.
+    untracked files, including gitignored paths such as node_modules/, .venv/,
+    and build caches. This keeps qmd from indexing local artifacts that are not
+    part of the upstream repository.
 
     Detached HEAD or no `origin` remote raises — the caller treats those as
     per-repo failures and keeps going through the rest of the vault.
@@ -4264,7 +4265,7 @@ def _repo_sync_pull_local_repo(repo_dir: Path, remote_url: str = "") -> dict[str
 
     _repo_sync_git("fetch", "--prune", "origin", branch, cwd=repo_dir, timeout=300)
     _repo_sync_git("reset", "--hard", f"origin/{branch}", cwd=repo_dir, timeout=300)
-    _repo_sync_git("clean", "-fd", cwd=repo_dir, timeout=300)
+    _repo_sync_git("clean", "-fdx", cwd=repo_dir, timeout=300)
 
     after_commit = _repo_sync_git("rev-parse", "HEAD", cwd=repo_dir).stdout.strip()
 

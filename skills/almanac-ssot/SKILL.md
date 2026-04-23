@@ -27,6 +27,7 @@ Common calls:
 
 ```json
 {"tool":"ssot.read","arguments":{"target_id":"<optional-page-or-database-id-or-url>","query":{},"include_markdown":false}}
+{"tool":"ssot.write","arguments":{"operation":"insert","payload":{"title":"Daily note","properties":{"Owner":{"people":[{"id":"<verified-caller-notion-user-id>"}]}},"children":[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":"Live note body."}}]}}]}}}
 {"tool":"ssot.write","arguments":{"operation":"append","target_id":"<page-id-or-url>","payload":{"children":[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":"Awesome alternatives include marshmallows and roasted chestnuts."}}]}}]}}}
 {"tool":"ssot.write","arguments":{"operation":"update","target_id":"<page-id-or-url>","payload":{"properties":{"Status":{"status":{"name":"In Progress"}}}}}}
 {"tool":"ssot.pending","arguments":{"status":"pending","limit":10}}
@@ -37,6 +38,8 @@ Decision tree:
 
 - For live scoped organizational state, call `ssot.read` once before answering.
 - For append/update/insert, call `ssot.write` once; never archive or delete.
+- For `insert`, assign `Owner` or `Assignee` to the verified caller in the
+  payload or the broker rejects the write before it lands.
 - Set `read_after:true` only when the user asks you to verify the live state
   immediately after an applied write.
 - If `ssot.write` returns `final_state:"applied"` or `applied:true`, tell the

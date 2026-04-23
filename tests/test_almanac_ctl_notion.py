@@ -636,6 +636,7 @@ def test_notion_webhook_cli_requires_force_and_tracks_arm_window() -> None:
         expect(status.returncode == 0, status.stderr or status.stdout)
         status_payload = json.loads(status.stdout)
         expect(status_payload["configured"] is False, str(status_payload))
+        expect(status_payload["verified"] is False, str(status_payload))
         expect(status_payload["armed"] is True, str(status_payload))
         expect(status_payload["last_armed_by"] == "operator", str(status_payload))
         expect(status_payload["last_reset_by"] == "operator", str(status_payload))
@@ -737,9 +738,53 @@ def test_notion_webhook_status_show_secret_requires_owner_and_returns_token() ->
             payload = json.loads(buffer.getvalue())
             expect(payload["verification_token"] == "tok_secret_value", str(payload))
             expect(payload["public_url"] == "https://hooks.example.com/notion/webhook", str(payload))
+            expect(payload["verified"] is False, str(payload))
             print("PASS test_notion_webhook_status_show_secret_requires_owner_and_returns_token")
         finally:
             ctl.os.geteuid = original_geteuid
+            sys.argv = original_argv
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_notion_webhook_confirm_verified_records_operator_confirmation() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_notion_webhook_confirm_verified_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_notion_webhook_confirm_verified_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = config_values(root)
+        values["ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"] = "https://hooks.example.com/notion/webhook"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        original_argv = sys.argv[:]
+        try:
+            os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            control.upsert_setting(conn, "notion_webhook_verification_token", "secret_live_token")
+
+            sys.argv = [
+                str(CTL_PY),
+                "--json",
+                "notion",
+                "webhook-confirm-verified",
+                "--actor",
+                "operator",
+            ]
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                ctl.main()
+            payload = json.loads(buffer.getvalue())
+            expect(payload["configured"] is True, str(payload))
+            expect(payload["verified"] is True, str(payload))
+            expect(bool(payload["verified_at"]), str(payload))
+            expect(payload["verified_by"] == "operator", str(payload))
+            print("PASS test_notion_webhook_confirm_verified_records_operator_confirmation")
+        finally:
             sys.argv = original_argv
             os.environ.clear()
             os.environ.update(old_env)
@@ -757,7 +802,8 @@ def main() -> int:
     test_notion_webhook_cli_requires_force_and_tracks_arm_window()
     test_notion_webhook_cli_refuses_non_owner_control_caller()
     test_notion_webhook_status_show_secret_requires_owner_and_returns_token()
-    print("PASS all 11 almanac ctl notion tests")
+    test_notion_webhook_confirm_verified_records_operator_confirmation()
+    print("PASS all 12 almanac ctl notion tests")
     return 0
 
 

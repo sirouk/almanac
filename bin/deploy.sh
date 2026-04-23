@@ -593,6 +593,148 @@ ask_secret_keep_default() {
   printf '%s' "$answer"
 }
 
+json_field() {
+  local payload="$1"
+  local field="$2"
+
+  printf '%s' "$payload" | python3 - "$field" <<'PY'
+import json
+import sys
+
+field = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+value = data
+for part in field.split("."):
+    if isinstance(value, dict):
+        value = value.get(part)
+    else:
+        value = None
+        break
+
+if isinstance(value, bool):
+    print("1" if value else "0")
+elif value is None:
+    print("")
+else:
+    print(str(value))
+PY
+}
+
+notion_webhook_status_json() {
+  local ctl_bin="$1"
+  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    "$ctl_bin" --json notion webhook-status --show-public-url --show-secret
+}
+
+run_notion_webhook_setup_flow() {
+  local ctl_bin="$1"
+  local actor="$2"
+  local status_json="" configured="" verified="" token="" public_url="" verified_at="" verified_by=""
+
+  if [[ -z "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    return 0
+  fi
+
+  status_json="$(notion_webhook_status_json "$ctl_bin" 2>/dev/null || true)"
+  if [[ -z "$status_json" ]]; then
+    echo "Could not read Notion webhook verification state; skipping interactive verification flow." >&2
+    return 0
+  fi
+
+  verified="$(json_field "$status_json" "verified" 2>/dev/null || true)"
+  if [[ "$verified" == "1" ]]; then
+    verified_at="$(json_field "$status_json" "verified_at" 2>/dev/null || true)"
+    verified_by="$(json_field "$status_json" "verified_by" 2>/dev/null || true)"
+    echo
+    echo "Notion webhook verification is already confirmed."
+    if [[ -n "$verified_at" || -n "$verified_by" ]]; then
+      echo "  confirmed_at: ${verified_at:-unknown}"
+      if [[ -n "$verified_by" ]]; then
+        echo "  confirmed_by: $verified_by"
+      fi
+    fi
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "Notion webhook verification is not yet confirmed. Run \`$SELF_PATH notion-ssot\` interactively to finish the webhook setup flow." >&2
+    return 0
+  fi
+
+  public_url="$(json_field "$status_json" "public_url" 2>/dev/null || true)"
+  configured="$(json_field "$status_json" "configured" 2>/dev/null || true)"
+  token="$(json_field "$status_json" "verification_token" 2>/dev/null || true)"
+
+  echo
+  echo "Notion webhook verification"
+  echo "  Webhook URL:"
+  echo "    ${public_url:-${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}}"
+  echo "  Event selection:"
+  echo "    - Page: all Page events"
+  echo "    - Database: all Database events"
+  echo "    - Data source: all Data source events"
+  echo "    - File uploads: all File upload events"
+  echo "    - View: leave unchecked"
+  echo "    - Comment: leave unchecked"
+
+  if [[ "$configured" != "1" || -z "${token//[[:space:]]/}" ]]; then
+    echo "  Arming a fresh 30-minute verification window now..."
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ctl_bin" --json notion webhook-arm-install --actor "$actor" --minutes 30 >/dev/null
+    echo "  In Notion, create or save the webhook subscription so Notion sends the verification POST."
+  else
+    echo "  A verification token is already installed; reusing it for the final Verify step."
+  fi
+
+  read -r -p "Press ENTER after Notion says the verification token was sent to the URL. " _
+
+  if [[ "$configured" != "1" || -z "${token//[[:space:]]/}" ]]; then
+    local attempt=""
+    for attempt in $(seq 1 45); do
+      status_json="$(notion_webhook_status_json "$ctl_bin" 2>/dev/null || true)"
+      configured="$(json_field "$status_json" "configured" 2>/dev/null || true)"
+      token="$(json_field "$status_json" "verification_token" 2>/dev/null || true)"
+      if [[ "$configured" == "1" && -n "${token//[[:space:]]/}" ]]; then
+        break
+      fi
+      sleep 2
+    done
+  fi
+
+  if [[ "$configured" != "1" || -z "${token//[[:space:]]/}" ]]; then
+    echo "Notion did not install a verification token within the waiting window." >&2
+    echo "The webhook URL is configured, but verification is still incomplete." >&2
+    return 1
+  fi
+
+  echo
+  echo "Paste this Notion verification token into the Notion Verify dialog:"
+  echo "  $token"
+  echo
+  if [[ "$(ask_yes_no "Did Notion accept the token and mark the subscription verified" "1")" != "1" ]]; then
+    echo "Notion webhook verification was not confirmed. You can rerun \`$SELF_PATH notion-ssot\` to finish it later." >&2
+    return 1
+  fi
+
+  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    "$ctl_bin" --json notion webhook-confirm-verified --actor "$actor" >/dev/null
+  status_json="$(notion_webhook_status_json "$ctl_bin")"
+  verified_at="$(json_field "$status_json" "verified_at" 2>/dev/null || true)"
+  verified_by="$(json_field "$status_json" "verified_by" 2>/dev/null || true)"
+  echo
+  echo "Notion webhook verification confirmed."
+  if [[ -n "$verified_at" || -n "$verified_by" ]]; then
+    echo "  verified_at: ${verified_at:-unknown}"
+    if [[ -n "$verified_by" ]]; then
+      echo "  verified_by: $verified_by"
+    fi
+  fi
+}
+
 require_notion_subtree_ack() {
   local answer=""
 
@@ -1768,10 +1910,10 @@ print_post_install_guide() {
     echo "       - File uploads: select all File upload events"
     echo "       - View: leave all View events unchecked"
     echo "       - Comment: leave all Comment events unchecked"
-    echo "    4. Arm the install window: almanac-ctl notion webhook-arm-install --actor <operator>"
-    echo "    5. After Notion sends the verification POST, print the token:"
-    echo "       almanac-ctl --json notion webhook-status --show-public-url --show-secret"
-    echo "    6. In the Notion Webhooks tab, click Verify and paste that verification_token."
+    echo "    4. Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot to walk the live arm/wait/verify flow."
+    echo "       It will arm the install window, wait for Notion to deliver the token,"
+    echo "       print the verification_token, and record operator confirmation once"
+    echo "       Notion accepts the Verify step."
   else
     echo "  Notion webhook URL (public HTTPS):"
     echo "    not configured; Notion cannot reach 127.0.0.1 without separate public ingress"
@@ -4653,14 +4795,19 @@ PY
     echo "     - File uploads: all File upload events"
     echo "     - View: leave unchecked"
     echo "     - Comment: leave unchecked"
-    echo "  4. Run: almanac-ctl notion webhook-arm-install --actor <operator>"
-    echo "  5. Create or save the subscription in Notion so it sends the verification POST."
-    echo "  6. Run:"
-    echo "     almanac-ctl --json notion webhook-status --show-public-url --show-secret"
-    echo "  7. Paste the returned verification_token into Notion and click Verify."
+    echo "  4. deploy.sh notion-ssot will arm the install window, wait for Notion to send the token, and print the verification_token for you."
+    echo "  5. Paste that verification_token into Notion and click Verify."
   fi
   echo "Config persisted to:"
   echo "  $CONFIG_TARGET"
+
+  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    if ! run_notion_webhook_setup_flow "$BOOTSTRAP_DIR/bin/almanac-ctl" "${SUDO_USER:-$(id -un)}"; then
+      rm -f "$handshake_file"
+      echo "Shared Notion configuration was saved, but webhook verification is still incomplete." >&2
+      exit 1
+    fi
+  fi
 
   rm -f "$handshake_file"
 }

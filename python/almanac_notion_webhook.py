@@ -28,6 +28,8 @@ NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_ARMED_AT_KEY = "notion_webhook_verificati
 NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_ARMED_BY_KEY = "notion_webhook_verification_token_last_armed_by"
 NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_RESET_AT_KEY = "notion_webhook_verification_token_last_reset_at"
 NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_RESET_BY_KEY = "notion_webhook_verification_token_last_reset_by"
+NOTION_WEBHOOK_VERIFIED_AT_KEY = "notion_webhook_verified_at"
+NOTION_WEBHOOK_VERIFIED_BY_KEY = "notion_webhook_verified_by"
 
 
 def backend_client_allowed(remote_ip: str) -> bool:
@@ -75,6 +77,8 @@ def reset_verification_token(conn, *, actor: str, rearm_ttl_seconds: int = 0) ->
     previously_set = bool(str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip())
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_INSTALLED_AT_KEY, "")
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "")
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_BY_KEY, "")
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_RESET_AT_KEY, utc_now_iso())
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_RESET_BY_KEY, actor_label)
     if int(rearm_ttl_seconds or 0) > 0:
@@ -115,9 +119,13 @@ def reset_verification_token(conn, *, actor: str, rearm_ttl_seconds: int = 0) ->
 def get_verification_token_state(conn) -> dict:
     configured = bool(str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip())
     armed, armed_until = _verification_token_install_armed(conn)
+    verified_at = str(get_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "") or "").strip()
     return {
         "configured": configured,
         "installed_at": str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_INSTALLED_AT_KEY, "") or "").strip(),
+        "verified": bool(verified_at),
+        "verified_at": verified_at,
+        "verified_by": str(get_setting(conn, NOTION_WEBHOOK_VERIFIED_BY_KEY, "") or "").strip(),
         "armed": armed,
         "armed_until": armed_until,
         "last_armed_at": str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_LAST_ARMED_AT_KEY, "") or "").strip(),
@@ -163,6 +171,8 @@ def handle_verification_token_post(conn, candidate_token: str) -> tuple[int, dic
         )
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, candidate)
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_INSTALLED_AT_KEY, utc_now_iso())
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "")
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_BY_KEY, "")
     upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY, "")
     note_refresh_job(
         conn,
@@ -177,6 +187,28 @@ def handle_verification_token_post(conn, candidate_token: str) -> tuple[int, dic
     # received successfully. Returning 202 causes the Notion UI to treat the
     # delivery as failed even though we stored the token.
     return HTTPStatus.OK, {"status": "verification_token_stored"}
+
+
+def mark_verification_token_verified(conn, *, actor: str) -> dict:
+    actor_label = str(actor or "").strip() or "operator"
+    stored = str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip()
+    if not stored:
+        raise ValueError("cannot mark the Notion webhook as verified before a verification token is installed")
+    verified_at = utc_now_iso()
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, verified_at)
+    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_BY_KEY, actor_label)
+    note_refresh_job(
+        conn,
+        job_name="notion-webhook-token",
+        job_kind="notion-webhook-token",
+        target_id="notion-webhook",
+        schedule="operator verification confirmation",
+        status="ok",
+        note=f"verification token confirmed in Notion by {actor_label} at {verified_at}",
+    )
+    payload = get_verification_token_state(conn)
+    payload["ok"] = True
+    return payload
 
 
 def parse_args() -> argparse.Namespace:

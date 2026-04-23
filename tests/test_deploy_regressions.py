@@ -244,6 +244,8 @@ def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
     expect("- File uploads: select all File upload events" in text, "expected explicit File upload event instruction")
     expect("- View: leave all View events unchecked" in text, "expected explicit View event exclusion")
     expect("- Comment: leave all Comment events unchecked" in text, "expected explicit Comment event exclusion")
+    expect("webhook-confirm-verified" in text, "expected deploy guidance to include explicit operator verification confirmation")
+    expect("Press ENTER after Notion says the verification token was sent to the URL." in text, "expected deploy to include an interactive wait point for the Notion verification POST")
     print("PASS test_deploy_guides_explicit_notion_webhook_event_selection")
 
 

@@ -215,6 +215,85 @@ PATH="$FAKEBIN:$PATH"
     print("PASS test_shared_notion_with_public_webhook_but_no_token_warns_not_ready")
 
 
+def test_shared_notion_with_installed_token_but_unconfirmed_verification_warns() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_REPO_DIR=/srv/almanac
+ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
+ALMANAC_DB_PATH="$(mktemp)"
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/sqlite3" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$2" == *"notion_webhook_verification_token"* ]]; then
+  printf 'secret_live_token\\n'
+fi
+EOF
+chmod +x "$FAKEBIN/sqlite3"
+PATH="$FAKEBIN:$PATH"
+{snippet}
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"shared notion unconfirmed verification case failed: {result.stderr}")
+    expect(
+        "WARN:Notion webhook verification token is installed, but operator confirmation is still pending" in result.stdout,
+        f"expected WARN about installed token without operator confirmation, got: {result.stdout!r}",
+    )
+    expect(
+        "webhook-confirm-verified" in result.stdout,
+        f"expected explicit verification confirmation guidance, got: {result.stdout!r}",
+    )
+    print("PASS test_shared_notion_with_installed_token_but_unconfirmed_verification_warns")
+
+
+def test_shared_notion_with_confirmed_verification_reports_ready() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
+ALMANAC_DB_PATH="$(mktemp)"
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/sqlite3" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$2" == *"notion_webhook_verification_token"* ]]; then
+  printf 'secret_live_token\\n'
+elif [[ "$2" == *"notion_webhook_verified_at"* ]]; then
+  printf '2026-04-22T20:31:40+00:00\\n'
+elif [[ "$2" == *"notion_webhook_verified_by"* ]]; then
+  printf 'operator\\n'
+fi
+EOF
+chmod +x "$FAKEBIN/sqlite3"
+PATH="$FAKEBIN:$PATH"
+{snippet}
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"shared notion confirmed verification case failed: {result.stderr}")
+    expect(
+        "PASS:Notion webhook verification confirmed at 2026-04-22T20:31:40+00:00 by operator" in result.stdout,
+        f"expected PASS about confirmed webhook verification, got: {result.stdout!r}",
+    )
+    print("PASS test_shared_notion_with_confirmed_verification_reports_ready")
+
+
 def test_shared_notion_with_tailscale_funnel_reports_live_public_route() -> None:
     text = HEALTH_SH.read_text()
     helper = extract(text, "check_notion_webhook_funnel() {", "check_activation_trigger_write_access() {")
@@ -275,8 +354,8 @@ PATH="$FAKEBIN:$PATH"
         f"expected PASS about live webhook funnel route, got: {result.stdout!r}",
     )
     expect(
-        "PASS:Notion webhook verification token is installed in control-plane state" in result.stdout,
-        f"expected PASS about installed webhook token, got: {result.stdout!r}",
+        "PASS:Notion webhook verification confirmed at token-installed by token-installed" in result.stdout,
+        f"expected PASS about confirmed webhook verification, got: {result.stdout!r}",
     )
     print("PASS test_shared_notion_with_tailscale_funnel_reports_live_public_route")
 
@@ -287,8 +366,10 @@ def main() -> int:
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
     test_shared_notion_without_webhook_reports_sweep_fallback_warning()
     test_shared_notion_with_public_webhook_but_no_token_warns_not_ready()
+    test_shared_notion_with_installed_token_but_unconfirmed_verification_warns()
+    test_shared_notion_with_confirmed_verification_reports_ready()
     test_shared_notion_with_tailscale_funnel_reports_live_public_route()
-    print("PASS all 6 health regression tests")
+    print("PASS all 8 health regression tests")
     return 0
 
 

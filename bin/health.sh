@@ -1590,7 +1590,21 @@ if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
         sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verification_token' LIMIT 1;" 2>/dev/null || true
       )"
       if [[ -n "${notion_webhook_token_state//[[:space:]]/}" ]]; then
-        pass "Notion webhook verification token is installed in control-plane state"
+        notion_webhook_verified_at="$(
+          sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verified_at' LIMIT 1;" 2>/dev/null || true
+        )"
+        notion_webhook_verified_by="$(
+          sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verified_by' LIMIT 1;" 2>/dev/null || true
+        )"
+        if [[ -n "${notion_webhook_verified_at//[[:space:]]/}" ]]; then
+          if [[ -n "${notion_webhook_verified_by//[[:space:]]/}" ]]; then
+            pass "Notion webhook verification confirmed at ${notion_webhook_verified_at} by ${notion_webhook_verified_by}"
+          else
+            pass "Notion webhook verification confirmed at ${notion_webhook_verified_at}"
+          fi
+        else
+          warn "Notion webhook verification token is installed, but operator confirmation is still pending: rerun \`$ALMANAC_REPO_DIR/deploy.sh notion-ssot\` or run \`almanac-ctl notion webhook-confirm-verified --actor <operator>\` after Notion accepts the token"
+        fi
       else
         warn "Notion webhook public URL is configured, but no verification token is installed yet: run \`almanac-ctl notion webhook-arm-install\` before completing the Notion webhook handshake"
       fi

@@ -25,6 +25,7 @@ from almanac_notion_webhook import (
     NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY,
     arm_verification_token_install,
     get_verification_token_state,
+    mark_verification_token_verified,
     reset_verification_token,
 )
 from almanac_onboarding_flow import notify_session_state, send_session_message
@@ -226,6 +227,8 @@ def parse_args() -> argparse.Namespace:
     notion_webhook_arm = notion_sub.add_parser("webhook-arm-install")
     notion_webhook_arm.add_argument("--actor", default=os.environ.get("USER", "operator"))
     notion_webhook_arm.add_argument("--minutes", type=int, default=10)
+    notion_webhook_confirm = notion_sub.add_parser("webhook-confirm-verified")
+    notion_webhook_confirm.add_argument("--actor", default=os.environ.get("USER", "operator"))
     notion_webhook_reset = notion_sub.add_parser("webhook-reset-token")
     notion_webhook_reset.add_argument("--actor", default=os.environ.get("USER", "operator"))
     notion_webhook_reset.add_argument("--minutes", type=int, default=10, help="Re-arm handshake install window for this many minutes after clearing the stored token. Use 0 to clear without arming.")
@@ -2072,6 +2075,19 @@ def main() -> None:
                 arm_verification_token_install(
                     conn,
                     ttl_seconds=max(1, int(args.minutes or 0)) * 60,
+                    actor=str(args.actor or "operator"),
+                ),
+            )
+            return
+        if args.domain == "notion" and args.action == "webhook-confirm-verified":
+            require_control_file_owner(
+                cfg,
+                "almanac-ctl notion webhook-confirm-verified must run as root or the owner of the Almanac control files.",
+            )
+            dump_output(
+                args,
+                mark_verification_token_verified(
+                    conn,
                     actor=str(args.actor or "operator"),
                 ),
             )

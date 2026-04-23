@@ -44,6 +44,8 @@ Do not read `/home/almanac/almanac/almanac-priv/config/almanac.env`, `.almanac-o
 
 When the user asks a question that could plausibly be answered by shared private documents, team notes, uploaded PDFs, internal terminology, company-specific plans, codenames, or a follow-up grounded in the current discussion, query qmd before you search the public web or answer from general model memory.
 
+When Almanac MCP is available, prefer `vault.search-and-fetch` for normal user-facing knowledge questions. It wraps qmd search plus fetch and returns the fetched body as plain structured text, including `vault-pdf-ingest` by default. Use raw qmd MCP (`query`, `get`, `multi_get`) for debugging, advanced retrieval control, or when the Almanac MCP bridge itself is unavailable.
+
 ## Fast path on a deployed Almanac host
 
 If the agent is already running on the Almanac host and the task is topic lookup rather than Almanac debugging, do this exact sequence:
@@ -51,8 +53,8 @@ If the agent is already running on the Almanac host and the task is topic lookup
 1. read the current user's local Almanac routing state first:
    - `$HERMES_HOME/state/almanac-vault-reconciler.json`
    - `$HERMES_HOME/state/almanac-recent-events.json` when recent drift or fresh uploads may matter
-2. use `[managed:qmd-ref]` or the default local rail `http://127.0.0.1:8181/mcp`
-3. query qmd immediately
+2. call Almanac MCP `vault.search-and-fetch` with the user's phrase
+3. only if that bridge fails, use `[managed:qmd-ref]` or the default local raw qmd rail `http://127.0.0.1:8181/mcp`
 4. only if the qmd path itself fails, inspect `docs/hermes-qmd-config.yaml`
 5. only if qmd still looks broken, inspect daemon/health files such as `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, or `bin/health.sh`
 
@@ -66,11 +68,11 @@ So:
 2. use `almanac-vaults` for subscription / catalog work
 3. use `almanac-vault-reconciler` when the stub layer or sync rail is in doubt
 
-For a simple knowledge question like "what is MESH?" on a deployed host, step 1 should usually be the only discovery step before the first qmd query.
+For a simple knowledge question like "what is MESH?" on a deployed host, the first retrieval call should usually be `vault.search-and-fetch`, not a raw file search.
 
 ## Minimal working qmd MCP recipe
 
-The local qmd server speaks MCP over JSON-RPC 2.0. If you need to call it directly, use this sequence instead of guessing the protocol:
+The local qmd server speaks MCP over JSON-RPC 2.0. Prefer Almanac MCP `vault.search-and-fetch` for ordinary agent answers; if you need to call raw qmd directly, use this sequence instead of guessing the protocol:
 
 1. initialize the session
 2. capture the `mcp-session-id` response header from `initialize`

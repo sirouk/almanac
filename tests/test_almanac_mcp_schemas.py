@@ -66,6 +66,12 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
     expect(notion_combo["properties"]["fetch_limit"]["maximum"] == 3, str(notion_combo))
     expect(notion_combo["properties"]["body_char_limit"]["maximum"] == 12000, str(notion_combo))
 
+    vault_combo = mod._tool_schema("vault.search-and-fetch")
+    expect(vault_combo["required"] == ["query"], str(vault_combo))
+    expect(vault_combo["properties"]["fetch_limit"]["maximum"] == 5, str(vault_combo))
+    expect(vault_combo["properties"]["body_char_limit"]["maximum"] == 20000, str(vault_combo))
+    expect(vault_combo["properties"]["lineNumbers"]["default"] is False, str(vault_combo))
+
     ssot_status = mod._tool_schema("ssot.status")
     expect(ssot_status["required"] == ["pending_id"], str(ssot_status))
 
@@ -73,6 +79,9 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
         "catalog.vaults",
         "vaults.refresh",
         "vaults.subscribe",
+        "vault.search",
+        "vault.fetch",
+        "vault.search-and-fetch",
         "agents.managed-memory",
         "agents.consume-notifications",
         "ssot.read",
@@ -108,6 +117,26 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "body_char_limit": 4000,
             "rerank": False,
         },
+        "vault.search": {
+            "query": "Chutes MESH",
+            "collections": ["vault", "vault-pdf-ingest"],
+            "limit": 5,
+            "rerank": False,
+        },
+        "vault.fetch": {
+            "file": "vault-pdf-ingest/projects/chutes/mesh/mesh-paper-1-pdf.md",
+            "fromLine": 1,
+            "maxLines": 80,
+            "lineNumbers": True,
+        },
+        "vault.search-and-fetch": {
+            "query": "Chutes MESH",
+            "collections": ["vault", "vault-pdf-ingest"],
+            "search_limit": 5,
+            "fetch_limit": 2,
+            "body_char_limit": 8000,
+            "rerank": False,
+        },
         "ssot.write": {
             "operation": "append",
             "target_id": "page-id",
@@ -140,6 +169,9 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "notion.fetch": ("Prefer over notion.search when the user already gave a URL or id",),
         "notion.query": ("Prefer for owner/status/due/assignee filters",),
         "notion.search-and-fetch": ("One-shot replacement", "search_limit", "fetch_limit"),
+        "vault.search": ("Prefer vault.search-and-fetch when you need the body",),
+        "vault.fetch": ("return plain structured text", "Prefer over raw qmd.get"),
+        "vault.search-and-fetch": ("One-shot replacement for qmd.query followed by qmd.get", "vault-pdf-ingest"),
     }
     for tool, needles in expectations.items():
         description = mod.TOOLS[tool]
@@ -205,6 +237,41 @@ def test_search_and_fetch_compacts_search_payloads() -> None:
     print("PASS test_search_and_fetch_compacts_search_payloads")
 
 
+def test_vault_qmd_helpers_normalize_resource_content() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_qmd_helper_test")
+    compact = mod._extract_qmd_text_result(
+        {
+            "content": [
+                {
+                    "type": "resource",
+                    "resource": {
+                        "uri": "qmd://vault-pdf-ingest/projects/chutes/mesh/mesh-paper-1-pdf.md",
+                        "mimeType": "text/markdown",
+                        "text": "1: # Mesh\n2: Chutes MESH reduces communication overhead.\n",
+                    },
+                }
+            ]
+        },
+        body_char_limit=10_000,
+    )
+    expect(compact["ok"] is True, str(compact))
+    expect(compact["uri"] == "qmd://vault-pdf-ingest/projects/chutes/mesh/mesh-paper-1-pdf.md", str(compact))
+    expect("Chutes MESH" in compact["text"], str(compact))
+    expect(compact["text_truncated"] is False, str(compact))
+    stripped = mod._extract_qmd_text_result(
+        {"content": [{"type": "resource", "resource": {"text": "---\na: b\n---\n# Mesh\nBody\n"}}]},
+        body_char_limit=10_000,
+    )
+    expect(stripped["metadata_stripped"] is True, str(stripped))
+    expect(stripped["text"].startswith("# Mesh"), str(stripped))
+
+    search_args = mod._qmd_query_arguments({"query": "Chutes MESH"})
+    expect(search_args["collections"] == ["vault", "vault-pdf-ingest"], str(search_args))
+    expect(search_args["searches"][0] == {"type": "lex", "query": "Chutes MESH"}, str(search_args))
+    expect(search_args["searches"][1] == {"type": "vec", "query": "Chutes MESH"}, str(search_args))
+    print("PASS test_vault_qmd_helpers_normalize_resource_content")
+
+
 def main() -> int:
     test_almanac_mcp_tools_advertise_actionable_input_schemas()
     test_high_value_sample_calls_match_advertised_schemas()
@@ -212,7 +279,8 @@ def main() -> int:
     test_hot_tool_descriptions_carry_when_to_call_guidance()
     test_runtime_helpers_close_schema_bypass_gaps()
     test_search_and_fetch_compacts_search_payloads()
-    print("PASS all 6 Almanac MCP schema tests")
+    test_vault_qmd_helpers_normalize_resource_content()
+    print("PASS all 7 Almanac MCP schema tests")
     return 0
 
 

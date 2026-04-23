@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from almanac_http import http_request, parse_json_response
 from almanac_control import (
     Config,
     RateLimitError,
@@ -65,6 +66,9 @@ TOOLS = {
     "vaults.refresh": "Run an authenticated subscription refresh for an agent.",
     "vaults.subscribe": "Subscribe or unsubscribe an authenticated agent to a vault.",
     "vaults.reload-defs": "Reload .vault definitions from disk. Requires operator-class token.",
+    "vault.search": "Search shared/private vault knowledge through Almanac's qmd-backed vault rail. Prefer vault.search-and-fetch when you need the body to answer, especially for PDFs.",
+    "vault.fetch": "Fetch a qmd vault hit by exact file/docid and return plain structured text. Prefer over raw qmd.get when the agent needs readable content instead of MCP resource objects.",
+    "vault.search-and-fetch": "Search shared/private vault knowledge and fetch bounded text for top hits in one call. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default.",
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
@@ -234,6 +238,55 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         required=("vault_name", "subscribed"),
     ),
     "vaults.reload-defs": _operator_schema({}),
+    "vault.search": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "query": {"type": "string", "minLength": 1, "description": "Search text for shared/private vault knowledge."},
+            "collections": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional qmd collections. Defaults to ['vault', 'vault-pdf-ingest'] so uploaded PDFs are included.",
+            },
+            "intent": {"type": "string", "description": "Optional retrieval intent passed to qmd."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+            "rerank": {"type": "boolean", "default": False},
+            "actor": ACTOR_PROP,
+        },
+        required=("query",),
+    ),
+    "vault.fetch": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "file": {"type": "string", "minLength": 1, "description": "qmd file path or docid returned by vault.search / qmd.query, e.g. '#d33c3b'."},
+            "fromLine": {"type": "integer", "minimum": 1, "default": 1},
+            "maxLines": {"type": "integer", "minimum": 1, "maximum": 500, "default": 160},
+            "lineNumbers": {"type": "boolean", "default": False},
+            "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 20000, "default": 8000},
+            "actor": ACTOR_PROP,
+        },
+        required=("file",),
+    ),
+    "vault.search-and-fetch": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "query": {"type": "string", "minLength": 1, "description": "Search text for shared/private vault knowledge."},
+            "collections": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional qmd collections. Defaults to ['vault', 'vault-pdf-ingest'] so uploaded PDFs are included.",
+            },
+            "intent": {"type": "string", "description": "Optional retrieval intent passed to qmd."},
+            "search_limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+            "fetch_limit": {"type": "integer", "minimum": 0, "maximum": 5, "default": 2},
+            "fromLine": {"type": "integer", "minimum": 1, "default": 1},
+            "maxLines": {"type": "integer", "minimum": 1, "maximum": 500, "default": 160},
+            "lineNumbers": {"type": "boolean", "default": False},
+            "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 20000, "default": 8000},
+            "rerank": {"type": "boolean", "default": False},
+            "actor": ACTOR_PROP,
+        },
+        required=("query",),
+    ),
     "agents.managed-memory": _schema({"token": AGENT_TOKEN_PROP}),
     "agents.consume-notifications": _schema(
         {
@@ -396,6 +449,199 @@ def _trim_text(value: object, limit: int) -> tuple[str, bool]:
         return text, False
     suffix = "..."
     return text[: max(0, limit - len(suffix))].rstrip() + suffix, True
+
+
+def _string_list_arg(arguments: dict, name: str, *, default: list[str]) -> list[str]:
+    raw_value = arguments.get(name)
+    if raw_value is None:
+        return list(default)
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{name} must be an array of strings")
+    values = [str(value).strip() for value in raw_value if str(value or "").strip()]
+    return values or list(default)
+
+
+def _qmd_default_collections() -> list[str]:
+    return ["vault", "vault-pdf-ingest"]
+
+
+def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeout: int = 25) -> dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+
+    def rpc(payload: dict[str, Any], session_id: str | None = None) -> tuple[str | None, dict[str, Any]]:
+        request_headers = dict(headers)
+        if session_id:
+            request_headers["mcp-session-id"] = session_id
+        response = http_request(
+            url,
+            method="POST",
+            headers=request_headers,
+            json_payload=payload,
+            timeout=timeout,
+        )
+        parsed = parse_json_response(response, label=url)
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"{url} returned a non-object MCP response")
+        if "error" in parsed:
+            message = str(((parsed.get("error") or {}).get("message")) or "MCP tool call failed")
+            raise RuntimeError(message)
+        if response.status_code >= 400:
+            raise RuntimeError(f"{url} returned {response.status_code}")
+        return response.headers.get("mcp-session-id") or session_id, parsed
+
+    session_id, _ = rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "almanac-mcp-vault-bridge", "version": "1.0"},
+            },
+        }
+    )
+    rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
+    _, response = rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        },
+        session_id,
+    )
+    result = (response or {}).get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{url} returned no MCP result object")
+    return result
+
+
+def _qmd_query_arguments(arguments: dict, *, limit_key: str = "limit") -> dict[str, Any]:
+    query = str(arguments.get("query") or "").strip()
+    if not query:
+        raise ValueError("query required")
+    search_limit = _clamp_int(arguments.get(limit_key), default=5, minimum=1, maximum=10)
+    intent = str(arguments.get("intent") or "").strip() or f"Answer from Almanac vault knowledge: {query}"
+    return {
+        "searches": [
+            {"type": "lex", "query": query},
+            {"type": "vec", "query": query},
+        ],
+        "collections": _string_list_arg(arguments, "collections", default=_qmd_default_collections()),
+        "intent": intent,
+        "rerank": _bool_arg(arguments, "rerank"),
+        "limit": search_limit,
+    }
+
+
+def _qmd_structured_content(result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("structuredContent")
+    return structured if isinstance(structured, dict) else {}
+
+
+def _strip_markdown_front_matter(text: str) -> tuple[str, bool]:
+    if not text.startswith("---\n"):
+        return text, False
+    marker = "\n---\n"
+    end = text.find(marker, len("---\n"))
+    if end < 0:
+        return text, False
+    return text[end + len(marker) :].lstrip(), True
+
+
+def _compact_qmd_search_hit(hit: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
+    snippet, snippet_truncated = _trim_text(hit.get("snippet"), snippet_char_limit)
+    return {
+        "docid": str(hit.get("docid") or ""),
+        "file": str(hit.get("file") or ""),
+        "title": str(hit.get("title") or ""),
+        "score": hit.get("score"),
+        "context": hit.get("context"),
+        "snippet": snippet,
+        "snippet_truncated": snippet_truncated,
+    }
+
+
+def _compact_qmd_search_result(result: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
+    structured = _qmd_structured_content(result)
+    hits = structured.get("results") if isinstance(structured.get("results"), list) else []
+    return {
+        "ok": True,
+        "results": [
+            _compact_qmd_search_hit(hit, snippet_char_limit=snippet_char_limit)
+            for hit in hits
+            if isinstance(hit, dict)
+        ],
+    }
+
+
+def _extract_qmd_text_result(result: dict[str, Any], *, body_char_limit: int) -> dict[str, Any]:
+    content = result.get("content") if isinstance(result.get("content"), list) else []
+    text_chunks: list[str] = []
+    uri = ""
+    mime_type = ""
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text":
+            text_value = str(item.get("text") or "")
+            if text_value:
+                text_chunks.append(text_value)
+        resource = item.get("resource")
+        if isinstance(resource, dict):
+            uri = uri or str(resource.get("uri") or "")
+            mime_type = mime_type or str(resource.get("mimeType") or "")
+            text_value = str(resource.get("text") or "")
+            if text_value:
+                text_chunks.append(text_value)
+    structured = _qmd_structured_content(result)
+    if not text_chunks and isinstance(structured.get("text"), str):
+        text_chunks.append(str(structured.get("text") or ""))
+    raw_text = "\n\n".join(text_chunks).strip()
+    raw_text, metadata_stripped = _strip_markdown_front_matter(raw_text)
+    text, truncated = _trim_text(raw_text, body_char_limit)
+    return {
+        "ok": bool(text),
+        "uri": uri,
+        "mime_type": mime_type,
+        "text": text,
+        "text_truncated": truncated,
+        "metadata_stripped": metadata_stripped,
+        "body_char_limit": body_char_limit,
+    }
+
+
+def _qmd_fetch_arguments(arguments: dict[str, Any], *, file_value: str | None = None) -> dict[str, Any]:
+    file_arg = str(file_value if file_value is not None else arguments.get("file") or "").strip()
+    if not file_arg:
+        raise ValueError("file required")
+    return {
+        "file": file_arg,
+        "fromLine": _clamp_int(arguments.get("fromLine"), default=1, minimum=1, maximum=1_000_000),
+        "maxLines": _clamp_int(arguments.get("maxLines"), default=160, minimum=1, maximum=500),
+        "lineNumbers": _bool_arg(arguments, "lineNumbers", default=False),
+    }
+
+
+def _qmd_fetch_file(cfg: Config, arguments: dict[str, Any], *, file_value: str | None = None) -> dict[str, Any]:
+    body_char_limit = _clamp_int(
+        arguments.get("body_char_limit"),
+        default=8000,
+        minimum=200,
+        maximum=20000,
+    )
+    fetch_args = _qmd_fetch_arguments(arguments, file_value=file_value)
+    raw_result = _mcp_tool_call(cfg.qmd_url, "get", fetch_args)
+    compact = _extract_qmd_text_result(raw_result, body_char_limit=body_char_limit)
+    compact["file"] = fetch_args["file"]
+    compact["fromLine"] = fetch_args["fromLine"]
+    compact["maxLines"] = fetch_args["maxLines"]
+    compact["lineNumbers"] = fetch_args["lineNumbers"]
+    return compact
 
 
 def _notion_search_hit_target_id(hit: dict[str, Any]) -> str:
@@ -865,6 +1111,63 @@ class Handler(BaseHTTPRequestHandler):
             if tool_name == "vaults.reload-defs":
                 self._require_operator(conn, arguments)
                 return reload_vault_definitions(conn, cfg)
+
+            if tool_name == "vault.search":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                query_args = _qmd_query_arguments(arguments)
+                search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
+                return {
+                    "ok": True,
+                    "agent_id": str(token_row["agent_id"]),
+                    "qmd_url": cfg.qmd_url,
+                    "query": query_args["searches"][0]["query"],
+                    "collections": query_args["collections"],
+                    "search": _compact_qmd_search_result(search_result),
+                }
+
+            if tool_name == "vault.fetch":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                return {
+                    "agent_id": str(token_row["agent_id"]),
+                    "fetch": _qmd_fetch_file(cfg, arguments),
+                }
+
+            if tool_name == "vault.search-and-fetch":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                query_args = _qmd_query_arguments(arguments, limit_key="search_limit")
+                search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
+                search = _compact_qmd_search_result(search_result)
+                fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=2, minimum=0, maximum=5)
+                fetched: list[dict[str, Any]] = []
+                seen_files: set[str] = set()
+                for hit in search.get("results", []):
+                    if not isinstance(hit, dict):
+                        continue
+                    file_value = str(hit.get("file") or hit.get("docid") or "").strip()
+                    if not file_value or file_value in seen_files:
+                        continue
+                    seen_files.add(file_value)
+                    try:
+                        fetched.append(
+                            {
+                                "search_hit": hit,
+                                "fetch": _qmd_fetch_file(cfg, arguments, file_value=file_value),
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        fetched.append({"search_hit": hit, "fetch_error": str(exc)})
+                    if len(fetched) >= fetch_limit:
+                        break
+                return {
+                    "ok": True,
+                    "agent_id": str(token_row["agent_id"]),
+                    "qmd_url": cfg.qmd_url,
+                    "query": query_args["searches"][0]["query"],
+                    "collections": query_args["collections"],
+                    "search": search,
+                    "fetched": fetched,
+                    "fetch_limit": fetch_limit,
+                }
 
             if tool_name == "agents.managed-memory":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))

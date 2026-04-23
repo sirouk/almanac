@@ -66,7 +66,26 @@ def mcp_call(url: str, tool_name: str, arguments: dict) -> dict:
         },
         session_id,
     )
-    return ((response or {}).get("result") or {}).get("structuredContent") or {}
+    result = ((response or {}).get("result") or {})
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict) and structured:
+        return structured
+    content = result.get("content")
+    if isinstance(content, list) and content:
+        text_chunks: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and item.get("text"):
+                text_chunks.append(str(item.get("text") or ""))
+            resource = item.get("resource")
+            if isinstance(resource, dict) and resource.get("text"):
+                text_chunks.append(str(resource.get("text") or ""))
+        return {
+            "content": content,
+            "text": "\n\n".join(text_chunks).strip(),
+        }
+    return {}
 
 
 def parse_args() -> argparse.Namespace:

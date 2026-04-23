@@ -583,6 +583,8 @@ def test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events() -
                         {"channel_kind": "vault-change", "created_at": "2026-04-21T12:00:00+00:00", "message": old_message},
                         {"channel_kind": "vault-change", "created_at": "2026-04-21T12:01:00+00:00", "message": old_message},
                         {"channel_kind": "vault-change", "created_at": "2026-04-21T12:02:00+00:00", "message": "Vault content changed: Skills (2 path(s)): almanac-ssot.md, README.md"},
+                        {"channel_kind": "almanac-upgrade", "created_at": "2026-04-21T12:03:00+00:00", "message": "Curator reports an Almanac host update is available: aaa -> bbb."},
+                        {"channel_kind": "almanac-upgrade", "created_at": "2026-04-21T12:04:00+00:00", "message": "Curator reports an Almanac host update is available: bbb -> ccc."},
                     ],
                 },
                 indent=2,
@@ -610,6 +612,9 @@ def test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events() -
             expect("Vault content changed:" not in context, context)
             expect(context.count("Hermes documentation refreshed in the Repos vault") == 1, context)
             expect("Skill library update" in context, context)
+            expect(context.count("Curator reports an Almanac host update is available") == 1, context)
+            expect("aaa -> bbb" not in context, context)
+            expect("bbb -> ccc" in context, context)
             print("PASS test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events")
         finally:
             os.environ.clear()

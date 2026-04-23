@@ -605,7 +605,7 @@ def _recent_events_payload(payload: dict[str, object]) -> list[dict[str, str]]:
             continue
         message = _trim(message, _MAX_EVENT_MESSAGE_CHARS)
         channel_kind = _clean_text(event.get("channel_kind") or "event", limit=64) or "event"
-        marker = (channel_kind, message)
+        marker = (channel_kind, "__latest__") if channel_kind == "almanac-upgrade" else (channel_kind, message)
         if marker in seen:
             continue
         seen.add(marker)

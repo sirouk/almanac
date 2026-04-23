@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import datetime as dt
+import sqlite3
 import subprocess
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -420,6 +423,97 @@ def test_nextcloud_health_uses_rootless_podman_runtime_dir() -> None:
     print("PASS test_nextcloud_health_uses_rootless_podman_runtime_dir")
 
 
+def test_active_agent_health_treats_private_user_runtime_as_ok() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_active_agent_state() {", "check_auto_provision_state() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        db_path = root / "control.sqlite3"
+        manifest_path = root / "agent-manifest.json"
+        private_parent = root / "private"
+        hermes_home = private_parent / "hermes-home"
+        hermes_home.mkdir(parents=True)
+        manifest_path.write_text('{"agent_id":"agent-private"}\n', encoding="utf-8")
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE agents (
+              agent_id TEXT,
+              unix_user TEXT,
+              display_name TEXT,
+              hermes_home TEXT,
+              manifest_path TEXT,
+              channels_json TEXT,
+              role TEXT,
+              status TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO agents (
+              agent_id, unix_user, display_name, hermes_home, manifest_path,
+              channels_json, role, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "agent-private",
+                "alice",
+                "Alice",
+                str(hermes_home),
+                str(manifest_path),
+                '["telegram"]',
+                "user",
+                "active",
+            ),
+        )
+        conn.execute(
+            "CREATE TABLE refresh_jobs (job_name TEXT, last_run_at TEXT, last_status TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO refresh_jobs (job_name, last_run_at, last_status) VALUES (?, ?, ?)",
+            (
+                "agent-private-refresh",
+                dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                "ok",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_DB_PATH={str(db_path)!r}
+{snippet}
+check_active_agent_state
+"""
+        try:
+            private_parent.chmod(0)
+            result = bash(script)
+        finally:
+            private_parent.chmod(0o700)
+        expect(result.returncode == 0, f"private user runtime health case failed: {result.stderr}")
+        expect("WARN:" not in result.stdout, f"private user runtime should not warn, got: {result.stdout!r}")
+        expect("FAIL:" not in result.stdout, f"private user runtime should not fail, got: {result.stdout!r}")
+        expect(
+            "PASS:agent-private: unix_user=alice display_name=Alice channels=telegram" in result.stdout,
+            f"expected active agent pass, got: {result.stdout!r}",
+        )
+        expect(
+            "hermes_home private; skills private; verified by user-owned refresh/service state" in result.stdout,
+            f"expected privacy note in PASS, got: {result.stdout!r}",
+        )
+    print("PASS test_active_agent_health_treats_private_user_runtime_as_ok")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_backup_timer_job_result_reports_success_and_failure()
@@ -431,7 +525,8 @@ def main() -> int:
     test_shared_notion_with_confirmed_verification_reports_ready()
     test_shared_notion_with_tailscale_funnel_reports_live_public_route()
     test_nextcloud_health_uses_rootless_podman_runtime_dir()
-    print("PASS all 10 health regression tests")
+    test_active_agent_health_treats_private_user_runtime_as_ok()
+    print("PASS all 11 health regression tests")
     return 0
 
 

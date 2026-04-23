@@ -758,6 +758,7 @@ for agent in agents:
     manifest_path = Path(agent["manifest_path"] or "")
     hermes_home = Path(agent["hermes_home"] or "")
     channels = json.loads(agent["channels_json"] or "[]")
+    privacy_notes = []
 
     if not manifest_path.is_file():
         print(f"FAIL {agent_id}: manifest missing at {manifest_path}")
@@ -766,8 +767,8 @@ for agent in agents:
     try:
         hermes_home_exists = hermes_home.exists()
     except PermissionError:
-        print(f"WARN {agent_id}: cannot inspect hermes home at {hermes_home} due to permissions")
         hermes_home_exists = True
+        privacy_notes.append("hermes_home private")
     if not hermes_home_exists:
         print(f"FAIL {agent_id}: hermes home missing at {hermes_home}")
         failures += 1
@@ -780,8 +781,8 @@ for agent in agents:
             if not (skill_root / skill_name / "SKILL.md").is_file()
         ]
     except PermissionError:
-        print(f"WARN {agent_id}: cannot inspect managed skills at {skill_root} due to permissions")
         missing_skills = []
+        privacy_notes.append("skills private")
     if missing_skills:
         print(
             f"FAIL {agent_id}: missing managed Almanac skills in {skill_root}: "
@@ -811,6 +812,7 @@ for agent in agents:
     print(
         f"OK {agent_id}: unix_user={agent['unix_user']} display_name={agent['display_name']} "
         f"channels={','.join(channels) if channels else 'tui-only'} refresh={job['last_run_at']}"
+        + (f" ({'; '.join(privacy_notes)}; verified by user-owned refresh/service state)" if privacy_notes else "")
     )
 
 raise SystemExit(1 if failures else 0)

@@ -9110,7 +9110,11 @@ def _build_notion_stub(
     return "\n".join(lines)
 
 
-def _today_plate_work_line(item: dict[str, Any]) -> str:
+def _today_plate_item_id(item: dict[str, Any]) -> str:
+    return str(item.get("id") or "").strip()
+
+
+def _today_plate_work_line(item: dict[str, Any], *, is_new: bool = False) -> str:
     title = _notion_title_from_page(item) or str(item.get("id") or "untitled")
     status = _notion_named_property_text(item, ("Status", "State", "Stage"))
     priority = _notion_named_property_text(item, ("Priority", "Urgency", "Importance"))
@@ -9124,6 +9128,8 @@ def _today_plate_work_line(item: dict[str, Any]) -> str:
         parts.append(due_label)
     if due_rank >= 4 and _notion_recently_updated(item, days=7):
         parts.append("updated recently")
+    if is_new:
+        parts.append("NEW since last plate")
     return " — ".join(parts)
 
 
@@ -9140,6 +9146,7 @@ def _build_today_plate(
     agent_row: sqlite3.Row,
     identity: dict[str, Any] | None,
     notion_stub_cache: dict[str, Any] | None = None,
+    previous_item_ids: object = None,
 ) -> str:
     agent_id = str(agent_row["agent_id"] or "").strip()
     lines = [
@@ -9201,6 +9208,14 @@ def _build_today_plate(
         lines.append("- Next action: use notion.query/ssot.read for a live check if the user needs this now.")
         return "\n".join(lines)
 
+    current_item_ids = [_today_plate_item_id(item) for item in user_items if _today_plate_item_id(item)]
+    if isinstance(notion_stub_cache, dict):
+        notion_stub_cache[f"today-plate-ids:{agent_id}"] = current_item_ids
+    previous_ids: set[str] = set()
+    has_previous_plate = previous_item_ids is not None
+    if isinstance(previous_item_ids, (list, tuple, set)):
+        previous_ids = {str(item or "").strip() for item in previous_item_ids if str(item or "").strip()}
+
     due_now = sum(1 for item in user_items if _notion_due_bucket(_notion_date_property(item))[0] in {0, 1})
     due_soon = sum(1 for item in user_items if _notion_due_bucket(_notion_date_property(item))[0] <= 2)
     recently_updated = sum(1 for item in user_items if _notion_recently_updated(item, days=7))
@@ -9213,7 +9228,9 @@ def _build_today_plate(
     if user_items:
         lines.append("- Work candidates:")
         for item in sorted(user_items, key=_today_plate_sort_key)[:5]:
-            lines.append(f"  - {_today_plate_work_line(item)}")
+            item_id = _today_plate_item_id(item)
+            is_new = bool(has_previous_plate and item_id and item_id not in previous_ids)
+            lines.append(f"  - {_today_plate_work_line(item, is_new=is_new)}")
         lines.append("- Agent posture: orient from this plate, then use notion.query/ssot.read for live details before changing shared state.")
     else:
         lines.append("- Work candidates: none scoped to this user in the last Curator snapshot.")
@@ -10538,6 +10555,7 @@ def build_managed_memory_payload(
     *,
     agent_id: str,
     notion_stub_cache: dict[str, Any] | None = None,
+    previous_today_plate_item_ids: object = None,
 ) -> dict[str, Any]:
     """Compose the canonical managed-memory stubs for an agent.
 
@@ -10724,18 +10742,25 @@ def build_managed_memory_payload(
         "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n"
         + "\n".join(topology_lines)
     )
+    local_notion_stub_cache = notion_stub_cache if isinstance(notion_stub_cache, dict) else {}
     notion_stub = _build_notion_stub(
         conn,
         agent_row=agent,
         identity=identity,
-        notion_stub_cache=notion_stub_cache,
+        notion_stub_cache=local_notion_stub_cache,
     )
     today_plate = _build_today_plate(
         conn,
         agent_row=agent,
         identity=identity,
-        notion_stub_cache=notion_stub_cache,
+        notion_stub_cache=local_notion_stub_cache,
+        previous_item_ids=previous_today_plate_item_ids,
     )
+    today_plate_item_ids = [
+        str(item or "").strip()
+        for item in local_notion_stub_cache.get(f"today-plate-ids:{agent_id}", [])
+        if str(item or "").strip()
+    ]
 
     payload = {
         "agent_id": agent_id,
@@ -10747,6 +10772,7 @@ def build_managed_memory_payload(
         "vault-topology": topology,
         "notion-stub": notion_stub,
         "today-plate": today_plate,
+        "today_plate_item_ids": today_plate_item_ids,
         "catalog": catalog,
         "subscriptions": subscriptions,
         "active_subscriptions": active_subscriptions,
@@ -11006,16 +11032,18 @@ def publish_central_managed_memory(
     """Write the agent's managed-memory payload into the shared state dir so
     the user-agent-refresh worker (running as the enrollment user) can read
     the curator's latest view without crossing uid boundaries."""
+    out_path = _central_managed_payload_path(cfg, agent_id)
+    existing_payload = _read_json_dict(out_path)
+    previous_today_plate_item_ids = existing_payload.get("today_plate_item_ids")
     payload = build_managed_memory_payload(
         conn,
         cfg,
         agent_id=agent_id,
         notion_stub_cache=notion_stub_cache,
+        previous_today_plate_item_ids=previous_today_plate_item_ids,
     )
-    out_path = _central_managed_payload_path(cfg, agent_id)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing_payload = _read_json_dict(out_path)
     existing_cache_key = str(
         existing_payload.get("managed_payload_cache_key")
         or (_compute_managed_payload_cache_key(existing_payload) if existing_payload else "")

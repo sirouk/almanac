@@ -14,3 +14,4 @@ Design notes:
 - keeps context ephemeral and attached to the current user turn
 - injects on first turn, on revision change, and on Almanac-relevant prompts
 - injects compact per-turn tool recipes for clear SSOT/Notion actions instead of asking the agent to read repo Python
+- writes JSONL injection telemetry under `HERMES_HOME/state/almanac-context-telemetry.jsonl`; summarize it with `bin/almanac-context-telemetry`

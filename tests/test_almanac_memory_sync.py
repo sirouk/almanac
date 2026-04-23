@@ -934,6 +934,34 @@ def test_managed_notion_stub_stays_scoped_to_verified_user() -> None:
             expect("overdue 2026-04-21" in plate, plate)
             expect("Other Task" not in plate, plate)
             expect("Alex" not in plate, plate)
+            expect("NEW since last plate" not in plate, plate)
+            expect(notion_stub_cache.get("today-plate-ids:agent-test") == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], notion_stub_cache)
+            new_plate = mod._build_today_plate(
+                conn,
+                agent_row=agent_row,
+                identity=identity,
+                notion_stub_cache=notion_stub_cache,
+                previous_item_ids=["old-task"],
+            )
+            expect("Own Task" in new_plate, new_plate)
+            expect("NEW since last plate" in new_plate, new_plate)
+            stable_plate = mod._build_today_plate(
+                conn,
+                agent_row=agent_row,
+                identity=identity,
+                notion_stub_cache=notion_stub_cache,
+                previous_item_ids=["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+            )
+            expect("NEW since last plate" not in stable_plate, stable_plate)
+            managed_payload = mod.build_managed_memory_payload(
+                conn,
+                cfg,
+                agent_id="agent-test",
+                notion_stub_cache={},
+                previous_today_plate_item_ids=["old-task"],
+            )
+            expect(managed_payload.get("today_plate_item_ids") == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], managed_payload)
+            expect("NEW since last plate" in managed_payload["today-plate"], managed_payload["today-plate"])
             print("PASS test_managed_notion_stub_stays_scoped_to_verified_user")
         finally:
             os.environ.clear()

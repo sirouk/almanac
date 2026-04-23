@@ -603,6 +603,7 @@ Linux services.
 - [almanac-ctl](./bin/almanac-ctl): operator CLI for users, tokens, auto-provision requests, vaults, and channel repair
 - [init.sh](./init.sh): curl-friendly user enrollment/update entrypoint
 - [user-agent-refresh.sh](./bin/user-agent-refresh.sh): 4-hour user-agent subscription, managed-memory, and notification refresh
+- [almanac-context-telemetry](./bin/almanac-context-telemetry): summarize `almanac-managed-context` JSONL injection telemetry
 - [curator-tui.sh](./bin/curator-tui.sh): Curator TUI recovery surface
 - [health.sh](./bin/health.sh): quick status for qmd, timers, backup, and Nextcloud
 - [vault-watch.sh](./bin/vault-watch.sh): host filesystem watcher for the shared vault

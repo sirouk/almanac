@@ -682,6 +682,32 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             expect("final_state" in write_context, write_context)
             expect("- ssot.status:" not in write_context, write_context)
 
+            fix_turn = hook(
+                session_id="session-recipes-fix-page",
+                user_message="please fix this page so it mentions roasted chestnuts too",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(fix_turn, dict) and "- ssot.write:" in fix_turn.get("context", ""), f"expected ssot.write recipe for fix-page language, got {fix_turn!r}")
+
+            almanac_lookup_turn = hook(
+                session_id="session-recipes-almanac-lookup",
+                user_message="check almanac knowledge about Chutes Unicorn",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(
+                isinstance(almanac_lookup_turn, dict)
+                and "- notion.search-and-fetch:" in almanac_lookup_turn.get("context", ""),
+                f"expected notion.search-and-fetch recipe for Almanac knowledge lookup, got {almanac_lookup_turn!r}",
+            )
+
             status_turn = hook(
                 session_id="session-recipes-2",
                 user_message="was it written yet?",

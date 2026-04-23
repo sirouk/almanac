@@ -1145,24 +1145,19 @@ resolve_agent_control_plane_endpoint() {
 
 detect_github_repo() {
   GITHUB_REPO_URL=""
-  GITHUB_SKILL_RAW_URL=""
-  GITHUB_SKILL_IDENTIFIER=""
-  GITHUB_RECONCILER_SKILL_RAW_URL=""
-  GITHUB_RECONCILER_SKILL_IDENTIFIER=""
+  GITHUB_REPO_OWNER_REPO=""
+  GITHUB_REPO_BRANCH="main"
 
   if ! command -v git >/dev/null 2>&1; then
     GITHUB_REPO_URL="https://github.com/sirouk/almanac"
-    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-qmd-mcp/SKILL.md"
-    GITHUB_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-qmd-mcp"
-    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-vault-reconciler/SKILL.md"
-    GITHUB_RECONCILER_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-vault-reconciler"
+    GITHUB_REPO_OWNER_REPO="sirouk/almanac"
     return 0
   fi
 
   local remote_url="" branch="" owner_repo=""
   remote_url="$(git -C "$ALMANAC_REPO_DIR" remote get-url origin 2>/dev/null || true)"
   branch="$(git -C "$ALMANAC_REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-  branch="${branch:-main}"
+  GITHUB_REPO_BRANCH="${branch:-main}"
 
   case "$remote_url" in
     https://github.com/*)
@@ -1179,16 +1174,11 @@ detect_github_repo() {
   owner_repo="${owner_repo%.git}"
   if [[ -n "$owner_repo" ]]; then
     GITHUB_REPO_URL="https://github.com/$owner_repo"
-    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/$owner_repo/$branch/skills/almanac-qmd-mcp/SKILL.md"
-    GITHUB_SKILL_IDENTIFIER="$owner_repo/skills/almanac-qmd-mcp"
-    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/$owner_repo/$branch/skills/almanac-vault-reconciler/SKILL.md"
-    GITHUB_RECONCILER_SKILL_IDENTIFIER="$owner_repo/skills/almanac-vault-reconciler"
+    GITHUB_REPO_OWNER_REPO="$owner_repo"
   else
     GITHUB_REPO_URL="https://github.com/sirouk/almanac"
-    GITHUB_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-qmd-mcp/SKILL.md"
-    GITHUB_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-qmd-mcp"
-    GITHUB_RECONCILER_SKILL_RAW_URL="https://raw.githubusercontent.com/sirouk/almanac/main/skills/almanac-vault-reconciler/SKILL.md"
-    GITHUB_RECONCILER_SKILL_IDENTIFIER="sirouk/almanac/skills/almanac-vault-reconciler"
+    GITHUB_REPO_OWNER_REPO="sirouk/almanac"
+    GITHUB_REPO_BRANCH="main"
   fi
 }
 
@@ -2045,6 +2035,18 @@ agent_install_payload_path() {
 }
 
 render_agent_install_payload_body() {
+  local -a payload_skills=(
+    "almanac-qmd-mcp"
+    "almanac-vault-reconciler"
+    "almanac-first-contact"
+    "almanac-vaults"
+    "almanac-ssot"
+    "almanac-notion-knowledge"
+    "almanac-ssot-connect"
+    "almanac-notion-mcp"
+  )
+  local skill_name=""
+
   detect_github_repo
   resolve_agent_qmd_endpoint
   resolve_agent_control_plane_endpoint
@@ -2061,33 +2063,20 @@ render_agent_install_payload_body() {
   if [[ -n "$GITHUB_REPO_URL" ]]; then
     echo "  repo: \"$GITHUB_REPO_URL\""
   fi
-  if [[ -n "$GITHUB_SKILL_RAW_URL" || -n "$GITHUB_RECONCILER_SKILL_RAW_URL" ]]; then
+  if [[ -n "$GITHUB_REPO_OWNER_REPO" ]]; then
     echo "  skill_docs:"
-    if [[ -n "$GITHUB_SKILL_RAW_URL" ]]; then
-      echo "    - \"$GITHUB_SKILL_RAW_URL\""
-    fi
-    if [[ -n "$GITHUB_RECONCILER_SKILL_RAW_URL" ]]; then
-      echo "    - \"$GITHUB_RECONCILER_SKILL_RAW_URL\""
-    fi
-  fi
-  if [[ -n "$GITHUB_SKILL_IDENTIFIER" || -n "$GITHUB_RECONCILER_SKILL_IDENTIFIER" ]]; then
+    for skill_name in "${payload_skills[@]}"; do
+      echo "    - \"https://raw.githubusercontent.com/$GITHUB_REPO_OWNER_REPO/$GITHUB_REPO_BRANCH/skills/$skill_name/SKILL.md\""
+    done
     echo "  skill_sources_github:"
-    if [[ -n "$GITHUB_SKILL_IDENTIFIER" ]]; then
-      echo "    - \"$GITHUB_SKILL_IDENTIFIER\""
-    fi
-    if [[ -n "$GITHUB_RECONCILER_SKILL_IDENTIFIER" ]]; then
-      echo "    - \"$GITHUB_RECONCILER_SKILL_IDENTIFIER\""
-    fi
+    for skill_name in "${payload_skills[@]}"; do
+      echo "    - \"$GITHUB_REPO_OWNER_REPO/skills/$skill_name\""
+    done
   fi
   echo "  skill_sources_local:"
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-qmd-mcp\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-vault-reconciler\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-first-contact\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-vaults\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-ssot\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-notion-knowledge\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-ssot-connect\""
-  echo "    - \"$ALMANAC_REPO_DIR/skills/almanac-notion-mcp\""
+  for skill_name in "${payload_skills[@]}"; do
+    echo "    - \"$ALMANAC_REPO_DIR/skills/$skill_name\""
+  done
   echo "  model_presets:"
   echo "    codex: \"$ALMANAC_MODEL_PRESET_CODEX\""
   echo "    opus: \"$ALMANAC_MODEL_PRESET_OPUS\""
@@ -2102,22 +2091,28 @@ render_agent_install_payload_body() {
   else
     echo "    - register chutes-kb during first contact when CHUTES_MCP_URL is provided"
   fi
+  echo "    - install the shipped almanac-managed-context plugin; bin/install-almanac-plugins.sh auto-enables it for Hermes homes"
+  echo "    - rely on almanac-managed-context to inject Almanac MCP auth, per-intent recipe cards, and telemetry before tool dispatch"
+  echo "    - do not read HERMES_HOME secrets files and do not pass token in Almanac MCP tool calls; the plugin injects the bootstrap token automatically"
   echo "    - run almanac-first-contact immediately after MCP registration"
   echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, fetch agents.managed-memory, and materialize the initial managed-memory stubs"
-  echo "    - use almanac-vaults via scripts/curate-vaults.sh for catalog, subscription, and stub curation work"
+  echo "    - prefer the almanac-mcp recipe-card rails directly for vault catalog/subscription, shared Notion lookup, and SSOT reads/writes; shell wrappers are human fallback only"
   echo "    - install exactly one 4h refresh timer/service for the user agent, and rely on Curator fanout -> activation trigger -> user-agent-refresh for immediate stub sync after vault/catalog changes"
   echo "  memory_contract:"
-  echo "    - maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:vault-topology]"
+  echo "    - maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:notion-ref], [managed:vault-topology], [managed:notion-stub], [managed:today-plate]"
   echo "    - write or refresh those stubs now; MEMORY.md is a frozen snapshot at session start"
   echo "    - make [managed:almanac-skill-ref] explicit: Almanac skills are active defaults, not passive extras"
   echo "    - make [managed:resource-ref] explicit: keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there"
   echo "    - make [managed:qmd-ref] explicit: qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval"
+  echo "    - make [managed:notion-ref] explicit: use shared Notion knowledge rails for indexed search/fetch context without confusing them with the governed SSOT write lane"
+  echo "    - make [managed:notion-stub] explicit: keep verification, scope, and pending-write posture visible so the agent can predict whether writes apply or queue"
+  echo "    - make [managed:today-plate] explicit: surface what is on deck for the user, due pressure, and pending approvals before exploring tools"
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     echo "    - include \"$PDF_INGEST_COLLECTION_NAME\" when present, especially for newly uploaded PDFs"
   fi
   echo "    - do not store note bodies, PDF bodies, or large dumps in built-in memory"
   echo "    - do not rely on background memory review or session-end flush"
-  echo "    - if cron lacks the native memory tool, patch only those five entries in \$HERMES_HOME/memories/MEMORY.md and preserve unrelated entries plus Hermes § delimiters"
+  echo "    - if cron lacks the native memory tool, patch only those eight entries in \$HERMES_HOME/memories/MEMORY.md and preserve unrelated entries plus Hermes § delimiters"
   echo "  report_contract:"
   echo "    - recurring success output: exactly 1 short line"
   echo "    - recurring warn/fail output: at most 2 short lines"
@@ -2125,6 +2120,7 @@ render_agent_install_payload_body() {
   echo "    - preferred success form: 'Almanac health ok: sync current, qmd indexed, managed memory refreshed, drift=none.'"
   echo "  rails:"
   echo "    - prefer qmd/MCP over filesystem access; direct local qmd service or CLI is fallback only when MCP is unavailable"
+  echo "    - prefer tool calls over bash mimicry; do not reach for scripts/curate-*.sh or python heredocs from a normal Hermes turn"
   echo "    - prefer the deployed almanac-owned qmd/vault over repo-scaffold guesses"
   if [[ "$AGENT_QMD_URL_MODE" == "tailnet" && "$AGENT_QMD_ROUTE_STATUS" != "live" ]]; then
     echo "    - tailnet hostname is known but ${TAILSCALE_QMD_PATH} is not visibly published; republish Tailscale Serve if MCP test fails"

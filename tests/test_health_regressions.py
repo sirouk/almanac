@@ -59,6 +59,53 @@ check_placeholder_secrets
     print("PASS test_placeholder_secret_detection_and_reporting")
 
 
+def test_backup_timer_job_result_reports_success_and_failure() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_unit_state() {", "check_port_listening() {")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+systemctl() {{
+  if [[ "$1" == "--user" && "$2" == "is-active" && "$3" == "almanac-github-backup.timer" ]]; then
+    printf 'active\\n'
+    return 0
+  fi
+  if [[ "$1" == "--user" && "$2" == "show" && "$3" == "almanac-github-backup.service" ]]; then
+    case "$4" in
+      --property=Result) printf '%s\\n' "${{ALMANAC_BACKUP_RESULT:-success}}" ;;
+      --property=ActiveState) printf '%s\\n' "${{ALMANAC_BACKUP_ACTIVE_STATE:-inactive}}" ;;
+      --property=SubState) printf '%s\\n' "${{ALMANAC_BACKUP_SUB_STATE:-dead}}" ;;
+      *) return 1 ;;
+    esac
+    return 0
+  fi
+  return 1
+}}
+{snippet}
+check_unit_state almanac-github-backup.timer required
+check_user_timer_job_result almanac-github-backup.service required
+ALMANAC_BACKUP_RESULT=exit-code
+ALMANAC_BACKUP_ACTIVE_STATE=failed
+ALMANAC_BACKUP_SUB_STATE=failed
+check_user_timer_job_result almanac-github-backup.service required
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"backup timer job result case failed: {result.stderr}")
+    expect("PASS:almanac-github-backup.timer is active" in result.stdout, result.stdout)
+    expect("PASS:almanac-github-backup.service last result is success" in result.stdout, result.stdout)
+    expect(
+        "FAIL:almanac-github-backup.service last result is exit-code (state=failed/failed)" in result.stdout,
+        result.stdout,
+    )
+    print("PASS test_backup_timer_job_result_reports_success_and_failure")
+
+
 def test_activation_trigger_write_probe_reports_writable_and_unwritable_states() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, "check_almanac_mcp_status() {", "check_vault_definition_health() {")
@@ -362,6 +409,7 @@ PATH="$FAKEBIN:$PATH"
 
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
+    test_backup_timer_job_result_reports_success_and_failure()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
     test_shared_notion_without_webhook_reports_sweep_fallback_warning()
@@ -369,7 +417,7 @@ def main() -> int:
     test_shared_notion_with_installed_token_but_unconfirmed_verification_warns()
     test_shared_notion_with_confirmed_verification_reports_ready()
     test_shared_notion_with_tailscale_funnel_reports_live_public_route()
-    print("PASS all 8 health regression tests")
+    print("PASS all 9 health regression tests")
     return 0
 
 

@@ -149,6 +149,44 @@ emit_runtime_config
     return result.stdout
 
 
+def render_agent_install_payload() -> str:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "render_agent_install_payload_body() {", "write_agent_install_payload_file() {")
+    script = f"""
+{snippet}
+detect_github_repo() {{
+  GITHUB_REPO_URL="https://github.com/example/almanac"
+  GITHUB_REPO_OWNER_REPO="example/almanac"
+  GITHUB_REPO_BRANCH="feature/smoke"
+}}
+resolve_agent_qmd_endpoint() {{
+  AGENT_QMD_URL="https://qmd.example.test/mcp"
+  QMD_COLLECTION_NAME="vault"
+  PDF_INGEST_ENABLED=1
+  PDF_INGEST_COLLECTION_NAME="vault-pdf-ingest"
+  AGENT_QMD_URL_MODE="tailnet"
+  AGENT_QMD_ROUTE_STATUS="live"
+  TAILSCALE_QMD_PATH="/mcp"
+}}
+resolve_agent_control_plane_endpoint() {{
+  AGENT_ALMANAC_MCP_URL="https://agent.example.test/almanac-mcp"
+  ALMANAC_MCP_HOST="127.0.0.1"
+  ALMANAC_MCP_PORT="8282"
+  AGENT_ALMANAC_MCP_URL_MODE="tailnet"
+  AGENT_ALMANAC_MCP_ROUTE_STATUS="live"
+  TAILSCALE_ALMANAC_MCP_PATH="/almanac-mcp"
+}}
+ALMANAC_REPO_DIR="/repo"
+ALMANAC_MODEL_PRESET_CODEX="openai:codex"
+ALMANAC_MODEL_PRESET_OPUS="anthropic:claude-opus"
+ALMANAC_MODEL_PRESET_CHUTES="chutes:auto-failover"
+render_agent_install_payload_body
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"render_agent_install_payload_body failed: {result.stderr}")
+    return result.stdout
+
+
 def source_value(config_text: str, key: str) -> str:
     with tempfile.NamedTemporaryFile("w", delete=False) as handle:
         handle.write(config_text)
@@ -367,6 +405,49 @@ def test_run_health_check_falls_back_when_user_bus_is_missing() -> None:
         "expected run_health_check to fall back to plain user-shell execution when the bus is absent",
     )
     print("PASS test_run_health_check_falls_back_when_user_bus_is_missing")
+
+
+def test_agent_install_payload_tracks_current_agent_contract() -> None:
+    payload = render_agent_install_payload()
+    expected_skills = [
+        "almanac-qmd-mcp",
+        "almanac-vault-reconciler",
+        "almanac-first-contact",
+        "almanac-vaults",
+        "almanac-ssot",
+        "almanac-notion-knowledge",
+        "almanac-ssot-connect",
+        "almanac-notion-mcp",
+    ]
+    expected_keys = [
+        "[managed:almanac-skill-ref]",
+        "[managed:vault-ref]",
+        "[managed:resource-ref]",
+        "[managed:qmd-ref]",
+        "[managed:notion-ref]",
+        "[managed:vault-topology]",
+        "[managed:notion-stub]",
+        "[managed:today-plate]",
+    ]
+
+    for skill_name in expected_skills:
+        expect(
+            f"https://raw.githubusercontent.com/example/almanac/feature/smoke/skills/{skill_name}/SKILL.md" in payload,
+            payload,
+        )
+        expect(f"example/almanac/skills/{skill_name}" in payload, payload)
+        expect(f'/repo/skills/{skill_name}' in payload, payload)
+
+    for managed_key in expected_keys:
+        expect(managed_key in payload, payload)
+
+    expect("scripts/curate-vaults.sh" not in payload, payload)
+    expect("almanac-managed-context" in payload, payload)
+    expect("inject Almanac MCP auth" in payload, payload)
+    expect("do not read HERMES_HOME secrets files" in payload, payload)
+    expect("do not pass token" in payload, payload)
+    expect("patch only those eight entries" in payload, payload)
+    print("PASS test_agent_install_payload_tracks_current_agent_contract")
 
 
 def test_emit_runtime_config_persists_org_interview_fields() -> None:
@@ -1514,6 +1595,7 @@ def main() -> int:
         test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,
         test_path_is_within_and_safe_remove_use_canonical_paths,
         test_run_health_check_falls_back_when_user_bus_is_missing,
+        test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,
         test_org_interview_validators_reject_bad_values,

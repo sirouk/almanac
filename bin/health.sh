@@ -224,6 +224,49 @@ check_system_unit_state() {
   esac
 }
 
+check_user_timer_job_result() {
+  local unit="$1"
+  local expect="$2"
+  local result=""
+  local active_state=""
+  local sub_state=""
+  local state_label=""
+  local message=""
+
+  result="$(systemctl --user show "$unit" --property=Result --value 2>/dev/null || true)"
+  active_state="$(systemctl --user show "$unit" --property=ActiveState --value 2>/dev/null || true)"
+  sub_state="$(systemctl --user show "$unit" --property=SubState --value 2>/dev/null || true)"
+
+  state_label="${active_state:-unknown}"
+  if [[ -n "$sub_state" ]]; then
+    state_label="$state_label/$sub_state"
+  fi
+
+  case "$active_state" in
+    activating|deactivating|reloading)
+      warn "$unit last result is ${result:-unknown} while state is $state_label"
+      return 0
+      ;;
+  esac
+
+  case "$result" in
+    success)
+      pass "$unit last result is success"
+      ;;
+    ""|none|no-result)
+      warn "$unit has not reported a completed run yet (state=$state_label)"
+      ;;
+    *)
+      message="$unit last result is ${result:-unknown} (state=$state_label)"
+      if [[ "$expect" == "required" ]]; then
+        fail "$message"
+      else
+        warn "$message"
+      fi
+      ;;
+  esac
+}
+
 check_port_listening() {
   local port="$1"
 
@@ -773,20 +816,20 @@ for agent in agents:
 raise SystemExit(1 if failures else 0)
 PY
   )"; then
-    while IFS= read -r line; do
-      [[ -n "$line" ]] && pass "$line"
-    done <<<"$output"
+    :
   else
-    while IFS= read -r line; do
-      [[ -z "$line" ]] && continue
-      case "$line" in
-        FAIL\ *) fail "${line#FAIL }" ;;
-        OK\ *) pass "${line#OK }" ;;
-        WARN\ *) warn "${line#WARN }" ;;
-        *) warn_or_fail "$line" ;;
-      esac
-    done <<<"$output"
+    :
   fi
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      FAIL\ *) fail "${line#FAIL }" ;;
+      OK\ *) pass "${line#OK }" ;;
+      WARN\ *) warn "${line#WARN }" ;;
+      *) warn_or_fail "$line" ;;
+    esac
+  done <<<"$output"
 }
 
 check_auto_provision_state() {
@@ -1533,6 +1576,9 @@ if set_user_systemd_bus_env; then
     pass "PDF ingest timer disabled in config"
   fi
   check_unit_state almanac-github-backup.timer required
+  if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
+    check_user_timer_job_result almanac-github-backup.service required
+  fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     if [[ "$STRICT_MODE" == "1" ]]; then

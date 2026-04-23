@@ -5180,13 +5180,22 @@ def grant_agent_runtime_access(
 
     traverse_only = [
         cfg.almanac_home,
+        cfg.repo_dir,
         cfg.private_dir,
         cfg.state_dir,
         cfg.runtime_dir,
         *extra_traverse,
     ]
     readable_trees = [
-        cfg.repo_dir,
+        cfg.repo_dir / "bin",
+        cfg.repo_dir / "compose",
+        cfg.repo_dir / "config",
+        cfg.repo_dir / "docs",
+        cfg.repo_dir / "plugins",
+        cfg.repo_dir / "python",
+        cfg.repo_dir / "skills",
+        cfg.repo_dir / "systemd",
+        cfg.repo_dir / "templates",
         cfg.runtime_dir / "hermes-venv",
         cfg.runtime_dir / "hermes-agent-src",
         activation_dir,

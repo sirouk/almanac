@@ -50,6 +50,7 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
         (runtime_dir / "hermes-venv" / "bin").mkdir(parents=True, exist_ok=True)
         (runtime_dir / "hermes-agent-src").mkdir(parents=True, exist_ok=True)
         (repo_dir / "bin").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "python").mkdir(parents=True, exist_ok=True)
         (runtime_dir / "hermes-venv" / "bin" / "python3").write_text(
             "#!/usr/bin/env python3\n",
             encoding="utf-8",
@@ -105,6 +106,18 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
         expect(result["unix_user"] == "alice", result)
         expect(result["agent_id"] == "agent-test", result)
         expect(str(repo_dir) in joined, f"expected repo ACL call, saw: {joined}")
+        expect(
+            not any(cmd[:5] == ["/usr/bin/setfacl", "-R", "-m", "u:alice:rX", str(repo_dir)] for cmd in commands),
+            f"repo root must not be recursively readable because it contains private/volatile state, saw: {joined}",
+        )
+        expect(
+            any(cmd[:5] == ["/usr/bin/setfacl", "-R", "-m", "u:alice:rX", str(repo_dir / "bin")] for cmd in commands),
+            f"expected public repo bin/ subtree ACL call, saw: {joined}",
+        )
+        expect(
+            any(cmd[:5] == ["/usr/bin/setfacl", "-R", "-m", "u:alice:rX", str(repo_dir / "python")] for cmd in commands),
+            f"expected public repo python/ subtree ACL call, saw: {joined}",
+        )
         expect(str(runtime_dir / "hermes-venv") in joined, f"expected hermes runtime ACL call, saw: {joined}")
         expect(str(runtime_dir / "hermes-agent-src") in joined, f"expected hermes source ACL call, saw: {joined}")
         expect(str(activation_dir) in joined, f"expected activation dir ACL call, saw: {joined}")

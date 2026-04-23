@@ -7,9 +7,9 @@ markdown docs through qmd.
 
 If a repository is present on disk as a real Git checkout, Almanac's hourly
 Curator refresh hard-syncs it to `origin/<current-branch>` in place. Local
-commits and uncommitted edits are overwritten; gitignored build artifacts are
-left alone. Markdown and text files in the checkout are indexed by qmd through
-the normal vault watcher.
+commits, uncommitted edits, untracked files, and gitignored build artifacts are
+cleaned so the checkout mirrors upstream. Markdown and text files in the
+checkout are indexed by qmd through the normal vault watcher.
 
 Useful contents:
 - repo purpose and ownership

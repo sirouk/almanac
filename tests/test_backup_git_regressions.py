@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -100,10 +101,83 @@ git -C "$ALMANAC_PRIV_DIR" diff --cached --name-only
     print("PASS test_backup_to_github_excludes_repo_local_key_material")
 
 
+def test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main() -> None:
+    backup_text = BACKUP_SH.read_text()
+    snippet = extract(backup_text, "reconcile_backup_git_remote_branch() {", '\nif [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then')
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        local_repo = tmp_path / "local"
+        seed_repo = tmp_path / "seed"
+        bare_remote = tmp_path / "remote.git"
+
+        run(["git", "init", "-b", "main", str(local_repo)])
+        (local_repo / "vault").mkdir(parents=True)
+        (local_repo / "vault" / "note.md").write_text("local-state\n", encoding="utf-8")
+        run(["git", "-C", str(local_repo), "add", "."])
+        run(
+            [
+                "git",
+                "-C",
+                str(local_repo),
+                "-c",
+                "user.name=Backup Bot",
+                "-c",
+                "user.email=backup@example.com",
+                "commit",
+                "-m",
+                "local root",
+            ]
+        )
+
+        run(["git", "init", "-b", "main", str(seed_repo)])
+        (seed_repo / "vault").mkdir(parents=True)
+        (seed_repo / "vault" / "legacy.md").write_text("legacy-remote\n", encoding="utf-8")
+        run(["git", "-C", str(seed_repo), "add", "."])
+        run(
+            [
+                "git",
+                "-C",
+                str(seed_repo),
+                "-c",
+                "user.name=Backup Bot",
+                "-c",
+                "user.email=backup@example.com",
+                "commit",
+                "-m",
+                "remote root",
+            ]
+        )
+
+        run(["git", "init", "--bare", str(bare_remote)])
+        run(["git", "-C", str(seed_repo), "remote", "add", "origin", str(bare_remote)])
+        run(["git", "-C", str(seed_repo), "push", "origin", "main"])
+        run(["git", "-C", str(local_repo), "remote", "add", "origin", str(bare_remote)])
+
+        script = f"""
+{snippet}
+BACKUP_GIT_BRANCH=main
+BACKUP_GIT_AUTHOR_NAME='Backup Bot'
+BACKUP_GIT_AUTHOR_EMAIL='backup@example.com'
+reconcile_backup_git_remote_branch {local_repo} "$BACKUP_GIT_BRANCH"
+printf 'local=%s\\n' "$(git -C {shlex.quote(str(local_repo))} rev-parse main)"
+printf 'remote=%s\\n' "$(git -C {shlex.quote(str(bare_remote))} rev-parse refs/heads/main)"
+printf 'archives=%s\\n' "$(git -C {shlex.quote(str(bare_remote))} for-each-ref --format='%(refname:short)' refs/heads/archive/)"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"backup unrelated-history reconcile failed: {result.stderr}")
+        local_head = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("local="))
+        remote_head = next(line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("remote="))
+        archives = [line.split("=", 1)[1] for line in result.stdout.splitlines() if line.startswith("archives=")]
+        expect(local_head == remote_head, f"expected remote main to align to local head, got {result.stdout!r}")
+        expect(any(item.startswith("archive/main-pre-align-") for item in archives), f"expected archive branch, got {result.stdout!r}")
+    print("PASS test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main")
+
+
 def main() -> int:
     test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts()
     test_backup_to_github_excludes_repo_local_key_material()
-    print("PASS all 2 backup git regression tests")
+    test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main()
+    print("PASS all 3 backup git regression tests")
     return 0
 
 

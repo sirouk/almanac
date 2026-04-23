@@ -407,6 +407,18 @@ def test_run_health_check_falls_back_when_user_bus_is_missing() -> None:
     print("PASS test_run_health_check_falls_back_when_user_bus_is_missing")
 
 
+def test_install_and_upgrade_run_live_agent_tool_smoke_after_health() -> None:
+    text = DEPLOY_SH.read_text()
+    install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
+    upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    smoke_call = 'env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"'
+    expect(smoke_call in install_snippet, install_snippet)
+    expect(smoke_call in upgrade_snippet, upgrade_snippet)
+    expect('echo "Running live agent tool smoke..."' in install_snippet, install_snippet)
+    expect('echo "Running live agent tool smoke..."' in upgrade_snippet, upgrade_snippet)
+    print("PASS test_install_and_upgrade_run_live_agent_tool_smoke_after_health")
+
+
 def test_agent_install_payload_tracks_current_agent_contract() -> None:
     payload = render_agent_install_payload()
     expected_skills = [
@@ -1595,6 +1607,7 @@ def main() -> int:
         test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,
         test_path_is_within_and_safe_remove_use_canonical_paths,
         test_run_health_check_falls_back_when_user_bus_is_missing,
+        test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,

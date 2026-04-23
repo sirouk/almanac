@@ -3243,6 +3243,12 @@ run_root_install() {
     run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
   fi
 
+  if [[ -x "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
+    echo
+    echo "Running live agent tool smoke..."
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"
+  fi
+
   echo
   echo "Almanac install complete."
   echo "Public repo:  $ALMANAC_REPO_DIR"
@@ -3347,6 +3353,12 @@ run_root_upgrade() {
     run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
   else
     run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+  fi
+
+  if [[ -x "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
+    echo
+    echo "Running live agent tool smoke..."
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"
   fi
 
   echo

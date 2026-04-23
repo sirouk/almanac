@@ -8,6 +8,46 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "vault backup"
 ensure_layout
 
+reconcile_backup_git_remote_branch() {
+  local repo_dir="$1"
+  local branch="$2"
+  local remote_ref="origin/$branch"
+  local remote_tracking_ref="refs/remotes/origin/$branch"
+  local remote_head=""
+  local archive_branch=""
+  local timestamp=""
+  local remote_short=""
+
+  git -C "$repo_dir" fetch origin "$branch" >/dev/null 2>&1 || return 0
+
+  if ! git -C "$repo_dir" show-ref --verify --quiet "$remote_tracking_ref"; then
+    return 0
+  fi
+
+  if git -C "$repo_dir" merge-base --is-ancestor "$remote_ref" "$branch" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if git -C "$repo_dir" merge-base --is-ancestor "$branch" "$remote_ref" >/dev/null 2>&1; then
+    git -C "$repo_dir" merge --ff-only "$remote_ref" >/dev/null
+    return 0
+  fi
+
+  if git -C "$repo_dir" merge-base "$branch" "$remote_ref" >/dev/null 2>&1; then
+    echo "Backup remote branch '$remote_ref' has diverged from local '$branch'. Resolve the divergence in $repo_dir before retrying backup." >&2
+    return 1
+  fi
+
+  remote_head="$(git -C "$repo_dir" rev-parse "$remote_ref")"
+  remote_short="${remote_head:0:12}"
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  archive_branch="archive/${branch}-pre-align-${timestamp}-${remote_short}"
+
+  echo "Backup remote branch '$remote_ref' has unrelated history; archiving it to '$archive_branch' before aligning '$branch' to local state." >&2
+  git -C "$repo_dir" push origin "$remote_ref:refs/heads/$archive_branch" >/dev/null
+  git -C "$repo_dir" push --force-with-lease="refs/heads/$branch:$remote_head" origin "$branch" >/dev/null
+}
+
 if [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then
   git -C "$ALMANAC_PRIV_DIR" init -b "$BACKUP_GIT_BRANCH"
 fi
@@ -51,5 +91,6 @@ fi
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
   ensure_backup_git_origin_remote "$ALMANAC_PRIV_DIR"
   prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
+  reconcile_backup_git_remote_branch "$ALMANAC_PRIV_DIR" "$BACKUP_GIT_BRANCH"
   git -C "$ALMANAC_PRIV_DIR" push origin "$BACKUP_GIT_BRANCH"
 fi

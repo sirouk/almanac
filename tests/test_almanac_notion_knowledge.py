@@ -586,7 +586,7 @@ def test_process_pending_notion_events_queues_full_reindex_for_data_source_and_f
                 event_type="file_upload.completed",
                 payload={"id": "evt-file-upload", "type": "file_upload.completed", "entity": {"id": "ffffffff-ffff-ffff-ffff-ffffffffffff", "type": "file_upload"}},
             )
-            mod._map_event_to_affected_users = lambda conn_arg, payload: ([], True)
+            mod._map_event_to_affected_users = lambda conn_arg, payload: ([], True, payload)
 
             result = mod.process_pending_notion_events(conn)
             expect(result["processed"] == 2, str(result))

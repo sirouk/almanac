@@ -215,9 +215,36 @@ def test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents
             os.environ.update(old_env)
 
 
+def test_vault_content_notification_copy_is_category_aware() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_vault_notify_copy_test")
+    expect(
+        mod._vault_content_notification_message("Skills", ["almanac-ssot.md"]).startswith("Skill library update: 1 file(s) changed"),
+        "expected skill-specific vault notification copy",
+    )
+    expect(
+        mod._vault_content_notification_message("Plugins", ["almanac-managed-context.md"]).startswith("Plugin library update: 1 file(s) changed"),
+        "expected plugin-specific vault notification copy",
+    )
+    hermes_message = mod._vault_content_notification_message(
+        "Repos",
+        [
+            "hermes-agent-docs/reference/cli-commands.md",
+            "hermes-agent-docs/user-guide/features/skills.md",
+        ],
+    )
+    expect("Hermes documentation refreshed" in hermes_message, hermes_message)
+    expect("Use qmd/Hermes docs" in hermes_message, hermes_message)
+    expect(
+        mod._vault_content_notification_message("Projects", ["roadmap.md"]).startswith("Vault update: Projects"),
+        "expected normal vault update copy for project work",
+    )
+    print("PASS test_vault_content_notification_copy_is_category_aware")
+
+
 def main() -> int:
     test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents()
-    print("PASS all 1 vault notification regression tests")
+    test_vault_content_notification_copy_is_category_aware()
+    print("PASS all 2 vault notification regression tests")
     return 0
 
 

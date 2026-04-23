@@ -380,6 +380,28 @@ def test_curator_fanout_skips_refresh_signal_when_payload_cache_matches() -> Non
                     expect(managed_path.read_text(encoding="utf-8") == first_body, "managed payload should stay byte-identical on cache hit")
                     trigger_path = mod.activation_trigger_path(cfg, "agent-test")
                     expect(not trigger_path.exists(), f"unexpected activation trigger on cache hit: {trigger_path}")
+
+            mod.queue_notification(
+                conn,
+                target_kind="user-agent",
+                target_id="agent-test",
+                channel_kind="notion-webhook",
+                message="Notion digest: 1 scoped update(s) for this user. Check live details before acting.",
+            )
+            mod.queue_notification(
+                conn,
+                target_kind="curator",
+                target_id="agent-test",
+                channel_kind="brief-fanout",
+                message="agent-test notification refresh",
+            )
+            result = mod.consume_curator_brief_fanout(conn, cfg)
+            expect(result["processed_notifications"] == 1, f"expected pending-notification fanout to process, got {result}")
+            published = result["published_agents"][0]
+            expect(bool(published.get("changed")) is False, str(published))
+            expect("activation_trigger_path" in published, f"pending user-agent notifications must wake the user refresh path: {published}")
+            trigger_path = mod.activation_trigger_path(cfg, "agent-test")
+            expect(trigger_path.is_file(), f"expected activation trigger for pending user-agent notifications: {trigger_path}")
             print("PASS test_curator_fanout_skips_refresh_signal_when_payload_cache_matches")
         finally:
             os.environ.clear()

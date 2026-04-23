@@ -4001,6 +4001,27 @@ def _changed_paths_by_vault(
     return {vault_name: sorted(paths) for vault_name, paths in grouped.items()}
 
 
+def _vault_content_notification_message(vault_name: str, relative_paths: Sequence[str]) -> str:
+    normalized_vault = str(vault_name or "").strip()
+    paths = [str(path or "").strip() for path in relative_paths if str(path or "").strip()]
+    count = len(paths)
+    preview = ", ".join(paths[:3])
+    if count > 3:
+        preview += f" ... (+{count - 3} more)"
+    if normalized_vault == "Skills":
+        return f"Skill library update: {count} file(s) changed" + (f": {preview}" if preview else ".")
+    if normalized_vault == "Plugins":
+        return f"Plugin library update: {count} file(s) changed" + (f": {preview}" if preview else ".")
+    if normalized_vault == "Repos" and paths and all(path.startswith("hermes-agent-docs/") for path in paths):
+        return (
+            f"Hermes documentation refreshed in the Repos vault: {count} doc file(s) changed. "
+            "Use qmd/Hermes docs for current operating details before editing skills, plugins, or config."
+        )
+    if normalized_vault == "Repos":
+        return f"Repo knowledge update: {count} file(s) changed" + (f": {preview}" if preview else ".")
+    return f"Vault update: {normalized_vault} ({count} path(s))" + (f": {preview}" if preview else ".")
+
+
 def queue_vault_content_notifications(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -4018,10 +4039,7 @@ def queue_vault_content_notifications(
         subscribers = subscribed_agent_ids_for_vault(conn, vault_name)
         if not subscribers:
             continue
-        preview = ", ".join(relative_paths[:3])
-        if len(relative_paths) > 3:
-            preview += f" ... (+{len(relative_paths) - 3} more)"
-        message = f"Vault content changed: {vault_name} ({len(relative_paths)} path(s)): {preview}"
+        message = _vault_content_notification_message(vault_name, relative_paths)
         for agent_id in subscribers:
             queue_notification(
                 conn,
@@ -4029,7 +4047,13 @@ def queue_vault_content_notifications(
                 target_id=agent_id,
                 channel_kind="vault-change",
                 message=message,
-                extra={"vault_name": vault_name, "paths": relative_paths, "source": source},
+                extra={
+                    "vault_name": vault_name,
+                    "paths": relative_paths[:50],
+                    "path_count": len(relative_paths),
+                    "paths_truncated": len(relative_paths) > 50,
+                    "source": source,
+                },
             )
             queued_notifications += 1
             agents_notified.add(agent_id)
@@ -6800,6 +6824,43 @@ def _notion_event_entity_ref(payload: dict[str, Any]) -> tuple[str, str]:
     entity_id = str(entity.get("id") or "").strip()
     entity_type = str(entity.get("type") or entity.get("object") or "").strip().lower()
     return entity_id, entity_type
+
+
+def _short_notion_ref(value: str, *, length: int = 8) -> str:
+    text = str(value or "").strip()
+    compact = text.replace("-", "")
+    if len(compact) >= length and all(ch in "0123456789abcdefABCDEF" for ch in compact[:length]):
+        return compact[:length].lower()
+    return text[:length] if text else "unknown"
+
+
+def _notion_event_entity_label(payload: dict[str, Any]) -> str:
+    entity_id, entity_type = _notion_event_entity_ref(payload)
+    object_type = entity_type or str(payload.get("object") or "item").strip().lower() or "item"
+    title = ""
+    if object_type == "page" or (isinstance(payload.get("properties"), dict) and not entity_type):
+        title = _notion_title_from_page(payload)
+    if not title and object_type in {"database", "data_source"}:
+        raw_title = payload.get("title")
+        if isinstance(raw_title, list):
+            title = "".join(
+                str(part.get("plain_text") or "").strip()
+                for part in raw_title
+                if isinstance(part, dict)
+            ).strip()
+    if not title:
+        entity = payload.get("entity")
+        if isinstance(entity, dict):
+            for key in ("title", "name", "display_name"):
+                candidate = str(entity.get(key) or "").strip()
+                if candidate:
+                    title = candidate
+                    break
+    short_id = _short_notion_ref(entity_id or str(payload.get("id") or ""))
+    readable_type = object_type.replace("_", " ") if object_type else "item"
+    if title:
+        return f"{title} ({readable_type} {short_id})"
+    return f"{readable_type} {short_id}"
 
 
 def _hydrate_notion_event_entity(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -10951,12 +11012,29 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
                 notion_stub_cache=notion_stub_cache,
             )
             published_payload = {"agent_id": agent_id, **publish_result}
-            if bool(publish_result.get("changed")):
+            pending_agent_notifications = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM notification_outbox
+                WHERE delivered_at IS NULL
+                  AND target_kind = 'user-agent'
+                  AND target_id = ?
+                """,
+                (agent_id,),
+            ).fetchone()
+            has_pending_agent_notifications = int(
+                pending_agent_notifications["c"] if pending_agent_notifications is not None else 0
+            ) > 0
+            if bool(publish_result.get("changed")) or has_pending_agent_notifications:
                 trigger_path = signal_agent_refresh_from_curator(
                     conn,
                     cfg,
                     agent_id=agent_id,
-                    note="curator brief-fanout: refresh managed memory stubs",
+                    note=(
+                        "curator brief-fanout: refresh managed memory stubs"
+                        if bool(publish_result.get("changed"))
+                        else "curator brief-fanout: consume pending Almanac event notifications"
+                    ),
                 )
                 if trigger_path is not None:
                     published_payload["activation_trigger_path"] = str(trigger_path)
@@ -11019,17 +11097,19 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
     }
 
 
-def _map_event_to_affected_users(conn: sqlite3.Connection, payload: dict[str, Any]) -> tuple[list[str], bool]:
+def _map_event_to_affected_users(conn: sqlite3.Connection, payload: dict[str, Any]) -> tuple[list[str], bool, dict[str, Any]]:
     owner_identity, _ = _notion_owner_identity(payload)
     resolved = True
+    routing_payload = payload
     if not owner_identity:
         hydrated_payload, resolved = _hydrate_notion_event_entity(payload)
         if hydrated_payload:
+            routing_payload = hydrated_payload
             owner_identity, _ = _notion_owner_identity(hydrated_payload)
     if not owner_identity:
-        return [], resolved
+        return [], resolved, routing_payload
     agent = _find_agent_for_owner(conn, owner_identity)
-    return ([agent["agent_id"]] if agent else []), resolved
+    return ([agent["agent_id"]] if agent else []), resolved, routing_payload
 
 
 def _signal_kind(event_type: str, payload: dict[str, Any]) -> str:
@@ -11041,6 +11121,61 @@ def _signal_kind(event_type: str, payload: dict[str, Any]) -> str:
     if "created" in kind:
         return "org-activity"
     return "org-activity"
+
+
+def _notion_event_action_label(event_type: str) -> str:
+    kind = str(event_type or "").strip().lower()
+    if "mention" in kind:
+        return "mention"
+    if "comment" in kind:
+        return "comment"
+    if "properties_updated" in kind:
+        return "properties updated"
+    if "content_updated" in kind:
+        return "content updated"
+    if "created" in kind:
+        return "created"
+    if "deleted" in kind:
+        return "deleted"
+    if "restored" in kind:
+        return "restored"
+    return kind or "changed"
+
+
+def _notion_signal_label(signal: str) -> str:
+    normalized = str(signal or "").strip().lower()
+    if normalized == "focus-nudge":
+        return "focus nudge"
+    if normalized == "task-reminder":
+        return "work update"
+    return "workspace activity"
+
+
+def _render_notion_agent_nudge(entries: list[dict[str, str]]) -> str:
+    clean_entries = [entry for entry in entries if isinstance(entry, dict)]
+    if not clean_entries:
+        return "Notion digest: shared Notion changed. Use notion.query or ssot.read before changing shared state."
+    total = len(clean_entries)
+    counts: dict[str, int] = {}
+    for entry in clean_entries:
+        label = str(entry.get("signal_label") or "workspace activity").strip()
+        counts[label] = counts.get(label, 0) + 1
+    count_text = ", ".join(f"{count} {label}" for label, count in sorted(counts.items()))
+    examples: list[str] = []
+    for entry in clean_entries[:3]:
+        action = str(entry.get("action") or "changed").strip()
+        target = str(entry.get("target") or "Notion item").strip()
+        event_ref = _short_notion_ref(str(entry.get("event_id") or ""))
+        examples.append(f"{action} on {target} (event {event_ref})")
+    suffix = "" if total <= len(examples) else f"; +{total - len(examples)} more"
+    return (
+        f"Notion digest: {total} scoped update(s) for this user"
+        + (f" ({count_text})" if count_text else "")
+        + ". Examples: "
+        + "; ".join(examples)
+        + suffix
+        + ". Check live details with notion.query or ssot.read before acting."
+    )
 
 
 def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -11056,7 +11191,7 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
 
     processed = 0
     event_types: dict[str, int] = {}
-    nudges_by_agent: dict[str, list[str]] = {}
+    nudges_by_agent: dict[str, list[dict[str, str]]] = {}
     reindex_entities: set[tuple[str, str]] = set()
     unresolved_events: list[str] = []
     failed_events: list[str] = []
@@ -11122,8 +11257,8 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
                 # page target we can reindex cheaply. Fall back to a full sync
                 # for correctness.
                 reindex_entities.add(("full", "full"))
-        affected, resolved = _map_event_to_affected_users(conn, payload)
-        signal = _signal_kind(row["event_type"], payload)
+        affected, resolved, routing_payload = _map_event_to_affected_users(conn, payload)
+        signal = _signal_kind(row["event_type"], routing_payload)
 
         if not affected:
             unresolved_events.append(row["event_id"])
@@ -11139,7 +11274,14 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
 
         for agent_id in affected:
             nudges_by_agent.setdefault(agent_id, []).append(
-                f"{signal}:{row['event_type']}:{row['event_id']}"
+                {
+                    "signal": signal,
+                    "signal_label": _notion_signal_label(signal),
+                    "event_type": str(row["event_type"] or ""),
+                    "event_id": str(row["event_id"] or ""),
+                    "action": _notion_event_action_label(str(row["event_type"] or "")),
+                    "target": _notion_event_entity_label(routing_payload),
+                }
             )
 
         processed += 1
@@ -11160,8 +11302,8 @@ def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
             target_kind="user-agent",
             target_id=agent_id,
             channel_kind="notion-webhook",
-            message=f"SSOT signals ({len(tokens)}): " + ", ".join(tokens[:10])
-            + ("" if len(tokens) <= 10 else f" ... (+{len(tokens) - 10} more)"),
+            message=_render_notion_agent_nudge(tokens),
+            extra={"events": tokens},
         )
         queue_notification(
             conn,

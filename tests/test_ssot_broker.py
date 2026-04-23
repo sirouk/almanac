@@ -2051,7 +2051,12 @@ def test_notion_batcher_hydrates_entity_before_routing() -> None:
                 retrieved.append(kwargs["page_id"])
                 return {
                     "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "object": "page",
                     "properties": {
+                        "Name": {
+                            "type": "title",
+                            "title": [{"plain_text": "Launch checklist"}],
+                        },
                         "Owner": {
                             "people": [
                                 {"id": "11111111-1111-1111-1111-111111111111"}
@@ -2067,12 +2072,18 @@ def test_notion_batcher_hydrates_entity_before_routing() -> None:
             expect(result["nudges"].get("agent-sirouk") == 1, result)
             agent_notice = conn.execute(
                 """
-                SELECT COUNT(*) AS c
+                SELECT COUNT(*) AS c, message, extra_json
                 FROM notification_outbox
                 WHERE target_kind = 'user-agent' AND channel_kind = 'notion-webhook' AND target_id = 'agent-sirouk'
                 """
             ).fetchone()
             expect(int(agent_notice["c"] if agent_notice else 0) == 1, str(dict(agent_notice) if agent_notice else {}))
+            expect("Notion digest: 1 scoped update" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
+            expect("properties updated on Launch checklist" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
+            expect("Check live details with notion.query or ssot.read before acting" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
+            extra = json.loads(str(agent_notice["extra_json"] or "{}"))
+            expect(extra["events"][0]["target"] == "Launch checklist (page aaaaaaaa)", str(extra))
+            expect(extra["events"][0]["signal_label"] == "work update", str(extra))
             fanout = conn.execute(
                 """
                 SELECT COUNT(*) AS c

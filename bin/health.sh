@@ -1280,10 +1280,14 @@ check_nextcloud_vault_mount() {
 
   podman_for_current_user() {
     local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    local podman_cwd="${HOME:-/tmp}"
+    if [[ ! -d "$podman_cwd" || ! -x "$podman_cwd" ]]; then
+      podman_cwd="/tmp"
+    fi
     if [[ -d "$runtime_dir" ]]; then
-      env XDG_RUNTIME_DIR="$runtime_dir" podman "$@"
+      (cd "$podman_cwd" && env XDG_RUNTIME_DIR="$runtime_dir" podman "$@")
     else
-      podman "$@"
+      (cd "$podman_cwd" && podman "$@")
     fi
   }
 

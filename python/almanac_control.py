@@ -1899,7 +1899,7 @@ def expire_stale_ssot_pending_writes(conn: sqlite3.Connection) -> int:
             END,
             decided_at = COALESCE(decided_at, ?),
             decision_note = CASE
-              WHEN decision_note = '' THEN 'expired before operator approval'
+              WHEN decision_note = '' THEN 'expired before user approval'
               ELSE decision_note
             END
         WHERE status = 'pending'
@@ -9702,23 +9702,26 @@ def _queue_ssot_write_for_approval(
         owner_label = owner_identity or "unknown"
         queue_notification(
             conn,
-            target_kind="operator",
-            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
-            channel_kind=cfg.operator_notify_platform or "tui-only",
+            target_kind="user-agent",
+            target_id=str(agent_row["agent_id"] or ""),
+            channel_kind="ssot-approval",
             message=(
-                "SSOT write approval requested.\n"
+                "Notion write approval requested.\n"
                 f"Pending: {pending_id}\n"
-                f"Agent: {agent_row['agent_id']}\n"
-                f"Requested by: {requested_by_actor}\n"
                 f"Operation: {operation}\n"
                 f"Target: {target_id}\n"
-                f"Owner: {owner_label}\n"
+                f"Target owner/scope: {owner_label}\n"
                 f"Expires: {expires_label}\n"
                 f"Reason: {request_reason}\n"
-                f"Approve: /approve {pending_id} or ./bin/almanac-ctl ssot approve {pending_id}\n"
-                f"Deny: /deny {pending_id} optional reason or ./bin/almanac-ctl ssot deny {pending_id} --reason 'optional reason'"
+                f"If the user approves in this chat, call ssot.approve with pending_id={pending_id}. "
+                f"If they decline, call ssot.deny."
             ),
-            extra=operator_ssot_write_action_extra(cfg, pending_id=pending_id),
+            extra={
+                "pending_id": pending_id,
+                "operation": operation,
+                "target_id": target_id,
+                "approval_owner": "user",
+            },
         )
     note_refresh_job(
         conn,
@@ -9749,7 +9752,7 @@ def _queue_ssot_write_for_approval(
         operation=operation,
         target_id=target_id,
         decision="queue",
-        reason=f"{request_reason}; operator approval required",
+        reason=f"{request_reason}; user approval required",
         actor=requested_by_actor,
         request_payload={**audit_payload, "pending_id": pending_id, "created": created},
     )
@@ -9762,6 +9765,7 @@ def _queue_ssot_write_for_approval(
         "owner_identity": owner_identity,
         "owner_source": owner_source,
         "approval_required": True,
+        "approval_owner": "user",
         "pending_id": pending_id,
         "pending_write": pending_row,
     }
@@ -9789,23 +9793,7 @@ def _apply_ssot_write(
     op = str(operation or "").strip().lower()
     normalized_target_id = str(target_id or "").strip()
     if op == "insert":
-        approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
         owner_identity = str(identity.get("notion_user_id") or identity.get("notion_user_email") or "")
-        if not approved:
-            reason = "insert payload must assign Owner or Assignee to the verified caller"
-            log_ssot_access_audit(
-                conn,
-                agent_id=str(agent_row["agent_id"]),
-                unix_user=str(agent_row["unix_user"]),
-                notion_user_id=str(identity.get("notion_user_id") or ""),
-                operation=op,
-                target_id=normalized_target_id,
-                decision="deny",
-                reason=reason,
-                actor=requested_by_actor,
-                request_payload=audit_payload,
-            )
-            raise PermissionError(reason)
         parent_meta = resolve_notion_target(
             target_id=normalized_target_id,
             token=settings["token"],
@@ -9817,6 +9805,20 @@ def _apply_ssot_write(
         changed_by_property = ""
         applied_request_payload = _strip_attribution_properties(payload)
         if parent_kind == "database":
+            approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
+            if not approved and not bypass_scope:
+                payload_owner_identity, payload_owner_source = _notion_owner_identity(payload)
+                reason = (
+                    "database insert is outside the verified caller's immediate Notion write lane; "
+                    "user approval is required"
+                )
+                raise SSOTApprovalRequired(
+                    reason,
+                    owner_identity=payload_owner_identity or owner_identity,
+                    owner_source=payload_owner_source or owner_source or "database-insert-scope",
+                )
+            if not approved:
+                owner_source = approval_surface or "approved-user-scope"
             database_payload, schema_payload = _load_notion_collection_schema(
                 target_id=normalized_target_id,
                 settings=settings,
@@ -9848,6 +9850,27 @@ def _apply_ssot_write(
                     owner_identity=parent_owner_identity,
                     owner_source="page-parent-ownership-mismatch",
                 )
+            explicit_owner_fields = (
+                _notion_property_people_identities(payload, "Owner")
+                or _notion_property_people_identities(payload, "Assignee")
+            )
+            if explicit_owner_fields:
+                approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
+                if not approved and not bypass_scope:
+                    payload_owner_identity, payload_owner_source = _notion_owner_identity(payload)
+                    reason = (
+                        "page child insert assigns Owner or Assignee outside the verified caller; "
+                        "user approval is required"
+                    )
+                    raise SSOTApprovalRequired(
+                        reason,
+                        owner_identity=payload_owner_identity or owner_identity,
+                        owner_source=payload_owner_source or owner_source or "page-child-owner-scope",
+                    )
+                if not approved:
+                    owner_source = approval_surface or "approved-user-scope"
+            else:
+                owner_source = f"page-parent-{parent_access_source or 'verified'}"
         applied_payload = create_notion_page(
             parent_id=normalized_target_id,
             parent_kind=parent_kind,
@@ -10003,6 +10026,185 @@ def _apply_ssot_write(
     }
 
 
+def preflight_ssot_write(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    agent_id: str,
+    operation: str,
+    target_id: str,
+    payload: dict[str, Any],
+    requested_by_actor: str,
+) -> dict[str, Any]:
+    """Check whether a shared Notion write would apply immediately or need
+    explicit user approval. This intentionally performs no writes."""
+    _ = cfg
+    op = (operation or "").strip().lower()
+    if op in SSOT_FORBIDDEN_OPERATIONS:
+        return {
+            "agent_id": agent_id,
+            "operation": op,
+            "target_id": str(target_id or "").strip(),
+            "allowed": False,
+            "would_queue": False,
+            "approval_required": False,
+            "recommended_action": "unsupported",
+            "reason": f"operation '{op}' is not permitted; archive/delete are unsupported",
+        }
+    if op not in SSOT_WRITE_OPERATIONS:
+        raise ValueError(f"unsupported SSOT operation '{op}'; allowed: {', '.join(SSOT_WRITE_OPERATIONS)}")
+
+    settings = _require_shared_notion_settings()
+    notion_target = str(target_id or settings["space_id"]).strip()
+    normalized_target_id = extract_notion_space_id(notion_target)
+    base = {
+        "agent_id": agent_id,
+        "operation": op,
+        "target_id": normalized_target_id,
+        "allowed": False,
+        "would_queue": False,
+        "approval_required": False,
+        "approval_owner": "",
+        "target_kind": "",
+        "owner_source": "",
+        "parent_access_source": "",
+        "recommended_action": "do-not-write",
+        "reason": "",
+    }
+    try:
+        agent_row, identity = _ssot_principal(conn, agent_id)
+    except PermissionError as exc:
+        return {**base, "reason": str(exc), "recommended_action": "verify-notion"}
+    gate_reason = _ssot_write_gate_reason(identity)
+    if gate_reason:
+        return {**base, "reason": gate_reason, "recommended_action": "verify-notion"}
+    try:
+        if op == "insert":
+            parent_meta = resolve_notion_target(
+                target_id=normalized_target_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+            )
+            parent_kind = str(parent_meta.get("kind") or "").strip()
+            base["target_kind"] = parent_kind
+            if parent_kind == "database":
+                approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
+                if approved:
+                    return {
+                        **base,
+                        "allowed": True,
+                        "owner_source": owner_source,
+                        "recommended_action": "write",
+                        "reason": "database insert is in the verified caller's lane",
+                    }
+                return {
+                    **base,
+                    "would_queue": True,
+                    "approval_required": True,
+                    "approval_owner": "user",
+                    "owner_source": "database-insert-scope",
+                    "recommended_action": "ask-user-approval",
+                    "reason": "database insert needs explicit user approval before writing outside the immediate lane",
+                }
+            if parent_kind == "page":
+                parent_page = retrieve_notion_page(
+                    page_id=normalized_target_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                )
+                parent_approved, parent_access_source = _page_access_matches_identity(
+                    parent_page,
+                    agent_row=agent_row,
+                    identity=identity,
+                    conn=conn,
+                    allow_prior_agent_touch=True,
+                )
+                explicit_owner_fields = (
+                    _notion_property_people_identities(payload, "Owner")
+                    or _notion_property_people_identities(payload, "Assignee")
+                )
+                if not parent_approved:
+                    return {
+                        **base,
+                        "would_queue": True,
+                        "approval_required": True,
+                        "approval_owner": "user",
+                        "parent_access_source": parent_access_source,
+                        "recommended_action": "ask-user-approval",
+                        "reason": "target parent page is outside the verified caller's immediate write lane",
+                    }
+                if explicit_owner_fields:
+                    approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
+                    if not approved:
+                        return {
+                            **base,
+                            "would_queue": True,
+                            "approval_required": True,
+                            "approval_owner": "user",
+                            "parent_access_source": parent_access_source,
+                            "owner_source": "page-child-owner-scope",
+                            "recommended_action": "ask-user-approval",
+                            "reason": "page child insert assigns Owner or Assignee outside the verified caller",
+                        }
+                    return {
+                        **base,
+                        "allowed": True,
+                        "parent_access_source": parent_access_source,
+                        "owner_source": owner_source,
+                        "recommended_action": "write",
+                        "reason": "page child insert is in the verified caller's lane",
+                    }
+                return {
+                    **base,
+                    "allowed": True,
+                    "parent_access_source": parent_access_source,
+                    "owner_source": f"page-parent-{parent_access_source or 'verified'}",
+                    "recommended_action": "write",
+                    "reason": "page child insert is in the verified caller's lane",
+                }
+            return {**base, "reason": f"unsupported Notion parent kind: {parent_kind or 'unknown'}"}
+
+        if op in {"update", "append"} and not normalized_target_id:
+            raise ValueError(f"shared Notion {op}s require a target page id")
+        page = retrieve_notion_page(
+            page_id=normalized_target_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+        )
+        approved, owner_source = _page_access_matches_identity(
+            page,
+            agent_row=agent_row,
+            identity=identity,
+            conn=conn,
+            allow_prior_agent_touch=True,
+        )
+        if approved:
+            return {
+                **base,
+                "allowed": True,
+                "target_kind": "page",
+                "owner_source": owner_source,
+                "recommended_action": "write",
+                "reason": f"page {op} is in the verified caller's lane",
+            }
+        return {
+            **base,
+            "would_queue": True,
+            "approval_required": True,
+            "approval_owner": "user",
+            "target_kind": "page",
+            "owner_source": owner_source,
+            "recommended_action": "ask-user-approval",
+            "reason": f"page {op} is outside the verified caller's immediate write lane",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            **base,
+            "reason": str(exc),
+            "recommended_action": "inspect-target",
+        }
+
+
 def enqueue_ssot_write(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -10147,7 +10349,7 @@ def approve_ssot_pending_write(
             operation=str(pending_row.get("operation") or ""),
             target_id=str(pending_row.get("target_id") or ""),
             decision="deny",
-            reason=f"operator could not approve pending SSOT write {pending_id}: {reason}",
+            reason=f"pending SSOT write {pending_id} could not be approved: {reason}",
             actor=str(actor or "").strip(),
             request_payload={
                 "pending_id": pending_id,
@@ -10218,7 +10420,7 @@ def approve_ssot_pending_write(
             operation=str(pending_row.get("operation") or ""),
             target_id=str(pending_row.get("target_id") or ""),
             decision="approve",
-            reason=f"operator approved pending SSOT write {pending_id}",
+            reason=f"{surface or 'approval'} approved pending SSOT write {pending_id}",
             actor=str(actor or "").strip(),
             request_payload={
                 "pending_id": pending_id,
@@ -10297,7 +10499,7 @@ def approve_ssot_pending_write(
         cfg,
         pending_row=updated,
         message=(
-            f"SSOT pending write {pending_id} was approved by {actor or 'operator'} "
+            f"SSOT pending write {pending_id} was approved by {actor or 'the user'} "
             f"and applied to {updated.get('target_id') or 'the requested target'}."
         ),
     )
@@ -10329,7 +10531,7 @@ def deny_ssot_pending_write(
             operation=str(pending_row.get("operation") or ""),
             target_id=str(pending_row.get("target_id") or ""),
             decision="deny",
-            reason=f"operator could not deny pending SSOT write {pending_id}: {note}",
+            reason=f"pending SSOT write {pending_id} could not be denied: {note}",
             actor=str(actor or "").strip(),
             request_payload={
                 "pending_id": pending_id,
@@ -10367,7 +10569,7 @@ def deny_ssot_pending_write(
         operation=str(pending_row.get("operation") or ""),
         target_id=str(pending_row.get("target_id") or ""),
         decision="deny",
-        reason=f"operator denied pending SSOT write {pending_id}: {note}",
+        reason=f"{surface or 'approval'} denied pending SSOT write {pending_id}: {note}",
         actor=str(actor or "").strip(),
         request_payload={
             "pending_id": pending_id,
@@ -10381,7 +10583,7 @@ def deny_ssot_pending_write(
         cfg,
         pending_row=updated,
         message=(
-            f"SSOT pending write {pending_id} was denied by {actor or 'operator'}"
+            f"SSOT pending write {pending_id} was denied by {actor or 'the user'}"
             + (f": {note}" if note else ".")
         ),
     )

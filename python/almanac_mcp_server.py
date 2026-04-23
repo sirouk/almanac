@@ -14,12 +14,14 @@ from almanac_control import (
     Config,
     RateLimitError,
     approve_request,
+    approve_ssot_pending_write,
     bootstrap_status,
     build_managed_memory_payload,
     connect_db,
     consume_agent_notifications,
     consume_curator_brief_fanout,
     deny_request,
+    deny_ssot_pending_write,
     enqueue_ssot_write,
     get_ssot_pending_write,
     is_loopback_ip,
@@ -33,6 +35,7 @@ from almanac_control import (
     notion_query,
     notion_search,
     note_refresh_job,
+    preflight_ssot_write,
     queue_notification,
     read_ssot,
     refresh_agent_context,
@@ -68,8 +71,11 @@ TOOLS = {
     "notifications.list": "List queued notifications. Requires operator-class token.",
     "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering. Use for scoped shared-database reads (org rows owned/assigned to the caller). For broad knowledge lookup by phrase, call notion.search or notion.search-and-fetch instead.",
     "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided. Use when the user asks about their queue in general; for a specific pending_id, call ssot.status instead.",
-    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for approval; surface the returned pending_id. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status with the pending_id.",
+    "ssot.preflight": "Check whether a Notion SSOT write would apply, queue for user approval, or fail before attempting the write. Use quietly when writeability is uncertain.",
+    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for user approval; surface the returned pending_id only when needed. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status.",
     "ssot.status": "Check one previously queued SSOT write by pending_id for the calling agent. Prefer over ssot.pending when the pending_id is already known.",
+    "ssot.approve": "Approve one of the caller's own queued Notion writes after the user explicitly approves it in chat.",
+    "ssot.deny": "Deny one of the caller's own queued Notion writes after the user declines it in chat.",
     "notion.search": "Search shared Notion knowledge through Almanac's qmd-backed indexed Notion rail. Call when the user wants a phrase/title discovery only; prefer notion.search-and-fetch when you also need the body to answer.",
     "notion.fetch": "Fetch the live body or schema of a shared Notion page/database/data source by exact id or URL. Prefer over notion.search when the user already gave a URL or id, or says they just edited the page.",
     "notion.query": "Run a live structured query against a shared Notion database/data source. Prefer for owner/status/due/assignee filters instead of page-by-page search.",
@@ -265,6 +271,33 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "pending_id": {"type": "string", "minLength": 1, "description": "Pending id returned by ssot.write when final_state is queued."},
         },
         required=("pending_id",),
+    ),
+    "ssot.approve": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "pending_id": {"type": "string", "minLength": 1, "description": "Pending id returned by ssot.write when final_state is queued."},
+            "actor": ACTOR_PROP,
+        },
+        required=("pending_id",),
+    ),
+    "ssot.deny": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "pending_id": {"type": "string", "minLength": 1, "description": "Pending id returned by ssot.write when final_state is queued."},
+            "reason": {"type": "string", "description": "Optional user-facing reason."},
+            "actor": ACTOR_PROP,
+        },
+        required=("pending_id",),
+    ),
+    "ssot.preflight": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "operation": {"type": "string", "enum": ["insert", "update", "append"], "description": "Mutating SSOT operation to check without applying."},
+            "target_id": {"type": "string", "description": "Target page/database/data-source id or URL."},
+            "payload": SSOT_PAYLOAD_PROP,
+            "actor": ACTOR_PROP,
+        },
+        required=("operation", "payload"),
     ),
     "ssot.write": _schema(
         {
@@ -1026,6 +1059,58 @@ class Handler(BaseHTTPRequestHandler):
                     "final_state": _ssot_final_state(row),
                     "pending_write": row,
                 }
+
+            if tool_name == "ssot.approve":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                pending_id = str(arguments.get("pending_id") or "").strip()
+                if not pending_id:
+                    raise ValueError("pending_id required")
+                agent_id = str(token_row["agent_id"])
+                row = get_ssot_pending_write(conn, pending_id)
+                if row is None:
+                    raise ValueError(f"unknown pending SSOT write: {pending_id}")
+                if str(row.get("agent_id") or "") != agent_id:
+                    raise PermissionError("pending SSOT write is outside this agent's scope")
+                return approve_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=pending_id,
+                    surface="user-agent",
+                    actor=str(arguments.get("actor") or agent_id),
+                )
+
+            if tool_name == "ssot.deny":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                pending_id = str(arguments.get("pending_id") or "").strip()
+                if not pending_id:
+                    raise ValueError("pending_id required")
+                agent_id = str(token_row["agent_id"])
+                row = get_ssot_pending_write(conn, pending_id)
+                if row is None:
+                    raise ValueError(f"unknown pending SSOT write: {pending_id}")
+                if str(row.get("agent_id") or "") != agent_id:
+                    raise PermissionError("pending SSOT write is outside this agent's scope")
+                return deny_ssot_pending_write(
+                    conn,
+                    cfg,
+                    pending_id=pending_id,
+                    surface="user-agent",
+                    actor=str(arguments.get("actor") or agent_id),
+                    reason=str(arguments.get("reason") or "denied by user"),
+                )
+
+            if tool_name == "ssot.preflight":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                agent_id = str(token_row["agent_id"])
+                return preflight_ssot_write(
+                    conn,
+                    cfg,
+                    agent_id=agent_id,
+                    operation=str(arguments.get("operation") or "").strip().lower(),
+                    target_id=str(arguments.get("target_id") or ""),
+                    payload=_dict_arg(arguments, "payload", required=True),
+                    requested_by_actor=str(arguments.get("actor") or agent_id),
+                )
 
             if tool_name == "ssot.write":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))

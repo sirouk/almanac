@@ -213,6 +213,91 @@ EOF
   fi
 }
 
+ensure_gateway_home_channel_env() {
+  local state_file="$TARGET_HERMES_HOME/state/almanac-enrollment.json"
+  local env_file="$TARGET_HERMES_HOME/.env"
+  if [[ ! -f "$state_file" ]]; then
+    return 0
+  fi
+
+  python3 - "$state_file" "$env_file" <<'PY'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+env_path = Path(sys.argv[2])
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+home_channel = state.get("home_channel")
+if not isinstance(home_channel, dict):
+    raise SystemExit(0)
+platform = str(home_channel.get("platform") or "").strip().lower()
+channel_id = str(home_channel.get("channel_id") or "").strip()
+if not platform or not channel_id:
+    raise SystemExit(0)
+
+updates = {}
+if platform == "discord":
+    updates["DISCORD_HOME_CHANNEL"] = channel_id
+    updates["DISCORD_HOME_CHANNEL_NAME"] = "Home"
+elif platform == "telegram":
+    updates["TELEGRAM_HOME_CHANNEL"] = channel_id
+    updates["TELEGRAM_HOME_CHANNEL_NAME"] = "Home"
+else:
+    raise SystemExit(0)
+
+existing = {}
+order = []
+if env_path.exists():
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        existing[key] = value.strip().strip("'\"")
+        order.append(key)
+
+for key, value in updates.items():
+    if key not in order:
+        order.append(key)
+    existing[key] = value
+
+env_path.parent.mkdir(parents=True, exist_ok=True)
+lines = [f"{key}={shlex.quote(str(existing[key]))}" for key in order if key in existing]
+env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "$UNIX_USER:$UNIX_USER" "$env_file"
+  fi
+  chmod 600 "$env_file" || true
+}
+
+ensure_gateway_running_without_interrupting_active_turns() {
+  local state=""
+  if run_user_systemctl is-active almanac-user-agent-gateway.service >/dev/null 2>&1; then
+    SERVICE_NOTES+=("    - Hermes gateway: already active; restart deferred to avoid interrupting user work")
+    return 0
+  fi
+  state="$(
+    run_user_systemctl is-enabled almanac-user-agent-gateway.service 2>/dev/null || true
+  )"
+  case "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    enabled|static|indirect)
+      try_user_systemctl "Hermes gateway" start almanac-user-agent-gateway.service
+      ;;
+    *)
+      SERVICE_NOTES+=("    - Hermes gateway: not enabled; start skipped")
+      ;;
+  esac
+}
+
 if target_can_access_repo; then
   run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
@@ -244,10 +329,11 @@ fi
 
 ensure_user_vault_link || true
 install_local_user_wrappers
+ensure_gateway_home_channel_env
 
 try_user_systemctl "user manager daemon-reload" daemon-reload
 try_user_systemctl "managed-memory refresh service" start almanac-user-agent-refresh.service
-try_user_systemctl "Hermes gateway" restart almanac-user-agent-gateway.service
+ensure_gateway_running_without_interrupting_active_turns
 try_user_systemctl "Hermes dashboard/proxy" restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service
 
 cat <<EOF

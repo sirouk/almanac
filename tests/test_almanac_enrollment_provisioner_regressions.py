@@ -138,6 +138,17 @@ def test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed() ->
     print("PASS test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed")
 
 
+def test_discord_onboarding_writes_home_channel_env() -> None:
+    text = PROVISIONER_PY.read_text(encoding="utf-8")
+    writer = extract(text, "def _write_env_values", "def _notify_user_via_curator")
+    discord = extract(text, "def _configure_user_discord_gateway", "def _run_pending_onboarding_gateway_configs")
+
+    expect('"DISCORD_HOME_CHANNEL": str(session.get("chat_id") or "")' in discord, discord)
+    expect('"DISCORD_HOME_CHANNEL_NAME": "Home"' in discord, discord)
+    expect("path.chmod(0o600)" in writer, "gateway env files should be user-only because they contain bot tokens")
+    print("PASS test_discord_onboarding_writes_home_channel_env")
+
+
 def test_completion_bundle_send_is_idempotent() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -461,11 +472,12 @@ def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
     test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed()
+    test_discord_onboarding_writes_home_channel_env()
     test_completion_bundle_send_is_idempotent()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
     test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
-    print("PASS all 7 enrollment provisioner regression tests")
+    print("PASS all 8 enrollment provisioner regression tests")
     return 0
 
 

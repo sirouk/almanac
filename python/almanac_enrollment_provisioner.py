@@ -200,6 +200,10 @@ def _write_env_values(path: Path, values: dict[str, str]) -> None:
     lines = [f"{key}={shell_quote(value)}" for key, value in sorted(existing.items())]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _notify_user_via_curator(
@@ -1055,6 +1059,8 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         {
             "DISCORD_BOT_TOKEN": pending_bot_token,
             "DISCORD_ALLOWED_USERS": sender_id,
+            "DISCORD_HOME_CHANNEL": str(session.get("chat_id") or ""),
+            "DISCORD_HOME_CHANNEL_NAME": "Home",
         },
     )
     try:

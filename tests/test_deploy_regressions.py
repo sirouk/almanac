@@ -1458,6 +1458,19 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "refresh-agent-install should reload the user manager before starting/restarting user units",
     )
     expect(
+        "ensure_gateway_home_channel_env" in refresh_helper
+        and "DISCORD_HOME_CHANNEL" in refresh_helper
+        and "TELEGRAM_HOME_CHANNEL" in refresh_helper,
+        "refresh-agent-install should repair gateway home-channel env from enrollment state",
+    )
+    expect(
+        "ensure_gateway_running_without_interrupting_active_turns" in refresh_helper
+        and "is-active almanac-user-agent-gateway.service" in refresh_helper
+        and "restart almanac-user-agent-gateway.service" not in refresh_helper
+        and "restart deferred to avoid interrupting user work" in refresh_helper,
+        "refresh-agent-install should not restart an active Hermes gateway and interrupt user turns",
+    )
+    expect(
         "update_agent_display_name" in helper,
         "active-agent realignment should keep the stored agent display name aligned with the saved bot label",
     )
@@ -1482,6 +1495,16 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "run_enrollment_align should reuse the shared active-agent realignment helper",
     )
     print("PASS test_deploy_reapplies_runtime_access_after_repo_sync")
+
+
+def test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools() -> None:
+    server_text = (REPO / "python" / "almanac_mcp_server.py").read_text(encoding="utf-8")
+    expect('"ssot.preflight"' in server_text, "agents should be able to check Notion writeability before writing")
+    expect('"ssot.approve"' in server_text and '"ssot.deny"' in server_text, "queued Notion writes should be user-approvable by the agent lane")
+    expect("approve_ssot_pending_write(" in server_text, "MCP ssot.approve should apply queued writes")
+    expect("deny_ssot_pending_write(" in server_text, "MCP ssot.deny should deny queued writes")
+    expect("str(row.get(\"agent_id\") or \"\") != agent_id" in server_text, "MCP approval tools must stay scoped to the caller's own pending writes")
+    print("PASS test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools")
 
 
 def test_control_py_discovers_artifact_priv_dir_config() -> None:
@@ -1714,6 +1737,7 @@ def main() -> int:
         test_write_answers_file_persists_host_dependency_choices,
         test_shell_scripts_avoid_bash4_only_features,
         test_deploy_reapplies_runtime_access_after_repo_sync,
+        test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,
         test_enrollment_reset_supports_full_forget_purge,

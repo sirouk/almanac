@@ -1,9 +1,15 @@
 <!-- managed: almanac-default-vault -->
 # Repos
 
-Keep one note per repository the organization depends on.
+Keep one note per repository the organization depends on, or clone the
+repository itself into this vault when agents should be able to retrieve its
+markdown docs through qmd.
 
-If a note includes a GitHub repository URL, Almanac's hourly Curator refresh will clone/pull it and mirror markdown/text files into `_mirrors/<owner-repo>/` for qmd indexing and subscriber notifications.
+If a repository is present on disk as a real Git checkout, Almanac's hourly
+Curator refresh hard-syncs it to `origin/<current-branch>` in place. Local
+commits and uncommitted edits are overwritten; gitignored build artifacts are
+left alone. Markdown and text files in the checkout are indexed by qmd through
+the normal vault watcher.
 
 Useful contents:
 - repo purpose and ownership

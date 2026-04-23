@@ -570,6 +570,24 @@ def _access_overlay_payload(payload: dict[str, object]) -> dict[str, str]:
     return overlay
 
 
+def _normalize_recent_event_message(message: str) -> str:
+    text = _clean_text(message, limit=600)
+    if text.startswith("Vault content changed: Repos") and "hermes-agent-docs/" in text:
+        return (
+            "Hermes documentation refreshed in the Repos vault. "
+            "Use qmd/Hermes docs for current operating details before editing skills, plugins, or config."
+        )
+    if text.startswith("Vault content changed: Skills"):
+        return text.replace("Vault content changed: Skills", "Skill library update", 1)
+    if text.startswith("Vault content changed: Plugins"):
+        return text.replace("Vault content changed: Plugins", "Plugin library update", 1)
+    if text.startswith("Vault content changed: Repos"):
+        return text.replace("Vault content changed: Repos", "Repo knowledge update", 1)
+    if text.startswith("Vault content changed: "):
+        return text.replace("Vault content changed: ", "Vault update: ", 1)
+    return text
+
+
 def _recent_events_payload(payload: dict[str, object]) -> list[dict[str, str]]:
     raw_events = payload.get("events")
     if not isinstance(raw_events, list):
@@ -579,20 +597,29 @@ def _recent_events_payload(payload: dict[str, object]) -> list[dict[str, str]]:
     if not events:
         return []
 
-    rendered: list[dict[str, str]] = []
-    for event in events[-_MAX_EVENT_COUNT:]:
-        message = _clean_text(event.get("message"), limit=_MAX_EVENT_MESSAGE_CHARS)
+    rendered_reversed: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for event in reversed(events):
+        message = _normalize_recent_event_message(str(event.get("message") or ""))
         if not message:
             continue
+        message = _trim(message, _MAX_EVENT_MESSAGE_CHARS)
+        channel_kind = _clean_text(event.get("channel_kind") or "event", limit=64) or "event"
+        marker = (channel_kind, message)
+        if marker in seen:
+            continue
+        seen.add(marker)
         item = {
-            "channel_kind": _clean_text(event.get("channel_kind") or "event", limit=64) or "event",
+            "channel_kind": channel_kind,
             "message": message,
         }
         created_at = _clean_text(event.get("created_at"), limit=64)
         if created_at:
             item["created_at"] = created_at
-        rendered.append(item)
-    return rendered
+        rendered_reversed.append(item)
+        if len(rendered_reversed) >= _MAX_EVENT_COUNT:
+            break
+    return list(reversed(rendered_reversed))
 
 
 def _identity_payload(payload: dict[str, object]) -> dict[str, str]:

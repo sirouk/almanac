@@ -551,6 +551,71 @@ def test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
             os.environ.update(old_env)
 
 
+def test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-vault-reconciler.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-jeef",
+                    "managed_memory_revision": "rev-events",
+                    "vault-ref": "Vault root: /srv/almanac/vault",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        old_message = (
+            "Vault content changed: Repos (120 path(s)): "
+            "hermes-agent-docs/reference/cli-commands.md, "
+            "hermes-agent-docs/user-guide/features/skills.md"
+        )
+        (state_dir / "almanac-recent-events.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-jeef",
+                    "events": [
+                        {"channel_kind": "vault-change", "created_at": "2026-04-21T12:00:00+00:00", "message": old_message},
+                        {"channel_kind": "vault-change", "created_at": "2026-04-21T12:01:00+00:00", "message": old_message},
+                        {"channel_kind": "vault-change", "created_at": "2026-04-21T12:02:00+00:00", "message": "Vault content changed: Skills (2 path(s)): almanac-ssot.md, README.md"},
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_legacy_events_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            result = ctx.hooks["pre_llm_call"][0](
+                session_id="session-events",
+                user_message="hello there",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            context = result["context"]
+            expect("Vault content changed:" not in context, context)
+            expect(context.count("Hermes documentation refreshed in the Repos vault") == 1, context)
+            expect("Skill library update" in context, context)
+            print("PASS test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_almanac_managed_context_handles_missing_and_invalid_local_state_files() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1007,6 +1072,7 @@ def main() -> int:
     test_almanac_managed_context_reads_writer_materialized_notion_state()
     test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
     test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
+    test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events()
     test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
     test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails()
     test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()

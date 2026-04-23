@@ -245,7 +245,10 @@ def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
     expect("- View: leave all View events unchecked" in text, "expected explicit View event exclusion")
     expect("- Comment: leave all Comment events unchecked" in text, "expected explicit Comment event exclusion")
     expect("webhook-confirm-verified" in text, "expected deploy guidance to include explicit operator verification confirmation")
-    expect("Press ENTER after Notion says the verification token was sent to the URL." in text, "expected deploy to include an interactive wait point for the Notion verification POST")
+    expect("Step 1. Open the Notion Developer Portal for this integration." in text, "expected deploy walkthrough to guide the operator into the Notion Webhooks tab")
+    expect("Press ENTER once the event selection in Notion matches this checklist exactly." in text, "expected deploy walkthrough to pause after the operator sets the exact event selection")
+    expect("Press ENTER immediately after Notion says the verification token was sent to the URL." in text, "expected deploy to include an interactive wait point for the Notion verification POST")
+    expect("Step 6. Click Verify subscription in Notion." in text, "expected deploy walkthrough to guide the operator through the final Notion verify click")
     print("PASS test_deploy_guides_explicit_notion_webhook_event_selection")
 
 

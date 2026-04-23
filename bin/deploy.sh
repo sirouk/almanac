@@ -633,7 +633,7 @@ notion_webhook_status_json() {
 run_notion_webhook_setup_flow() {
   local ctl_bin="$1"
   local actor="$2"
-  local status_json="" configured="" verified="" token="" public_url="" verified_at="" verified_by=""
+  local status_json="" configured="" verified="" token="" public_url="" verified_at="" verified_by="" armed_json="" armed_until=""
 
   if [[ -z "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     return 0
@@ -670,27 +670,49 @@ run_notion_webhook_setup_flow() {
   token="$(json_field "$status_json" "verification_token" 2>/dev/null || true)"
 
   echo
-  echo "Notion webhook verification"
-  echo "  Webhook URL:"
-  echo "    ${public_url:-${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}}"
-  echo "  Event selection:"
-  echo "    - Page: all Page events"
-  echo "    - Database: all Database events"
-  echo "    - Data source: all Data source events"
-  echo "    - File uploads: all File upload events"
-  echo "    - View: leave unchecked"
-  echo "    - Comment: leave unchecked"
+  echo "Notion webhook verification walkthrough"
+  echo
+  echo "Step 1. Open the Notion Developer Portal for this integration."
+  echo "  - Go to the Webhooks tab."
+  echo "  - Keep this terminal open; deploy will walk you through each step."
+  read -r -p "Press ENTER when the Notion Webhooks tab is open. " _
 
+  echo
+  echo "Step 2. Use this exact webhook URL."
+  echo "  ${public_url:-${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}}"
+  echo "  - If a subscription already exists for this exact URL, edit it."
+  echo "  - Do not create a duplicate subscription for the same Almanac endpoint."
+  read -r -p "Press ENTER when the webhook URL is entered or the existing matching subscription is open for editing. " _
+
+  echo
+  echo "Step 3. Set the event selection exactly like this."
+  echo "  - Page: all Page events"
+  echo "  - Database: all Database events"
+  echo "  - Data source: all Data source events"
+  echo "  - File uploads: all File upload events"
+  echo "  - View: leave unchecked"
+  echo "  - Comment: leave unchecked"
+  read -r -p "Press ENTER once the event selection in Notion matches this checklist exactly. " _
+
+  echo
   if [[ "$configured" != "1" || -z "${token//[[:space:]]/}" ]]; then
-    echo "  Arming a fresh 30-minute verification window now..."
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-      "$ctl_bin" --json notion webhook-arm-install --actor "$actor" --minutes 30 >/dev/null
-    echo "  In Notion, create or save the webhook subscription so Notion sends the verification POST."
+    echo "Step 4. Deploy will arm a fresh 30-minute verification window."
+    echo "  - After the window is armed, immediately click Create subscription or Save in Notion."
+    echo "  - That click is what causes Notion to send the verification token to Almanac."
+    read -r -p "Press ENTER when you are ready for deploy to arm the window. " _
+    armed_json="$(env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ctl_bin" --json notion webhook-arm-install --actor "$actor" --minutes 30)"
+    armed_until="$(json_field "$armed_json" "armed_until" 2>/dev/null || true)"
+    echo "  Verification window armed."
+    if [[ -n "$armed_until" ]]; then
+      echo "  armed_until: $armed_until"
+    fi
+    read -r -p "Press ENTER immediately after Notion says the verification token was sent to the URL. " _
   else
-    echo "  A verification token is already installed; reusing it for the final Verify step."
+    echo "Step 4. A verification token is already installed."
+    echo "  - We will reuse that token for the final Verify step."
+    read -r -p "Press ENTER once the Notion Verify dialog is open and ready for the token. " _
   fi
-
-  read -r -p "Press ENTER after Notion says the verification token was sent to the URL. " _
 
   if [[ "$configured" != "1" || -z "${token//[[:space:]]/}" ]]; then
     local attempt=""
@@ -712,9 +734,12 @@ run_notion_webhook_setup_flow() {
   fi
 
   echo
-  echo "Paste this Notion verification token into the Notion Verify dialog:"
+  echo "Step 5. Paste this Notion verification token into the Notion Verify dialog."
   echo "  $token"
   echo
+  read -r -p "Press ENTER after you paste the token into Notion. " _
+  echo
+  echo "Step 6. Click Verify subscription in Notion."
   if [[ "$(ask_yes_no "Did Notion accept the token and mark the subscription verified" "1")" != "1" ]]; then
     echo "Notion webhook verification was not confirmed. You can rerun \`$SELF_PATH notion-ssot\` to finish it later." >&2
     return 1
@@ -1910,10 +1935,10 @@ print_post_install_guide() {
     echo "       - File uploads: select all File upload events"
     echo "       - View: leave all View events unchecked"
     echo "       - Comment: leave all Comment events unchecked"
-    echo "    4. Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot to walk the live arm/wait/verify flow."
-    echo "       It will arm the install window, wait for Notion to deliver the token,"
-    echo "       print the verification_token, and record operator confirmation once"
-    echo "       Notion accepts the Verify step."
+    echo "    4. Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot for the full step-by-step webhook walkthrough."
+    echo "       It will pause at each Notion UI step, arm the install window,"
+    echo "       wait for Notion to deliver the token, print the verification_token,"
+    echo "       and record operator confirmation once Notion accepts the Verify step."
   else
     echo "  Notion webhook URL (public HTTPS):"
     echo "    not configured; Notion cannot reach 127.0.0.1 without separate public ingress"
@@ -4795,8 +4820,8 @@ PY
     echo "     - File uploads: all File upload events"
     echo "     - View: leave unchecked"
     echo "     - Comment: leave unchecked"
-    echo "  4. deploy.sh notion-ssot will arm the install window, wait for Notion to send the token, and print the verification_token for you."
-    echo "  5. Paste that verification_token into Notion and click Verify."
+    echo "  4. deploy.sh notion-ssot will walk you through the Webhooks tab step by step, arm the install window, wait for Notion to send the token, and print the verification_token for you."
+    echo "  5. Paste that verification_token into Notion and click Verify when deploy tells you to."
   fi
   echo "Config persisted to:"
   echo "  $CONFIG_TARGET"

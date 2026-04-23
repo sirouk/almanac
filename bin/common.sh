@@ -492,6 +492,8 @@ ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
 ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
 ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+# Hermes upstream pin: vetted against the live shared runtime and Jeef smoke.
+ALMANAC_HERMES_AGENT_REF="${ALMANAC_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}"
 ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
 ALMANAC_AGENT_CODE_PORT_BASE="${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
@@ -698,6 +700,86 @@ has_curator_onboarding() {
   has_curator_telegram_onboarding || has_curator_discord_onboarding
 }
 
+resolve_hermes_agent_ref_commit() {
+  local repo_dir="$1"
+  local ref="${2:-$ALMANAC_HERMES_AGENT_REF}"
+  local candidate=""
+  local resolved=""
+
+  if [[ -z "$repo_dir" || -z "$ref" ]]; then
+    return 1
+  fi
+
+  for candidate in \
+    "$ref" \
+    "refs/tags/$ref" \
+    "refs/remotes/origin/$ref" \
+    "origin/$ref"; do
+    resolved="$(git -C "$repo_dir" rev-parse --verify --quiet "${candidate}^{commit}" 2>/dev/null || true)"
+    if [[ -n "$resolved" ]]; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+ensure_hermes_agent_checkout() {
+  local repo_dir="$1"
+  local remote_url="https://github.com/NousResearch/hermes-agent.git"
+  local ref="${ALMANAC_HERMES_AGENT_REF:-}"
+  local current_remote=""
+  local is_shallow="false"
+  local resolved_commit=""
+  local current_commit=""
+  local head_ref=""
+
+  if [[ -z "$ref" ]]; then
+    echo "ALMANAC_HERMES_AGENT_REF must not be empty." >&2
+    return 1
+  fi
+
+  if [[ -e "$repo_dir" && ! -d "$repo_dir/.git" ]]; then
+    echo "Managed Hermes source directory at $repo_dir is not a git checkout; recreating it." >&2
+    rm -rf "$repo_dir"
+  fi
+
+  if [[ ! -d "$repo_dir/.git" ]]; then
+    git clone "$remote_url" "$repo_dir"
+  else
+    current_remote="$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)"
+    if [[ -z "$current_remote" ]]; then
+      git -C "$repo_dir" remote add origin "$remote_url"
+    elif [[ "$current_remote" != "$remote_url" ]]; then
+      git -C "$repo_dir" remote set-url origin "$remote_url"
+    fi
+  fi
+
+  is_shallow="$(git -C "$repo_dir" rev-parse --is-shallow-repository 2>/dev/null || printf '%s\n' "false")"
+  if [[ "$is_shallow" == "true" ]]; then
+    git -C "$repo_dir" fetch --tags --force --unshallow origin
+  else
+    git -C "$repo_dir" fetch --tags --force origin
+  fi
+
+  resolved_commit="$(resolve_hermes_agent_ref_commit "$repo_dir" "$ref" || true)"
+  if [[ -z "$resolved_commit" ]]; then
+    git -C "$repo_dir" fetch --tags --force origin "$ref"
+    resolved_commit="$(resolve_hermes_agent_ref_commit "$repo_dir" "$ref" || true)"
+  fi
+  if [[ -z "$resolved_commit" ]]; then
+    echo "Could not resolve Hermes ref '$ref' from $remote_url." >&2
+    return 1
+  fi
+
+  current_commit="$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)"
+  head_ref="$(git -C "$repo_dir" symbolic-ref -q HEAD 2>/dev/null || true)"
+  if [[ "$current_commit" != "$resolved_commit" || -n "$head_ref" ]]; then
+    git -C "$repo_dir" checkout --force --detach "$resolved_commit"
+  fi
+}
+
 ensure_shared_hermes_runtime() {
   ensure_uv
   local repo_dir="$RUNTIME_DIR/hermes-agent-src"
@@ -710,11 +792,7 @@ ensure_shared_hermes_runtime() {
     return 1
   fi
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$repo_dir"
-  else
-    git -C "$repo_dir" pull --ff-only
-  fi
+  ensure_hermes_agent_checkout "$repo_dir"
 
   if [[ ! -x "$venv_dir/bin/hermes" ]]; then
     rebuild_runtime="1"
@@ -736,7 +814,7 @@ ensure_shared_hermes_runtime() {
     uv venv "$venv_dir" --python "$seed_python" --seed
   fi
 
-  uv pip install --python "$venv_dir/bin/python3" "$repo_dir[cli,mcp,messaging,cron,web]"
+  uv pip install --python "$venv_dir/bin/python3" --reinstall "$repo_dir[cli,mcp,messaging,cron,web]"
   ensure_hermes_dashboard_assets "$repo_dir"
   sync_hermes_dashboard_assets_into_runtime "$repo_dir" "$venv_dir/bin/python3"
 }

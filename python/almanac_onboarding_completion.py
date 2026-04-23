@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import pwd
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +13,55 @@ from almanac_control import Config, config_env_value, get_agent, get_agent_ident
 from almanac_resource_map import shared_resource_lines, shared_tailnet_host
 
 
+def _release_state(cfg: Config) -> dict[str, Any]:
+    path = cfg.release_state_file
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _repo_ref_contains_path(cfg: Config, ref: str, relative_path: str) -> bool | None:
+    ref = str(ref or "").strip()
+    if not ref or shutil.which("git") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cfg.repo_dir), "cat-file", "-e", f"{ref}:{relative_path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.returncode == 0
+
+
 def _remote_client_setup_url(cfg: Config) -> str:
-    raw_repo = str(cfg.upstream_repo_url or "").strip()
-    branch = str(cfg.upstream_branch or "main").strip() or "main"
+    release_state = _release_state(cfg)
+    raw_repo = str(
+        release_state.get("tracked_upstream_repo_url")
+        or release_state.get("deployed_source_repo")
+        or cfg.upstream_repo_url
+        or ""
+    ).strip()
+    deployed_commit = str(release_state.get("deployed_commit") or "").strip()
+    branch = str(
+        release_state.get("tracked_upstream_branch")
+        or release_state.get("deployed_source_branch")
+        or cfg.upstream_branch
+        or "main"
+    ).strip() or "main"
+    ref = deployed_commit or branch
+    helper_path = "bin/setup-remote-hermes-client.sh"
+    if deployed_commit:
+        contains_helper = _repo_ref_contains_path(cfg, deployed_commit, helper_path)
+        if contains_helper is False:
+            ref = branch
     prefix = ""
     if raw_repo.startswith("https://github.com/"):
         prefix = raw_repo.removeprefix("https://github.com/")
@@ -25,7 +74,7 @@ def _remote_client_setup_url(cfg: Config) -> str:
     prefix = prefix.removesuffix(".git").strip("/")
     if not prefix:
         return ""
-    return f"https://raw.githubusercontent.com/{prefix}/{branch}/bin/setup-remote-hermes-client.sh"
+    return f"https://raw.githubusercontent.com/{prefix}/{ref}/bin/setup-remote-hermes-client.sh"
 
 
 def completion_ack_callback_data(session_id: str) -> str:

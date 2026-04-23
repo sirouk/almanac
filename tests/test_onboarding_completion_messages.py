@@ -236,10 +236,178 @@ def test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails(
             os.environ.update(old_env)
 
 
+def test_completion_bundle_pins_remote_setup_helper_to_deployed_commit() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_completion_remote_url_test")
+    completion = load_module(COMPLETION_PY, "almanac_onboarding_completion_remote_url_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        release_state_path = root / "state" / "almanac-release.json"
+        release_state_path.parent.mkdir(parents=True, exist_ok=True)
+        release_state_path.write_text(
+            json.dumps(
+                {
+                    "tracked_upstream_repo_url": "https://github.com/sirouk/almanac.git",
+                    "tracked_upstream_branch": "main",
+                    "deployed_commit": "eb41b3fc458071ac08222982d66d225518f01fbe",
+                }
+            ),
+            encoding="utf-8",
+        )
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            unix_user = pwd.getpwuid(os.getuid()).pw_name
+            hermes_home = root / "homes" / unix_user / ".local" / "share" / "almanac-agent" / "hermes-home"
+            (hermes_home / "state").mkdir(parents=True, exist_ok=True)
+            insert_agent(control, conn, agent_id="agent-sirouk", unix_user=unix_user, hermes_home=hermes_home)
+
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="123456789",
+                sender_id="123456789",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-sirouk",
+                answers={
+                    "bot_platform": "discord",
+                    "bot_username": "Jeef",
+                    "preferred_bot_name": "Jeef",
+                },
+            )
+
+            access = {
+                "unix_user": unix_user,
+                "username": unix_user,
+                "password": "sup3r-secret",
+                "dashboard_url": "https://kor.tail77f45e.ts.net:30011/",
+                "code_url": "https://kor.tail77f45e.ts.net:40011/",
+            }
+            (hermes_home / "state" / "almanac-web-access.json").write_text(
+                json.dumps(access),
+                encoding="utf-8",
+            )
+
+            bundle = completion.completion_bundle_for_session(conn, cfg, session)
+            expect(bundle is not None, "expected completion bundle")
+            followup_text = str(bundle["followup_text"])
+            expect(
+                "https://raw.githubusercontent.com/sirouk/almanac/eb41b3fc458071ac08222982d66d225518f01fbe/bin/setup-remote-hermes-client.sh"
+                in followup_text,
+                followup_text,
+            )
+            expect(
+                "https://raw.githubusercontent.com/sirouk/almanac/main/bin/setup-remote-hermes-client.sh"
+                not in followup_text,
+                followup_text,
+            )
+            print("PASS test_completion_bundle_pins_remote_setup_helper_to_deployed_commit")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_completion_bundle_falls_back_to_branch_when_deployed_commit_lacks_helper() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_completion_remote_fallback_test")
+    completion = load_module(COMPLETION_PY, "almanac_onboarding_completion_remote_fallback_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        release_state_path = root / "state" / "almanac-release.json"
+        release_state_path.parent.mkdir(parents=True, exist_ok=True)
+        release_state_path.write_text(
+            json.dumps(
+                {
+                    "tracked_upstream_repo_url": "https://github.com/sirouk/almanac.git",
+                    "tracked_upstream_branch": "main",
+                    "deployed_commit": "3d2f51bb8d532f03a9869244c357b73ef6afddbf",
+                }
+            ),
+            encoding="utf-8",
+        )
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            unix_user = pwd.getpwuid(os.getuid()).pw_name
+            hermes_home = root / "homes" / unix_user / ".local" / "share" / "almanac-agent" / "hermes-home"
+            (hermes_home / "state").mkdir(parents=True, exist_ok=True)
+            insert_agent(control, conn, agent_id="agent-sirouk", unix_user=unix_user, hermes_home=hermes_home)
+
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="123456789",
+                sender_id="123456789",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-sirouk",
+                answers={
+                    "bot_platform": "discord",
+                    "bot_username": "Jeef",
+                    "preferred_bot_name": "Jeef",
+                },
+            )
+
+            access = {
+                "unix_user": unix_user,
+                "username": unix_user,
+                "password": "sup3r-secret",
+                "dashboard_url": "https://kor.tail77f45e.ts.net:30011/",
+                "code_url": "https://kor.tail77f45e.ts.net:40011/",
+            }
+            (hermes_home / "state" / "almanac-web-access.json").write_text(
+                json.dumps(access),
+                encoding="utf-8",
+            )
+
+            bundle = completion.completion_bundle_for_session(conn, cfg, session)
+            expect(bundle is not None, "expected completion bundle")
+            followup_text = str(bundle["followup_text"])
+            expect(
+                "https://raw.githubusercontent.com/sirouk/almanac/main/bin/setup-remote-hermes-client.sh"
+                in followup_text,
+                followup_text,
+            )
+            expect(
+                "https://raw.githubusercontent.com/sirouk/almanac/3d2f51bb8d532f03a9869244c357b73ef6afddbf/bin/setup-remote-hermes-client.sh"
+                not in followup_text,
+                followup_text,
+            )
+            print("PASS test_completion_bundle_falls_back_to_branch_when_deployed_commit_lacks_helper")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_completion_bundle_lists_resources_and_scrubs_password()
     test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails()
-    print("PASS all 2 onboarding completion regression tests")
+    test_completion_bundle_pins_remote_setup_helper_to_deployed_commit()
+    test_completion_bundle_falls_back_to_branch_when_deployed_commit_lacks_helper()
+    print("PASS all 4 onboarding completion regression tests")
     return 0
 
 

@@ -441,9 +441,11 @@ def test_run_health_check_falls_back_when_user_bus_is_missing() -> None:
 
 def test_install_and_upgrade_run_live_agent_tool_smoke_after_health() -> None:
     text = DEPLOY_SH.read_text()
+    smoke_script = REPO / "bin" / "live-agent-tool-smoke.sh"
     install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     smoke_call = 'env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"'
+    expect(os.access(smoke_script, os.X_OK), "live-agent-tool-smoke.sh must be executable or deploy will skip it")
     expect(smoke_call in install_snippet, install_snippet)
     expect(smoke_call in upgrade_snippet, upgrade_snippet)
     expect('echo "Running live agent tool smoke..."' in install_snippet, install_snippet)
@@ -458,6 +460,19 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("tool_token_injected" in body, body)
     expect("almanac-bootstrap-token" in body, body)
     print("PASS test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants")
+
+
+def test_live_agent_tool_smoke_inspects_private_home_as_target_user() -> None:
+    body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
+    expect("run_as_target_user()" in body, "live smoke should centralize target-user execution")
+    expect('runuser -u "$TARGET_UNIX_USER" -- env HOME="$TARGET_HOME" HERMES_HOME="$TARGET_HERMES_HOME"' in body, body)
+    expect('if [[ ! -d "$TARGET_HERMES_HOME" ]]' not in body, "root-owned smoke must not stat private Hermes home directly")
+    expect('run_as_target_user test -d "$TARGET_HERMES_HOME"' in body, body)
+    expect('chown "$TARGET_UNIX_USER" "$output_file"' in body, "target user must be able to read smoke output")
+    expect('session_id="$(run_as_target_user python3 - "$output_file" "$sessions_dir" "$before_latest_session"' in body, body)
+    expect('run_as_target_user test -f "$session_file"' in body, body)
+    expect('run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id"' in body, body)
+    print("PASS test_live_agent_tool_smoke_inspects_private_home_as_target_user")
 
 
 def test_agent_install_payload_tracks_current_agent_contract() -> None:
@@ -1408,6 +1423,7 @@ def test_shell_scripts_avoid_bash4_only_features() -> None:
 
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
+    refresh_helper = (REPO / "bin" / "refresh-agent-install.sh").read_text(encoding="utf-8")
     helper = extract(text, "realign_active_enrolled_agents_root() {", "chown_managed_paths() {")
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
@@ -1419,6 +1435,12 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     expect(
         'refresh-agent-install.sh' in helper,
         "active-agent realignment should reinstall user-owned Hermes assets and services",
+    )
+    daemon_reload_index = refresh_helper.find('daemon-reload')
+    refresh_start_index = refresh_helper.find('start almanac-user-agent-refresh.service')
+    expect(
+        daemon_reload_index >= 0 and refresh_start_index >= 0 and daemon_reload_index < refresh_start_index,
+        "refresh-agent-install should reload the user manager before starting/restarting user units",
     )
     expect(
         "update_agent_display_name" in helper,
@@ -1651,6 +1673,7 @@ def main() -> int:
         test_run_health_check_falls_back_when_user_bus_is_missing,
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
+        test_live_agent_tool_smoke_inspects_private_home_as_target_user,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,

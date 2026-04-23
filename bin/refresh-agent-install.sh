@@ -245,6 +245,7 @@ fi
 ensure_user_vault_link || true
 install_local_user_wrappers
 
+try_user_systemctl "user manager daemon-reload" daemon-reload
 try_user_systemctl "managed-memory refresh service" start almanac-user-agent-refresh.service
 try_user_systemctl "Hermes gateway" restart almanac-user-agent-gateway.service
 try_user_systemctl "Hermes dashboard/proxy" restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service

@@ -68,9 +68,26 @@ fi
 TARGET_UNIX_USER="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["unix_user"])' "$agent_json")"
 TARGET_HERMES_HOME="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["hermes_home"])' "$agent_json")"
 TARGET_DISPLAY_NAME="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("display_name") or "")' "$agent_json")"
+TARGET_HOME="$(getent passwd "$TARGET_UNIX_USER" | cut -d: -f6 || true)"
 
-if [[ ! -d "$TARGET_HERMES_HOME" ]]; then
-  echo "Active agent hermes home is missing at $TARGET_HERMES_HOME" >&2
+if [[ -z "$TARGET_HOME" || ! -d "$TARGET_HOME" ]]; then
+  echo "Active agent unix user $TARGET_UNIX_USER has no usable home directory." >&2
+  exit 1
+fi
+
+run_as_target_user() {
+  if [[ "$(id -un)" == "$TARGET_UNIX_USER" ]]; then
+    env HOME="$TARGET_HOME" HERMES_HOME="$TARGET_HERMES_HOME" "$@"
+  elif [[ "$(id -u)" -eq 0 ]]; then
+    runuser -u "$TARGET_UNIX_USER" -- env HOME="$TARGET_HOME" HERMES_HOME="$TARGET_HERMES_HOME" "$@"
+  else
+    echo "Live agent tool smoke must run as root or $TARGET_UNIX_USER to inspect private Hermes home at $TARGET_HERMES_HOME." >&2
+    return 77
+  fi
+}
+
+if ! run_as_target_user test -d "$TARGET_HERMES_HOME"; then
+  echo "Active agent Hermes home is missing or inaccessible at $TARGET_HERMES_HOME" >&2
   exit 1
 fi
 
@@ -79,16 +96,20 @@ sessions_dir="$TARGET_HERMES_HOME/sessions"
 output_file="$(mktemp /tmp/almanac-live-agent-smoke.XXXXXX.log)"
 trap 'rm -f "$output_file"' EXIT
 
-before_latest_session="$(find "$sessions_dir" -maxdepth 1 -type f -name 'session_*.json' -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"
+before_latest_session="$(run_as_target_user bash -lc 'find "$HERMES_HOME/sessions" -maxdepth 1 -type f -name "session_*.json" -printf "%f\n" 2>/dev/null | sort | tail -1' || true)"
 
-if ! runuser -u "$TARGET_UNIX_USER" -- env TARGET_HERMES_HOME="$TARGET_HERMES_HOME" TARGET_PROMPT="$PROMPT" TARGET_HERMES_BIN="$RUNTIME_DIR/hermes-venv/bin/hermes" \
-  bash -lc 'cd "$HOME" && HERMES_HOME="$TARGET_HERMES_HOME" timeout 90 "$TARGET_HERMES_BIN" chat -q "$TARGET_PROMPT"' >"$output_file" 2>&1; then
+if ! run_as_target_user env TARGET_PROMPT="$PROMPT" TARGET_HERMES_BIN="$RUNTIME_DIR/hermes-venv/bin/hermes" \
+  bash -lc 'cd "$HOME" && timeout 90 "$TARGET_HERMES_BIN" chat -q "$TARGET_PROMPT"' >"$output_file" 2>&1; then
   echo "Live agent tool smoke failed for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}. Recent output:" >&2
   tail -40 "$output_file" >&2 || true
   exit 1
 fi
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown "$TARGET_UNIX_USER" "$output_file"
+fi
+chmod 0600 "$output_file"
 
-session_id="$(python3 - "$output_file" "$sessions_dir" "$before_latest_session" <<'PY'
+if ! session_id="$(run_as_target_user python3 - "$output_file" "$sessions_dir" "$before_latest_session" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -109,7 +130,10 @@ for path in sorted(sessions_dir.glob("session_*.json")):
 if latest:
     print(latest)
 PY
-)"
+)"; then
+  echo "Could not inspect the live smoke output/session directory for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}" >&2
+  exit 1
+fi
 
 if [[ -z "$session_id" ]]; then
   echo "Could not determine the live smoke session id for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}" >&2
@@ -118,12 +142,12 @@ if [[ -z "$session_id" ]]; then
 fi
 
 session_file="$sessions_dir/session_${session_id}.json"
-if [[ ! -f "$session_file" ]]; then
+if ! run_as_target_user test -f "$session_file"; then
   echo "Expected live smoke session file at $session_file" >&2
   exit 1
 fi
 
-python3 - "$session_file" "$telemetry_path" "$session_id" <<'PY'
+run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id" <<'PY'
 import json
 import re
 import sys

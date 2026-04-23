@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+REFRESH_SH = REPO / "bin" / "refresh-agent-install.sh"
+
+
+def expect(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def extract_function(source: str, fn_name: str) -> str:
+    """Pull a bash function definition out of a script source."""
+    start_marker = f"{fn_name}() {{"
+    start = source.find(start_marker)
+    if start < 0:
+        raise AssertionError(f"could not find function {fn_name}() in script")
+    depth = 0
+    end = start
+    for idx in range(start, len(source)):
+        ch = source[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+    return source[start:end]
+
+
+def bash_script(*, vault_dir: Path, link_path: Path, unix_user: str, extra: str = "") -> str:
+    """Build a self-contained bash harness that exercises ensure_one_vault_link."""
+    text = REFRESH_SH.read_text(encoding="utf-8")
+    fn = extract_function(text, "ensure_one_vault_link")
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+VAULT_DIR={str(vault_dir)!r}
+UNIX_USER={unix_user!r}
+{fn}
+
+{extra}
+"""
+
+
+def run_bash(script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", script], text=True, capture_output=True, check=False
+    )
+
+
+def test_vault_symlink_creates_fresh_link_to_vault_dir() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        vault_dir.mkdir()
+        link_path = root / "home" / "user" / "Vault"
+        script = bash_script(
+            vault_dir=vault_dir,
+            link_path=link_path,
+            unix_user=os.environ.get("USER", "nobody"),
+            extra=f'ensure_one_vault_link "{link_path}"',
+        )
+        result = run_bash(script)
+        expect(result.returncode == 0, f"fresh link create failed: {result.stderr!r}")
+        expect(link_path.is_symlink(), f"expected symlink at {link_path}")
+        expect(os.readlink(link_path) == str(vault_dir), f"bad symlink target: {os.readlink(link_path)!r}")
+    print("PASS test_vault_symlink_creates_fresh_link_to_vault_dir")
+
+
+def test_vault_symlink_replaces_stale_symlink_to_wrong_target() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        vault_dir.mkdir()
+        wrong_target = root / "stale-vault"
+        wrong_target.mkdir()
+        link_path = root / "home" / "user" / "Vault"
+        link_path.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(wrong_target), str(link_path))
+
+        script = bash_script(
+            vault_dir=vault_dir,
+            link_path=link_path,
+            unix_user=os.environ.get("USER", "nobody"),
+            extra=f'ensure_one_vault_link "{link_path}"',
+        )
+        result = run_bash(script)
+        expect(result.returncode == 0, f"stale link replace failed: {result.stderr!r}")
+        expect(link_path.is_symlink(), f"expected symlink at {link_path}")
+        expect(os.readlink(link_path) == str(vault_dir), f"bad symlink target: {os.readlink(link_path)!r}")
+    print("PASS test_vault_symlink_replaces_stale_symlink_to_wrong_target")
+
+
+def test_vault_symlink_refuses_to_overwrite_real_directory() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        vault_dir.mkdir()
+        link_path = root / "home" / "user" / "Vault"
+        link_path.parent.mkdir(parents=True, exist_ok=True)
+        link_path.mkdir()
+        (link_path / "user-file.md").write_text("keep me\n", encoding="utf-8")
+
+        script = bash_script(
+            vault_dir=vault_dir,
+            link_path=link_path,
+            unix_user=os.environ.get("USER", "nobody"),
+            extra=f'ensure_one_vault_link "{link_path}" || echo "REFUSED"',
+        )
+        result = run_bash(script)
+        expect(result.returncode == 0, f"script crashed: {result.stderr!r}")
+        expect("REFUSED" in result.stdout, f"expected refusal on real dir, got: {result.stdout!r}")
+        expect(not link_path.is_symlink(), "real directory must NOT be replaced with a symlink")
+        expect((link_path / "user-file.md").read_text(encoding="utf-8") == "keep me\n", "user data was lost")
+    print("PASS test_vault_symlink_refuses_to_overwrite_real_directory")
+
+
+def test_vault_symlink_is_idempotent_when_already_correct() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        vault_dir.mkdir()
+        link_path = root / "home" / "user" / "Vault"
+        link_path.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(vault_dir), str(link_path))
+        original_inode = link_path.lstat().st_ino
+
+        script = bash_script(
+            vault_dir=vault_dir,
+            link_path=link_path,
+            unix_user=os.environ.get("USER", "nobody"),
+            extra=f'ensure_one_vault_link "{link_path}"',
+        )
+        result = run_bash(script)
+        expect(result.returncode == 0, f"idempotent run failed: {result.stderr!r}")
+        expect(link_path.is_symlink(), "symlink must still exist")
+        expect(os.readlink(link_path) == str(vault_dir), "target must be unchanged")
+        expect(link_path.lstat().st_ino == original_inode, "idempotent run should not recreate the symlink inode")
+    print("PASS test_vault_symlink_is_idempotent_when_already_correct")
+
+
+def main() -> int:
+    test_vault_symlink_creates_fresh_link_to_vault_dir()
+    test_vault_symlink_replaces_stale_symlink_to_wrong_target()
+    test_vault_symlink_refuses_to_overwrite_real_directory()
+    test_vault_symlink_is_idempotent_when_already_correct()
+    print("PASS all 4 vault symlink regression tests")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -83,9 +83,47 @@ def test_sync_hermes_docs_into_vault_tracks_source_updates() -> None:
         print("PASS test_sync_hermes_docs_into_vault_tracks_source_updates")
 
 
+def test_hermes_docs_ref_defaults_to_hermes_agent_ref() -> None:
+    """When ALMANAC_HERMES_DOCS_REF is unset, it must derive from the pinned
+    runtime ref so docs cannot silently float to upstream main ahead of the
+    runtime they describe."""
+    common_text = (REPO / "bin" / "common.sh").read_text(encoding="utf-8")
+    expect(
+        'ALMANAC_HERMES_DOCS_REF="${ALMANAC_HERMES_DOCS_REF:-$ALMANAC_HERMES_AGENT_REF}"' in common_text,
+        "common.sh must default ALMANAC_HERMES_DOCS_REF to $ALMANAC_HERMES_AGENT_REF; found a different default",
+    )
+    expect(
+        'ALMANAC_HERMES_DOCS_REF="${ALMANAC_HERMES_DOCS_REF:-main}"' not in common_text,
+        "common.sh must not default ALMANAC_HERMES_DOCS_REF to 'main' (silent-drift regression)",
+    )
+
+    deploy_text = (REPO / "bin" / "deploy.sh").read_text(encoding="utf-8")
+    expect(
+        'write_kv ALMANAC_HERMES_DOCS_REF "${ALMANAC_HERMES_DOCS_REF:-${ALMANAC_HERMES_AGENT_REF' in deploy_text,
+        "deploy.sh write_kv for ALMANAC_HERMES_DOCS_REF must default to ${ALMANAC_HERMES_AGENT_REF:-...}",
+    )
+    expect(
+        'write_kv ALMANAC_HERMES_DOCS_REF "${ALMANAC_HERMES_DOCS_REF:-main}"' not in deploy_text,
+        "deploy.sh must not write 'main' as the default docs ref (silent-drift regression)",
+    )
+
+    example_text = (REPO / "config" / "almanac.env.example").read_text(encoding="utf-8")
+    expect(
+        "ALMANAC_HERMES_DOCS_REF=main" not in example_text,
+        "config/almanac.env.example must not ship ALMANAC_HERMES_DOCS_REF=main as the default",
+    )
+    expect(
+        "ALMANAC_HERMES_DOCS_REF=ce089169d578b96c82641f17186ba63c288b22d8" in example_text
+        or "ALMANAC_HERMES_DOCS_REF=${ALMANAC_HERMES_AGENT_REF" in example_text,
+        "config/almanac.env.example must ship a pinned SHA or reference to ALMANAC_HERMES_AGENT_REF",
+    )
+    print("PASS test_hermes_docs_ref_defaults_to_hermes_agent_ref")
+
+
 def main() -> int:
     test_sync_hermes_docs_into_vault_tracks_source_updates()
-    print("PASS all 1 Hermes docs sync regression tests")
+    test_hermes_docs_ref_defaults_to_hermes_agent_ref()
+    print("PASS all 2 Hermes docs sync regression tests")
     return 0
 
 

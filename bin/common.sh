@@ -502,7 +502,11 @@ ALMANAC_AGENT_CODE_SERVER_IMAGE="${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/co
 ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
 ALMANAC_HERMES_DOCS_SYNC_ENABLED="${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}"
 ALMANAC_HERMES_DOCS_REPO_URL="${ALMANAC_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
-ALMANAC_HERMES_DOCS_REF="${ALMANAC_HERMES_DOCS_REF:-main}"
+# Track the vetted Hermes runtime commit by default so agent-facing docs cannot
+# silently drift ahead of the pinned runtime they describe. Operators can
+# override with a different tag/SHA if they deliberately want to preview
+# upstream docs before moving the runtime pin forward.
+ALMANAC_HERMES_DOCS_REF="${ALMANAC_HERMES_DOCS_REF:-$ALMANAC_HERMES_AGENT_REF}"
 ALMANAC_HERMES_DOCS_SOURCE_SUBDIR="${ALMANAC_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
 ALMANAC_HERMES_DOCS_STATE_DIR="${ALMANAC_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
 ALMANAC_HERMES_DOCS_VAULT_DIR="${ALMANAC_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Repos/hermes-agent-docs}"

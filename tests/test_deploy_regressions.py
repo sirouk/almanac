@@ -282,9 +282,16 @@ def test_emit_runtime_config_persists_hermes_docs_sync_fields() -> None:
         source_value(config, "ALMANAC_HERMES_DOCS_REPO_URL") == "https://github.com/NousResearch/hermes-agent.git",
         config,
     )
+    # Docs ref must default to the pinned runtime ref so in-vault docs cannot
+    # silently drift ahead of the pinned runtime they describe.
+    hermes_agent_ref = source_value(config, "ALMANAC_HERMES_AGENT_REF")
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_REF") == "main",
+        source_value(config, "ALMANAC_HERMES_DOCS_REF") == hermes_agent_ref,
         config,
+    )
+    expect(
+        source_value(config, "ALMANAC_HERMES_DOCS_REF") != "main",
+        "ALMANAC_HERMES_DOCS_REF must not default to 'main' (silent-drift regression)",
     )
     expect(
         source_value(config, "ALMANAC_HERMES_DOCS_SOURCE_SUBDIR") == "website/docs",

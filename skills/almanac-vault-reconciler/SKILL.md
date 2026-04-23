@@ -25,8 +25,11 @@ Managed memory entries must use these prefixes exactly:
 
 - `[managed:almanac-skill-ref]`
 - `[managed:vault-ref]`
+- `[managed:resource-ref]`
 - `[managed:qmd-ref]`
+- `[managed:notion-ref]`
 - `[managed:vault-topology]`
+- `[managed:notion-stub]`
 
 Only touch memories with those prefixes.
 
@@ -80,8 +83,11 @@ The canonical payload should teach future sessions:
 
 - which Almanac skills are active defaults
 - where the shared vault lives conceptually
+- which access rails and local URLs are safe to try without exposing credentials
 - that qmd is the deeper retrieval layer and should be queried first for vault-relevant questions
+- how to use the shared Notion knowledge rail for indexed search, exact live fetches, and structured live queries
 - which vaults are currently subscribed/default/unsubscribed at a compact level
+- the current shared Notion digest and verification state Curator has published for ambient orientation
 
 ## Recommended workflow
 

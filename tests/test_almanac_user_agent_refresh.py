@@ -244,9 +244,69 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         print("PASS test_user_agent_refresh_materializes_managed_stubs_and_recent_events")
 
 
+def test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_payload_is_invalid() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo_dir = root / "repo"
+        bin_dir = repo_dir / "bin"
+        python_dir = repo_dir / "python"
+        hermes_home = root / "hermes-home"
+        rpc_log = root / "rpc-log.json"
+
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        python_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SOURCE_SCRIPT, bin_dir / "user-agent-refresh.sh")
+        (bin_dir / "user-agent-refresh.sh").chmod(0o755)
+        shutil.copy2(CONTROL_PY, python_dir / "almanac_control.py")
+        shutil.copy2(NOTION_SSOT_PY, python_dir / "almanac_notion_ssot.py")
+        shutil.copy2(RESOURCE_MAP_PY, python_dir / "almanac_resource_map.py")
+        write_fake_rpc_client(python_dir / "almanac_rpc_client.py")
+
+        agents_state_dir = root / "agents-state" / "agent-jeef"
+        agents_state_dir.mkdir(parents=True, exist_ok=True)
+        (agents_state_dir / "managed-memory.json").write_text("{not-json}\n", encoding="utf-8")
+
+        token_file = hermes_home / "secrets" / "almanac-bootstrap-token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text("tok_jeef\n", encoding="utf-8")
+
+        enrollment_state = hermes_home / "state" / "almanac-enrollment.json"
+        enrollment_state.parent.mkdir(parents=True, exist_ok=True)
+        enrollment_state.write_text(json.dumps({"status": "active"}) + "\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [str(bin_dir / "user-agent-refresh.sh")],
+            env={
+                **os.environ,
+                "HERMES_HOME": str(hermes_home),
+                "HOME": str(root / "home-jeef"),
+                "ALMANAC_MCP_URL": "http://127.0.0.1:8282/mcp",
+                "ALMANAC_FAKE_RPC_LOG": str(rpc_log),
+                "ALMANAC_AGENT_ID": "agent-jeef",
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "agents-state"),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected invalid central payload to fall back live, got rc={result.returncode} stderr={result.stderr!r}")
+        expect("Ignoring invalid central managed-memory payload" in result.stderr, result.stderr)
+
+        state_path = hermes_home / "state" / "almanac-vault-reconciler.json"
+        state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+        expect(state_payload["agent_id"] == "agent-jeef", state_payload)
+        expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
+
+        rpc_calls = json.loads(rpc_log.read_text(encoding="utf-8"))
+        expect([call["tool"] for call in rpc_calls] == ["vaults.refresh", "agents.managed-memory", "agents.consume-notifications"], rpc_calls)
+        expect(all(call["payload"].get("token") == "tok_jeef" for call in rpc_calls), rpc_calls)
+        print("PASS test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_payload_is_invalid")
+
+
 def main() -> int:
     test_user_agent_refresh_materializes_managed_stubs_and_recent_events()
-    print("PASS all 1 user-agent refresh regression tests")
+    test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_payload_is_invalid()
+    print("PASS all 2 user-agent refresh regression tests")
     return 0
 
 

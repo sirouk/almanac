@@ -27,13 +27,13 @@ _LOCAL_KEYS = (
 )
 _SECTION_ORDER = _MANAGED_KEYS + _LOCAL_KEYS
 _SECTION_LIMITS = {
-    "almanac-skill-ref": 1200,
+    "almanac-skill-ref": 1500,
     "vault-ref": 600,
     "resource-ref": 1000,
-    "qmd-ref": 600,
-    "notion-ref": 900,
+    "qmd-ref": 1800,
+    "notion-ref": 2200,
     "vault-topology": 900,
-    "notion-stub": 1000,
+    "notion-stub": 1400,
     "resource-ref-live": 700,
     "recent-events": 1200,
     "identity": 900,
@@ -73,7 +73,76 @@ _RELEVANT_TERMS = (
     "repos",
     "plugins",
     "code workspace",
+    "assignment",
+    "assignments",
+    "assignee",
+    "attachment",
+    "attachments",
+    "backlog",
+    "decision",
+    "decisions",
+    "decide",
+    "decided",
+    "deadline",
+    "deadlines",
+    "document",
+    "documents",
+    "due",
+    "file",
+    "files",
+    "knowledge",
+    "latest",
+    "meeting",
+    "meetings",
+    "milestone",
+    "milestones",
+    "next",
+    "owner",
+    "owners",
+    "plan",
+    "planning",
+    "plans",
+    "priority",
+    "priorities",
+    "project",
+    "recent",
+    "roadmap",
+    "schedule",
+    "status",
+    "task",
+    "tasks",
+    "todo",
+    "update",
+    "updated",
+    "uploads",
 )
+_FOLLOWUP_TERMS = (
+    "and then",
+    "anything else",
+    "continue",
+    "did we",
+    "do that",
+    "do we",
+    "follow up",
+    "go on",
+    "how",
+    "keep going",
+    "next",
+    "now what",
+    "tell me more",
+    "that",
+    "them",
+    "these",
+    "this",
+    "those",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+)
+_HISTORY_RELEVANCE_LOOKBACK = 8
 _SESSION_REVISIONS: dict[str, str] = {}
 
 
@@ -140,6 +209,37 @@ def _managed_revision(payload: dict[str, object]) -> str:
 def _is_relevant(user_message: str) -> bool:
     lowered = str(user_message or "").lower()
     return any(term in lowered for term in _RELEVANT_TERMS)
+
+
+def _is_followup(user_message: str) -> bool:
+    lowered = str(user_message or "").lower()
+    return any(term in lowered for term in _FOLLOWUP_TERMS)
+
+
+def _history_message_text(item: object) -> str:
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return ""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        return " ".join(parts)
+    return ""
+
+
+def _history_was_relevant(conversation_history: object) -> bool:
+    if not isinstance(conversation_history, list):
+        return False
+    recent = conversation_history[-_HISTORY_RELEVANCE_LOOKBACK:]
+    return any(_is_relevant(_history_message_text(item)) for item in recent)
 
 
 def _skill_snapshot(raw_value: object) -> str:
@@ -388,7 +488,9 @@ def _pre_llm_call(
     revision_changed = previous_revision is not None and previous_revision != revision
     _SESSION_REVISIONS[session_key] = revision
 
-    if not (is_first_turn or revision_changed or _is_relevant(user_message)):
+    context_relevant = _is_relevant(user_message)
+    context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)
+    if not (is_first_turn or revision_changed or context_relevant or context_followup):
         return None
 
     context = _render_context(

@@ -257,6 +257,21 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
             )
             expect(second is None, f"expected no injection for unrelated turn with unchanged revision, got {second!r}")
 
+            followup = hook(
+                session_id="session-1",
+                user_message="what did we decide?",
+                conversation_history=[
+                    {"role": "user", "content": "Can you check the Notion roadmap for the Hermes plugin work?"},
+                    {"role": "assistant", "content": "I found the roadmap and summarized the key notes."},
+                ],
+                is_first_turn=False,
+                model="test-model",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            expect(isinstance(followup, dict) and followup.get("context"), f"expected context injection for relevant follow-up, got {followup!r}")
+            expect("[managed:notion-ref]" in followup["context"], followup["context"])
+
             recent_events_path.write_text(
                 json.dumps(
                     {
@@ -553,13 +568,66 @@ def test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
             os.environ.update(old_env)
 
 
+def test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        qmd_guardrail = "Do not read central deployment secrets such as almanac.env."
+        notion_guardrail = "without webhook ingress, notion.search may be up to four hours behind live Notion edits."
+        (state_dir / "almanac-vault-reconciler.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-jeef",
+                    "managed_memory_revision": "rev-guardrails",
+                    "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Jeef",
+                    "qmd-ref": "qmd MCP (deep retrieval): https://kor.example/mcp\n" + ("qmd detail " * 120) + qmd_guardrail,
+                    "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.\n"
+                    + ("notion detail " * 130)
+                    + notion_guardrail,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_guardrail_limit_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_llm_call"][0]
+            result = hook(
+                session_id="session-guardrails",
+                user_message="what is the latest project status?",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            expect(isinstance(result, dict) and result.get("context"), f"expected guardrail context, got {result!r}")
+            context = result["context"]
+            expect(qmd_guardrail in context, context)
+            expect(notion_guardrail in context, context)
+            print("PASS test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_install_almanac_plugins_installs_default_hermes_plugin()
     test_almanac_managed_context_reads_writer_materialized_notion_state()
     test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
     test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
     test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
-    print("PASS all 5 Almanac plugin tests")
+    test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails()
+    print("PASS all 6 Almanac plugin tests")
     return 0
 
 

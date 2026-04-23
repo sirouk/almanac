@@ -36,9 +36,12 @@ live Notion reads.
 
 ## Staleness Model
 
-- `search` is qmd-backed and can lag recent Notion edits by minutes
+- `search` is qmd-backed and near-real-time only when public Notion webhook ingress is configured and verified
+- with the verified webhook live, edits normally reach indexed search on the minutes-scale after Almanac batches and de-duplicates the event
+- without the verified webhook, `search` relies on the 4-hour Curator full sweep and may be up to four hours behind live Notion edits
 - `fetch` and `query` are live Notion reads
 - if a user says they just changed a page, prefer `fetch`
+- if a user asks about newly attached files, prefer `fetch` first for live attachment refs; indexed search covers extractable Notion-hosted PDFs and text-like attachments after the webhook or sweep reindexes the page
 
 ## Guardrails
 
@@ -56,11 +59,12 @@ Use the local wrapper so the script reads the bootstrap token from
 
 ```bash
 scripts/curate-notion.sh search "Chutes Unicorn"
+scripts/curate-notion.sh search --rerank "Chutes Unicorn"
 scripts/curate-notion.sh fetch "https://www.notion.so/...page-id..."
 scripts/curate-notion.sh query "<database-or-data-source-id-or-url>" '{"filter":{"property":"Status","status":{"equals":"In Progress"}}}'
 ```
 
-Add `--json` for raw structured output.
+Add `--json` for raw structured output. Add `--rerank` to `search` when quality matters more than latency.
 
 ## Result Interpretation
 

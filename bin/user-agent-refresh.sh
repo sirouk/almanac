@@ -75,16 +75,47 @@ PY
   )" >/dev/null
 
 # 2. materialize the last curator-published managed-memory payload when it is
-# available locally; otherwise fall back to a live fetch.
+# available locally and parseable; otherwise fall back to a live fetch. The
+# local file is a convenience cache, never a reason to break agent refresh.
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 managed_payload_path=""
+managed_payload_source="live"
 if [[ -n "$ALMANAC_AGENT_ID" ]]; then
   managed_payload_path="$ALMANAC_AGENTS_STATE_DIR/$ALMANAC_AGENT_ID/managed-memory.json"
 fi
-if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]]; then
-  cp "$managed_payload_path" "$tmp"
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$tmp" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+try:
+    payload = json.loads(source.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Ignoring invalid central managed-memory payload at {source}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+if not isinstance(payload, dict):
+    print(f"Ignoring invalid central managed-memory payload at {source}: not a JSON object", file=sys.stderr)
+    raise SystemExit(1)
+
+required = ("agent_id", "vault-ref", "qmd-ref", "catalog", "subscriptions")
+missing = [key for key in required if key not in payload]
+if missing:
+    print(
+        f"Ignoring incomplete central managed-memory payload at {source}: missing {', '.join(missing)}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+shutil.copyfile(source, target)
+PY
+then
+  managed_payload_source="central"
 else
   python3 "$REPO_DIR/python/almanac_rpc_client.py" \
     --url "$MCP_URL" \
@@ -96,7 +127,7 @@ PY
     )" >"$tmp"
 fi
 
-ALMANAC_MANAGED_PAYLOAD="$tmp" ALMANAC_HERMES_HOME="$HERMES_HOME" \
+ALMANAC_MANAGED_PAYLOAD="$tmp" ALMANAC_HERMES_HOME="$HERMES_HOME" ALMANAC_MANAGED_PAYLOAD_SOURCE="$managed_payload_source" \
 PYTHONPATH="$REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
 python3 - <<'PY'
 import json
@@ -108,7 +139,7 @@ import almanac_control
 payload = json.loads(Path(os.environ["ALMANAC_MANAGED_PAYLOAD"]).read_text())
 hermes_home = Path(os.environ["ALMANAC_HERMES_HOME"])
 paths = almanac_control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
-print(json.dumps({"agent_id": payload["agent_id"], **paths}, sort_keys=True))
+print(json.dumps({"agent_id": payload["agent_id"], "source": os.environ.get("ALMANAC_MANAGED_PAYLOAD_SOURCE", "live"), **paths}, sort_keys=True))
 PY
 
 # 3. drain agent-targeted notifications (SSOT nudges, subscription signals)

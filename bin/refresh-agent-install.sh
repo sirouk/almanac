@@ -97,7 +97,7 @@ run_user_systemctl() {
   local bus_path="$runtime_dir/bus"
   if [[ ! -S "$bus_path" ]]; then
     echo "User bus is not available at $bus_path; skipping systemd --user refresh/restart." >&2
-    return 0
+    return 75
   fi
   if [[ "$(id -un)" == "$UNIX_USER" ]]; then
     env \
@@ -118,6 +118,18 @@ run_user_systemctl() {
     XDG_RUNTIME_DIR="$runtime_dir" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" \
     "${cmd[@]}"
+}
+
+SERVICE_NOTES=()
+try_user_systemctl() {
+  local label="$1"
+  shift
+  if run_user_systemctl "$@" >/dev/null; then
+    SERVICE_NOTES+=("    - $label: ok")
+  else
+    local rc=$?
+    SERVICE_NOTES+=("    - $label: skipped or failed (rc=$rc)")
+  fi
 }
 
 target_can_access_repo() {
@@ -170,9 +182,9 @@ else
   fix_target_ownership
 fi
 
-run_user_systemctl start almanac-user-agent-refresh.service >/dev/null 2>&1 || true
-run_user_systemctl restart almanac-user-agent-gateway.service >/dev/null 2>&1 || true
-run_user_systemctl restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service >/dev/null 2>&1 || true
+try_user_systemctl "managed-memory refresh service" start almanac-user-agent-refresh.service
+try_user_systemctl "Hermes gateway" restart almanac-user-agent-gateway.service
+try_user_systemctl "Hermes dashboard/proxy" restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service
 
 cat <<EOF
 Refreshed Almanac install for $UNIX_USER
@@ -184,3 +196,8 @@ Refreshed Almanac install for $UNIX_USER
     - almanac-qmd: $ALMANAC_QMD_URL
 $(if [[ -n "${CHUTES_MCP_URL:-}" ]]; then printf '    - chutes-kb: %s\n' "$CHUTES_MCP_URL"; fi)
 EOF
+
+if [[ ${#SERVICE_NOTES[@]} -gt 0 ]]; then
+  echo "  service_actions:"
+  printf '%s\n' "${SERVICE_NOTES[@]}"
+fi

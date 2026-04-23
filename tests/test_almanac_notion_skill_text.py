@@ -45,7 +45,10 @@ def test_notion_knowledge_skill_teaches_shared_three_tool_split() -> None:
     expect("database/data source" in body or "database or data source" in body, body)
     expect("attachment" in body.lower(), body)
     expect("search is qmd-backed" in body, body)
+    expect("verified webhook" in body, body)
+    expect("4-hour Curator full sweep" in body, body)
     expect("fetch` and `query` are live Notion reads" in body, body)
+    expect("--rerank" in body, body)
     expect("scripts/curate-notion.sh search" in body, body)
     expect("scripts/curate-notion.sh fetch" in body, body)
     expect("scripts/curate-notion.sh query" in body, body)
@@ -72,6 +75,8 @@ def test_ssot_skill_marks_broker_as_non_workspace_search_lane() -> None:
     expect("default shared Almanac" in body and "workspace-search path" in body, body)
     expect("owner, status, due date, or assignee" in body, body)
     expect("name both sources" in body, body)
+    expect("verified webhook" in body, body)
+    expect("4-hour Curator full-sweep fallback" in body, body)
     print("PASS test_ssot_skill_marks_broker_as_non_workspace_search_lane")
 
 

@@ -49,8 +49,9 @@ free-for-all edit surface.
 
 - Curator pushes a shared Notion digest into managed memory on the normal
   fanout cycle
-- prefer webhook-driven refreshes
-- tolerate delayed webhook delivery by using the hourly backstop state maintained by Almanac
+- prefer webhook-driven refreshes when the operator has configured and verified the public Notion webhook
+- with the verified webhook live, treat shared Notion changes as minutes-scale after Almanac batches and de-duplicates the event
+- without the verified webhook, tolerate delayed updates by using the 4-hour Curator full-sweep fallback
 - expect Almanac to batch and de-duplicate webhook-driven refresh work
 - treat managed-memory SSOT summaries as ambient orientation and `ssot.read`
   as the depth rail when the user needs specifics

@@ -252,6 +252,123 @@ def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
     print("PASS test_deploy_guides_explicit_notion_webhook_event_selection")
 
 
+def test_json_field_reads_json_payload() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "json_field() {", "notion_webhook_status_json() {")
+    script = f"""
+{snippet}
+payload='{{"verified": true, "public_url": "https://hooks.example.com/notion/webhook"}}'
+printf 'verified=%s\\n' "$(json_field "$payload" verified)"
+printf 'public_url=%s\\n' "$(json_field "$payload" public_url)"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"json_field helper failed: {result.stderr}")
+    expect("verified=1" in result.stdout, f"expected json_field to decode booleans, got: {result.stdout!r}")
+    expect(
+        "public_url=https://hooks.example.com/notion/webhook" in result.stdout,
+        f"expected json_field to decode strings, got: {result.stdout!r}",
+    )
+    print("PASS test_json_field_reads_json_payload")
+
+
+def test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "json_field() {", "require_notion_subtree_ack() {")
+    script = f"""
+{snippet}
+SELF_PATH=/tmp/deploy.sh
+CONFIG_TARGET=/tmp/almanac.env
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=https://hooks.example.com/notion/webhook
+notion_webhook_status_json() {{
+  printf '%s' '{{"verified": false, "configured": false, "public_url": "https://hooks.example.com/notion/webhook", "verification_token": ""}}'
+}}
+run_notion_webhook_setup_flow /bin/true operator >/tmp/notion-flow.out 2>/tmp/notion-flow.err
+rc=$?
+printf 'rc=%s\\n' "$rc"
+cat /tmp/notion-flow.err
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"notion webhook flow probe failed: {result.stderr}")
+    expect("rc=1" in result.stdout, f"expected non-interactive notion webhook flow to fail closed, got: {result.stdout!r}")
+    expect(
+        "not yet confirmed" in result.stdout,
+        f"expected non-interactive notion webhook flow to explain why it stopped, got: {result.stdout!r}",
+    )
+    print("PASS test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified")
+
+
+def test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "detect_tailscale_serve() {", "normalize_http_path() {")
+    script = f"""
+{snippet}
+TAILSCALE_SERVE_PORT=443
+QMD_MCP_PORT=8181
+TAILSCALE_QMD_PATH=/mcp
+ALMANAC_MCP_PORT=8282
+TAILSCALE_ALMANAC_MCP_PATH=/almanac-mcp
+tailscale() {{
+  cat <<'JSON'
+{{"Web": {{"host.example.com:443": {{"Handlers": {{"/almanac-mcp": {{"Proxy": "http://127.0.0.1:8282/mcp"}}}}}}}}}}
+JSON
+}}
+detect_tailscale_serve
+printf 'qmd=%s almanac=%s\\n' "$TAILSCALE_SERVE_HAS_QMD" "$TAILSCALE_SERVE_HAS_ALMANAC_MCP"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"detect_tailscale_serve probe failed: {result.stderr}")
+    expect("qmd=0 almanac=1" in result.stdout, f"expected exact route detection, got: {result.stdout!r}")
+    print("PASS test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes")
+
+
+def test_path_is_within_and_safe_remove_use_canonical_paths() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "path_is_within() {", "nextcloud_state_has_existing_data() {")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        base = Path(temp_dir) / "base"
+        child = base / "child"
+        base.mkdir()
+        child.mkdir()
+        protected = Path(temp_dir) / "protected"
+        protected.mkdir()
+        target = protected / "victim.txt"
+        target.write_text("keep", encoding="utf-8")
+        script = f"""
+{snippet}
+if path_is_within {shlex.quote(str(base / '../protected'))} {shlex.quote(str(base))}; then
+  echo "within-bad=1"
+else
+  echo "within-bad=0"
+fi
+if path_is_within {shlex.quote(str(child))} {shlex.quote(str(base))}; then
+  echo "within-good=1"
+else
+  echo "within-good=0"
+fi
+safe_remove_path {shlex.quote(str(base / '../protected'))}
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"canonical path helpers probe failed: {result.stderr}")
+        expect("within-bad=0" in result.stdout, f"expected canonical containment check to reject ../ escape, got: {result.stdout!r}")
+        expect("within-good=1" in result.stdout, f"expected canonical containment check to accept real child path, got: {result.stdout!r}")
+        expect(not protected.exists(), "expected safe_remove_path to resolve and remove the canonical target path")
+    print("PASS test_path_is_within_and_safe_remove_use_canonical_paths")
+
+
+def test_run_health_check_falls_back_when_user_bus_is_missing() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "run_health_check() {", "run_rotate_nextcloud_secrets() {")
+    expect(
+        'if [[ -S "/run/user/$uid/bus" ]]; then' in snippet,
+        "expected run_health_check to check whether the service-user bus socket exists",
+    )
+    expect(
+        'run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE=\'$CONFIG_TARGET\' \'$ALMANAC_REPO_DIR/bin/health.sh\'"' in snippet,
+        "expected run_health_check to fall back to plain user-shell execution when the bus is absent",
+    )
+    print("PASS test_run_health_check_falls_back_when_user_bus_is_missing")
+
+
 def test_emit_runtime_config_persists_org_interview_fields() -> None:
     config = render_runtime_config(
         "tui-only",
@@ -1392,6 +1509,11 @@ def main() -> int:
         test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag,
         test_emit_runtime_config_persists_notion_ssot_fields,
         test_deploy_guides_explicit_notion_webhook_event_selection,
+        test_json_field_reads_json_payload,
+        test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,
+        test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,
+        test_path_is_within_and_safe_remove_use_canonical_paths,
+        test_run_health_check_falls_back_when_user_bus_is_missing,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,
         test_org_interview_validators_reject_bad_values,

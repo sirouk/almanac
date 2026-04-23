@@ -597,13 +597,13 @@ json_field() {
   local payload="$1"
   local field="$2"
 
-  printf '%s' "$payload" | python3 - "$field" <<'PY'
+  python3 - "$field" "$payload" <<'PY'
 import json
 import sys
 
 field = sys.argv[1]
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(sys.argv[2])
 except Exception:
     raise SystemExit(1)
 
@@ -641,8 +641,8 @@ run_notion_webhook_setup_flow() {
 
   status_json="$(notion_webhook_status_json "$ctl_bin" 2>/dev/null || true)"
   if [[ -z "$status_json" ]]; then
-    echo "Could not read Notion webhook verification state; skipping interactive verification flow." >&2
-    return 0
+    echo "Could not read Notion webhook verification state; cannot continue the deploy-owned webhook setup flow." >&2
+    return 1
   fi
 
   verified="$(json_field "$status_json" "verified" 2>/dev/null || true)"
@@ -662,7 +662,7 @@ run_notion_webhook_setup_flow() {
 
   if [[ ! -t 0 ]]; then
     echo "Notion webhook verification is not yet confirmed. Run \`$SELF_PATH notion-ssot\` interactively to finish the webhook setup flow." >&2
-    return 0
+    return 1
   fi
 
   public_url="$(json_field "$status_json" "public_url" 2>/dev/null || true)"
@@ -932,15 +932,19 @@ for hostport, entry in web.items():
     handlers = (entry or {}).get("Handlers") or {}
     if "/" in handlers:
         has_root = True
-    if qmd_path in handlers:
+    qmd_handler = handlers.get(qmd_path) or {}
+    almanac_handler = handlers.get(almanac_mcp_path) or {}
+    qmd_proxy = str(qmd_handler.get("Proxy") or "")
+    almanac_proxy = str(almanac_handler.get("Proxy") or "")
+    if qmd_proxy == f"http://127.0.0.1:{qmd_port}/mcp":
         has_qmd = True
-    if almanac_mcp_path in handlers:
+    if almanac_proxy == f"http://127.0.0.1:{almanac_mcp_port}/mcp":
         has_almanac_mcp = True
     for path, handler in handlers.items():
         proxy = str((handler or {}).get("Proxy") or "")
-        if path == qmd_path or f":{qmd_port}/mcp" in proxy or proxy.endswith("/mcp"):
+        if path == qmd_path and proxy == f"http://127.0.0.1:{qmd_port}/mcp":
             has_qmd = True
-        if path == almanac_mcp_path or f":{almanac_mcp_port}/mcp" in proxy:
+        if path == almanac_mcp_path and proxy == f"http://127.0.0.1:{almanac_mcp_port}/mcp":
             has_almanac_mcp = True
 
 values = {
@@ -1056,8 +1060,8 @@ for hostport, entry in web.items():
     if not hostport.endswith(f":{port}"):
         continue
     handlers = (entry or {}).get("Handlers") or {}
-    handler = handlers.get("/") or {}
-    if handler.get("Proxy") != expected_proxy:
+    handler = handlers.get(path) or handlers.get("/") or {}
+    if str(handler.get("Proxy") or "") != expected_proxy:
         continue
     if not allow.get(hostport):
         continue
@@ -2191,27 +2195,56 @@ path_is_within() {
   local path="$1"
   local base="$2"
 
-  case "$path" in
-    "$base"|"${base}/"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  python3 - "$path" "$base" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+base = sys.argv[2]
+
+if not path or not base:
+    raise SystemExit(1)
+
+path_real = os.path.realpath(path)
+base_real = os.path.realpath(base)
+
+if path_real == base_real:
+    raise SystemExit(0)
+
+base_prefix = base_real if base_real.endswith(os.sep) else base_real + os.sep
+raise SystemExit(0 if path_real.startswith(base_prefix) else 1)
+PY
 }
 
 safe_remove_path() {
   local path="$1"
+  local resolved=""
 
   if [[ -z "$path" ]]; then
     return 0
   fi
 
-  case "$path" in
-    /|/home|/root|/usr|/etc|/var)
-      echo "Refusing to remove unsafe path: $path" >&2
+  if [[ "$path" != /* ]]; then
+    echo "Refusing to remove non-absolute path: $path" >&2
+    return 1
+  fi
+
+  resolved="$(python3 - "$path" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+
+  case "$resolved" in
+    /|/home|/root|/usr|/etc|/var|/bin|/sbin|/lib|/lib64|/boot|/run|/opt)
+      echo "Refusing to remove unsafe path: $path -> $resolved" >&2
       return 1
       ;;
   esac
 
-  rm -rf -- "$path"
+  rm -rf -- "$resolved"
 }
 
 nextcloud_state_has_existing_data() {
@@ -4460,7 +4493,11 @@ run_health_check() {
       exit 1
     fi
     uid="$(id -u "$ALMANAC_USER")"
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+    if [[ -S "/run/user/$uid/bus" ]]; then
+      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+    else
+      run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+    fi
     return 0
   fi
 
@@ -4474,11 +4511,17 @@ run_health_check() {
   fi
 
   uid="$(id -u "$ALMANAC_USER")"
-  sudo -iu "$ALMANAC_USER" env \
-    XDG_RUNTIME_DIR="/run/user/$uid" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-    "$ALMANAC_REPO_DIR/bin/health.sh"
+  if [[ -S "/run/user/$uid/bus" ]]; then
+    sudo -iu "$ALMANAC_USER" env \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ALMANAC_REPO_DIR/bin/health.sh"
+  else
+    sudo -iu "$ALMANAC_USER" env \
+      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ALMANAC_REPO_DIR/bin/health.sh"
+  fi
   write_operator_checkout_artifact
 }
 

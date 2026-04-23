@@ -201,7 +201,11 @@ def test_generated_backup_units_follow_backup_state_file() -> None:
 
         log = systemctl_log.read_text(encoding="utf-8")
         expect("--user enable almanac-user-agent-backup.timer" in log, log)
-        expect("--user start almanac-user-agent-backup.service" in log, log)
+        expect("--user restart almanac-user-agent-backup.timer" in log, log)
+        expect(
+            "--user start almanac-user-agent-backup.service" not in log,
+            "install/upgrade should not force a backup before the deploy key has been installed",
+        )
         print("PASS test_generated_backup_units_follow_backup_state_file")
 
 

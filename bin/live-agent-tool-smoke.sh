@@ -8,8 +8,69 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "live agent tool smoke"
 ensure_layout
 
-TARGET_UNIX_USER="${1:-}"
+TARGET_UNIX_USER=""
+TARGET_AGENT_SELECTOR=""
+TAIL_LINES=40
 PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac vault catalog rail to tell me my current subscribed vaults in one short sentence. Do not use terminal, python heredocs, or read any secrets files.}"
+
+usage() {
+  cat <<'EOF'
+Usage: live-agent-tool-smoke.sh [--user UNIX_USER] [--agent AGENT_ID_OR_NAME] [--tail LINES]
+
+Runs a live Hermes tool smoke against one active enrolled user agent.
+If no selector is provided, the first active user agent is selected.
+EOF
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --user|-u)
+      if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+        echo "Missing value for $1" >&2
+        usage >&2
+        exit 2
+      fi
+      TARGET_UNIX_USER="$2"
+      shift 2
+      ;;
+    --agent|-a)
+      if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+        echo "Missing value for $1" >&2
+        usage >&2
+        exit 2
+      fi
+      TARGET_AGENT_SELECTOR="$2"
+      shift 2
+      ;;
+    --tail)
+      if [[ "$#" -lt 2 || ! "${2:-}" =~ ^[0-9]+$ || "${2:-0}" -lt 1 ]]; then
+        echo "Missing or invalid numeric value for $1" >&2
+        usage >&2
+        exit 2
+      fi
+      TAIL_LINES="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ -n "$TARGET_UNIX_USER" ]]; then
+        echo "Unexpected extra argument: $1" >&2
+        usage >&2
+        exit 2
+      fi
+      TARGET_UNIX_USER="$1"
+      shift
+      ;;
+  esac
+done
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is unavailable; cannot run live agent tool smoke." >&2
@@ -21,37 +82,37 @@ if [[ ! -x "$RUNTIME_DIR/hermes-venv/bin/hermes" ]]; then
   exit 1
 fi
 
-agent_json="$(python3 - "$ALMANAC_DB_PATH" "$TARGET_UNIX_USER" <<'PY'
+agent_json="$(python3 - "$ALMANAC_DB_PATH" "$TARGET_UNIX_USER" "$TARGET_AGENT_SELECTOR" <<'PY'
 import json
 import sqlite3
 import sys
 
 db_path = sys.argv[1]
 target_unix_user = (sys.argv[2] or "").strip()
+target_agent_selector = (sys.argv[3] or "").strip().lower()
 
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
+query = """
+    SELECT agent_id, unix_user, hermes_home, display_name
+    FROM agents
+    WHERE role = 'user' AND status = 'active'
+"""
+params: list[str] = []
 if target_unix_user:
-    row = conn.execute(
-        """
-        SELECT unix_user, hermes_home, display_name
-        FROM agents
-        WHERE role = 'user' AND status = 'active' AND unix_user = ?
-        ORDER BY unix_user
-        LIMIT 1
-        """,
-        (target_unix_user,),
-    ).fetchone()
-else:
-    row = conn.execute(
-        """
-        SELECT unix_user, hermes_home, display_name
-        FROM agents
-        WHERE role = 'user' AND status = 'active'
-        ORDER BY unix_user
-        LIMIT 1
-        """
-    ).fetchone()
+    query += " AND unix_user = ?"
+    params.append(target_unix_user)
+if target_agent_selector:
+    query += """
+      AND (
+        lower(agent_id) = ?
+        OR lower(unix_user) = ?
+        OR lower(coalesce(display_name, '')) = ?
+      )
+    """
+    params.extend([target_agent_selector, target_agent_selector, target_agent_selector])
+query += " ORDER BY unix_user LIMIT 1"
+row = conn.execute(query, params).fetchone()
 
 if row is None:
     print("{}")
@@ -101,7 +162,7 @@ before_latest_session="$(run_as_target_user bash -lc 'find "$HERMES_HOME/session
 if ! run_as_target_user env TARGET_PROMPT="$PROMPT" TARGET_HERMES_BIN="$RUNTIME_DIR/hermes-venv/bin/hermes" \
   bash -lc 'cd "$HOME" && timeout 90 "$TARGET_HERMES_BIN" chat -q "$TARGET_PROMPT"' >"$output_file" 2>&1; then
   echo "Live agent tool smoke failed for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}. Recent output:" >&2
-  tail -40 "$output_file" >&2 || true
+  tail -"$TAIL_LINES" "$output_file" >&2 || true
   exit 1
 fi
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -137,7 +198,7 @@ fi
 
 if [[ -z "$session_id" ]]; then
   echo "Could not determine the live smoke session id for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}" >&2
-  tail -20 "$output_file" >&2 || true
+  tail -"$TAIL_LINES" "$output_file" >&2 || true
   exit 1
 fi
 

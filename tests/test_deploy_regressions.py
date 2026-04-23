@@ -475,6 +475,21 @@ def test_live_agent_tool_smoke_inspects_private_home_as_target_user() -> None:
     print("PASS test_live_agent_tool_smoke_inspects_private_home_as_target_user")
 
 
+def test_live_agent_tool_smoke_parses_explicit_selectors() -> None:
+    body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
+    expect("--user|-u" in body, "live smoke should accept an explicit Unix user selector")
+    expect("--agent|-a" in body, "live smoke should accept an explicit agent id/name selector")
+    expect("--tail" in body, "live smoke should support the documented failure-output tail option")
+    expect("TAIL_LINES=40" in body, body)
+    expect('tail -"$TAIL_LINES" "$output_file"' in body, body)
+    expect("Unknown option:" in body, "live smoke should fail closed on unknown flags")
+    expect('"$ALMANAC_DB_PATH" "$TARGET_UNIX_USER" "$TARGET_AGENT_SELECTOR"' in body, body)
+    expect("lower(agent_id) = ?" in body, body)
+    expect("lower(unix_user) = ?" in body, body)
+    expect("lower(coalesce(display_name, '')) = ?" in body, body)
+    print("PASS test_live_agent_tool_smoke_parses_explicit_selectors")
+
+
 def test_agent_install_payload_tracks_current_agent_contract() -> None:
     payload = render_agent_install_payload()
     expected_skills = [
@@ -1674,6 +1689,7 @@ def main() -> int:
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,
+        test_live_agent_tool_smoke_parses_explicit_selectors,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
         test_org_interview_validators_accept_known_good_values,

@@ -134,6 +134,13 @@ def _operator_action_log_dir(cfg: Config) -> Path:
     return path
 
 
+def _config_file_for_child_process(cfg: Config) -> str:
+    configured = str(os.environ.get("ALMANAC_CONFIG_FILE") or "").strip()
+    if configured:
+        return configured
+    return str(cfg.private_dir / "config" / "almanac.env")
+
+
 def _tail_text(path: Path, *, max_lines: int = 16) -> str:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -150,7 +157,7 @@ def _tail_text(path: Path, *, max_lines: int = 16) -> str:
 
 def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["ALMANAC_CONFIG_FILE"] = str(cfg.config_path)
+    env["ALMANAC_CONFIG_FILE"] = _config_file_for_child_process(cfg)
     if cfg.upstream_repo_url:
         env.setdefault("ALMANAC_UPSTREAM_REPO_URL", str(cfg.upstream_repo_url))
     if cfg.upstream_branch:
@@ -176,7 +183,7 @@ def _run_install_agent_ssh_key(
     log_path: Path,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["ALMANAC_CONFIG_FILE"] = str(cfg.config_path)
+    env["ALMANAC_CONFIG_FILE"] = _config_file_for_child_process(cfg)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as handle:
         return subprocess.run(
@@ -1499,7 +1506,11 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
 
 def _run_pending_remote_ssh_key_actions(conn, cfg: Config) -> None:
     while True:
-        action = get_pending_operator_action(conn, action_kind="install-agent-ssh-key")
+        action = get_pending_operator_action(
+            conn,
+            action_kind="install-agent-ssh-key",
+            reclaim_stale_running_seconds=300,
+        )
         if action is None:
             return
         action_id = int(action["id"])
@@ -1572,8 +1583,9 @@ def _run_pending_remote_ssh_key_actions(conn, cfg: Config) -> None:
                     cfg,
                     session,
                     (
-                        "Remote SSH key installed. "
-                        f"You can now connect over Tailscale with `ssh {target}` or run your generated remote Hermes wrapper."
+                        "Remote agent key installed. Run your generated `almanac-remote-hermes-*` wrapper from your own machine "
+                        "to start Hermes inside this remote agent lane with its remote config, skills, MCP tools, and files. "
+                        f"For debugging only, raw SSH is available over Tailscale as `ssh {target}`."
                     ),
                 )
             _queue_operator_message(

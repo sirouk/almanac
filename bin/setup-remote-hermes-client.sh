@@ -5,8 +5,9 @@ usage() {
   cat >&2 <<'EOF'
 Usage: setup-remote-hermes-client.sh [--host tailnet-host] [--user remote-unix-user] [--key-path ~/.ssh/key]
 
-Create a local SSH/tailnet wrapper that forwards Hermes commands to a remote
-Almanac-enrolled user account over SSH.
+Create a local SSH/tailnet wrapper that starts Hermes on a remote
+Almanac-enrolled user account. This is remote-agent control, not local Hermes
+with a remote terminal backend.
 EOF
 }
 
@@ -144,6 +145,11 @@ Remote Hermes client prepared
   wrapper: $wrapper_path
   target: $TARGET_USER@$TARGET_HOST
 
+What this does:
+  The wrapper runs Hermes on the remote Almanac host inside your agent lane.
+  It uses the remote Hermes config, skills, MCP tools, plugins, and files.
+  Do not run your local 'hermes' command for this path; run the wrapper below.
+
 Public key to send back to Curator:
 $(sed 's/^/  /' "${KEY_PATH}.pub")
 
@@ -151,6 +157,6 @@ Reply to Curator with:
   /ssh-key $(cat "${KEY_PATH}.pub")
 
 Curator will bind that key to Unix user $TARGET_USER and install it on the host with Tailscale-only SSH restrictions.
-After they do, run:
+After Curator confirms the key is installed, run:
   $wrapper_path chat
 EOF

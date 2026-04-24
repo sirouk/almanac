@@ -212,7 +212,7 @@ def completion_message_bundle(
         remote_user, remote_host = _remote_ssh_target(access)
         if remote_user and remote_host:
             followup_lines.append("")
-            followup_lines.append("Optional remote CLI from your own machine:")
+            followup_lines.append("Optional remote agent CLI from your own machine:")
             followup_lines.append(
                 f"- Run: `curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}`"
             )
@@ -220,7 +220,11 @@ def completion_message_bundle(
                 "- That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
                 "`/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
             )
-            followup_lines.append(f"- Remote SSH target after key install: {remote_user}@{remote_host}")
+            followup_lines.append(
+                "- Use the generated `almanac-remote-hermes-*` wrapper, not your local `hermes` command. "
+                "The wrapper starts Hermes on this host inside your agent lane, so it uses the remote config, skills, MCP tools, plugins, and files."
+            )
+            followup_lines.append(f"- Raw SSH target for debugging after key install: {remote_user}@{remote_host}")
         else:
             followup_lines.append(
                 "Optional tailnet-only remote CLI: unavailable until this host has a Tailscale DNS name and your Unix user is recorded."

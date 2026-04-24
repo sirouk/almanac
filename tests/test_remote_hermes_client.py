@@ -62,6 +62,8 @@ def test_setup_remote_hermes_client_generates_key_and_wrapper() -> None:
         expect("StrictHostKeyChecking=yes" in wrapper_text, wrapper_text)
         expect((home / ".ssh" / "almanac-remote-hermes-ed25519").is_file(), "expected generated private key")
         expect((home / ".ssh" / "almanac-remote-hermes-ed25519.pub").is_file(), "expected generated public key")
+        expect("remote Hermes config, skills, MCP tools, plugins, and files" in result.stdout, result.stdout)
+        expect("Do not run your local 'hermes' command" in result.stdout, result.stdout)
         expect("Public key to send back to Curator:" in result.stdout, result.stdout)
         expect("Reply to Curator with:" in result.stdout, result.stdout)
         expect("/ssh-key ssh-ed25519" in result.stdout, result.stdout)

@@ -3620,7 +3620,29 @@ def get_pending_operator_action(
     conn: sqlite3.Connection,
     *,
     action_kind: str,
+    reclaim_stale_running_seconds: int = 0,
 ) -> dict[str, Any] | None:
+    if int(reclaim_stale_running_seconds or 0) > 0:
+        stale_before = auto_provision_stale_before_iso(int(reclaim_stale_running_seconds))
+        row = conn.execute(
+            """
+            SELECT *
+            FROM operator_actions
+            WHERE action_kind = ?
+              AND (
+                status = 'pending'
+                OR (
+                  status = 'running'
+                  AND COALESCE(started_at, created_at, '') < ?
+                )
+              )
+            ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, id ASC
+            LIMIT 1
+            """,
+            (str(action_kind or "").strip(), stale_before),
+        ).fetchone()
+        return _operator_action_row_to_dict(row)
+
     row = conn.execute(
         """
         SELECT *

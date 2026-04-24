@@ -136,7 +136,9 @@ def test_completed_onboarding_user_can_queue_remote_ssh_key_install() -> None:
                 validate_bot_token=lambda token: onboarding.BotIdentity(bot_id="unused"),
             )
             expect(len(replies) == 1, str(replies))
-            expect("Remote SSH key install queued for `sirouk`" in replies[0].text, replies[0].text)
+            expect("Remote agent key install queued for `sirouk`" in replies[0].text, replies[0].text)
+            expect("generated `almanac-remote-hermes-*` wrapper" in replies[0].text, replies[0].text)
+            expect("remote config, skills, MCP tools, and files" in replies[0].text, replies[0].text)
             row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'install-agent-ssh-key'").fetchone()
             expect(row is not None, "expected queued operator action")
             payload = json.loads(str(row["requested_target"]))
@@ -183,7 +185,7 @@ def test_remote_ssh_key_install_requires_completed_sender_lane() -> None:
             os.environ.update(old_env)
 
 
-def test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user() -> None:
+def test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     control = load_module(CONTROL_PY, "almanac_control_remote_ssh_key_root_test")
@@ -214,7 +216,7 @@ def test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user() -> 
                 answers={"unix_user": "sirouk"},
             )
             pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey almanac-remote-hermes@test"
-            control.request_operator_action(
+            action, _created = control.request_operator_action(
                 conn,
                 action_kind="install-agent-ssh-key",
                 requested_by="sirouk",
@@ -231,6 +233,18 @@ def test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user() -> 
                 ),
                 dedupe_by_target=True,
             )
+            action_id = int(action["id"])
+            control.mark_operator_action_running(
+                conn,
+                action_id=action_id,
+                note="stale in-flight action from crashed process",
+                log_path=str(root / "missing.log"),
+            )
+            conn.execute(
+                "UPDATE operator_actions SET started_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", action_id),
+            )
+            conn.commit()
 
             calls: list[tuple[str, str]] = []
             user_messages: list[str] = []
@@ -247,8 +261,54 @@ def test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user() -> 
             expect(calls == [("sirouk", pubkey)], str(calls))
             refreshed = conn.execute("SELECT status, note FROM operator_actions WHERE action_kind = 'install-agent-ssh-key'").fetchone()
             expect(refreshed is not None and refreshed["status"] == "completed", str(dict(refreshed) if refreshed else {}))
+            expect(user_messages and "almanac-remote-hermes-*" in user_messages[0], str(user_messages))
+            expect(user_messages and "remote config, skills, MCP tools, and files" in user_messages[0], str(user_messages))
             expect(user_messages and "ssh sirouk@kor.tail77f45e.ts.net" in user_messages[0], str(user_messages))
-            print("PASS test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user")
+            print("PASS test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_root_maintenance_install_ssh_key_uses_discovered_config_file() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_remote_ssh_key_config_env_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_remote_ssh_key_config_env_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            seen: dict[str, object] = {}
+
+            def fake_run(args, *, cwd, env, text, stdout, stderr, check):
+                seen["args"] = list(args)
+                seen["cwd"] = cwd
+                seen["config_file"] = env.get("ALMANAC_CONFIG_FILE")
+                stdout.write("Installed SSH key\n")
+                return subprocess.CompletedProcess(args=args, returncode=0)
+
+            original_run = provisioner.subprocess.run
+            provisioner.subprocess.run = fake_run
+            try:
+                result = provisioner._run_install_agent_ssh_key(
+                    cfg,
+                    unix_user="sirouk",
+                    pubkey="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey test",
+                    log_path=root / "install.log",
+                )
+            finally:
+                provisioner.subprocess.run = original_run
+
+            expect(result.returncode == 0, str(result))
+            expect(seen.get("config_file") == str(config_path), str(seen))
+            expect(str(seen.get("cwd")) == str(REPO), str(seen))
+            expect("install-agent-ssh-key.sh" in " ".join(str(x) for x in seen.get("args", [])), str(seen))
+            print("PASS test_root_maintenance_install_ssh_key_uses_discovered_config_file")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -257,8 +317,9 @@ def test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user() -> 
 def main() -> int:
     test_completed_onboarding_user_can_queue_remote_ssh_key_install()
     test_remote_ssh_key_install_requires_completed_sender_lane()
-    test_root_maintenance_installs_queued_remote_ssh_key_and_notifies_user()
-    print("PASS all 3 remote SSH key onboarding tests")
+    test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user()
+    test_root_maintenance_install_ssh_key_uses_discovered_config_file()
+    print("PASS all 4 remote SSH key onboarding tests")
     return 0
 
 

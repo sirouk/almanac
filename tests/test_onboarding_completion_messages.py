@@ -332,7 +332,9 @@ def test_completion_bundle_pins_remote_setup_helper_to_deployed_commit() -> None
             )
             expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user in followup_text, followup_text)
             expect("reply here with `/ssh-key <public key>`" in followup_text, followup_text)
-            expect(f"Remote SSH target after key install: {unix_user}@kor.tail77f45e.ts.net" in followup_text, followup_text)
+            expect("Use the generated `almanac-remote-hermes-*` wrapper, not your local `hermes` command" in followup_text, followup_text)
+            expect("remote config, skills, MCP tools, plugins, and files" in followup_text, followup_text)
+            expect(f"Raw SSH target for debugging after key install: {unix_user}@kor.tail77f45e.ts.net" in followup_text, followup_text)
             expect(
                 "https://raw.githubusercontent.com/sirouk/almanac/main/bin/setup-remote-hermes-client.sh"
                 not in followup_text,

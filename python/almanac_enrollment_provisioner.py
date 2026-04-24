@@ -21,6 +21,7 @@ from almanac_agent_access import (
 from almanac_control import (
     Config,
     activation_trigger_path,
+    auto_provision_stale_before_iso,
     auto_provision_retry_delay_seconds,
     build_managed_memory_payload,
     config_env_value,
@@ -172,6 +173,48 @@ def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedPro
             stdout=handle,
             stderr=subprocess.STDOUT,
             check=False,
+        )
+
+
+def _fail_stale_running_operator_actions(
+    conn,
+    cfg: Config,
+    *,
+    action_kind: str,
+    label: str,
+    stale_seconds: int,
+) -> None:
+    stale_before = auto_provision_stale_before_iso(stale_seconds)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM operator_actions
+        WHERE action_kind = ?
+          AND status = 'running'
+          AND COALESCE(started_at, created_at, '') < ?
+        ORDER BY id ASC
+        """,
+        (str(action_kind or "").strip(), stale_before),
+    ).fetchall()
+    for row in rows:
+        action_id = int(row["id"])
+        requested_by = str(row["requested_by"] or "operator").strip() or "operator"
+        log_path = str(row["log_path"] or "").strip()
+        note = (
+            f"{label} action {action_id} marked failed after being stuck in running state "
+            f"for more than {stale_seconds} second(s); the previous worker likely exited before completion"
+        )
+        finish_operator_action(
+            conn,
+            action_id=action_id,
+            status="failed",
+            note=note,
+            log_path=log_path,
+        )
+        _queue_operator_message(
+            conn,
+            cfg,
+            f"{note}.\nRequested by: {requested_by}" + (f"\nLog: {log_path}" if log_path else ""),
         )
 
 
@@ -1409,6 +1452,13 @@ def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
 
 
 def _run_pending_operator_actions(conn, cfg: Config) -> None:
+    _fail_stale_running_operator_actions(
+        conn,
+        cfg,
+        action_kind="upgrade",
+        label="Almanac upgrade",
+        stale_seconds=6 * 60 * 60,
+    )
     action = get_pending_operator_action(conn, action_kind="upgrade")
     if action is None:
         return

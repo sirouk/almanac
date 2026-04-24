@@ -477,6 +477,64 @@ def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None
             os.environ.update(old_env)
 
 
+def test_operator_upgrade_stale_running_action_fails_closed() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_operator_upgrade_stale_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_operator_upgrade_stale_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = config_values(root)
+        values["OPERATOR_NOTIFY_CHANNEL_PLATFORM"] = "telegram"
+        values["OPERATOR_NOTIFY_CHANNEL_ID"] = "1994645819"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            action_row, created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@sirouk",
+                request_source="telegram-button",
+                requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+            )
+            expect(created is True, str(action_row))
+            action_id = int(action_row["id"])
+            control.mark_operator_action_running(
+                conn,
+                action_id=action_id,
+                note="worker crashed",
+                log_path=str(root / "operator-actions" / "upgrade-1.log"),
+            )
+            conn.execute(
+                "UPDATE operator_actions SET started_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", action_id),
+            )
+            conn.commit()
+
+            def fail_if_upgrade_runs(cfg, *, log_path):
+                raise AssertionError("stale running upgrade actions must not be rerun automatically")
+
+            provisioner._run_host_upgrade = fail_if_upgrade_runs
+            provisioner._run_pending_operator_actions(conn, cfg)
+
+            refreshed = conn.execute("SELECT status, note FROM operator_actions WHERE id = ?", (action_id,)).fetchone()
+            expect(refreshed is not None and refreshed["status"] == "failed", str(dict(refreshed) if refreshed else {}))
+            expect("stuck in running state" in str(refreshed["note"] or ""), str(dict(refreshed)))
+            operator_rows = conn.execute(
+                "SELECT message FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
+            ).fetchall()
+            expect(len(operator_rows) == 1, str([dict(row) for row in operator_rows]))
+            expect("stuck in running state" in str(operator_rows[0]["message"] or ""), str([dict(row) for row in operator_rows]))
+            print("PASS test_operator_upgrade_stale_running_action_fails_closed")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
@@ -486,7 +544,8 @@ def main() -> int:
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
     test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
-    print("PASS all 8 enrollment provisioner regression tests")
+    test_operator_upgrade_stale_running_action_fails_closed()
+    print("PASS all 9 enrollment provisioner regression tests")
     return 0
 
 

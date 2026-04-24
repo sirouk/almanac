@@ -1619,6 +1619,23 @@ PY
     --exclude '*.pyc' \
     --exclude '.DS_Store' \
     "$source_dir/" "$target_dir/"
+
+  sync_public_repo_git_metadata_from_source "$source_dir" "$target_dir"
+}
+
+sync_public_repo_git_metadata_from_source() {
+  local source_dir="$1"
+  local target_dir="$2"
+
+  if [[ ! -d "$source_dir/.git" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$target_dir/.git" && "${ALMANAC_INSTALL_PUBLIC_GIT:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  rm -rf "$target_dir/.git"
+  rsync -a --delete "$source_dir/.git/" "$target_dir/.git/"
 }
 
 git_head_commit() {

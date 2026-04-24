@@ -1737,6 +1737,74 @@ fi
     print("PASS test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo")
 
 
+def test_sync_public_repo_repairs_existing_git_metadata_from_source() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "sync_public_repo_from_source() {", "git_head_commit() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        source_dir = tmp_path / "source"
+        target_dir = tmp_path / "target"
+        source_dir.mkdir()
+        target_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main", str(source_dir)], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "Almanac Test"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
+        (source_dir / "README.md").write_text("ready\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(source_dir), "add", "README.md"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "commit", "-m", "ready"], check=True, capture_output=True, text=True)
+        source_head = subprocess.run(
+            ["git", "-C", str(source_dir), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        # This mirrors the bad live shape we found: an initialized target repo
+        # with no commits. Sync should not preserve that orphaned metadata.
+        subprocess.run(["git", "init", "-b", "main", str(target_dir)], check=True, capture_output=True, text=True)
+        script = f"""
+{snippet}
+sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
+git -C {shlex.quote(str(target_dir))} rev-parse HEAD
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"sync_public_repo_from_source should repair target git metadata: {result.stderr}")
+        expect(source_head in result.stdout, result.stdout)
+    print("PASS test_sync_public_repo_repairs_existing_git_metadata_from_source")
+
+
+def test_sync_public_repo_copies_git_metadata_when_public_git_requested() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "sync_public_repo_from_source() {", "git_head_commit() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        source_dir = tmp_path / "source"
+        target_dir = tmp_path / "target"
+        source_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main", str(source_dir)], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "Almanac Test"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
+        (source_dir / "README.md").write_text("ready\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(source_dir), "add", "README.md"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "commit", "-m", "ready"], check=True, capture_output=True, text=True)
+        source_head = subprocess.run(
+            ["git", "-C", str(source_dir), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        script = f"""
+{snippet}
+ALMANAC_INSTALL_PUBLIC_GIT=1 sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
+git -C {shlex.quote(str(target_dir))} rev-parse HEAD
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"sync_public_repo_from_source should copy git metadata when requested: {result.stderr}")
+        expect(source_head in result.stdout, result.stdout)
+    print("PASS test_sync_public_repo_copies_git_metadata_when_public_git_requested")
+
+
 def test_enrollment_reset_supports_full_forget_purge() -> None:
     text = DEPLOY_SH.read_text()
     reset = extract(text, "run_enrollment_reset() {", "run_health_check() {")
@@ -1902,6 +1970,8 @@ def main() -> int:
         test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,
+        test_sync_public_repo_repairs_existing_git_metadata_from_source,
+        test_sync_public_repo_copies_git_metadata_when_public_git_requested,
         test_enrollment_reset_supports_full_forget_purge,
         test_enrollment_align_reseeds_agent_identity,
         test_root_install_and_upgrade_do_not_globally_export_runtime_secrets,

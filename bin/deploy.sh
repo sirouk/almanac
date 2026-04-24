@@ -5360,6 +5360,7 @@ run_install_flow() {
   require_supported_host_mode "$MODE"
 
   collect_install_answers
+  prepare_operator_upstream_deploy_key_before_sudo
 
   if [[ "$MODE" == "write-config" ]]; then
     seed_private_repo "$ALMANAC_PRIV_DIR"
@@ -5369,8 +5370,6 @@ run_install_flow() {
     echo "Private repo scaffold: $ALMANAC_PRIV_DIR"
     return 0
   fi
-
-  prepare_operator_upstream_deploy_key_before_sudo
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     run_root_install

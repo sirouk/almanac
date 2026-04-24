@@ -3497,7 +3497,7 @@ chown_managed_paths() {
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && -n "${NEXTCLOUD_STATE_DIR:-}" && -d "$NEXTCLOUD_STATE_DIR" ]]; then
     chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
-    find -ignore_readdir_race "$ALMANAC_PRIV_DIR" \
+    find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
       -path "$NEXTCLOUD_STATE_DIR" -prune -o \
       -name "*.sqlite3-shm" -prune -o \
       -name "*.sqlite3-wal" -prune -o \
@@ -3505,7 +3505,7 @@ chown_managed_paths() {
     return 0
   fi
 
-  find -ignore_readdir_race "$ALMANAC_PRIV_DIR" \
+  find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
     -name "*.sqlite3-shm" -prune -o \
     -name "*.sqlite3-wal" -prune -o \
     -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +

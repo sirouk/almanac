@@ -1667,7 +1667,7 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "run_root_upgrade should use the scoped ownership helper instead of blanket chowning private state",
     )
     expect(
-        "-ignore_readdir_race" in chown_helper
+        'find "$ALMANAC_PRIV_DIR" -ignore_readdir_race' in chown_helper
         and "*.sqlite3-shm" in chown_helper
         and "*.sqlite3-wal" in chown_helper,
         "scoped ownership repair should tolerate transient SQLite sidecar files during live upgrades",

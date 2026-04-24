@@ -303,14 +303,15 @@ An enrolled user gets:
 - A chat bot lane on Discord or Telegram.
 - User systemd services for refresh, gateway, dashboard, and code workspace
   when enabled.
-- A `~/Vault` symlink to the shared vault for VS Code / code-server file
+- A `~/Almanac` symlink to the shared vault for VS Code / code-server file
   explorer convenience.
-- A `$HERMES_HOME/Vault` symlink for agent-local discovery.
+- `$HERMES_HOME/Almanac` and `$HERMES_HOME/Vault` symlinks for agent-local
+  discovery and compatibility with older instructions.
 - Optional Nextcloud user access.
 - Optional private agent backup to a user-owned GitHub repo.
 - Optional remote SSH control over Tailscale using a user-provided public key.
 
-The vault symlink refuses to overwrite a real directory. Stale symlinks are
+Vault shortcuts refuse to overwrite a real directory. Stale symlinks are
 repaired; real user data is not bulldozed.
 
 ## Vaults And Knowledge

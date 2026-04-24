@@ -60,7 +60,7 @@ def bash_script_for_user_links(*, root: Path, vault_dir: Path, unix_user: str, e
 set -euo pipefail
 VAULT_DIR={str(vault_dir)!r}
 UNIX_USER={unix_user!r}
-TARGET_VAULT_LINK_PATH={str(home_dir / "Vault")!r}
+TARGET_VAULT_LINK_PATH=""
 TARGET_ALMANAC_LINK_PATH={str(home_dir / "Almanac")!r}
 TARGET_HERMES_HOME={str(hermes_home)!r}
 {one_link_fn}
@@ -167,7 +167,7 @@ def test_vault_symlink_is_idempotent_when_already_correct() -> None:
     print("PASS test_vault_symlink_is_idempotent_when_already_correct")
 
 
-def test_user_vault_links_create_vault_and_almanac_aliases() -> None:
+def test_user_vault_links_create_almanac_alias_and_internal_compat_links() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         vault_dir = root / "vault"
@@ -182,10 +182,31 @@ def test_user_vault_links_create_vault_and_almanac_aliases() -> None:
         expect(result.returncode == 0, f"user link fanout failed: {result.stderr!r}")
         home_dir = root / "home" / "user"
         hermes_home = home_dir / ".local" / "share" / "almanac-agent" / "hermes-home"
-        for path in (home_dir / "Vault", home_dir / "Almanac", hermes_home / "Vault", hermes_home / "Almanac"):
+        expect(not (home_dir / "Vault").exists(), "home-level Vault alias should be opt-in to avoid duplicate Explorer roots")
+        for path in (home_dir / "Almanac", hermes_home / "Vault", hermes_home / "Almanac"):
             expect(path.is_symlink(), f"expected symlink at {path}")
             expect(os.readlink(path) == str(vault_dir), f"bad target for {path}: {os.readlink(path)!r}")
-    print("PASS test_user_vault_links_create_vault_and_almanac_aliases")
+    print("PASS test_user_vault_links_create_almanac_alias_and_internal_compat_links")
+
+
+def test_user_vault_links_create_home_vault_only_when_explicitly_requested() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        vault_dir.mkdir()
+        home_dir = root / "home" / "user"
+        explicit_vault = home_dir / "Vault"
+        script = bash_script_for_user_links(
+            root=root,
+            vault_dir=vault_dir,
+            unix_user=os.environ.get("USER", "nobody"),
+            extra=f'TARGET_VAULT_LINK_PATH="{explicit_vault}"\nensure_user_vault_link',
+        )
+        result = run_bash(script)
+        expect(result.returncode == 0, f"explicit home Vault link failed: {result.stderr!r}")
+        expect(explicit_vault.is_symlink(), f"expected explicit home Vault symlink at {explicit_vault}")
+        expect(os.readlink(explicit_vault) == str(vault_dir), f"bad explicit Vault target: {os.readlink(explicit_vault)!r}")
+    print("PASS test_user_vault_links_create_home_vault_only_when_explicitly_requested")
 
 
 def main() -> int:
@@ -193,8 +214,9 @@ def main() -> int:
     test_vault_symlink_replaces_stale_symlink_to_wrong_target()
     test_vault_symlink_refuses_to_overwrite_real_directory()
     test_vault_symlink_is_idempotent_when_already_correct()
-    test_user_vault_links_create_vault_and_almanac_aliases()
-    print("PASS all 5 vault symlink regression tests")
+    test_user_vault_links_create_almanac_alias_and_internal_compat_links()
+    test_user_vault_links_create_home_vault_only_when_explicitly_requested()
+    print("PASS all 6 vault symlink regression tests")
     return 0
 
 

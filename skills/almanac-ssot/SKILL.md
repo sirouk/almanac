@@ -37,13 +37,17 @@ Common calls:
 Decision tree:
 
 - For live scoped organizational state, call `ssot.read` once before answering.
-- For append/update/insert, call `ssot.write` once; never archive or delete.
+- For short append/update/insert work, call `ssot.write` once; never archive or delete.
+- For long new pages, create the page first with a compact title/intro/source
+  block, then append the body in small chunks of roughly 10-20 Notion blocks.
+  Do not keep retrying one huge insert if it times out.
 - For `insert`, assign `Owner` or `Assignee` to the verified caller in the
   payload or the broker rejects the write before it lands.
 - Set `read_after:true` only when the user asks you to verify the live state
   immediately after an applied write.
 - If `ssot.write` returns `final_state:"applied"` or `applied:true`, tell the
-  user it was written and summarize the target.
+  user it was written, summarize the target, and surface `page_url` / `url`
+  when the response includes it.
 - If it returns `final_state:"queued"`, `queued:true`, or `approval_required:true`,
   report the `pending_id`, owner/scope reason, and that approval is required.
 - For “did it land?” follow-ups, call `ssot.status` with the `pending_id` when

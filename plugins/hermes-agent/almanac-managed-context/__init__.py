@@ -205,12 +205,13 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "revise that page",
         ),
         (
-            "ssot.write — one call. The plugin injects token automatically; omit token. Required: operation, payload. "
+            "ssot.write — governed Notion write. The plugin injects token automatically; omit token. Required: operation, payload. "
             "operation is one of insert|update|append (archive/delete are rejected). "
             "For append, payload MUST be {\"children\":[...]} with no 'after'. "
             "For update/insert, use {\"properties\":{...}}. target_id is required for append/update. "
+            "For long pages: create the page first with title/intro, then append chunks of about 10-20 blocks; do not retry one huge payload. "
             "Set read_after:true only if the user asked you to verify live state. "
-            "Response has final_state:\"applied\"|\"queued\"; when queued, surface pending_id to the user."
+            "Response has final_state:\"applied\"|\"queued\"; when applied, surface page_url/url if present; when queued, surface pending_id only when useful."
         ),
     ),
     (

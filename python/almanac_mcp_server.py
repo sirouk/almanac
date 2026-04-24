@@ -79,7 +79,7 @@ TOOLS = {
     "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering. Use for scoped shared-database reads (org rows owned/assigned to the caller). For broad knowledge lookup by phrase, call notion.search or notion.search-and-fetch instead.",
     "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided. Use when the user asks about their queue in general; for a specific pending_id, call ssot.status instead.",
     "ssot.preflight": "Check whether a Notion SSOT write would apply, queue for user approval, or fail before attempting the write. Use quietly when writeability is uncertain.",
-    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for user approval; surface the returned pending_id only when needed. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status.",
+    "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for user approval; applied page inserts promote page_url/url as a receipt. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status.",
     "ssot.status": "Check one previously queued SSOT write by pending_id for the calling agent. Prefer over ssot.pending when the pending_id is already known.",
     "ssot.approve": "Approve one of the caller's own queued Notion writes after the user explicitly approves it in chat.",
     "ssot.deny": "Deny one of the caller's own queued Notion writes after the user declines it in chat.",
@@ -441,6 +441,19 @@ def _dict_arg(arguments: dict, name: str, *, default_empty: bool = True, require
     value = arguments.get(name)
     if isinstance(value, dict):
         return value
+    if isinstance(value, str):
+        raw_value = value.strip()
+        if not raw_value:
+            if required:
+                raise ValueError(f"{name} must be an object")
+            return {} if default_empty else None  # type: ignore[return-value]
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{name} must be an object or valid JSON object string") from exc
+        if isinstance(parsed, dict):
+            return parsed
+        raise ValueError(f"{name} JSON string must decode to an object, not {type(parsed).__name__}")
     raise ValueError(f"{name} must be an object, not {type(value).__name__}")
 
 
@@ -740,6 +753,15 @@ def _ssot_final_state(payload: dict[str, Any]) -> str:
 def _normalize_ssot_write_result(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     result.setdefault("final_state", _ssot_final_state(result))
+    notion_result = result.get("notion_result") if isinstance(result.get("notion_result"), dict) else {}
+    if isinstance(notion_result, dict):
+        notion_url = str(notion_result.get("url") or "").strip()
+        notion_id = str(notion_result.get("id") or "").strip()
+        if notion_url:
+            result.setdefault("url", notion_url)
+            result.setdefault("page_url", notion_url)
+        if notion_id:
+            result.setdefault("result_id", notion_id)
     return result
 
 

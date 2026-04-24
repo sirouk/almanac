@@ -192,13 +192,46 @@ def test_runtime_helpers_close_schema_bypass_gaps() -> None:
         expect("must be a boolean" in str(exc), str(exc))
     else:
         raise AssertionError("string 'false' should not pass boolean runtime validation")
+    parsed = mod._dict_arg({"payload": '{"children":[]}'}, "payload", required=True)
+    expect(parsed == {"children": []}, f"JSON object strings should be accepted, got {parsed!r}")
     try:
         mod._dict_arg({"payload": []}, "payload", required=True)
     except ValueError as exc:
         expect("must be an object" in str(exc), str(exc))
     else:
         raise AssertionError("list payload should not pass object runtime validation")
+    try:
+        mod._dict_arg({"payload": '["not-an-object"]'}, "payload", required=True)
+    except ValueError as exc:
+        expect("must decode to an object" in str(exc), str(exc))
+    else:
+        raise AssertionError("JSON array string should not pass object runtime validation")
+    try:
+        mod._dict_arg({"payload": '{"children":'}, "payload", required=True)
+    except ValueError as exc:
+        expect("valid JSON object string" in str(exc), str(exc))
+    else:
+        raise AssertionError("malformed JSON object string should fail clearly")
     print("PASS test_runtime_helpers_close_schema_bypass_gaps")
+
+
+def test_ssot_write_result_promotes_receipt_fields() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_ssot_receipt_test")
+    normalized = mod._normalize_ssot_write_result(
+        {
+            "applied": True,
+            "target_id": "page-id",
+            "notion_result": {
+                "id": "notion-page-id",
+                "url": "https://www.notion.so/example-page",
+            },
+        }
+    )
+    expect(normalized["final_state"] == "applied", str(normalized))
+    expect(normalized["url"] == "https://www.notion.so/example-page", str(normalized))
+    expect(normalized["page_url"] == "https://www.notion.so/example-page", str(normalized))
+    expect(normalized["result_id"] == "notion-page-id", str(normalized))
+    print("PASS test_ssot_write_result_promotes_receipt_fields")
 
 
 def test_search_and_fetch_compacts_search_payloads() -> None:
@@ -282,9 +315,10 @@ def main() -> int:
     test_tools_list_serves_rich_schemas_not_empty_objects()
     test_hot_tool_descriptions_carry_when_to_call_guidance()
     test_runtime_helpers_close_schema_bypass_gaps()
+    test_ssot_write_result_promotes_receipt_fields()
     test_search_and_fetch_compacts_search_payloads()
     test_vault_qmd_helpers_normalize_resource_content()
-    print("PASS all 7 Almanac MCP schema tests")
+    print("PASS all 8 Almanac MCP schema tests")
     return 0
 
 

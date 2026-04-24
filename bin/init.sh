@@ -559,7 +559,7 @@ PY
 
   if [[ -z "$preseeded_request_id" && "${ALMANAC_INIT_SKIP_AGENT_BACKUP_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
-    read -r -p "Configure a private GitHub backup for this Hermes home now? [Y/n]: " configure_backup_answer
+    read -r -p "Configure this agent's separate private GitHub backup with its own read/write deploy key now? [Y/n]: " configure_backup_answer
     if [[ -z "$configure_backup_answer" ]] || is_yes "$configure_backup_answer"; then
       HERMES_HOME="$hermes_home" "$SHARED_REPO_DIR/bin/configure-agent-backup.sh" "$hermes_home" || true
     fi
@@ -634,6 +634,7 @@ Local Hermes wrapper:
   $HOME/.local/bin/almanac-agent-hermes
 Backup helper:
   $HOME/.local/bin/almanac-agent-configure-backup
+  Use this to set up this agent's separate private GitHub backup deploy key.
 Control plane:
   $ALMANAC_MCP_URL
 Bootstrap handshake:
@@ -669,6 +670,7 @@ Local Hermes wrapper:
   $HOME/.local/bin/almanac-agent-hermes
 Backup helper:
   $HOME/.local/bin/almanac-agent-configure-backup
+  Use this after approval to set up this agent's separate private GitHub backup deploy key.
 Control plane:
   $ALMANAC_MCP_URL
 Bootstrap handshake:

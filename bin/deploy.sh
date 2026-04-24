@@ -2002,7 +2002,7 @@ print_post_install_guide() {
     if [[ -n "$upstream_repo_page" ]]; then
       echo "  Add or review that deploy key here:"
       echo "    $upstream_repo_page/settings/keys"
-      echo "  Read-only is enough for upgrades; enable write access if this operator/agent should push."
+      echo "  Enable GitHub Allow write access. This upstream deploy key is for operator/agent code pushes."
     fi
     if [[ -n "$upstream_pub_key" ]]; then
       echo "  Public key to paste into GitHub:"
@@ -2466,19 +2466,21 @@ upstream_git_ssh_command() {
 
 collect_upstream_git_answers() {
   local default_remote="" default_owner_repo="" owner_repo="" default_enabled="" repo_page=""
-  local key_user=""
+  local default_key_user="" key_user=""
 
   default_remote="${ALMANAC_UPSTREAM_REPO_URL:-$(git_origin_url "$BOOTSTRAP_DIR")}"
   default_owner_repo="$(github_owner_repo_from_remote "$default_remote")"
   default_enabled="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+  default_key_user="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
   if [[ -n "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" && -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
     default_enabled="1"
   fi
 
   echo
   echo "GitHub deploy key for Almanac upstream"
-  echo "  Optional but recommended for operators who want this host to pull/push via SSH instead of HTTPS prompts."
-  echo "  Read-only is enough for upgrades. Enable GitHub Allow write access only if this operator/agent should push to the repo."
+  echo "  This is the read/write deploy key for operator/agent code pushes to the Almanac repo."
+  echo "  The almanac-priv backup and per-user Hermes-home backups use separate deploy keys."
+  echo "  In GitHub deploy key settings, enable: Allow write access."
 
   ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="$(ask_yes_no "Set up an operator deploy key for the Almanac upstream repo" "$default_enabled")"
   if [[ "$ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED" != "1" ]]; then
@@ -2494,7 +2496,7 @@ collect_upstream_git_answers() {
     owner_repo="${owner_repo%/}"
     if [[ "$owner_repo" == */* && "$owner_repo" != */ && "$owner_repo" != /* ]]; then
       ALMANAC_UPSTREAM_REPO_URL="$(github_ssh_remote_from_owner_repo "$owner_repo")"
-      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$(ask "Unix user that should own the Almanac repo push deploy key" "$default_key_user")"
       ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
       ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
       key_user="$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
@@ -2508,6 +2510,8 @@ collect_upstream_git_answers() {
       if [[ -n "$repo_page" ]]; then
         echo "  Add the public key to GitHub here:"
         echo "    $repo_page/settings/keys"
+        echo "  Required GitHub setting:"
+        echo "    Enable Allow write access."
       fi
       return 0
     fi
@@ -2599,7 +2603,7 @@ print_upstream_deploy_key_instructions() {
   if [[ -n "$repo_page" ]]; then
     echo "  Add it to GitHub here:"
     echo "    $repo_page/settings/keys"
-    echo "  Use read-only for upgrades; enable Allow write access if this operator/agent should push."
+    echo "  Required GitHub setting: enable Allow write access."
   fi
   if [[ -n "$pub_key" ]]; then
     echo "  Public key to paste into GitHub:"

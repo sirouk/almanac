@@ -89,6 +89,9 @@ def test_configure_agent_backup_defaults_to_core_snapshot_without_sessions() -> 
         state_body = (hermes_home / "state" / "almanac-agent-backup.env").read_text(encoding="utf-8")
         expect("AGENT_BACKUP_INCLUDE_SESSIONS=0" in state_body, state_body)
         expect("Session transcripts stay out of the backup unless" in result.stdout, result.stdout)
+        expect("deploy key with write access" in result.stdout, result.stdout)
+        expect("separate per-user backup key" in result.stdout, result.stdout)
+        expect("do not reuse the Almanac upstream code-push key" in result.stdout, result.stdout)
         print("PASS test_configure_agent_backup_defaults_to_core_snapshot_without_sessions")
 
 

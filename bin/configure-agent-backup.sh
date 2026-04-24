@@ -10,6 +10,8 @@ usage() {
 Usage: configure-agent-backup.sh <hermes-home> [--remote git@github.com:owner/repo.git] [--branch main] [--include-sessions 0|1]
 
 Configure a private GitHub backup for one enrolled user's Hermes home.
+This uses a per-user read/write deploy key. Do not reuse the Almanac upstream
+code-push key or the shared almanac-priv backup key.
 The backup snapshot is curated by default: SOUL, config, memories, installed
 skills/plugins, selected state, and optionally sessions. Secrets and logs stay
 local to the host.
@@ -155,7 +157,7 @@ fi
 mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$KEY_PATH")" "$(dirname "$KNOWN_HOSTS_FILE")"
 
 if [[ -z "$REMOTE_URL" && -t 0 ]]; then
-  owner_repo="$(prompt_tty "GitHub owner/repo for a private Hermes-home backup (blank to skip)" "")"
+  owner_repo="$(prompt_tty "GitHub owner/repo for this user's private Hermes-home backup (blank to skip)" "")"
   if [[ -n "$owner_repo" ]]; then
     REMOTE_URL="git@github.com:${owner_repo}.git"
   fi
@@ -239,5 +241,6 @@ Configured private Hermes-home backup
 $(sed 's/^/    /' "${KEY_PATH}.pub")
 
 Add that public key to the private repository as a deploy key with write access.
+This is a separate per-user backup key; do not reuse the Almanac upstream code-push key or the shared almanac-priv backup key.
 Session transcripts stay out of the backup unless you rerun this helper with --include-sessions 1.
 EOF

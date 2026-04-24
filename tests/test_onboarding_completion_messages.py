@@ -170,6 +170,8 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("Notion webhook: shared operator-managed rail on this host" in followup_text, followup_text)
             expect("Shared Notion writes:" in full_text, full_text)
             expect(str(user_home) in followup_text, followup_text)
+            expect("separate private GitHub repo and read/write deploy key" in followup_text, followup_text)
+            expect("Do not reuse the Almanac code-push deploy key" in followup_text, followup_text)
 
             telegram_button = bundle["telegram_reply_markup"]["inline_keyboard"][0][0]
             discord_button = bundle["discord_components"][0]["components"][0]

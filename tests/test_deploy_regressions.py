@@ -1223,8 +1223,10 @@ printf 'ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE=%s\\n' "$ALMANAC_UPSTREAM_KNOWN_HOSTS_
         f"expected upstream known_hosts path, got: {result.stdout!r}",
     )
     expect(
-        "Read-only is enough for upgrades" in result.stdout and "Allow write access" in result.stdout,
-        f"expected deploy-key guidance to explain read/write tradeoff, got: {result.stdout!r}",
+        "read/write deploy key for operator/agent code pushes" in result.stdout
+        and "Allow write access" in result.stdout
+        and "almanac-priv backup and per-user Hermes-home backups use separate deploy keys" in result.stdout,
+        f"expected upstream deploy-key guidance to require write access and separate backup keys, got: {result.stdout!r}",
     )
     print("PASS test_collect_install_answers_guides_upstream_deploy_key_setup")
 

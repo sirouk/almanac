@@ -890,7 +890,8 @@ assert_agent_payload() {
     "$ALMANAC_REPO_DIR/skills/almanac-ssot" \
     "$ALMANAC_REPO_DIR/skills/almanac-notion-knowledge" \
     "$ALMANAC_REPO_DIR/skills/almanac-ssot-connect" \
-    "$ALMANAC_REPO_DIR/skills/almanac-notion-mcp"
+    "$ALMANAC_REPO_DIR/skills/almanac-notion-mcp" \
+    "$ALMANAC_REPO_DIR/skills/almanac-resources"
   do
     if ! grep -Fq "$required" <<<"$payload"; then
       echo "Agent payload is missing expected text: $required" >&2

@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 
 PLUGIN_NAME = "almanac-managed-context"
 STATE_FILENAME = "almanac-vault-reconciler.json"
@@ -44,7 +46,10 @@ _MAX_EVENT_COUNT = 5
 _MAX_EVENT_MESSAGE_CHARS = 240
 _MAX_LOCAL_FIELD_CHARS = 160
 _MAX_URL_FIELD_CHARS = 240
+_DEFAULT_REMOTE_SETUP_URL = "https://raw.githubusercontent.com/sirouk/almanac/main/bin/setup-remote-hermes-client.sh"
 _RELEVANT_TERMS = (
+    "/almanac-resources",
+    "/almanac-links",
     "almanac",
     "access",
     "agent",
@@ -117,6 +122,29 @@ _RELEVANT_TERMS = (
     "update",
     "updated",
     "uploads",
+)
+_RESOURCE_REQUEST_TERMS = (
+    "/almanac-resources",
+    "/almanac-links",
+    "almanac resources",
+    "almanac resource",
+    "almanac links",
+    "my almanac resources",
+    "my almanac links",
+    "show my almanac resources",
+    "show my almanac links",
+)
+_HUMAN_SHARED_RESOURCE_SKIP_PREFIXES = (
+    "hermes dashboard:",
+    "dashboard username:",
+    "code workspace:",
+    "workspace root:",
+    "almanac vault:",
+    "qmd mcp retrieval rail:",
+    "almanac mcp control rail:",
+    "credentials are",
+    "if the user needs",
+    "these rails are",
 )
 _FOLLOWUP_TERMS = (
     "and then",
@@ -593,6 +621,7 @@ def _skill_snapshot(raw_value: object) -> str:
         "Use almanac-notion-knowledge",
         "Use almanac-ssot-connect",
         "Use almanac-notion-mcp",
+        "Use almanac-resources",
         "Use almanac-first-contact",
         "Built-in MEMORY.md",
         "Treat the skill as the workflow",
@@ -620,6 +649,230 @@ def _access_overlay_payload(payload: dict[str, object]) -> dict[str, str]:
         return {}
     overlay["credentials"] = "omitted"
     return overlay
+
+
+def _is_resource_request(user_message: str) -> bool:
+    lowered = " ".join(str(user_message or "").strip().lower().split())
+    if not lowered:
+        return False
+    first_token = lowered.split(" ", 1)[0]
+    if first_token in {"/almanac-resources", "/almanac-links"}:
+        return True
+    return any(term in lowered for term in _RESOURCE_REQUEST_TERMS)
+
+
+def _clean_resource_value(value: object, *, limit: int = _MAX_LOCAL_FIELD_CHARS) -> str:
+    return _clean_text(value, limit=limit)
+
+
+def _home_root(access_payload: dict[str, object]) -> str:
+    explicit = _clean_resource_value(access_payload.get("workspace_root"), limit=240)
+    if explicit:
+        return explicit
+    raw_home = str(os.environ.get("HOME") or "").strip()
+    if raw_home:
+        return str(Path(raw_home).expanduser())
+    unix_user = _clean_resource_value(
+        access_payload.get("unix_user") or access_payload.get("username"),
+        limit=80,
+    )
+    if unix_user:
+        return f"/home/{unix_user}"
+    try:
+        return str(Path.home())
+    except RuntimeError:
+        return ""
+
+
+def _vault_root_for_home(home_root: str) -> str:
+    home = str(home_root or "").rstrip("/")
+    return f"{home}/Almanac" if home else "~/Almanac"
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+
+
+def _append_unique(lines: list[str], seen: set[str], line: str) -> None:
+    value = str(line or "").strip()
+    if not value:
+        return
+    marker = value.lower()
+    if marker in seen:
+        return
+    seen.add(marker)
+    lines.append(value)
+
+
+def _managed_resource_bullets(managed_payload: dict[str, object]) -> list[str]:
+    raw = str(managed_payload.get("resource-ref") or "").strip()
+    if not raw:
+        return []
+    bullets: list[str] = []
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if line.startswith("- "):
+            bullets.append(line[2:].strip())
+    return [line for line in bullets if line]
+
+
+def _human_shared_resource_lines(
+    *,
+    managed_payload: dict[str, object],
+    access_payload: dict[str, object],
+    home_root: str,
+) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in _managed_resource_bullets(managed_payload):
+        lowered = line.lower()
+        if any(lowered.startswith(prefix) for prefix in _HUMAN_SHARED_RESOURCE_SKIP_PREFIXES):
+            continue
+        if "password" in lowered or "secret" in lowered or "credential" in lowered:
+            continue
+        _append_unique(lines, seen, line)
+
+    if not any(line.lower().startswith("vault access in nextcloud:") for line in lines):
+        host = _clean_resource_value(access_payload.get("tailscale_host"), limit=160)
+        if host:
+            _append_unique(
+                lines,
+                seen,
+                f"Vault access in Nextcloud: https://{host}:8445/ (shared mount: /Vault)",
+            )
+
+    vault_root = _vault_root_for_home(home_root)
+    _append_unique(lines, seen, f"Vault path in VS Code and shell: {vault_root}")
+    _append_unique(lines, seen, "The shared Vault and control rails are already wired into your agent by default.")
+    return lines
+
+
+def _remote_cli_lines(
+    *,
+    access_payload: dict[str, object],
+    identity_payload: dict[str, object],
+) -> list[str]:
+    remote_user = _clean_resource_value(
+        access_payload.get("unix_user") or access_payload.get("username"),
+        limit=80,
+    )
+    remote_host = _clean_resource_value(access_payload.get("tailscale_host"), limit=160)
+    setup_url = _clean_resource_value(
+        access_payload.get("remote_setup_url") or os.environ.get("ALMANAC_REMOTE_SETUP_URL") or _DEFAULT_REMOTE_SETUP_URL,
+        limit=_MAX_URL_FIELD_CHARS,
+    )
+    if not (remote_user and remote_host and setup_url):
+        return []
+
+    org_name = _clean_resource_value(
+        access_payload.get("org_name") or identity_payload.get("org_name"),
+        limit=120,
+    )
+    org_arg = f" --org {shlex.quote(org_name)}" if org_name else ""
+    wrapper_org = _slug(org_name) or _slug(remote_host)
+    wrapper_user = _slug(remote_user)
+    wrapper_name = (
+        f"hermes-almanac-{wrapper_user}-{wrapper_org}"
+        if wrapper_user and wrapper_org
+        else "hermes-almanac-*"
+    )
+    return [
+        f"Run: `curl -fsSL {setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`",
+        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
+        f"Use the generated `{wrapper_name}` wrapper, not your local `hermes` command.",
+        f"Remote SSH target after key install: {remote_user}@{remote_host}",
+    ]
+
+
+def _resource_bundle(
+    *,
+    managed_payload: dict[str, object],
+    access_payload: dict[str, object],
+    identity_payload: dict[str, object],
+) -> str:
+    lines: list[str] = ["Almanac resources:", "", "Web access:"]
+    dashboard_url = _clean_resource_value(access_payload.get("dashboard_url"), limit=_MAX_URL_FIELD_CHARS)
+    code_url = _clean_resource_value(access_payload.get("code_url"), limit=_MAX_URL_FIELD_CHARS)
+    username = _clean_resource_value(access_payload.get("username") or access_payload.get("unix_user"), limit=80)
+    nextcloud_username = _clean_resource_value(
+        access_payload.get("nextcloud_username") or username,
+        limit=80,
+    )
+    home_root = _home_root(access_payload)
+    vault_root = _vault_root_for_home(home_root)
+
+    if dashboard_url:
+        lines.append(f"- Hermes dashboard: {dashboard_url}")
+    if username:
+        lines.append(f"- Dashboard username: {username}")
+    if nextcloud_username:
+        lines.append(f"- Nextcloud login: {nextcloud_username}")
+    if code_url:
+        lines.append(f"- Code workspace: {code_url}")
+    if home_root:
+        lines.append(f"- Workspace root: {home_root}")
+    lines.append(f"- Almanac vault: {vault_root}")
+
+    lines.extend(
+        [
+            "",
+            "Host helper:",
+            "- Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes",
+            "",
+            "Backups:",
+            "- Private Hermes-home backup: run ~/.local/bin/almanac-agent-configure-backup to set up this agent's separate private GitHub repo and read/write deploy key.",
+            "- Do not reuse the Almanac code-push deploy key or shared almanac-priv backup key for your agent backup.",
+            "",
+            "Shared Almanac links:",
+        ]
+    )
+    shared_lines = _human_shared_resource_lines(
+        managed_payload=managed_payload,
+        access_payload=access_payload,
+        home_root=home_root,
+    )
+    if shared_lines:
+        lines.extend(f"- {line}" for line in shared_lines)
+    else:
+        lines.append("- Vault path in VS Code and shell: " + vault_root)
+
+    remote_lines = _remote_cli_lines(access_payload=access_payload, identity_payload=identity_payload)
+    if remote_lines:
+        lines.extend(["", "Optional remote agent CLI from your own machine:"])
+        lines.extend(f"- {line}" for line in remote_lines)
+
+    lines.extend(
+        [
+            "",
+            "Credentials and passwords are intentionally omitted from this resource reference.",
+            "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again.",
+        ]
+    )
+    return "\n".join(line for line in lines if line is not None).strip()
+
+
+def _render_resource_request_context(
+    *,
+    managed_payload: dict[str, object],
+    access_payload: dict[str, object],
+    identity_payload: dict[str, object],
+) -> str:
+    bundle = _resource_bundle(
+        managed_payload=managed_payload,
+        access_payload=access_payload,
+        identity_payload=identity_payload,
+    )
+    if not bundle:
+        return ""
+    return "\n".join(
+        [
+            f"[Plugin: {PLUGIN_NAME} - Almanac resource request]",
+            "The user asked for their Almanac resources. Reply with the bundle below, preserving user-specific links and usernames.",
+            "Do not reveal, infer, summarize, or ask for passwords, tokens, keys, or secrets. Use the user's ~/Almanac alias as the vault home base.",
+            "",
+            bundle,
+        ]
+    ).strip()
 
 
 def _normalize_recent_event_message(message: str) -> str:
@@ -837,15 +1090,39 @@ def _pre_llm_call(
     **kwargs,
 ):
     payload = _load_state()
-    if not payload:
-        return None
-
     access_path = _local_state_path(ACCESS_STATE_FILENAME)
     events_path = _local_state_path(RECENT_EVENTS_FILENAME)
     identity_path = _local_state_path(IDENTITY_STATE_FILENAME)
     access_payload = _load_json_dict(access_path)
     events_payload = _load_json_dict(events_path)
     identity_payload = _load_json_dict(identity_path)
+    resource_request = _is_resource_request(user_message)
+    if resource_request:
+        context = _render_resource_request_context(
+            managed_payload=payload,
+            access_payload=access_payload,
+            identity_payload=identity_payload,
+        )
+        if context:
+            session_key = str(session_id or "__global__")
+            _emit_telemetry(
+                {
+                    "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    "session_id": session_key,
+                    "injected": True,
+                    "gate": ["resource_request"],
+                    "recipes": [],
+                    "context_chars": len(context),
+                    "context_mode": "resource_request",
+                    "managed_revision": _managed_revision(payload) if payload else "",
+                    "platform": str(platform or ""),
+                }
+            )
+            return {"context": context}
+
+    if not payload:
+        return None
+
     sections, freshness = _build_sections(
         payload,
         access_path=access_path,

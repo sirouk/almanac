@@ -2104,6 +2104,7 @@ render_agent_install_payload_body() {
     "almanac-notion-knowledge"
     "almanac-ssot-connect"
     "almanac-notion-mcp"
+    "almanac-resources"
   )
   local skill_name=""
 

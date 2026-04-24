@@ -200,6 +200,7 @@ def completion_message_bundle(
         f"- Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
         f"- Code workspace: {access.get('code_url')}",
         f"- Workspace root: {home}",
+        f"- Almanac vault: {home / 'Almanac'}",
         "",
         "Host helper:",
         "- Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes",

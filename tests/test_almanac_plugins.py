@@ -769,6 +769,108 @@ def _write_minimal_managed_state(hermes_home: Path) -> None:
     )
 
 
+def test_almanac_managed_context_answers_resource_request_without_secrets() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        user_home = root / "home" / "sirouk"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        user_home.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-vault-reconciler.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-sirouk",
+                    "managed_memory_revision": "rev-resources",
+                    "resource-ref": (
+                        "Canonical user access rails and shared Almanac addresses:\n"
+                        "- Hermes dashboard: https://old.example/dashboard\n"
+                        "- Code workspace: https://old.example/code\n"
+                        "- Workspace root: /home/almanac/internal\n"
+                        "- Almanac vault: /home/almanac/internal/vault\n"
+                        "- Vault access in Nextcloud: https://kor.tail77f45e.ts.net:8445/ (shared mount: /Vault)\n"
+                        "- QMD MCP retrieval rail: https://kor.tail77f45e.ts.net:8445/mcp\n"
+                        "- Almanac MCP control rail: https://kor.tail77f45e.ts.net:8445/almanac-mcp\n"
+                        "- Shared Notion SSOT: https://www.notion.so/The-Almanac-3497afdeade580789a3cc26cbef6a140\n"
+                        "- Notion webhook: shared operator-managed rail on this host\n"
+                        "- Credentials are intentionally omitted from managed memory."
+                    ),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (state_dir / "almanac-web-access.json").write_text(
+            json.dumps(
+                {
+                    "unix_user": "sirouk",
+                    "username": "sirouk",
+                    "nextcloud_username": "sirouk",
+                    "tailscale_host": "kor.tail77f45e.ts.net",
+                    "dashboard_url": "https://kor.tail77f45e.ts.net:30011/",
+                    "code_url": "https://kor.tail77f45e.ts.net:40011/",
+                    "remote_setup_url": "https://raw.githubusercontent.com/example/almanac/feature/bin/setup-remote-hermes-client.sh",
+                    "password": "sup3r-secret",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (state_dir / "almanac-identity-context.json").write_text(
+            json.dumps({"org_name": "KorBon"}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(user_home)
+        os.environ["ALMANAC_CONTEXT_TELEMETRY"] = "0"
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_resource_request_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_llm_call"][0]
+            result = hook(
+                session_id="session-resources",
+                user_message="/almanac-resources",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(result, dict) and result.get("context"), f"expected resource context, got {result!r}")
+            context = result["context"]
+            expect("Almanac resources:" in context, context)
+            expect("Hermes dashboard: https://kor.tail77f45e.ts.net:30011/" in context, context)
+            expect("Dashboard username: sirouk" in context, context)
+            expect("Nextcloud login: sirouk" in context, context)
+            expect("Code workspace: https://kor.tail77f45e.ts.net:40011/" in context, context)
+            expect(f"Workspace root: {user_home}" in context, context)
+            expect(f"Almanac vault: {user_home / 'Almanac'}" in context, context)
+            expect("Vault access in Nextcloud: https://kor.tail77f45e.ts.net:8445/ (shared mount: /Vault)" in context, context)
+            expect("Shared Notion SSOT: https://www.notion.so/The-Almanac-3497afdeade580789a3cc26cbef6a140" in context, context)
+            expect("Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes" in context, context)
+            expect("almanac-agent-configure-backup" in context, context)
+            expect("curl -fsSL https://raw.githubusercontent.com/example/almanac/feature/bin/setup-remote-hermes-client.sh" in context, context)
+            expect("--host kor.tail77f45e.ts.net --user sirouk --org KorBon" in context, context)
+            expect("hermes-almanac-sirouk-korbon" in context, context)
+            expect("sirouk@kor.tail77f45e.ts.net" in context, context)
+            expect("sup3r-secret" not in context, context)
+            expect("same shared password" not in context.lower(), context)
+            expect("QMD MCP retrieval rail:" not in context, context)
+            expect("Almanac MCP control rail:" not in context, context)
+            expect("/home/almanac" not in context, context)
+            print("PASS test_almanac_managed_context_answers_resource_request_without_secrets")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hermes_home = Path(tmp) / "hermes-home"
@@ -1168,11 +1270,12 @@ def main() -> int:
     test_almanac_managed_context_normalizes_and_dedupes_legacy_recent_events()
     test_almanac_managed_context_handles_missing_and_invalid_local_state_files()
     test_almanac_managed_context_preserves_late_qmd_and_notion_guardrails()
+    test_almanac_managed_context_answers_resource_request_without_secrets()
     test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()
     test_almanac_managed_context_pre_tool_call_injects_bootstrap_token()
     test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
     test_almanac_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 11 Almanac plugin tests")
+    print("PASS all 12 Almanac plugin tests")
     return 0
 
 

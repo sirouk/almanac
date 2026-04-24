@@ -85,6 +85,7 @@ def managed_resource_lines(
     workspace_root_text = str(workspace_root or "").strip()
     if workspace_root_text:
         lines.append(f"Workspace root: {workspace_root_text}")
+        lines.append(f"Almanac vault: {Path(workspace_root_text) / 'Almanac'}")
 
     lines.extend(str(line).strip() for line in shared_lines if str(line).strip())
     lines.append("Credentials are intentionally omitted from managed memory.")

@@ -301,6 +301,7 @@ def _seed_almanac_identity(bot_name: str, unix_user: str, user_name: str = "") -
         "almanac-notion-knowledge",
         "almanac-ssot-connect",
         "almanac-notion-mcp",
+        "almanac-resources",
     ]
     almanac_plugin_names = [
         "almanac-managed-context",

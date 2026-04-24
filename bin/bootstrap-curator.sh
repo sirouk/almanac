@@ -790,6 +790,7 @@ PY
     almanac-notion-knowledge \
     almanac-ssot-connect \
     almanac-notion-mcp \
+    almanac-resources \
     almanac-upgrade-orchestrator
 
   "$BOOTSTRAP_DIR/bin/install-almanac-plugins.sh" \

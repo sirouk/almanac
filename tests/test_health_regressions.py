@@ -533,6 +533,7 @@ def test_active_agent_health_fails_when_shared_vault_acl_is_missing() -> None:
             "almanac-notion-knowledge",
             "almanac-ssot-connect",
             "almanac-notion-mcp",
+            "almanac-resources",
         ]
         hermes_home.mkdir(parents=True)
         (vault_dir / "Projects").mkdir(parents=True)

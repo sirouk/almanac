@@ -768,6 +768,7 @@ required_skill_names = [
     "almanac-notion-knowledge",
     "almanac-ssot-connect",
     "almanac-notion-mcp",
+    "almanac-resources",
 ]
 
 

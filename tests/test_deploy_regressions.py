@@ -519,6 +519,7 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
         "almanac-notion-knowledge",
         "almanac-ssot-connect",
         "almanac-notion-mcp",
+        "almanac-resources",
     ]
     expected_keys = [
         "[managed:almanac-skill-ref]",

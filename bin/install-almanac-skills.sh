@@ -19,7 +19,8 @@ if [[ $# -eq 0 ]]; then
     almanac-ssot \
     almanac-notion-knowledge \
     almanac-ssot-connect \
-    almanac-notion-mcp
+    almanac-notion-mcp \
+    almanac-resources
 fi
 
 SKILLS_ROOT="$REPO_DIR/skills"

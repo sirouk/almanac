@@ -123,6 +123,7 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
             "almanac-notion-knowledge.md",
             "almanac-notion-mcp.md",
             "almanac-qmd-mcp.md",
+            "almanac-resources.md",
             "almanac-ssot.md",
             "almanac-ssot-connect.md",
             "almanac-upgrade-orchestrator.md",

@@ -291,7 +291,8 @@ install_default_skills() {
     almanac-ssot \
     almanac-notion-knowledge \
     almanac-ssot-connect \
-    almanac-notion-mcp
+    almanac-notion-mcp \
+    almanac-resources
 }
 
 install_default_plugins() {

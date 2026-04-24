@@ -60,7 +60,7 @@ def config_values(root: Path) -> dict[str, str]:
         "ALMANAC_SSOT_NOTION_SPACE_URL": "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
         "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:auto-failover",
+        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
         "ALMANAC_CURATOR_CHANNELS": "tui-only,telegram,discord",
         "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
         "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",

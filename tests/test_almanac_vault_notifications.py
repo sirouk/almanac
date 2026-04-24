@@ -113,7 +113,7 @@ def test_queue_vault_content_notifications_targets_defaulted_and_opted_in_agents
             "OPERATOR_NOTIFY_CHANNEL_ID": "1994645819",
             "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
             "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-            "ALMANAC_MODEL_PRESET_CHUTES": "chutes:auto-failover",
+            "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
             "ALMANAC_CURATOR_CHANNELS": "tui-only,telegram,discord",
             "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
             "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",

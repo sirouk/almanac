@@ -75,7 +75,7 @@ def make_config(root: Path) -> Path:
         "OPERATOR_NOTIFY_CHANNEL_ID": "operator",
         "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
         "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:auto-failover",
+        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
         "ALMANAC_CURATOR_CHANNELS": "tui-only",
     }
     write_config(config_path, values)

@@ -58,7 +58,7 @@ def config_values(root: Path) -> dict[str, str]:
         "OPERATOR_NOTIFY_CHANNEL_ID": "",
         "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
         "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:auto-failover",
+        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
         "ALMANAC_CURATOR_CHANNELS": "tui-only",
         "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
         "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",

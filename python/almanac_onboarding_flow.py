@@ -76,6 +76,13 @@ MODEL_PROVIDER_DESCRIPTIONS = {
     "opus": "Claude account OAuth; best for long, careful collaboration",
     "codex": "OpenAI Codex sign-in; best for code-heavy lanes",
 }
+CHUTES_DEFAULT_MODEL = "model-router"
+CHUTES_LEGACY_DEFAULT_MODELS = {"auto-failover"}
+CHUTES_RECOMMENDED_MODELS = (
+    "model-router",
+    "moonshotai/Kimi-K2.6-TEE",
+    "zai-org/GLM-5.1-TEE",
+)
 MODEL_PROVIDER_ALIASES = {
     "chute": "chutes",
     "chutes": "chutes",
@@ -288,13 +295,21 @@ def _configured_model_id(cfg: Config, preset: str) -> str:
     return target.split(":", 1)[1].strip()
 
 
+def _default_model_id(cfg: Config, preset: str) -> str:
+    configured = _configured_model_id(cfg, preset)
+    if preset == "chutes" and configured.lower() in {"", *CHUTES_LEGACY_DEFAULT_MODELS}:
+        return CHUTES_DEFAULT_MODEL
+    return configured
+
+
 def _parse_model_id(cfg: Config, preset: str, raw_text: str) -> tuple[str, str]:
     value = raw_text.strip().strip("`").rstrip("\\").strip()
-    default_model = _configured_model_id(cfg, preset)
+    default_model = _default_model_id(cfg, preset)
     if value.lower() in {"", "default", "recommended", "auto"}:
         return default_model, ""
     if any(char.isspace() for char in value):
-        return "", "Use a single model id with no spaces, like `auto-failover` or `deepseek-ai/DeepSeek-V3.2-Speciale`."
+        examples = ", ".join(f"`{model}`" for model in CHUTES_RECOMMENDED_MODELS)
+        return "", f"Use a single model id with no spaces, like {examples}."
     if value.upper().endswith(":THINKING"):
         value = value[: -len(":THINKING")]
     return value, ""
@@ -626,16 +641,15 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         )
     if state == "awaiting-model-id":
         model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
-        default_model = _configured_model_id(cfg, model_preset) or "auto-failover"
+        default_model = _default_model_id(cfg, model_preset) or CHUTES_DEFAULT_MODEL
         label = MODEL_PROVIDER_LABELS.get(model_preset, model_preset)
         if model_preset == "chutes":
+            examples = "\n".join(f"- `{model}`" for model in CHUTES_RECOMMENDED_MODELS)
             return (
                 "Great, Chutes it is. Which model should this agent use?\n\n"
                 f"Reply with a model id, or `default` for `{default_model}`.\n"
-                "Examples:\n"
-                "- `auto-failover`\n"
-                "- `deepseek-ai/DeepSeek-V3.2-Speciale`\n"
-                "- `zai-org/GLM-4.7`\n\n"
+                "Good starting points:\n"
+                f"{examples}\n\n"
                 "I’ll wire Chutes through Hermes as an OpenAI-compatible provider at `https://llm.chutes.ai/v1`."
             )
         return (

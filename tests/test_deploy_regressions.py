@@ -179,7 +179,7 @@ resolve_agent_control_plane_endpoint() {{
 ALMANAC_REPO_DIR="/repo"
 ALMANAC_MODEL_PRESET_CODEX="openai:codex"
 ALMANAC_MODEL_PRESET_OPUS="anthropic:claude-opus"
-ALMANAC_MODEL_PRESET_CHUTES="chutes:auto-failover"
+ALMANAC_MODEL_PRESET_CHUTES="chutes:model-router"
 render_agent_install_payload_body
 """
     result = bash(script)

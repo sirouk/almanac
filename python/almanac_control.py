@@ -369,7 +369,7 @@ class Config:
         model_presets = {
             "codex": env.get("ALMANAC_MODEL_PRESET_CODEX", "openai:codex"),
             "opus": env.get("ALMANAC_MODEL_PRESET_OPUS", "anthropic:claude-opus"),
-            "chutes": env.get("ALMANAC_MODEL_PRESET_CHUTES", "chutes:auto-failover"),
+            "chutes": env.get("ALMANAC_MODEL_PRESET_CHUTES", "chutes:model-router"),
         }
         curator_channels = {
             value.strip().lower()

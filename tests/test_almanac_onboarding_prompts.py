@@ -494,6 +494,8 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
                 "ALMANAC_MCP_PORT": "8282",
                 "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
                 "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+                # Legacy installs may still carry auto-failover; onboarding should surface the current
+                # Chutes recommendation instead of teaching new users the old alias.
                 "ALMANAC_MODEL_PRESET_CHUTES": "chutes:auto-failover",
                 "ALMANAC_CURATOR_CHANNELS": "discord",
                 "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
@@ -539,9 +541,11 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
 
             model_id_prompt = send("1")[0].text
             expect("Great, Chutes it is" in model_id_prompt, model_id_prompt)
-            expect("auto-failover" in model_id_prompt, model_id_prompt)
+            expect("model-router" in model_id_prompt, model_id_prompt)
+            expect("moonshotai/Kimi-K2.6-TEE" in model_id_prompt, model_id_prompt)
+            expect("zai-org/GLM-5.1-TEE" in model_id_prompt, model_id_prompt)
 
-            thinking_prompt = send("zai-org/GLM-4.7")[0].text
+            thinking_prompt = send("zai-org/GLM-5.1-TEE")[0].text
             expect("How much thinking room" in thinking_prompt, thinking_prompt)
             expect("Pick the default reasoning depth" in thinking_prompt, thinking_prompt)
             expect("1. medium" in thinking_prompt, thinking_prompt)
@@ -557,23 +561,23 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             )
             answers = session.get("answers") or {}
             expect(answers["model_preset"] == "chutes", str(answers))
-            expect(answers["model_id"] == "zai-org/GLM-4.7", str(answers))
+            expect(answers["model_id"] == "zai-org/GLM-5.1-TEE", str(answers))
             expect(answers["reasoning_effort"] == "xhigh", str(answers))
 
             review = onboarding._operator_review_message(cfg, session)  # noqa: SLF001
             expect("Model provider: Chutes (`chutes`)" in review, review)
-            expect("Model id: zai-org/GLM-4.7" in review, review)
+            expect("Model id: zai-org/GLM-5.1-TEE" in review, review)
             expect("Thinking level: xhigh" in review, review)
 
             provider_setup = onboarding.resolve_provider_setup(  # noqa: SLF001
                 cfg,
                 "chutes",
-                model_id="zai-org/GLM-4.7",
+                model_id="zai-org/GLM-5.1-TEE",
                 reasoning_effort="xhigh",
             )
             expect(provider_setup.provider_id == "chutes", str(provider_setup))
             expect(provider_setup.base_url == "https://llm.chutes.ai/v1", str(provider_setup))
-            expect(provider_setup.model_id == "zai-org/GLM-4.7:THINKING", str(provider_setup))
+            expect(provider_setup.model_id == "zai-org/GLM-5.1-TEE:THINKING", str(provider_setup))
             expect(provider_setup.reasoning_effort == "xhigh", str(provider_setup))
             print("PASS test_onboarding_model_picker_is_chutes_first_and_collects_reasoning")
         finally:

@@ -246,7 +246,7 @@ probe_hermes_state_json() {
     return 1
   fi
 
-  python3 - "$dump_file" "${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}" "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}" "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:auto-failover}" <<'PY'
+  python3 - "$dump_file" "${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}" "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}" "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:model-router}" <<'PY'
 import json
 import re
 import sys

@@ -722,15 +722,18 @@ check_active_agent_state() {
     return 0
   fi
 
-if output="$(python3 - "$ALMANAC_DB_PATH" <<'PY'
+if output="$(python3 - "$ALMANAC_DB_PATH" "$VAULT_DIR" <<'PY'
 import datetime as dt
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
 db_path = sys.argv[1]
+vault_dir_raw = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("VAULT_DIR", "").strip()
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 
@@ -766,15 +769,92 @@ required_skill_names = [
     "almanac-ssot-connect",
     "almanac-notion-mcp",
 ]
+
+
+def acl_effective_perms(line):
+    body, _, comment = line.partition("#")
+    perms = body.rsplit(":", 1)[-1].strip()
+    marker = "effective:"
+    if marker in comment:
+        perms = comment.split(marker, 1)[1].strip().split()[0]
+    return perms
+
+
+def acl_has_rwx(text, prefix):
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(prefix + ":"):
+            continue
+        return acl_effective_perms(line) == "rwx"
+    return False
+
+
+def shared_vault_acl_dirs(vault_dir):
+    dirs = [vault_dir]
+    warnings = []
+    try:
+        children = sorted(vault_dir.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        warnings.append(f"could not list shared vault children for ACL probe: {exc}")
+        return dirs, warnings
+    for child in children:
+        try:
+            if child.is_dir() and not child.is_symlink():
+                dirs.append(child)
+        except OSError:
+            continue
+    return dirs, warnings
+
+
+def check_shared_vault_acl(vault_dir_raw, unix_user):
+    if not vault_dir_raw:
+        return [], [], []
+    vault_dir = Path(vault_dir_raw)
+    try:
+        vault_exists = vault_dir.is_dir()
+    except OSError:
+        vault_exists = False
+    if not vault_exists:
+        return [], [], []
+    getfacl = shutil.which("getfacl")
+    if not getfacl:
+        return [], ["shared vault ACL probe skipped because getfacl is unavailable"], []
+
+    failures = []
+    warnings = []
+    dirs, list_warnings = shared_vault_acl_dirs(vault_dir)
+    warnings.extend(list_warnings)
+    for path in dirs:
+        result = subprocess.run([getfacl, "-cp", str(path)], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "unknown getfacl error").strip()
+            failures.append(f"could not inspect shared vault ACL at {path}: {detail}")
+            continue
+        if not acl_has_rwx(result.stdout, f"user:{unix_user}"):
+            failures.append(f"shared vault ACL for {unix_user} is missing rwx on {path}")
+        if not acl_has_rwx(result.stdout, f"default:user:{unix_user}"):
+            failures.append(f"shared vault default ACL for {unix_user} is missing rwx on {path}")
+
+    if len(failures) > 5:
+        failures = failures[:5] + [f"{len(failures) - 5} additional shared vault ACL issue(s) omitted"]
+    return failures, warnings, ["shared vault ACL ok"] if not failures else []
+
+
 for agent in agents:
     agent_id = agent["agent_id"]
+    unix_user = str(agent["unix_user"] or "").strip()
     manifest_path = Path(agent["manifest_path"] or "")
     hermes_home = Path(agent["hermes_home"] or "")
     channels = json.loads(agent["channels_json"] or "[]")
     privacy_notes = []
+    status_notes = []
 
     if not manifest_path.is_file():
         print(f"FAIL {agent_id}: manifest missing at {manifest_path}")
+        failures += 1
+        continue
+    if not unix_user:
+        print(f"FAIL {agent_id}: missing unix_user in agent registry")
         failures += 1
         continue
     try:
@@ -804,6 +884,16 @@ for agent in agents:
         failures += 1
         continue
 
+    vault_failures, vault_warnings, vault_notes = check_shared_vault_acl(vault_dir_raw, unix_user)
+    for warning in vault_warnings:
+        print(f"WARN {agent_id}: {warning}")
+    if vault_failures:
+        for failure in vault_failures:
+            print(f"FAIL {agent_id}: {failure}")
+        failures += len(vault_failures)
+        continue
+    status_notes.extend(vault_notes)
+
     job = conn.execute(
         "SELECT last_run_at, last_status FROM refresh_jobs WHERE job_name = ?",
         (f"{agent_id}-refresh",),
@@ -822,10 +912,14 @@ for agent in agents:
         failures += 1
         continue
 
+    note_parts = []
+    if privacy_notes:
+        note_parts.append(f"{'; '.join(privacy_notes)}; verified by user-owned refresh/service state")
+    note_parts.extend(status_notes)
     print(
-        f"OK {agent_id}: unix_user={agent['unix_user']} display_name={agent['display_name']} "
+        f"OK {agent_id}: unix_user={unix_user} display_name={agent['display_name']} "
         f"channels={','.join(channels) if channels else 'tui-only'} refresh={job['last_run_at']}"
-        + (f" ({'; '.join(privacy_notes)}; verified by user-owned refresh/service state)" if privacy_notes else "")
+        + (f" ({'; '.join(note_parts)})" if note_parts else "")
     )
 
 raise SystemExit(1 if failures else 0)

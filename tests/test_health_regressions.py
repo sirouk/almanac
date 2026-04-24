@@ -514,6 +514,128 @@ check_active_agent_state
     print("PASS test_active_agent_health_treats_private_user_runtime_as_ok")
 
 
+def test_active_agent_health_fails_when_shared_vault_acl_is_missing() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_active_agent_state() {", "check_auto_provision_state() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        db_path = root / "control.sqlite3"
+        manifest_path = root / "agent-manifest.json"
+        hermes_home = root / "hermes-home"
+        vault_dir = root / "vault"
+        fakebin = root / "fakebin"
+        required_skill_names = [
+            "almanac-qmd-mcp",
+            "almanac-vault-reconciler",
+            "almanac-first-contact",
+            "almanac-vaults",
+            "almanac-ssot",
+            "almanac-notion-knowledge",
+            "almanac-ssot-connect",
+            "almanac-notion-mcp",
+        ]
+        hermes_home.mkdir(parents=True)
+        (vault_dir / "Projects").mkdir(parents=True)
+        fakebin.mkdir()
+        manifest_path.write_text('{"agent_id":"agent-private"}\n', encoding="utf-8")
+        for skill_name in required_skill_names:
+            skill_dir = hermes_home / "skills" / skill_name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+        (fakebin / "getfacl").write_text(
+            """#!/usr/bin/env bash
+cat <<'ACL'
+user::rwx
+user:bob:rwx
+group::r-x
+mask::rwx
+other::---
+default:user::rwx
+default:user:bob:rwx
+default:group::r-x
+default:mask::rwx
+default:other::---
+ACL
+""",
+            encoding="utf-8",
+        )
+        (fakebin / "getfacl").chmod(0o755)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE agents (
+              agent_id TEXT,
+              unix_user TEXT,
+              display_name TEXT,
+              hermes_home TEXT,
+              manifest_path TEXT,
+              channels_json TEXT,
+              role TEXT,
+              status TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO agents (
+              agent_id, unix_user, display_name, hermes_home, manifest_path,
+              channels_json, role, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "agent-private",
+                "alice",
+                "Alice",
+                str(hermes_home),
+                str(manifest_path),
+                '["telegram"]',
+                "user",
+                "active",
+            ),
+        )
+        conn.execute(
+            "CREATE TABLE refresh_jobs (job_name TEXT, last_run_at TEXT, last_status TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO refresh_jobs (job_name, last_run_at, last_status) VALUES (?, ?, ?)",
+            (
+                "agent-private-refresh",
+                dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                "ok",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_DB_PATH={str(db_path)!r}
+VAULT_DIR={str(vault_dir)!r}
+PATH={str(fakebin)!r}:$PATH
+{snippet}
+check_active_agent_state
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"missing vault ACL health case crashed: {result.stderr}")
+        expect(
+            f"FAIL:agent-private: shared vault ACL for alice is missing rwx on {vault_dir}" in result.stdout,
+            f"expected missing user ACL failure, got: {result.stdout!r}",
+        )
+        expect(
+            f"FAIL:agent-private: shared vault default ACL for alice is missing rwx on {vault_dir}" in result.stdout,
+            f"expected missing default ACL failure, got: {result.stdout!r}",
+        )
+    print("PASS test_active_agent_health_fails_when_shared_vault_acl_is_missing")
+
+
 def test_active_agent_health_allows_clean_zero_user_enrollment_state() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, "check_active_agent_state() {", "check_auto_provision_state() {")
@@ -582,8 +704,9 @@ def main() -> int:
     test_shared_notion_with_tailscale_funnel_reports_live_public_route()
     test_nextcloud_health_uses_rootless_podman_runtime_dir()
     test_active_agent_health_treats_private_user_runtime_as_ok()
+    test_active_agent_health_fails_when_shared_vault_acl_is_missing()
     test_active_agent_health_allows_clean_zero_user_enrollment_state()
-    print("PASS all 12 health regression tests")
+    print("PASS all 13 health regression tests")
     return 0
 
 

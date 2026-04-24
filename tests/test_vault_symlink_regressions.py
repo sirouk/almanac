@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 REFRESH_SH = REPO / "bin" / "refresh-agent-install.sh"
+INSTALL_SH = REPO / "bin" / "install-agent-user-services.sh"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -211,12 +212,15 @@ def test_user_vault_links_create_home_vault_only_when_explicitly_requested() -> 
 
 def test_refresh_repair_chowns_local_bin_when_root_creates_wrappers() -> None:
     text = REFRESH_SH.read_text(encoding="utf-8")
+    install_text = INSTALL_SH.read_text(encoding="utf-8")
     fn = extract_function(text, "install_local_user_wrappers")
     expect('chown "$UNIX_USER:$UNIX_USER" "$TARGET_LOCAL_BIN_DIR"' in fn, fn)
     expect("almanac-agent-hermes" in fn, fn)
     expect("almanac-agent-configure-backup" in fn, fn)
     expect("should_restart_gateway" in fn, fn)
     expect("systemctl --user restart almanac-user-agent-gateway.service" in fn, fn)
+    expect("ensure_user_vault_link || true" not in text, "refresh must not silently ignore missing vault links")
+    expect('ensure_one_vault_link "$HOME/Almanac" || status=1' in install_text, install_text)
     print("PASS test_refresh_repair_chowns_local_bin_when_root_creates_wrappers")
 
 

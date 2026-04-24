@@ -70,9 +70,11 @@ ensure_one_vault_link() {
 }
 
 ensure_user_vault_links() {
-  ensure_one_vault_link "$HOME/Almanac" || true
-  ensure_one_vault_link "$HERMES_HOME/Vault" || true
-  ensure_one_vault_link "$HERMES_HOME/Almanac" || true
+  local status=0
+  ensure_one_vault_link "$HOME/Almanac" || status=1
+  ensure_one_vault_link "$HERMES_HOME/Vault" || status=1
+  ensure_one_vault_link "$HERMES_HOME/Almanac" || status=1
+  return "$status"
 }
 
 install_local_user_wrappers() {

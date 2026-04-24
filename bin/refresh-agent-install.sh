@@ -383,7 +383,7 @@ else
   fix_target_ownership
 fi
 
-ensure_user_vault_link || true
+ensure_user_vault_link
 install_local_user_wrappers
 ensure_gateway_home_channel_env
 

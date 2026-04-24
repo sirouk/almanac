@@ -215,6 +215,8 @@ def test_refresh_repair_chowns_local_bin_when_root_creates_wrappers() -> None:
     expect('chown "$UNIX_USER:$UNIX_USER" "$TARGET_LOCAL_BIN_DIR"' in fn, fn)
     expect("almanac-agent-hermes" in fn, fn)
     expect("almanac-agent-configure-backup" in fn, fn)
+    expect("should_restart_gateway" in fn, fn)
+    expect("systemctl --user restart almanac-user-agent-gateway.service" in fn, fn)
     print("PASS test_refresh_repair_chowns_local_bin_when_root_creates_wrappers")
 
 

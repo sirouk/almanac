@@ -213,7 +213,42 @@ install_local_user_wrappers() {
 #!/usr/bin/env bash
 set -euo pipefail
 HERMES_HOME="\${HERMES_HOME:-$TARGET_HERMES_HOME}"
-exec env HERMES_HOME="\$HERMES_HOME" "$RUNTIME_HERMES" "\$@"
+
+should_restart_gateway() {
+  case "\${1:-}" in
+    setup|model|auth|login|logout|config|tools|mcp|plugins|skills)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+restart_gateway_if_possible() {
+  local uid runtime_dir bus_path
+  uid="\$(id -u)"
+  runtime_dir="\${XDG_RUNTIME_DIR:-/run/user/\$uid}"
+  bus_path="\$runtime_dir/bus"
+  if [[ ! -S "\$bus_path" ]] || ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s\n' "Restarting Almanac messaging gateway so config changes apply..." >&2
+  env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus_path" \\
+    systemctl --user restart almanac-user-agent-gateway.service >/dev/null 2>&1 || \\
+    printf '%s\n' "Note: could not restart Almanac messaging gateway automatically; run 'systemctl --user restart almanac-user-agent-gateway.service' in the remote account." >&2
+}
+
+set +e
+env HERMES_HOME="\$HERMES_HOME" "$RUNTIME_HERMES" "\$@"
+status="\$?"
+set -e
+if [[ "\$status" -ne 0 ]]; then
+  exit "\$status"
+fi
+if should_restart_gateway "\${1:-}"; then
+  restart_gateway_if_possible
+fi
 EOF
   chmod 755 "$wrapper_path"
 

@@ -147,6 +147,10 @@ def test_generated_web_service_units_follow_access_state() -> None:
         expect("gateway run --replace" in gateway_text, gateway_text)
         expect(f'HERMES_HOME="${{HERMES_HOME:-{hermes_home}}}"' in local_wrapper_text, local_wrapper_text)
         expect(str(hermes_bin) in local_wrapper_text, local_wrapper_text)
+        expect("should_restart_gateway" in local_wrapper_text, local_wrapper_text)
+        expect("setup|model|auth|login|logout|config|tools|mcp|plugins|skills" in local_wrapper_text, local_wrapper_text)
+        expect("systemctl --user restart almanac-user-agent-gateway.service" in local_wrapper_text, local_wrapper_text)
+        expect("Restarting Almanac messaging gateway so config changes apply" in local_wrapper_text, local_wrapper_text)
         expect("configure-agent-backup.sh" in backup_wrapper_text, backup_wrapper_text)
         print("PASS test_generated_web_service_units_follow_access_state")
 

@@ -1254,6 +1254,21 @@ def _git_remote_uses_ssh(repo_url: str) -> bool:
     return repo_url.startswith("git@") or repo_url.startswith("ssh://")
 
 
+def _github_https_fallback_url(repo_url: str) -> str:
+    value = str(repo_url or "").strip()
+    owner_repo = ""
+    if value.startswith("git@github.com:"):
+        owner_repo = value[len("git@github.com:") :]
+    elif value.startswith("ssh://git@github.com/"):
+        owner_repo = value[len("ssh://git@github.com/") :]
+    owner_repo = owner_repo.strip("/")
+    if not owner_repo or "/" not in owner_repo:
+        return ""
+    if not owner_repo.endswith(".git"):
+        owner_repo = f"{owner_repo}.git"
+    return f"https://github.com/{owner_repo}"
+
+
 def _upstream_git_env(cfg: Config, repo_url: str) -> dict[str, str] | None:
     if not cfg.upstream_deploy_key_enabled or not _git_remote_uses_ssh(repo_url):
         return None
@@ -1389,38 +1404,55 @@ def upgrade_check(
         "relation": "unknown",
     }
 
+    upstream_query_url = upstream_repo_url
+    upstream_commit = ""
+    upstream_transport_fallback = ""
+    upstream_transport_warning = ""
     try:
         upstream_commit = _query_upstream_head(
-            upstream_repo_url,
+            upstream_query_url,
             upstream_branch,
-            _upstream_git_env(cfg, upstream_repo_url),
+            _upstream_git_env(cfg, upstream_query_url),
         )
     except Exception as exc:  # noqa: BLE001
-        note = f"upstream check failed for {upstream_repo_url}#{upstream_branch}: {exc}"
-        note_refresh_job(
-            conn,
-            job_name="almanac-upgrade-check",
-            job_kind="upgrade-check",
-            target_id="almanac",
-            schedule="every 1h",
-            status="warn",
-            note=note,
-        )
-        result.update(
-            {
-                "status": "warn",
-                "update_available": False,
-                "upstream_commit": "",
-                "upstream_commit_short": "",
-                "note": note,
-                "error": str(exc),
-            }
-        )
-        return result
+        fallback_url = _github_https_fallback_url(upstream_repo_url)
+        if fallback_url:
+            try:
+                upstream_commit = _query_upstream_head(fallback_url, upstream_branch, None)
+                upstream_query_url = fallback_url
+                upstream_transport_fallback = "https"
+                upstream_transport_warning = str(exc)
+                result["upstream_query_url"] = fallback_url
+                result["upstream_transport_fallback"] = upstream_transport_fallback
+                result["upstream_transport_warning"] = upstream_transport_warning
+            except Exception as fallback_exc:  # noqa: BLE001
+                exc = RuntimeError(f"{exc}; HTTPS fallback {fallback_url} also failed: {fallback_exc}")
+        if not upstream_commit:
+            note = f"upstream check failed for {upstream_repo_url}#{upstream_branch}: {exc}"
+            note_refresh_job(
+                conn,
+                job_name="almanac-upgrade-check",
+                job_kind="upgrade-check",
+                target_id="almanac",
+                schedule="every 1h",
+                status="warn",
+                note=note,
+            )
+            result.update(
+                {
+                    "status": "warn",
+                    "update_available": False,
+                    "upstream_commit": "",
+                    "upstream_commit_short": "",
+                    "note": note,
+                    "error": str(exc),
+                }
+            )
+            return result
 
     relation = _classify_upstream_relation(
         cfg.repo_dir,
-        upstream_repo_url,
+        upstream_query_url,
         upstream_branch,
         deployed_commit,
         upstream_commit,
@@ -1467,8 +1499,12 @@ def upgrade_check(
             "upstream_commit_short": _short_sha(upstream_commit),
             "note": note,
             "relation": relation,
+            "upstream_query_url": upstream_query_url,
         }
     )
+    if upstream_transport_fallback:
+        result["upstream_transport_fallback"] = upstream_transport_fallback
+        result["upstream_transport_warning"] = upstream_transport_warning
 
     upsert_setting(conn, "almanac_upgrade_last_seen_sha", upstream_commit)
     upsert_setting(conn, "almanac_upgrade_relation", relation)

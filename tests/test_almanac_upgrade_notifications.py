@@ -418,13 +418,111 @@ def test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes() -> 
             os.environ.update(old_env)
 
 
+def test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_service_readable() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_upgrade_https_fallback_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_upgrade_https_fallback_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state_dir = root / "state"
+        release_state_file = state_dir / "almanac-release.json"
+        config_path = root / "config" / "almanac.env"
+        key_path = root / "operator-home" / ".ssh" / "almanac-upstream-ed25519"
+        known_hosts = root / "operator-home" / ".ssh" / "almanac-upstream-known_hosts"
+        deployed_sha = "1481ef8d391794d31bb04efe233a7c3f2a810947"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(state_dir),
+                "RUNTIME_DIR": str(state_dir / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(state_dir / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(state_dir / "agents"),
+                "ALMANAC_CURATOR_DIR": str(state_dir / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(state_dir / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(state_dir / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(state_dir / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(release_state_file),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_UPSTREAM_REPO_URL": "git@github.com:sirouk/almanac.git",
+                "ALMANAC_UPSTREAM_BRANCH": "main",
+                "ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED": "1",
+                "ALMANAC_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
+                "ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
+            },
+        )
+        release_state_file.parent.mkdir(parents=True, exist_ok=True)
+        release_state_file.write_text(
+            json.dumps(
+                {
+                    "deployed_commit": deployed_sha,
+                    "tracked_upstream_repo_url": "git@github.com:sirouk/almanac.git",
+                    "tracked_upstream_branch": "main",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        calls: list[tuple[str, str, bool]] = []
+
+        def fake_query(repo_url: str, branch: str, env=None):
+            calls.append((repo_url, branch, env is not None))
+            if repo_url == "git@github.com:sirouk/almanac.git":
+                raise RuntimeError("operator deploy key is not readable by service user")
+            if repo_url == "https://github.com/sirouk/almanac.git":
+                return deployed_sha
+            raise AssertionError(f"unexpected repo url {repo_url}")
+
+        def fake_classify(repo_dir: Path, repo_url: str, branch: str, deployed_commit: str, upstream_commit: str) -> str:
+            expect(repo_url == "https://github.com/sirouk/almanac.git", repo_url)
+            expect(branch == "main", branch)
+            expect(deployed_commit == deployed_sha, deployed_commit)
+            expect(upstream_commit == deployed_sha, upstream_commit)
+            return "equal"
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            ctl._query_upstream_head = fake_query
+            ctl._classify_upstream_relation = fake_classify
+            result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
+            expect(result["status"] == "ok", result)
+            expect(result["relation"] == "equal", result)
+            expect(result["upstream_query_url"] == "https://github.com/sirouk/almanac.git", result)
+            expect(result["upstream_transport_fallback"] == "https", result)
+            expect(calls == [
+                ("git@github.com:sirouk/almanac.git", "main", True),
+                ("https://github.com/sirouk/almanac.git", "main", False),
+            ], calls)
+            job = conn.execute(
+                "SELECT last_status, last_note FROM refresh_jobs WHERE job_name = 'almanac-upgrade-check'"
+            ).fetchone()
+            expect(job["last_status"] == "ok", dict(job))
+            expect("up to date" in str(job["last_note"] or ""), dict(job))
+            print("PASS test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_service_readable")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_upgrade_check_notifies_operator_and_user_agents_once_per_sha()
     test_upgrade_check_adds_discord_buttons_for_operator_channel()
     test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs()
     test_upgrade_check_does_not_notify_when_deployed_is_ahead()
     test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes()
-    print("PASS all 5 upgrade notification regression tests")
+    test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_service_readable()
+    print("PASS all 6 upgrade notification regression tests")
     return 0
 
 

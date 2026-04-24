@@ -85,7 +85,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 },
             )
             expect("Almanac’s Curator" in opening, opening)
-            expect("Step 1 of 6" in opening, opening)
+            expect("First up" in opening, opening)
 
             purpose_prompt = onboarding.session_prompt(
                 cfg,
@@ -94,7 +94,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                     "answers": {},
                 },
             )
-            expect("Step 2 of 6" in purpose_prompt, purpose_prompt)
+            expect("A little context" in purpose_prompt, purpose_prompt)
             expect("practice, build, or keep moving" in purpose_prompt, purpose_prompt)
 
             unix_prompt = onboarding.session_prompt(
@@ -259,7 +259,7 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("What should I call you?" in replies[0].text, replies[0].text)
+            expect("First up: what should I call you?" in replies[0].text, replies[0].text)
 
             replies = onboarding.process_onboarding_message(
                 cfg,
@@ -301,7 +301,7 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("Step 4 of 6" in replies[0].text, replies[0].text)
+            expect("Now name your" in replies[0].text, replies[0].text)
             expect("What should it be called?" in replies[0].text, replies[0].text)
             expect("telegram" in replies[0].text.lower(), replies[0].text)
             print("PASS test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question")
@@ -528,22 +528,21 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
                     validate_bot_token=lambda raw: None,
                 )
 
-            expect("What should I call you?" in send("/start")[0].text, "missing opening prompt")
+            expect("First up: what should I call you?" in send("/start")[0].text, "missing opening prompt")
             send("Chris")
             send("Build impossible things calmly")
             send(desired_unix_user)
             model_prompt = send("Jeef")[0].text
-            expect("Step 5 of 6" in model_prompt, model_prompt)
-            expect("Model provider" in model_prompt, model_prompt)
+            expect("Now let’s pick the model provider" in model_prompt, model_prompt)
             expect(model_prompt.index("1. Chutes") < model_prompt.index("2. Claude Opus"), model_prompt)
             expect(model_prompt.index("2. Claude Opus") < model_prompt.index("3. OpenAI Codex"), model_prompt)
 
             model_id_prompt = send("1")[0].text
-            expect("Which Chutes model" in model_id_prompt, model_id_prompt)
+            expect("Great, Chutes it is" in model_id_prompt, model_id_prompt)
             expect("auto-failover" in model_id_prompt, model_id_prompt)
 
             thinking_prompt = send("zai-org/GLM-4.7")[0].text
-            expect("Step 5b" in thinking_prompt, thinking_prompt)
+            expect("How much thinking room" in thinking_prompt, thinking_prompt)
             expect("Pick the default reasoning depth" in thinking_prompt, thinking_prompt)
             expect("1. medium" in thinking_prompt, thinking_prompt)
             expect("6. none" in thinking_prompt, thinking_prompt)

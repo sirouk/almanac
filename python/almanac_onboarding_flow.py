@@ -595,33 +595,32 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
         return (
-            "Welcome. I’m Almanac’s Curator, and I’ll walk you through a private agent lane step by step.\n\n"
-            "Step 1 of 6 — Your name\n"
-            "What should I call you?"
+            "Hi, I’m Almanac’s Curator. I’ll help get your private agent lane set up and keep the handoff tidy.\n\n"
+            "First up: what should I call you?"
         )
     if state == "awaiting-unix-user":
         return (
-            "Step 3 of 6 — Unix username\n"
+            "Now let’s pick your host username.\n"
             "Almanac runs on a shared host. Each enrolled user gets a private Unix account, home directory, Hermes state, and code workspace.\n\n"
             "What Unix username should I create for you?\n"
             "Use lowercase letters, digits, `_`, or `-`; start with a letter or `_`."
         )
     if state == "awaiting-purpose":
         return (
-            "Step 2 of 6 — What this agent is for\n"
+            "A little context helps me shape the agent properly.\n\n"
             "In a sentence or a short paragraph, what should this agent help you practice, build, or keep moving?"
         )
     if state == "awaiting-bot-platform":
         return "I can only wire the same platform you're onboarding from right now. Reply with `telegram` or `discord` to match this DM."
     if state == "awaiting-bot-name":
         return (
-            f"Step 4 of 6 — Your {bot_platform or 'chat'} bot name\n"
+            f"Now name your {bot_platform or 'chat'} bot.\n"
             "This will be the bot you talk to after onboarding.\n\n"
             "What should it be called? A short plain-English name is perfect."
         )
     if state == "awaiting-model-preset":
         return (
-            "Step 5 of 6 — Model provider\n"
+            "Now let’s pick the model provider.\n"
             "Choose what should power this agent. Reply with the number or provider name.\n\n"
             f"{_model_options(cfg)}"
         )
@@ -631,8 +630,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         label = MODEL_PROVIDER_LABELS.get(model_preset, model_preset)
         if model_preset == "chutes":
             return (
-                "Step 5a — Chutes model\n"
-                "Which Chutes model should this agent use?\n\n"
+                "Great, Chutes it is. Which model should this agent use?\n\n"
                 f"Reply with a model id, or `default` for `{default_model}`.\n"
                 "Examples:\n"
                 "- `auto-failover`\n"
@@ -641,7 +639,6 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 "I’ll wire Chutes through Hermes as an OpenAI-compatible provider at `https://llm.chutes.ai/v1`."
             )
         return (
-            f"Step 5a — {label} model\n"
             f"Which {label} model should this agent use?\n\n"
             f"Reply with a model id, or `default` for `{default_model}`."
         )
@@ -657,7 +654,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             for index, (effort, description) in enumerate(REASONING_EFFORT_OPTIONS, start=1)
         )
         return (
-            "Step 5b — Thinking level\n"
+            "How much thinking room should this agent use by default?\n"
             "Pick the default reasoning depth for this agent. Reply with the number or name.\n\n"
             f"{options}"
             f"{chutes_note}"
@@ -675,8 +672,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             except ValueError:
                 waiting_note = ""
         return (
-            "Step 6 of 6 — Operator approval\n"
-            "Thanks. I sent this onboarding request to the operator for approval. I’ll keep watch and continue here automatically once it is approved."
+            "Thanks. I sent this onboarding request to the operator for approval.\n\n"
+            "I’ll keep watch and continue here automatically once it is approved."
             + waiting_note
         )
     if state == "awaiting-bot-token":

@@ -18,6 +18,7 @@ TARGET_DIR="$HOME/.config/systemd/user"
 PYTHON3_BIN="$(command -v python3 || true)"
 PODMAN_BIN="$(command -v podman || true)"
 ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$SHARED_REPO_DIR/almanac-priv/state/agents}"
+ALMANAC_AGENT_VAULT_DIR="${ALMANAC_AGENT_VAULT_DIR:-${VAULT_DIR:-}}"
 mkdir -p "$TARGET_DIR"
 
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
@@ -36,6 +37,43 @@ fi
 if [[ -z "$PODMAN_BIN" ]]; then
   PODMAN_BIN="/usr/bin/podman"
 fi
+
+if [[ -z "$ALMANAC_AGENT_VAULT_DIR" && -d "$SHARED_REPO_DIR/almanac-priv/vault" ]]; then
+  ALMANAC_AGENT_VAULT_DIR="$SHARED_REPO_DIR/almanac-priv/vault"
+fi
+
+ensure_one_vault_link() {
+  local link_path="$1"
+  local target_path="$ALMANAC_AGENT_VAULT_DIR"
+  local parent_dir=""
+
+  if [[ -z "$target_path" || ! -d "$target_path" ]]; then
+    return 0
+  fi
+
+  parent_dir="$(dirname "$link_path")"
+  mkdir -p "$parent_dir"
+
+  if [[ -L "$link_path" ]]; then
+    local existing_target=""
+    existing_target="$(readlink "$link_path" || true)"
+    if [[ "$existing_target" == "$target_path" ]]; then
+      return 0
+    fi
+    rm -f "$link_path"
+  elif [[ -e "$link_path" ]]; then
+    echo "Vault shortcut path already exists and is not a symlink: $link_path" >&2
+    return 1
+  fi
+
+  ln -s "$target_path" "$link_path"
+}
+
+ensure_user_vault_links() {
+  ensure_one_vault_link "$HOME/Almanac" || true
+  ensure_one_vault_link "$HERMES_HOME/Vault" || true
+  ensure_one_vault_link "$HERMES_HOME/Almanac" || true
+}
 
 install_local_user_wrappers() {
   local target_local_bin_dir="$HOME/.local/bin"
@@ -96,6 +134,7 @@ EOF
 }
 
 install_local_user_wrappers
+ensure_user_vault_links
 
 disable_native_hermes_gateway_units() {
   local runtime_dir="$1"

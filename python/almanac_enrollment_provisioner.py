@@ -449,6 +449,7 @@ def _provision_user_access_surfaces(
             str(activation_trigger_path(cfg, agent_id)),
             str(_resolve_user_gateway_bin(cfg)),
         ],
+        extra={"ALMANAC_AGENT_VAULT_DIR": str(cfg.vault_dir)},
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "install-agent-user-services failed").strip())

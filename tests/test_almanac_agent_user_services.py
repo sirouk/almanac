@@ -86,8 +86,10 @@ def test_generated_web_service_units_follow_access_state() -> None:
 
         home = root / "home"
         hermes_home = home / ".local" / "share" / "almanac-agent" / "hermes-home"
+        vault_dir = root / "shared" / "vault"
         state_dir = hermes_home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
+        vault_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "almanac-web-access.json").write_text(
             json.dumps(
                 {
@@ -114,6 +116,7 @@ def test_generated_web_service_units_follow_access_state() -> None:
                 **os.environ,
                 "HOME": str(home),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "ALMANAC_AGENT_VAULT_DIR": str(vault_dir),
             },
             text=True,
             capture_output=True,
@@ -127,12 +130,18 @@ def test_generated_web_service_units_follow_access_state() -> None:
         gateway_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-gateway.service"
         local_wrapper = home / ".local" / "bin" / "almanac-agent-hermes"
         backup_wrapper = home / ".local" / "bin" / "almanac-agent-configure-backup"
+        home_almanac = home / "Almanac"
+        hermes_vault = hermes_home / "Vault"
+        hermes_almanac = hermes_home / "Almanac"
         expect(dashboard_unit.is_file(), f"expected dashboard unit: {dashboard_unit}")
         expect(proxy_unit.is_file(), f"expected dashboard proxy unit: {proxy_unit}")
         expect(code_unit.is_file(), f"expected code unit: {code_unit}")
         expect(gateway_unit.is_file(), f"expected gateway unit: {gateway_unit}")
         expect(local_wrapper.is_file(), f"expected local Hermes wrapper: {local_wrapper}")
         expect(backup_wrapper.is_file(), f"expected local backup wrapper: {backup_wrapper}")
+        for link_path in (home_almanac, hermes_vault, hermes_almanac):
+            expect(link_path.is_symlink(), f"expected vault symlink: {link_path}")
+            expect(os.readlink(link_path) == str(vault_dir), f"bad symlink target for {link_path}: {os.readlink(link_path)!r}")
 
         dashboard_text = dashboard_unit.read_text(encoding="utf-8")
         proxy_text = proxy_unit.read_text(encoding="utf-8")

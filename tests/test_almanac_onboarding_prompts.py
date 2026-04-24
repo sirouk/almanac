@@ -548,11 +548,13 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             thinking_prompt = send("zai-org/GLM-5.1-TEE")[0].text
             expect("How much thinking room" in thinking_prompt, thinking_prompt)
             expect("Pick the default reasoning depth" in thinking_prompt, thinking_prompt)
-            expect("1. medium" in thinking_prompt, thinking_prompt)
+            expect("1. xhigh" in thinking_prompt, thinking_prompt)
+            expect("2. high" in thinking_prompt, thinking_prompt)
+            expect("3. medium" in thinking_prompt, thinking_prompt)
             expect("6. none" in thinking_prompt, thinking_prompt)
             expect("Chutes thinking mode" in thinking_prompt, thinking_prompt)
 
-            approval_prompt = send("3")[0].text
+            approval_prompt = send("1")[0].text
             expect("operator for approval" in approval_prompt, approval_prompt)
             session = control.find_active_onboarding_session(
                 conn,

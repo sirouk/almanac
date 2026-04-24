@@ -96,9 +96,9 @@ MODEL_PROVIDER_ALIASES = {
     "codex": "codex",
 }
 REASONING_EFFORT_OPTIONS = (
-    ("medium", "Recommended default; balanced speed and depth"),
-    ("high", "Deeper thinking for harder work"),
     ("xhigh", "Maximum depth where the provider supports it"),
+    ("high", "Deeper thinking for harder work"),
+    ("medium", "Recommended default; balanced speed and depth"),
     ("low", "Faster, lighter thinking"),
     ("minimal", "Smallest reasoning budget"),
     ("none", "Disable provider thinking/reasoning hints"),

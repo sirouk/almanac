@@ -458,6 +458,9 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("import re" in body, body)
     expect(r"python(?:3)?\s*-\s*<<\s*\S+" in body, body)
     expect("tool_token_injected" in body, body)
+    expect("provider_auth_failed" in body, body)
+    expect("authentication_error" in body, body)
+    expect("Live agent tool smoke skipped" in body, body)
     expect("almanac-bootstrap-token" in body, body)
     print("PASS test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants")
 

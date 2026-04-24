@@ -154,6 +154,7 @@ fi
 
 telemetry_path="$TARGET_HERMES_HOME/state/almanac-context-telemetry.jsonl"
 sessions_dir="$TARGET_HERMES_HOME/sessions"
+agent_log_path="$TARGET_HERMES_HOME/logs/agent.log"
 output_file="$(mktemp /tmp/almanac-live-agent-smoke.XXXXXX.log)"
 trap 'rm -f "$output_file"' EXIT
 
@@ -208,7 +209,8 @@ if ! run_as_target_user test -f "$session_file"; then
   exit 1
 fi
 
-run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id" <<'PY'
+validation_result="$(
+run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id" "$output_file" "$agent_log_path" <<'PY'
 import json
 import re
 import sys
@@ -218,6 +220,36 @@ from pathlib import Path
 session_path = Path(sys.argv[1])
 telemetry_path = Path(sys.argv[2])
 session_id = sys.argv[3]
+output_path = Path(sys.argv[4])
+agent_log_path = Path(sys.argv[5])
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def provider_auth_failure_seen() -> bool:
+    markers = (
+        "authentication_error",
+        "invalid authentication credentials",
+        "error code: 401",
+        "credential pool: no available entries",
+        "marking anthropic_token exhausted",
+    )
+    output_text = read_text(output_path)
+    log_text = read_text(agent_log_path)
+    if session_id and log_text:
+        relevant_lines = [
+            line
+            for line in log_text.splitlines()
+            if session_id in line or "credential pool:" in line or "authentication_error" in line
+        ]
+        log_text = "\n".join(relevant_lines[-80:])
+    haystack = (output_text + "\n" + log_text).lower()
+    return any(marker in haystack for marker in markers)
 
 tool_token_event = False
 if telemetry_path.exists():
@@ -267,9 +299,29 @@ if any(name in {"terminal", "execute_code"} for name in functions):
     errors.append(f"session invoked terminal-style tools: {functions}")
 
 if errors:
+    if not tool_token_event and not functions and provider_auth_failure_seen():
+        print(
+            json.dumps(
+                {
+                    "skipped": "provider_auth_failed",
+                    "session_id": session_id,
+                    "reason": "model provider rejected the live agent credential before any tool call",
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(0)
     raise SystemExit("\n".join(errors))
 
 print(json.dumps({"session_id": session_id, "functions": functions}, sort_keys=True))
 PY
+)"
+
+if [[ "$validation_result" == *'"skipped": "provider_auth_failed"'* ]]; then
+  echo "Live agent tool smoke skipped for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: model provider credentials were rejected before any tool call; ask the user to reauthorize their provider credential."
+  echo "$validation_result"
+  exit 0
+fi
 
 echo "Live agent tool smoke ok for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: session=$session_id"
+echo "$validation_result"

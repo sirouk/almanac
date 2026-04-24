@@ -37,6 +37,31 @@ if [[ -z "$PODMAN_BIN" ]]; then
   PODMAN_BIN="/usr/bin/podman"
 fi
 
+install_local_user_wrappers() {
+  local target_local_bin_dir="$HOME/.local/bin"
+  local wrapper_path="$target_local_bin_dir/almanac-agent-hermes"
+  local backup_wrapper="$target_local_bin_dir/almanac-agent-configure-backup"
+
+  mkdir -p "$target_local_bin_dir"
+  cat >"$wrapper_path" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+HERMES_HOME="\${HERMES_HOME:-$HERMES_HOME}"
+exec env HERMES_HOME="\$HERMES_HOME" "$HERMES_BIN" "\$@"
+EOF
+  chmod 755 "$wrapper_path"
+
+  cat >"$backup_wrapper" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+HERMES_HOME="\${HERMES_HOME:-$HERMES_HOME}"
+exec env HERMES_HOME="\$HERMES_HOME" "$SHARED_REPO_DIR/bin/configure-agent-backup.sh" "\$HERMES_HOME" "\$@"
+EOF
+  chmod 755 "$backup_wrapper"
+}
+
+install_local_user_wrappers
+
 disable_native_hermes_gateway_units() {
   local runtime_dir="$1"
   local bus_path="$2"

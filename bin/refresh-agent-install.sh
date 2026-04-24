@@ -206,6 +206,9 @@ install_local_user_wrappers() {
   local backup_wrapper="$TARGET_LOCAL_BIN_DIR/almanac-agent-configure-backup"
 
   mkdir -p "$TARGET_LOCAL_BIN_DIR"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "$UNIX_USER:$UNIX_USER" "$TARGET_LOCAL_BIN_DIR"
+  fi
   cat >"$wrapper_path" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail

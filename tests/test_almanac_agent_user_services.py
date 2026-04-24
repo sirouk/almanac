@@ -125,20 +125,29 @@ def test_generated_web_service_units_follow_access_state() -> None:
         proxy_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-dashboard-proxy.service"
         code_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-code.service"
         gateway_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-gateway.service"
+        local_wrapper = home / ".local" / "bin" / "almanac-agent-hermes"
+        backup_wrapper = home / ".local" / "bin" / "almanac-agent-configure-backup"
         expect(dashboard_unit.is_file(), f"expected dashboard unit: {dashboard_unit}")
         expect(proxy_unit.is_file(), f"expected dashboard proxy unit: {proxy_unit}")
         expect(code_unit.is_file(), f"expected code unit: {code_unit}")
         expect(gateway_unit.is_file(), f"expected gateway unit: {gateway_unit}")
+        expect(local_wrapper.is_file(), f"expected local Hermes wrapper: {local_wrapper}")
+        expect(backup_wrapper.is_file(), f"expected local backup wrapper: {backup_wrapper}")
 
         dashboard_text = dashboard_unit.read_text(encoding="utf-8")
         proxy_text = proxy_unit.read_text(encoding="utf-8")
         code_text = code_unit.read_text(encoding="utf-8")
         gateway_text = gateway_unit.read_text(encoding="utf-8")
+        local_wrapper_text = local_wrapper.read_text(encoding="utf-8")
+        backup_wrapper_text = backup_wrapper.read_text(encoding="utf-8")
         expect("--port 19021" in dashboard_text, dashboard_text)
         expect("--listen-port 29021" in proxy_text, proxy_text)
         expect("run-agent-code-server.sh" in code_text, code_text)
         expect("almanac-agent-code-agent-test" in code_text, code_text)
         expect("gateway run --replace" in gateway_text, gateway_text)
+        expect(f'HERMES_HOME="${{HERMES_HOME:-{hermes_home}}}"' in local_wrapper_text, local_wrapper_text)
+        expect(str(hermes_bin) in local_wrapper_text, local_wrapper_text)
+        expect("configure-agent-backup.sh" in backup_wrapper_text, backup_wrapper_text)
         print("PASS test_generated_web_service_units_follow_access_state")
 
 

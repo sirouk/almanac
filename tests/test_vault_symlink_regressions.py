@@ -209,6 +209,15 @@ def test_user_vault_links_create_home_vault_only_when_explicitly_requested() -> 
     print("PASS test_user_vault_links_create_home_vault_only_when_explicitly_requested")
 
 
+def test_refresh_repair_chowns_local_bin_when_root_creates_wrappers() -> None:
+    text = REFRESH_SH.read_text(encoding="utf-8")
+    fn = extract_function(text, "install_local_user_wrappers")
+    expect('chown "$UNIX_USER:$UNIX_USER" "$TARGET_LOCAL_BIN_DIR"' in fn, fn)
+    expect("almanac-agent-hermes" in fn, fn)
+    expect("almanac-agent-configure-backup" in fn, fn)
+    print("PASS test_refresh_repair_chowns_local_bin_when_root_creates_wrappers")
+
+
 def main() -> int:
     test_vault_symlink_creates_fresh_link_to_vault_dir()
     test_vault_symlink_replaces_stale_symlink_to_wrong_target()
@@ -216,7 +225,8 @@ def main() -> int:
     test_vault_symlink_is_idempotent_when_already_correct()
     test_user_vault_links_create_almanac_alias_and_internal_compat_links()
     test_user_vault_links_create_home_vault_only_when_explicitly_requested()
-    print("PASS all 6 vault symlink regression tests")
+    test_refresh_repair_chowns_local_bin_when_root_creates_wrappers()
+    print("PASS all 7 vault symlink regression tests")
     return 0
 
 

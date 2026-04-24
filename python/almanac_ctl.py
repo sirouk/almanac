@@ -1295,6 +1295,7 @@ def _query_upstream_head(repo_url: str, branch: str, env: dict[str, str] | None 
         capture_output=True,
         text=True,
         check=False,
+        cwd="/",
         timeout=30,
         env=env,
     )

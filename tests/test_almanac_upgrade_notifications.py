@@ -515,6 +515,36 @@ def test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_servi
             os.environ.update(old_env)
 
 
+def test_query_upstream_head_uses_safe_working_directory() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    ctl = load_module(CTL_PY, "almanac_ctl_upgrade_query_cwd_test")
+    seen: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = list(args)
+        seen["cwd"] = kwargs.get("cwd")
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "bbbbbbbbbbbb2222222222222222222222222222\trefs/heads/main\n",
+                "stderr": "",
+            },
+        )()
+
+    original_run = ctl.subprocess.run
+    ctl.subprocess.run = fake_run
+    try:
+        sha = ctl._query_upstream_head("https://github.com/example/almanac.git", "main", None)
+    finally:
+        ctl.subprocess.run = original_run
+    expect(sha == "bbbbbbbbbbbb2222222222222222222222222222", sha)
+    expect(seen.get("cwd") == "/", str(seen))
+    print("PASS test_query_upstream_head_uses_safe_working_directory")
+
+
 def main() -> int:
     test_upgrade_check_notifies_operator_and_user_agents_once_per_sha()
     test_upgrade_check_adds_discord_buttons_for_operator_channel()
@@ -522,7 +552,8 @@ def main() -> int:
     test_upgrade_check_does_not_notify_when_deployed_is_ahead()
     test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes()
     test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_service_readable()
-    print("PASS all 6 upgrade notification regression tests")
+    test_query_upstream_head_uses_safe_working_directory()
+    print("PASS all 7 upgrade notification regression tests")
     return 0
 
 

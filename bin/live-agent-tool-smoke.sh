@@ -11,7 +11,7 @@ ensure_layout
 TARGET_UNIX_USER=""
 TARGET_AGENT_SELECTOR=""
 TAIL_LINES=40
-PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac vault catalog rail to tell me my current subscribed vaults in one short sentence. Do not use terminal, python heredocs, or read any secrets files.}"
+PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, python heredocs, curl, raw MCP protocol, or read any secrets files.}"
 
 usage() {
   cat <<'EOF'
@@ -297,6 +297,19 @@ if "almanac-bootstrap-token" in joined:
     errors.append("session content still mentions the bootstrap token path")
 if any(name in {"terminal", "execute_code"} for name in functions):
     errors.append(f"session invoked terminal-style tools: {functions}")
+if not any(
+    name
+    in {
+        "mcp_almanac_mcp_vault_search_and_fetch",
+        "mcp_almanac_mcp_knowledge_search_and_fetch",
+    }
+    for name in functions
+):
+    errors.append(f"session did not invoke the brokered Almanac knowledge/vault MCP rail: {functions}")
+if "missing or invalid mcp-session-id" in joined:
+    errors.append("session leaked a stale MCP transport-session error to the agent")
+if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", joined, re.IGNORECASE | re.DOTALL):
+    errors.append("session attempted raw curl/MCP debugging instead of brokered Almanac tools")
 
 if errors:
     if not tool_token_event and not functions and provider_auth_failure_seen():

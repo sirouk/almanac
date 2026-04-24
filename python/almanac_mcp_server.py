@@ -95,6 +95,27 @@ TOOLS = {
 }
 
 
+MCP_SESSION_RECOVERY_METHODS = {"notifications/initialized", "tools/list", "tools/call"}
+
+
+def _ensure_mcp_session(method: str, session_id: str | None, sessions: set[str]) -> tuple[str | None, bool]:
+    """Return a usable MCP transport session for restart-safe methods.
+
+    Hermes chat sessions can outlive an Almanac MCP service repair or upgrade.
+    The MCP session id is transport bookkeeping, not authorization; individual
+    tools still enforce injected agent/operator tokens. Reaccepting a stale id
+    prevents in-progress user chats from falling into raw MCP protocol debugging
+    after almanac-mcp restarts.
+    """
+    if session_id in sessions:
+        return session_id, True
+    if method not in MCP_SESSION_RECOVERY_METHODS:
+        return session_id, False
+    recovered = session_id or f"session-{secrets.token_hex(8)}"
+    sessions.add(recovered)
+    return recovered, True
+
+
 def _schema(
     properties: dict[str, dict],
     *,
@@ -1232,7 +1253,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        if session_id not in self.server.sessions:
+        session_id, session_ok = _ensure_mcp_session(str(method or ""), session_id, self.server.sessions)
+        if not session_ok:
             self._rpc_error("missing or invalid mcp-session-id; initialize first", request_id, status=400)
             return
 

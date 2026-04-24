@@ -54,9 +54,11 @@ If the agent is already running on the Almanac host and the task is topic lookup
    - `$HERMES_HOME/state/almanac-vault-reconciler.json`
    - `$HERMES_HOME/state/almanac-recent-events.json` when recent drift or fresh uploads may matter
 2. call Almanac MCP `knowledge.search-and-fetch` when the source is unclear, or `vault.search-and-fetch` when the user clearly asks for files/PDFs/vault content
-3. only if that bridge fails, use `[managed:qmd-ref]` or the default local raw qmd rail `http://127.0.0.1:8181/mcp`
-4. only if the qmd path itself fails, inspect `docs/hermes-qmd-config.yaml`
-5. only if qmd still looks broken, inspect daemon/health files such as `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, or `bin/health.sh`
+3. if that brokered tool returns a stale MCP transport error such as `missing or invalid mcp-session-id`, retry the same brokered Almanac MCP tool once
+4. if the retry still fails, stop and report that the Almanac knowledge rail needs operator repair; do not switch to raw `curl`/qmd protocol debugging in a normal user chat
+5. only if the user is explicitly debugging Almanac itself, use `[managed:qmd-ref]` or the default local raw qmd rail `http://127.0.0.1:8181/mcp`
+6. only if the qmd path itself fails, inspect `docs/hermes-qmd-config.yaml`
+7. only if qmd still looks broken, inspect daemon/health files such as `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, or `bin/health.sh`
 
 Do not start with repo-wide searches for the topic, for `qmd`, for `/mcp`, or for generic deployment clues when the question is just asking for vault-backed knowledge.
 
@@ -72,7 +74,7 @@ For a simple knowledge question like "what is MESH?" on a deployed host, the fir
 
 ## Minimal working qmd MCP recipe
 
-The local qmd server speaks MCP over JSON-RPC 2.0. Prefer Almanac MCP `vault.search-and-fetch` for ordinary agent answers; if you need to call raw qmd directly, use this sequence instead of guessing the protocol:
+The local qmd server speaks MCP over JSON-RPC 2.0. Prefer Almanac MCP `vault.search-and-fetch` for ordinary agent answers; raw qmd is an operator/debugging fallback, not the normal chat path. If you need to call raw qmd directly, use this sequence instead of guessing the protocol:
 
 1. initialize the session
 2. capture the `mcp-session-id` response header from `initialize`

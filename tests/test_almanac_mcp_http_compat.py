@@ -61,9 +61,42 @@ def test_rpc_error_uses_http_200_for_jsonrpc_failures() -> None:
     print("PASS test_rpc_error_uses_http_200_for_jsonrpc_failures")
 
 
+def test_mcp_session_recovery_accepts_stale_tool_sessions() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_session_recovery_test")
+    sessions: set[str] = set()
+    session_id, ok = mod._ensure_mcp_session("tools/call", "stale-after-restart", sessions)
+    expect(ok, "stale tools/call session should recover")
+    expect(session_id == "stale-after-restart", f"expected stale id to be reused, got {session_id}")
+    expect("stale-after-restart" in sessions, f"expected recovered session to be tracked, got {sessions}")
+    print("PASS test_mcp_session_recovery_accepts_stale_tool_sessions")
+
+
+def test_mcp_session_recovery_mints_missing_safe_session() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_missing_session_recovery_test")
+    sessions: set[str] = set()
+    session_id, ok = mod._ensure_mcp_session("tools/list", None, sessions)
+    expect(ok, "missing tools/list session should recover")
+    expect(isinstance(session_id, str) and session_id.startswith("session-"), f"unexpected session id {session_id}")
+    expect(session_id in sessions, f"expected minted session to be tracked, got {sessions}")
+    print("PASS test_mcp_session_recovery_mints_missing_safe_session")
+
+
+def test_mcp_session_recovery_still_requires_initialize_for_unknown_methods() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_unknown_session_recovery_test")
+    sessions: set[str] = set()
+    session_id, ok = mod._ensure_mcp_session("resources/read", None, sessions)
+    expect(not ok, "unknown MCP methods should still require initialize")
+    expect(session_id is None, f"unexpected recovered session id {session_id}")
+    expect(sessions == set(), f"unexpected sessions created for unsupported method: {sessions}")
+    print("PASS test_mcp_session_recovery_still_requires_initialize_for_unknown_methods")
+
+
 def main() -> int:
     test_rpc_error_uses_http_200_for_jsonrpc_failures()
-    print("PASS all 1 Almanac MCP HTTP compatibility tests")
+    test_mcp_session_recovery_accepts_stale_tool_sessions()
+    test_mcp_session_recovery_mints_missing_safe_session()
+    test_mcp_session_recovery_still_requires_initialize_for_unknown_methods()
+    print("PASS all 4 Almanac MCP HTTP compatibility tests")
     return 0
 
 

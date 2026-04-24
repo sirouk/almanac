@@ -739,7 +739,20 @@ agents = conn.execute(
 ).fetchall()
 
 if not agents:
-    print("no active enrolled user agents")
+    completed = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM bootstrap_requests
+        WHERE auto_provision = 1
+          AND status = 'approved'
+          AND COALESCE(provisioned_at, '') != ''
+        """
+    ).fetchone()
+    completed_count = int(completed["count"] if completed is not None else 0)
+    if completed_count:
+        print(f"FAIL no active enrolled user agents despite {completed_count} completed auto-provision enrollment(s)")
+    else:
+        print("OK no active enrolled user agents yet")
     raise SystemExit(0)
 
 failures = 0

@@ -514,6 +514,62 @@ check_active_agent_state
     print("PASS test_active_agent_health_treats_private_user_runtime_as_ok")
 
 
+def test_active_agent_health_allows_clean_zero_user_enrollment_state() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_active_agent_state() {", "check_auto_provision_state() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        db_path = root / "control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE agents (
+              agent_id TEXT,
+              unix_user TEXT,
+              display_name TEXT,
+              hermes_home TEXT,
+              manifest_path TEXT,
+              channels_json TEXT,
+              role TEXT,
+              status TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE bootstrap_requests (
+              auto_provision INTEGER,
+              status TEXT,
+              provisioned_at TEXT
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=1
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ fail "$1"; }}
+ALMANAC_DB_PATH={str(db_path)!r}
+{snippet}
+check_active_agent_state
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"zero-user health case failed: {result.stderr}")
+        expect(
+            "PASS:no active enrolled user agents yet" in result.stdout,
+            f"expected clean zero-user state to pass, got: {result.stdout!r}",
+        )
+        expect("WARN:" not in result.stdout and "FAIL:" not in result.stdout, result.stdout)
+    print("PASS test_active_agent_health_allows_clean_zero_user_enrollment_state")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_backup_timer_job_result_reports_success_and_failure()
@@ -526,7 +582,8 @@ def main() -> int:
     test_shared_notion_with_tailscale_funnel_reports_live_public_route()
     test_nextcloud_health_uses_rootless_podman_runtime_dir()
     test_active_agent_health_treats_private_user_runtime_as_ok()
-    print("PASS all 11 health regression tests")
+    test_active_agent_health_allows_clean_zero_user_enrollment_state()
+    print("PASS all 12 health regression tests")
     return 0
 
 

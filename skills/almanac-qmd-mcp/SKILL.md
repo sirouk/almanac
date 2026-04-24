@@ -44,7 +44,7 @@ Do not read `/home/almanac/almanac/almanac-priv/config/almanac.env`, `.almanac-o
 
 When the user asks a question that could plausibly be answered by shared private documents, team notes, uploaded PDFs, internal terminology, company-specific plans, codenames, or a follow-up grounded in the current discussion, query qmd before you search the public web or answer from general model memory.
 
-When Almanac MCP is available, prefer `vault.search-and-fetch` for normal user-facing knowledge questions. It wraps qmd search plus fetch and returns the fetched body as plain structured text, including `vault-pdf-ingest` by default. Keep it fast: do not request reranking, large result sets, or multiple fetched bodies unless the user explicitly asks for a broad literature review. Use raw qmd MCP (`query`, `get`, `multi_get`) for debugging, advanced retrieval control, or when the Almanac MCP bridge itself is unavailable.
+When Almanac MCP is available, prefer `vault.search-and-fetch` for normal user-facing knowledge questions. It wraps qmd search plus fetch and returns the fetched body as plain structured text, including `vault-pdf-ingest` by default. Results include `source_metadata` so you can tell whether a hit came from a normal vault file, a generated PDF sidecar, or a cloned Git repo with branch/commit/remote provenance. Keep it fast: do not request reranking, large result sets, or multiple fetched bodies unless the user explicitly asks for a broad literature review. Use raw qmd MCP (`query`, `get`, `multi_get`) for debugging, advanced retrieval control, or when the Almanac MCP bridge itself is unavailable.
 
 ## Fast path on a deployed Almanac host
 

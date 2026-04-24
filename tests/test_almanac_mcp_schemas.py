@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[1]
 MCP_SERVER = REPO / "python" / "almanac_mcp_server.py"
@@ -309,6 +312,66 @@ def test_vault_qmd_helpers_normalize_resource_content() -> None:
     print("PASS test_vault_qmd_helpers_normalize_resource_content")
 
 
+def test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars() -> None:
+    mod = load_module(MCP_SERVER, "almanac_mcp_server_source_metadata_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "knowledge-base"
+        state_dir = root / "state"
+        repo_dir = vault_dir / "TeamDocs"
+        repo_dir.mkdir(parents=True)
+        (repo_dir / ".vault").write_text(
+            "name: Team Knowledge\ncategory: docs\nowner: engineering\ndefault_subscribed: true\n",
+            encoding="utf-8",
+        )
+        (repo_dir / "README.md").write_text("# Team Docs\n\nRetrieval source.\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "Almanac Test"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin", "https://github.com/example/team-docs.git"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(repo_dir), "add", "README.md", ".vault"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "seed"], check=True, capture_output=True, text=True)
+
+        cfg = SimpleNamespace(vault_dir=vault_dir.resolve(), state_dir=state_dir.resolve())
+        direct = mod._vault_source_metadata(
+            cfg,
+            "qmd://vault/TeamDocs/README.md",
+            include_hash=True,
+            include_repo_details=True,
+        )
+        expect(direct["vault_dir_name"] == "knowledge-base", str(direct))
+        expect(direct["nearest_vault_root"]["name"] == "Team Knowledge", str(direct))
+        expect(direct["nearest_vault_root"]["rel_path"] == "TeamDocs", str(direct))
+        expect(direct["is_git_repo"] is True, str(direct))
+        expect(direct["repo"]["remote_origin"] == "https://github.com/example/team-docs.git", str(direct))
+        expect(direct["repo"]["branch"] == "main", str(direct))
+        expect(direct["repo"]["commit"], str(direct))
+        expect(len(direct["source_sha256"]) == 64, str(direct))
+
+        pdf_source = vault_dir / "Research" / "MESH Paper.pdf"
+        pdf_source.parent.mkdir(parents=True)
+        pdf_source.write_bytes(b"%PDF-pretend")
+        generated = state_dir / "pdf-ingest" / "markdown" / "Research" / "MESH Paper-pdf.md"
+        generated.parent.mkdir(parents=True)
+        generated.write_text(
+            "---\n"
+            "almanac_generated: true\n"
+            "almanac_source_type: pdf\n"
+            "source_rel_path: 'Research/MESH Paper.pdf'\n"
+            "source_sha256: 'upstream-sha'\n"
+            "---\n"
+            "# MESH Paper\n",
+            encoding="utf-8",
+        )
+        pdf_meta = mod._vault_source_metadata(cfg, "qmd://vault-pdf-ingest/Research/MESH Paper-pdf.md", include_hash=False)
+        expect(pdf_meta["generated"] is True, str(pdf_meta))
+        expect(pdf_meta["source_type"] == "pdf", str(pdf_meta))
+        expect(pdf_meta["source_rel_path"] == "Research/MESH Paper.pdf", str(pdf_meta))
+        expect(pdf_meta["generated_metadata"]["generated_markdown_rel_path"] == "Research/MESH Paper-pdf.md", str(pdf_meta))
+        expect(pdf_meta["source_exists"] is True, str(pdf_meta))
+    print("PASS test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars")
+
+
 def main() -> int:
     test_almanac_mcp_tools_advertise_actionable_input_schemas()
     test_high_value_sample_calls_match_advertised_schemas()
@@ -318,7 +381,8 @@ def main() -> int:
     test_ssot_write_result_promotes_receipt_fields()
     test_search_and_fetch_compacts_search_payloads()
     test_vault_qmd_helpers_normalize_resource_content()
-    print("PASS all 8 Almanac MCP schema tests")
+    test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars()
+    print("PASS all 9 Almanac MCP schema tests")
     return 0
 
 

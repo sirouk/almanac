@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
 import secrets
+import subprocess
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -570,9 +572,207 @@ def _strip_markdown_front_matter(text: str) -> tuple[str, bool]:
     return text[end + len(marker) :].lstrip(), True
 
 
-def _compact_qmd_search_hit(hit: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
+def _simple_metadata_file(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    result: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if not key:
+            continue
+        result[key] = value.strip().strip("'\"")
+    return result
+
+
+def _markdown_frontmatter(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != "---":
+        return {}
+    result: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key:
+            result[key] = value.strip().strip("'\"")
+    return result
+
+
+def _path_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_relative(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return ""
+
+
+def _git_output(repo_root: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+
+def _nearest_parent_with_file(path: Path, stop_at: Path, filename: str) -> Path | None:
+    current = path if path.is_dir() else path.parent
+    stop_at = stop_at.resolve()
+    while True:
+        if (current / filename).exists():
+            return current
+        if current == stop_at or current.parent == current:
+            return None
+        try:
+            current.relative_to(stop_at)
+        except ValueError:
+            return None
+        current = current.parent
+
+
+def _qmd_source_parts(source_ref: str) -> tuple[str, str]:
+    value = str(source_ref or "").strip()
+    if value.startswith("qmd://"):
+        value = value[len("qmd://") :]
+    if "/" not in value:
+        return "", value
+    collection, rel_path = value.split("/", 1)
+    return collection.strip(), rel_path.strip("/")
+
+
+def _vault_source_path_for_qmd_ref(cfg: Config, source_ref: str) -> tuple[str, str, Path | None, dict[str, str]]:
+    collection, rel_path = _qmd_source_parts(source_ref)
+    if collection == "vault":
+        return collection, rel_path, (cfg.vault_dir / rel_path).resolve(), {}
+    if collection == "vault-pdf-ingest":
+        generated_path = (cfg.state_dir / "pdf-ingest" / "markdown" / rel_path).resolve()
+        frontmatter = _markdown_frontmatter(generated_path)
+        source_rel_path = str(frontmatter.get("source_rel_path") or "").strip()
+        source_path = (cfg.vault_dir / source_rel_path).resolve() if source_rel_path else None
+        return collection, source_rel_path or rel_path, source_path, {
+            **frontmatter,
+            "generated_markdown_path": str(generated_path),
+            "generated_markdown_rel_path": rel_path,
+        }
+    candidate = Path(source_ref)
+    if candidate.is_absolute():
+        try:
+            candidate.relative_to(cfg.vault_dir)
+            return "vault", candidate.relative_to(cfg.vault_dir).as_posix(), candidate.resolve(), {}
+        except ValueError:
+            pass
+    return collection, rel_path, None, {}
+
+
+def _vault_source_metadata(
+    cfg: Config,
+    source_ref: str,
+    *,
+    include_hash: bool = False,
+    include_repo_details: bool = False,
+) -> dict[str, Any]:
+    collection, rel_path, source_path, generated_metadata = _vault_source_path_for_qmd_ref(cfg, source_ref)
+    metadata: dict[str, Any] = {
+        "qmd_collection": collection,
+        "qmd_source": str(source_ref or "").strip(),
+        "vault_dir_name": cfg.vault_dir.name,
+        "vault_root_path": str(cfg.vault_dir),
+        "source_rel_path": rel_path,
+    }
+    if generated_metadata:
+        metadata["generated"] = True
+        metadata["generated_metadata"] = generated_metadata
+        metadata["source_type"] = str(generated_metadata.get("almanac_source_type") or "generated")
+    else:
+        metadata["generated"] = False
+        metadata["source_type"] = Path(rel_path).suffix.lower().lstrip(".") if rel_path else ""
+
+    if source_path is None:
+        return metadata
+
+    metadata["source_host_path"] = str(source_path)
+    metadata["source_exists"] = source_path.exists()
+    if source_path.exists():
+        try:
+            stat = source_path.stat()
+            metadata["source_size_bytes"] = int(stat.st_size)
+            metadata["source_mtime_epoch"] = int(stat.st_mtime)
+            if include_hash:
+                metadata["source_sha256"] = _path_sha256(source_path)
+        except OSError:
+            pass
+
+    vault_root = _nearest_parent_with_file(source_path, cfg.vault_dir, ".vault")
+    if vault_root is not None:
+        vault_meta = _simple_metadata_file(vault_root / ".vault")
+        vault_rel = _safe_relative(vault_root, cfg.vault_dir)
+        metadata["nearest_vault_root"] = {
+            "name": vault_meta.get("name") or vault_root.name or cfg.vault_dir.name,
+            "rel_path": vault_rel or ".",
+            "host_path": str(vault_root),
+            "category": vault_meta.get("category", ""),
+            "owner": vault_meta.get("owner", ""),
+            "default_subscribed": vault_meta.get("default_subscribed", ""),
+        }
+    else:
+        metadata["nearest_vault_root"] = {
+            "name": cfg.vault_dir.name,
+            "rel_path": ".",
+            "host_path": str(cfg.vault_dir),
+        }
+
+    repo_root = _nearest_parent_with_file(source_path, cfg.vault_dir, ".git")
+    metadata["is_git_repo"] = bool(repo_root)
+    if repo_root is not None:
+        metadata["repo"] = {
+            "root_name": repo_root.name,
+            "root_rel_path": _safe_relative(repo_root, cfg.vault_dir) or ".",
+            "root_host_path": str(repo_root),
+        }
+        if include_repo_details:
+            metadata["repo"].update(
+                {
+                    "remote_origin": _git_output(repo_root, "remote", "get-url", "origin"),
+                    "branch": _git_output(repo_root, "branch", "--show-current"),
+                    "commit": _git_output(repo_root, "rev-parse", "HEAD"),
+                }
+            )
+    return metadata
+
+
+def _compact_qmd_search_hit(hit: dict[str, Any], *, cfg: Config | None = None, snippet_char_limit: int = 700) -> dict[str, Any]:
     snippet, snippet_truncated = _trim_text(hit.get("snippet"), snippet_char_limit)
-    return {
+    result = {
         "docid": str(hit.get("docid") or ""),
         "file": str(hit.get("file") or ""),
         "title": str(hit.get("title") or ""),
@@ -581,15 +781,20 @@ def _compact_qmd_search_hit(hit: dict[str, Any], *, snippet_char_limit: int = 70
         "snippet": snippet,
         "snippet_truncated": snippet_truncated,
     }
+    if cfg is not None:
+        source_ref = result["file"] or result["docid"]
+        if source_ref:
+            result["source_metadata"] = _vault_source_metadata(cfg, source_ref, include_hash=False, include_repo_details=False)
+    return result
 
 
-def _compact_qmd_search_result(result: dict[str, Any], *, snippet_char_limit: int = 700) -> dict[str, Any]:
+def _compact_qmd_search_result(result: dict[str, Any], *, cfg: Config | None = None, snippet_char_limit: int = 700) -> dict[str, Any]:
     structured = _qmd_structured_content(result)
     hits = structured.get("results") if isinstance(structured.get("results"), list) else []
     return {
         "ok": True,
         "results": [
-            _compact_qmd_search_hit(hit, snippet_char_limit=snippet_char_limit)
+            _compact_qmd_search_hit(hit, cfg=cfg, snippet_char_limit=snippet_char_limit)
             for hit in hits
             if isinstance(hit, dict)
         ],
@@ -658,6 +863,12 @@ def _qmd_fetch_file(cfg: Config, arguments: dict[str, Any], *, file_value: str |
     compact["fromLine"] = fetch_args["fromLine"]
     compact["maxLines"] = fetch_args["maxLines"]
     compact["lineNumbers"] = fetch_args["lineNumbers"]
+    compact["source_metadata"] = _vault_source_metadata(
+        cfg,
+        compact.get("uri") or compact.get("file") or fetch_args["file"],
+        include_hash=True,
+        include_repo_details=True,
+    )
     return compact
 
 
@@ -1159,7 +1370,7 @@ class Handler(BaseHTTPRequestHandler):
                     "qmd_url": cfg.qmd_url,
                     "query": query_args["searches"][0]["query"],
                     "collections": query_args["collections"],
-                    "search": _compact_qmd_search_result(search_result),
+                    "search": _compact_qmd_search_result(search_result, cfg=cfg),
                 }
 
             if tool_name == "vault.fetch":
@@ -1183,7 +1394,7 @@ class Handler(BaseHTTPRequestHandler):
                     query_args = _qmd_query_arguments(arguments, limit_key="search_limit", include_vec=False)
                     search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args, timeout=8)
                     search_fallback_used = True
-                search = _compact_qmd_search_result(search_result)
+                search = _compact_qmd_search_result(search_result, cfg=cfg)
                 fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=1, minimum=0, maximum=2)
                 fetched: list[dict[str, Any]] = []
                 seen_files: set[str] = set()

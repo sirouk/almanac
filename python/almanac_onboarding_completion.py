@@ -176,37 +176,49 @@ def completion_message_bundle(
 ) -> dict[str, Any]:
     nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
     first_lines = [
-        f"Your lane is ready. Your own bot is {bot_reference} now.",
-        f"Unix user: {access.get('unix_user') or access.get('username')}",
+        "Your lane is ready.",
+        "",
+        "Agent lane:",
+        f"- Bot: {bot_reference}",
+        f"- Unix user: {access.get('unix_user') or access.get('username')}",
         notion_status_line,
-        "This shared password unlocks your Almanac dashboard, code workspace, and Nextcloud when it is enabled.",
+        "",
+        "Temporary shared password:",
+        "This password unlocks your Almanac dashboard, code workspace, and Nextcloud when it is enabled.",
     ]
     followup_lines = [
-        f"Hermes dashboard: {access.get('dashboard_url')}",
-        f"Dashboard username: {access.get('username')}",
-        f"Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
-        f"Code workspace: {access.get('code_url')}",
-        f"Workspace root: {home}",
-        "Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes",
+        "Web access:",
+        f"- Hermes dashboard: {access.get('dashboard_url')}",
+        f"- Dashboard username: {access.get('username')}",
+        f"- Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
+        f"- Code workspace: {access.get('code_url')}",
+        f"- Workspace root: {home}",
+        "",
+        "Host helper:",
+        "- Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes",
+        "",
+        "Backups:",
         "Private Hermes-home backup: run ~/.local/bin/almanac-agent-configure-backup to set up this agent's separate private GitHub repo and read/write deploy key.",
         "Do not reuse the Almanac code-push deploy key or shared almanac-priv backup key for your agent backup.",
+        "",
         *_shared_resource_lines(cfg),
-        "The shared Vault and control rails are already wired into your agent by default.",
+        "- The shared Vault and control rails are already wired into your agent by default.",
         notion_followup_line,
     ]
     remote_setup_url = _remote_client_setup_url(cfg)
     if remote_setup_url:
         remote_user, remote_host = _remote_ssh_target(access)
         if remote_user and remote_host:
+            followup_lines.append("")
+            followup_lines.append("Optional remote CLI from your own machine:")
             followup_lines.append(
-                "Optional tailnet-only remote CLI from your own machine: "
-                f"curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}"
+                f"- Run: `curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}`"
             )
             followup_lines.append(
-                "That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
+                "- That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
                 "`/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
             )
-            followup_lines.append(f"Remote SSH target after key install: {remote_user}@{remote_host}")
+            followup_lines.append(f"- Remote SSH target after key install: {remote_user}@{remote_host}")
         else:
             followup_lines.append(
                 "Optional tailnet-only remote CLI: unavailable until this host has a Tailscale DNS name and your Unix user is recorded."
@@ -218,12 +230,12 @@ def completion_message_bundle(
             "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
         )
     full_lines = list(first_lines)
-    full_lines.insert(2, f"Shared password: {access.get('password')}")
-    full_lines.append("After you've recorded this safely, click the button below. I’ll remove the password from this message and then send the rest of your links.")
+    full_lines.append(f"Shared password: {access.get('password')}")
+    full_lines.append("")
+    full_lines.append("After you record it safely, click the button below. I’ll remove the password from this message and then send the rest of your links.")
 
     scrubbed_lines = list(first_lines)
-    scrubbed_lines.insert(2, "Shared password: removed after you confirmed you recorded it.")
-    scrubbed_lines.append("Password removed after confirmation.")
+    scrubbed_lines.append("Shared password: removed after confirmation.")
 
     return {
         "full_text": "\n".join(full_lines),

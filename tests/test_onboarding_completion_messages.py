@@ -155,10 +155,10 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
 
             expect("Shared password: sup3r-secret" in full_text, full_text)
             expect("Shared password: sup3r-secret" not in scrubbed_text, scrubbed_text)
-            expect("Shared password: removed after you confirmed you recorded it." in scrubbed_text, scrubbed_text)
+            expect("Shared password: removed after confirmation." in scrubbed_text, scrubbed_text)
             expect("Your lane is ready." in full_text, full_text)
             expect("send the rest of your links" in full_text, full_text)
-            expect(f"Nextcloud login: {unix_user} (same shared password)" in followup_text, followup_text)
+            expect(f"- Nextcloud login: {unix_user} (same shared password)" in followup_text, followup_text)
             expect("Shared Almanac links:" in followup_text, followup_text)
             expect("https://kor.tail77f45e.ts.net:8445/" in followup_text, followup_text)
             expect("https://kor.tail77f45e.ts.net/mcp" not in followup_text, followup_text)
@@ -221,7 +221,7 @@ def test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails(
                         "platform": "discord",
                         "chat_id": "123456789",
                         "message_id": "555",
-                        "scrubbed_text": "Shared password: removed after you confirmed you recorded it.",
+                        "scrubbed_text": "Shared password: removed after confirmation.",
                         "password_scrubbed": False,
                     }
                 },
@@ -229,7 +229,7 @@ def test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails(
 
             scrubbed_text = completion.completion_scrubbed_text_for_session(conn, cfg, session)
             expect(
-                scrubbed_text == "Shared password: removed after you confirmed you recorded it.",
+                scrubbed_text == "Shared password: removed after confirmation.",
                 scrubbed_text,
             )
             print("PASS test_completion_scrubbed_text_uses_stored_receipt_when_reconstruction_fails")

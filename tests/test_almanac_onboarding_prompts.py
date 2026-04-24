@@ -85,7 +85,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 },
             )
             expect("Almanac’s Curator" in opening, opening)
-            expect("keep us on the rails" in opening, opening)
+            expect("Step 1 of 6" in opening, opening)
 
             purpose_prompt = onboarding.session_prompt(
                 cfg,
@@ -94,7 +94,8 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                     "answers": {},
                 },
             )
-            expect("practice or get done" in purpose_prompt, purpose_prompt)
+            expect("Step 2 of 6" in purpose_prompt, purpose_prompt)
+            expect("practice, build, or keep moving" in purpose_prompt, purpose_prompt)
 
             unix_prompt = onboarding.session_prompt(
                 cfg,
@@ -104,7 +105,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 },
             )
             expect("shared host" in unix_prompt.lower(), unix_prompt)
-            expect("unix account" in unix_prompt.lower(), unix_prompt)
+            expect("private Unix account" in unix_prompt, unix_prompt)
 
             prompt = onboarding.session_prompt(
                 cfg,
@@ -116,8 +117,10 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                     },
                 },
             )
-            expect("Open Installation and copy the install link" in prompt, prompt)
-            expect("share a server" in prompt or "Add App" in prompt, prompt)
+            expect("Discord setup steps:" in prompt, prompt)
+            expect("Open `Installation`" in prompt, prompt)
+            expect("new agent bot only" in prompt, prompt)
+            expect("share with it" in prompt or "`Add App`" in prompt, prompt)
 
             notion_access_prompt = onboarding.session_prompt(
                 cfg,
@@ -270,7 +273,7 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("practice or get done" in replies[0].text, replies[0].text)
+            expect("practice, build, or keep moving" in replies[0].text, replies[0].text)
 
             replies = onboarding.process_onboarding_message(
                 cfg,
@@ -298,7 +301,8 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("bot carry" in replies[0].text, replies[0].text)
+            expect("Step 4 of 6" in replies[0].text, replies[0].text)
+            expect("What should it be called?" in replies[0].text, replies[0].text)
             expect("telegram" in replies[0].text.lower(), replies[0].text)
             print("PASS test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question")
         finally:
@@ -529,7 +533,8 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             send("Build impossible things calmly")
             send(desired_unix_user)
             model_prompt = send("Jeef")[0].text
-            expect("Which model provider" in model_prompt, model_prompt)
+            expect("Step 5 of 6" in model_prompt, model_prompt)
+            expect("Model provider" in model_prompt, model_prompt)
             expect(model_prompt.index("1. Chutes") < model_prompt.index("2. Claude Opus"), model_prompt)
             expect(model_prompt.index("2. Claude Opus") < model_prompt.index("3. OpenAI Codex"), model_prompt)
 
@@ -538,7 +543,8 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             expect("auto-failover" in model_id_prompt, model_id_prompt)
 
             thinking_prompt = send("zai-org/GLM-4.7")[0].text
-            expect("Pick the agent's thinking level" in thinking_prompt, thinking_prompt)
+            expect("Step 5b" in thinking_prompt, thinking_prompt)
+            expect("Pick the default reasoning depth" in thinking_prompt, thinking_prompt)
             expect("1. medium" in thinking_prompt, thinking_prompt)
             expect("6. none" in thinking_prompt, thinking_prompt)
             expect("Chutes thinking mode" in thinking_prompt, thinking_prompt)

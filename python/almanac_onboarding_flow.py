@@ -289,7 +289,7 @@ def _configured_model_id(cfg: Config, preset: str) -> str:
 
 
 def _parse_model_id(cfg: Config, preset: str, raw_text: str) -> tuple[str, str]:
-    value = raw_text.strip().strip("`")
+    value = raw_text.strip().strip("`").rstrip("\\").strip()
     default_model = _configured_model_id(cfg, preset)
     if value.lower() in {"", "default", "recommended", "auto"}:
         return default_model, ""
@@ -594,19 +594,35 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     provider_setup = _provider_setup(session)
     browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
-        return "Hi. I’m Almanac’s Curator. I’ll guide the setup and keep us on the rails. What should I call you?"
+        return (
+            "Welcome. I’m Almanac’s Curator, and I’ll walk you through a private agent lane step by step.\n\n"
+            "Step 1 of 6 — Your name\n"
+            "What should I call you?"
+        )
     if state == "awaiting-unix-user":
-        return "Almanac runs on a shared host, so each enrolled user gets their own Unix account there. What username should I create for you?"
+        return (
+            "Step 3 of 6 — Unix username\n"
+            "Almanac runs on a shared host. Each enrolled user gets a private Unix account, home directory, Hermes state, and code workspace.\n\n"
+            "What Unix username should I create for you?\n"
+            "Use lowercase letters, digits, `_`, or `-`; start with a letter or `_`."
+        )
     if state == "awaiting-purpose":
-        return "What should this agent help you practice or get done?"
+        return (
+            "Step 2 of 6 — What this agent is for\n"
+            "In a sentence or a short paragraph, what should this agent help you practice, build, or keep moving?"
+        )
     if state == "awaiting-bot-platform":
         return "I can only wire the same platform you're onboarding from right now. Reply with `telegram` or `discord` to match this DM."
     if state == "awaiting-bot-name":
-        return f"What name should your own {bot_platform or 'chat'} bot carry? A short plain-English name is enough."
+        return (
+            f"Step 4 of 6 — Your {bot_platform or 'chat'} bot name\n"
+            "This will be the bot you talk to after onboarding.\n\n"
+            "What should it be called? A short plain-English name is perfect."
+        )
     if state == "awaiting-model-preset":
         return (
-            "Which model provider should power this agent?\n"
-            "Reply with the number or name:\n"
+            "Step 5 of 6 — Model provider\n"
+            "Choose what should power this agent. Reply with the number or provider name.\n\n"
             f"{_model_options(cfg)}"
         )
     if state == "awaiting-model-id":
@@ -615,15 +631,24 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         label = MODEL_PROVIDER_LABELS.get(model_preset, model_preset)
         if model_preset == "chutes":
             return (
-                "Which Chutes model should this agent use?\n"
+                "Step 5a — Chutes model\n"
+                "Which Chutes model should this agent use?\n\n"
                 f"Reply with a model id, or `default` for `{default_model}`.\n"
-                "Examples: `auto-failover`, `deepseek-ai/DeepSeek-V3.2-Speciale`, `zai-org/GLM-4.7`."
+                "Examples:\n"
+                "- `auto-failover`\n"
+                "- `deepseek-ai/DeepSeek-V3.2-Speciale`\n"
+                "- `zai-org/GLM-4.7`\n\n"
+                "I’ll wire Chutes through Hermes as an OpenAI-compatible provider at `https://llm.chutes.ai/v1`."
             )
-        return f"Which {label} model should this agent use? Reply with a model id, or `default` for `{default_model}`."
+        return (
+            f"Step 5a — {label} model\n"
+            f"Which {label} model should this agent use?\n\n"
+            f"Reply with a model id, or `default` for `{default_model}`."
+        )
     if state == "awaiting-thinking-level":
         model_preset = str(answers.get("model_preset") or "").strip().lower()
         chutes_note = (
-            "\nFor Chutes, any level except `none` enables Chutes thinking mode when the selected model supports it."
+            "\n\nFor Chutes, any level except `none` enables Chutes thinking mode when the selected model supports it."
             if model_preset == "chutes"
             else ""
         )
@@ -632,8 +657,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             for index, (effort, description) in enumerate(REASONING_EFFORT_OPTIONS, start=1)
         )
         return (
-            "Pick the agent's thinking level.\n"
-            "Reply with the number or name:\n"
+            "Step 5b — Thinking level\n"
+            "Pick the default reasoning depth for this agent. Reply with the number or name.\n\n"
             f"{options}"
             f"{chutes_note}"
         )
@@ -649,29 +674,39 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                     waiting_note = " If this has been sitting for a while, ask the operator to check the onboarding queue and reply `/status` here any time."
             except ValueError:
                 waiting_note = ""
-        return "Thanks. I’ve sent this to the operator for approval. I’ll keep watch and continue here once I hear back." + waiting_note
+        return (
+            "Step 6 of 6 — Operator approval\n"
+            "Thanks. I sent this onboarding request to the operator for approval. I’ll keep watch and continue here automatically once it is approved."
+            + waiting_note
+        )
     if state == "awaiting-bot-token":
         if bot_platform == "discord":
             return (
-                "You’re approved. Set up your Discord bot like this:\n"
-                "1. Go to https://discord.com/developers/applications and click New Application.\n"
-                f"2. Name it {preferred_bot_name} or whatever you prefer.\n"
-                "3. Open the Bot page for that application.\n"
-                "4. Turn Public Bot on.\n"
-                "5. Leave Requires OAuth2 Code Grant off.\n"
-                "6. For DM-only use, you can leave the Permissions Integer at 0.\n"
-                "7. Turn Message Content Intent on.\n"
-                "8. Turn Server Members Intent on.\n"
-                "9. Leave Presence Intent off unless you specifically want it.\n"
-                "10. Open Installation and copy the install link for the app.\n"
-                "11. Use that link to add the app to one of your servers or use Add App so you can start a DM with it. Discord DMs work once you and the bot share a server or the app has been installed for you.\n"
-                "12. Copy the bot token. If needed, use Reset Token to mint a fresh one.\n"
-                "13. Paste the bot token back to me here.\n"
-                "Once I have the token, I’ll ask for the model provider credential, wire it to your agent, and stay on the handoff until it’s live."
+                "Approved. Next I need the Discord bot token for your private agent lane.\n\n"
+                "Discord setup steps:\n"
+                "1. Go to https://discord.com/developers/applications and click `New Application`.\n"
+                f"2. Name the app `{preferred_bot_name}` or any bot name you prefer.\n"
+                "3. Open the app’s `Bot` page.\n"
+                "4. Turn `Public Bot` on.\n"
+                "5. Leave `Requires OAuth2 Code Grant` off.\n"
+                "6. Turn `Message Content Intent` on.\n"
+                "7. Turn `Server Members Intent` on.\n"
+                "8. Leave `Presence Intent` off unless you specifically want it.\n"
+                "9. Open `Installation` and copy the install link for the app.\n"
+                "10. Use that link to add the app to a server you share with it, or use Discord’s `Add App` flow so you can DM it.\n"
+                "11. Open the `Bot` page again, copy the bot token, and paste that token here.\n\n"
+                "Important: send the token for the new agent bot only, not Curator’s Discord token. After I receive it, I’ll ask for the model credential and finish the handoff."
             )
         return (
-            "You’re approved. Create your bot with BotFather, give it the name you want, "
-            f"and send me the API token for {preferred_bot_name}. I’ll ask for the model provider credential next, then wire everything and stay with it until it’s live."
+            "Approved. Next I need the Telegram bot token for your private agent lane.\n\n"
+            "Telegram setup steps:\n"
+            "1. Open Telegram and message @BotFather.\n"
+            "2. Send `/newbot`.\n"
+            f"3. Give it the display name `{preferred_bot_name}` or any bot name you prefer.\n"
+            "4. Choose a username that ends in `bot`.\n"
+            "5. Copy the API token BotFather prints.\n"
+            "6. Paste that token here.\n\n"
+            "Important: send the token for the new agent bot only, not Curator’s Telegram token. After I receive it, I’ll ask for the model credential and finish the handoff."
         )
     if state == "awaiting-provider-credential" and provider_setup is not None:
         return provider_credential_prompt(provider_setup)
@@ -685,24 +720,29 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 f"{provision_error}\n\n"
                 "I’ve kept your session open so the operator can recover it cleanly. Reply `/status` here any time for the latest state."
             )
-        return "I’m provisioning your agent and wiring your bot now. This usually lands within a minute. I’ll ping you as soon as your lane is ready."
+        return "Provisioning is underway. I’m creating your Unix lane, wiring Hermes, installing the agent services, and connecting your bot. This usually lands within a minute; I’ll ping you when it is ready."
     if state == "awaiting-notion-access":
         shared_page_url = shared_notion_home_url().strip()
         lines = [
-            "Your lane is live. Before shared Notion access can work, make sure you can open the shared Almanac page in this Notion workspace.",
+            "Your agent lane is live. Optional final step: shared Notion access.",
+            "",
+            "First, make sure you can open the shared Almanac page in this Notion workspace:",
         ]
         if shared_page_url:
             lines.append(shared_page_url)
+        lines.append("")
         lines.append(
             "If Notion says `Request access`, tell the operator you need edit access to the shared Almanac page. "
             "On free Notion that usually means `Full access`, plus the operator may need to invite you into the workspace or teamspace first."
         )
-        lines.append("Reply `ready` once you can open it. If you want to finish now and leave shared Notion writes disabled, reply `skip`.")
+        lines.append("")
+        lines.append("Reply `ready` once you can open it. Reply `skip` to finish now with shared Notion writes disabled.")
         return "\n".join(lines)
     if state == "awaiting-notion-email":
         return (
-            "Good. One last step for shared Notion access: reply with the Notion email you use in this organization's workspace. "
-            "If you want to finish now and leave shared Notion writes disabled, reply `skip`."
+            "Shared Notion verification, step 2 of 3.\n"
+            "Reply with the Notion email you use in this organization’s workspace.\n\n"
+            "Reply `skip` to finish now with shared Notion writes disabled."
         )
     if state == "awaiting-notion-verification":
         claim_url = str(answers.get("notion_claim_url") or "").strip()
@@ -716,7 +756,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             except ValueError:
                 expiry_note = ""
         lines = [
-            "Open your Almanac verification page in Notion and make any edit there. A keystroke or property change is enough.",
+            "Shared Notion verification, step 3 of 3.",
+            "Open your Almanac verification page in Notion and make any small edit there. A keystroke or property change is enough.",
         ]
         if claim_url:
             lines.append(claim_url)

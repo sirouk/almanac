@@ -483,6 +483,16 @@ def test_live_agent_tool_smoke_inspects_private_home_as_target_user() -> None:
     print("PASS test_live_agent_tool_smoke_inspects_private_home_as_target_user")
 
 
+def test_discord_onboarding_dedupes_message_ids_before_state_transitions() -> None:
+    body = (REPO / "python" / "almanac_curator_discord_onboarding.py").read_text(encoding="utf-8")
+    expect("_claim_discord_message_once" in body, body)
+    expect("curator_discord_onboarding_seen_message:" in body, body)
+    expect("INSERT OR IGNORE INTO settings" in body, body)
+    expect('if not _claim_discord_message_once(str(getattr(message, "id", "") or "")):' in body, body)
+    expect("await _handle_operator_channel_message(message, content)" in body, body)
+    print("PASS test_discord_onboarding_dedupes_message_ids_before_state_transitions")
+
+
 def test_live_agent_tool_smoke_parses_explicit_selectors() -> None:
     body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
     expect("--user|-u" in body, "live smoke should accept an explicit Unix user selector")
@@ -1945,6 +1955,7 @@ def main() -> int:
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,
+        test_discord_onboarding_dedupes_message_ids_before_state_transitions,
         test_live_agent_tool_smoke_parses_explicit_selectors,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,

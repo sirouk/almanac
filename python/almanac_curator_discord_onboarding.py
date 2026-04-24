@@ -100,6 +100,22 @@ async def main() -> None:
             return ""
         return str(cfg.operator_notify_channel_id or "").strip()
 
+    def _claim_discord_message_once(message_id: str) -> bool:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return True
+        key = f"curator_discord_onboarding_seen_message:{normalized}"
+        with connect_db(cfg) as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, "1", utc_now_iso()),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
     def _run_operator_action(*, target_id: str, action: str, actor: str, reason: str = "") -> str:
         normalized_action = action.strip().lower()
         with connect_db(cfg) as conn:
@@ -384,6 +400,8 @@ async def main() -> None:
             return
         content = (message.content or "").strip()
         if not content:
+            return
+        if not _claim_discord_message_once(str(getattr(message, "id", "") or "")):
             return
         if await _handle_operator_channel_message(message, content):
             return

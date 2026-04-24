@@ -3497,11 +3497,18 @@ chown_managed_paths() {
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && -n "${NEXTCLOUD_STATE_DIR:-}" && -d "$NEXTCLOUD_STATE_DIR" ]]; then
     chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
-    find "$ALMANAC_PRIV_DIR" -path "$NEXTCLOUD_STATE_DIR" -prune -o -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +
+    find -ignore_readdir_race "$ALMANAC_PRIV_DIR" \
+      -path "$NEXTCLOUD_STATE_DIR" -prune -o \
+      -name "*.sqlite3-shm" -prune -o \
+      -name "*.sqlite3-wal" -prune -o \
+      -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +
     return 0
   fi
 
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+  find -ignore_readdir_race "$ALMANAC_PRIV_DIR" \
+    -name "*.sqlite3-shm" -prune -o \
+    -name "*.sqlite3-wal" -prune -o \
+    -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +
 }
 
 enrollment_snapshot_json() {

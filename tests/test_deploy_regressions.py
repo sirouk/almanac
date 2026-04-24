@@ -1586,6 +1586,7 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
     refresh_helper = (REPO / "bin" / "refresh-agent-install.sh").read_text(encoding="utf-8")
     helper = extract(text, "realign_active_enrolled_agents_root() {", "chown_managed_paths() {")
+    chown_helper = extract(text, "chown_managed_paths() {", "enrollment_snapshot_json() {")
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     enrollment_align = extract(text, "run_enrollment_align() {", "run_enrollment_reset() {")
@@ -1664,6 +1665,12 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     expect(
         "chown_managed_paths" in upgrade,
         "run_root_upgrade should use the scoped ownership helper instead of blanket chowning private state",
+    )
+    expect(
+        "-ignore_readdir_race" in chown_helper
+        and "*.sqlite3-shm" in chown_helper
+        and "*.sqlite3-wal" in chown_helper,
+        "scoped ownership repair should tolerate transient SQLite sidecar files during live upgrades",
     )
     expect(
         "realign_active_enrolled_agents_root" in enrollment_align,

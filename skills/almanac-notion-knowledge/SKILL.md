@@ -23,6 +23,7 @@ before dispatch. Leave `token` out of normal Hermes tool calls.
 Common calls:
 
 ```json
+{"tool":"knowledge.search-and-fetch","arguments":{"query":"Chutes Unicorn","search_limit":5,"vault_fetch_limit":1,"notion_fetch_limit":2,"body_char_limit":6000}}
 {"tool":"notion.search","arguments":{"query":"Chutes Unicorn","limit":5,"rerank":false}}
 {"tool":"notion.fetch","arguments":{"target_id":"<page-or-database-id-or-url>"}}
 {"tool":"notion.query","arguments":{"target_id":"<database-or-data-source-id-or-url>","query":{"filter":{"property":"Status","status":{"equals":"In Progress"}}},"limit":25}}
@@ -31,7 +32,10 @@ Common calls:
 
 Call budget:
 
-- If the user asks a simple knowledge question by title or phrase, use
+- If the user asks a simple knowledge question by title or phrase and did not
+  clearly say it lives in Notion, use `knowledge.search-and-fetch` once so vault
+  files/PDFs and shared Notion are checked together.
+- If the user clearly says the answer is in shared Notion, use
   `notion.search-and-fetch` once and answer from the fetched body.
 - If the user gives an exact page/database URL or id, skip search and call
   `notion.fetch` once.
@@ -45,6 +49,7 @@ Call budget:
 - `search` for broad knowledge discovery over indexed shared Notion content, including extractable Notion-hosted PDF/text attachments on indexed pages
 - `fetch` for the live body of one exact page or the live schema of one exact database/data source
 - `query` for live structured state in a shared Notion database or data source
+- `knowledge.search-and-fetch` for source-agnostic discovery across both vault/PDF and shared Notion when the user does not name the source
 
 Use that split literally:
 

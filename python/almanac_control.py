@@ -10700,6 +10700,7 @@ def build_managed_memory_payload(
     skill_ref = (
         "Current Almanac capability snapshot:\n"
         "- Installed Almanac skills are live defaults on this dedicated user agent.\n"
+        "- When a knowledge question could live in either files/PDFs or shared Notion, start with Almanac MCP knowledge.search-and-fetch; it searches both rails with bounded defaults.\n"
         "- Use almanac-qmd-mcp for vault retrieval and follow-ups.\n"
         "- Use almanac-vaults for subscription, catalog, and curate-vaults work.\n"
         "- Use almanac-vault-reconciler for Almanac memory drift or repair.\n"
@@ -10726,6 +10727,10 @@ def build_managed_memory_payload(
         "discussion, start with this rail before searching repo files, docs,\n"
         "or the public web. Include the 'vault-pdf-ingest' collection when\n"
         "present for PDF-derived markdown.\n"
+        "If the user did not specify whether the answer is in the vault or\n"
+        "shared Notion, prefer Almanac MCP knowledge.search-and-fetch first;\n"
+        "it searches vault/PDF and shared Notion together and returns tagged\n"
+        "source buckets.\n"
         "Preferred normal path: call Almanac MCP vault.search-and-fetch first;\n"
         "it wraps qmd query+get and returns fetched vault/PDF text as structured\n"
         "content. Keep it fast and bounded: one fetched result is usually enough.\n"
@@ -10753,6 +10758,8 @@ def build_managed_memory_payload(
     )
     notion_ref = (
         "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.\n"
+        "If the source is unclear, call knowledge.search-and-fetch before choosing\n"
+        "a Notion-only or vault-only rail.\n"
         "Use notion.search for shared documentation, meeting notes, project pages,\n"
         "and user-generated knowledge that Almanac has indexed into qmd.\n"
         "Use notion.fetch when you already know the exact page, database, or data\n"
@@ -10970,6 +10977,8 @@ def write_managed_memory_stubs(
     payload.setdefault(
         "almanac-skill-ref",
         "Installed Almanac skills are live defaults on this dedicated user agent."
+        " Use knowledge.search-and-fetch when the source could be either vault/PDF"
+        " or shared Notion."
         " Use almanac-qmd-mcp for vault retrieval and follow-ups, almanac-vaults"
         " for subscription and catalog work, almanac-vault-reconciler for Almanac"
         " memory drift or repair, almanac-ssot for organization-aware SSOT"

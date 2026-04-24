@@ -947,6 +947,16 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             expect(result is None, result)
             expect(wrapped_args["token"] == "tok_live_test", wrapped_args)
 
+            knowledge_args = {"query": "Chutes MESH", "vault_fetch_limit": 1, "notion_fetch_limit": 2}
+            hook(
+                tool_name="mcp_almanac_mcp_knowledge_search_and_fetch",
+                args=knowledge_args,
+                session_id="session-token",
+                task_id="task-knowledge",
+                tool_call_id="call-knowledge",
+            )
+            expect(knowledge_args["token"] == "tok_live_test", knowledge_args)
+
             vault_args = {"query": "Chutes MESH", "fetch_limit": 1}
             hook(
                 tool_name="mcp_almanac_mcp_vault_search_and_fetch",
@@ -1019,12 +1029,13 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
 
             os.environ["HERMES_HOME"] = str(hermes_home)
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            expect(len(lines) == 4, lines)
+            expect(len(lines) == 5, lines)
             expect(all(record.get("tool_token_injected") is True for record in lines), lines)
             expect(
                 {record.get("tool_name") for record in lines}
                 == {
                     "mcp_almanac_mcp_notion_search_and_fetch",
+                    "mcp_almanac_mcp_knowledge_search_and_fetch",
                     "mcp_almanac_mcp_vault_search_and_fetch",
                     "mcp_almanac_mcp_ssot_write",
                     "mcp_almanac_mcp_ssot_preflight",
@@ -1033,7 +1044,7 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             )
             expect(
                 {record.get("task_id") for record in lines}
-                == {"task-1", "task-2", "task-ssot-write", "task-ssot-preflight"},
+                == {"task-1", "task-knowledge", "task-2", "task-ssot-write", "task-ssot-preflight"},
                 lines,
             )
             telemetry_body = telemetry_path.read_text(encoding="utf-8")
@@ -1140,6 +1151,7 @@ def test_almanac_managed_context_recipe_tools_match_mcp_surface() -> None:
     expect(recipe_tools, "expected plugin recipe tools")
     missing = sorted(set(recipe_tools) - set(mcp_server.TOOLS))
     expect(not missing, f"recipe tools missing from MCP server: {missing}")
+    expect("knowledge.search-and-fetch" in recipe_tools, recipe_tools)
     expect("vault.search-and-fetch" in recipe_tools, recipe_tools)
     for tool_name, _, recipe in plugin._TOOL_RECIPES:
         expect(tool_name in recipe, f"recipe for {tool_name} should name its tool: {recipe}")

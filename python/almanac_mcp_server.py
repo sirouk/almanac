@@ -90,6 +90,8 @@ TOOLS = {
     "notion.fetch": "Fetch the live body or schema of a shared Notion page/database/data source by exact id or URL. Prefer over notion.search when the user already gave a URL or id, or says they just edited the page.",
     "notion.query": "Run a live structured query against a shared Notion database/data source. Prefer for owner/status/due/assignee filters instead of page-by-page search.",
     "notion.search-and-fetch": "Search shared Notion knowledge and fetch bounded live page bodies for the top matching pages. One-shot replacement for \"search, pick, fetch\" loops; bounded by search_limit ≤10, fetch_limit ≤3, body_char_limit ≤12000.",
+    "knowledge.search": "Search Almanac knowledge across both vault/PDF and shared Notion rails when the source is unclear. Bounded source-agnostic discovery; prefer precise vault.*, notion.*, or ssot.* tools when the user clearly names the lane.",
+    "knowledge.search-and-fetch": "Search and fetch Almanac knowledge across vault/PDF and shared Notion rails in one bounded call. Best first move for broad user questions that could live in files, PDFs, cloned docs, or shared Notion pages.",
 }
 
 
@@ -403,6 +405,49 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "fetch_limit": {"type": "integer", "minimum": 0, "maximum": 3, "default": 2},
             "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 12000, "default": 4000},
             "rerank": {"type": "boolean", "default": False},
+            "actor": ACTOR_PROP,
+        },
+        required=("query",),
+    ),
+    "knowledge.search": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "query": {"type": "string", "minLength": 1, "description": "Search text across Almanac vault/PDF and shared Notion knowledge."},
+            "sources": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["vault", "notion"]},
+                "description": "Optional rails to search. Defaults to both ['vault', 'notion'].",
+            },
+            "collections": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional qmd collections for the vault rail. Defaults to ['vault', 'vault-pdf-ingest'].",
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 5, "default": 5, "description": "Maximum search hits per source rail."},
+            "rerank": {"type": "boolean", "default": False, "description": "Only applies to the Notion rail; the vault bridge stays fast and does not rerank."},
+            "actor": ACTOR_PROP,
+        },
+        required=("query",),
+    ),
+    "knowledge.search-and-fetch": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "query": {"type": "string", "minLength": 1, "description": "Search and fetch text across Almanac vault/PDF and shared Notion knowledge."},
+            "sources": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["vault", "notion"]},
+                "description": "Optional rails to search. Defaults to both ['vault', 'notion'].",
+            },
+            "collections": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional qmd collections for the vault rail. Defaults to ['vault', 'vault-pdf-ingest'].",
+            },
+            "search_limit": {"type": "integer", "minimum": 1, "maximum": 5, "default": 5, "description": "Maximum search hits per source rail."},
+            "vault_fetch_limit": {"type": "integer", "minimum": 0, "maximum": 2, "default": 1},
+            "notion_fetch_limit": {"type": "integer", "minimum": 0, "maximum": 3, "default": 2},
+            "body_char_limit": {"type": "integer", "minimum": 200, "maximum": 12000, "default": 6000},
+            "rerank": {"type": "boolean", "default": False, "description": "Only applies to the Notion rail; the vault bridge stays fast and does not rerank."},
             "actor": ACTOR_PROP,
         },
         required=("query",),
@@ -1005,6 +1050,40 @@ def _compact_notion_fetch_result(result: dict[str, Any], *, body_char_limit: int
     }
 
 
+def _knowledge_sources_arg(arguments: dict[str, Any]) -> list[str]:
+    raw_sources = arguments.get("sources")
+    if raw_sources is None:
+        return ["vault", "notion"]
+    if not isinstance(raw_sources, list):
+        raise ValueError("sources must be an array containing vault and/or notion")
+    allowed = {"vault", "notion"}
+    sources: list[str] = []
+    for raw_source in raw_sources:
+        source = str(raw_source or "").strip().lower()
+        if not source:
+            continue
+        if source not in allowed:
+            raise ValueError("sources may only contain vault and notion")
+        if source not in sources:
+            sources.append(source)
+    return sources or ["vault", "notion"]
+
+
+def _knowledge_flat_hits(source_results: dict[str, Any]) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
+    vault_result = source_results.get("vault")
+    if isinstance(vault_result, dict):
+        for hit in ((vault_result.get("search") or {}).get("results") or []):
+            if isinstance(hit, dict):
+                hits.append({"source": "vault", **hit})
+    notion_result = source_results.get("notion")
+    if isinstance(notion_result, dict):
+        for hit in ((notion_result.get("search") or {}).get("results") or []):
+            if isinstance(hit, dict):
+                hits.append({"source": "notion", **hit})
+    return hits
+
+
 def _ssot_final_state(payload: dict[str, Any]) -> str:
     if bool(payload.get("applied")):
         return "applied"
@@ -1590,6 +1669,199 @@ class Handler(BaseHTTPRequestHandler):
                     "fetched": fetched,
                     "fetch_limit": fetch_limit,
                     "body_char_limit": body_char_limit,
+                }
+
+            if tool_name == "knowledge.search":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                agent_id = str(token_row["agent_id"])
+                actor = str(arguments.get("actor") or agent_id)
+                sources = _knowledge_sources_arg(arguments)
+                query = str(arguments.get("query") or "").strip()
+                if not query:
+                    raise ValueError("query required")
+                per_source_limit = _clamp_int(arguments.get("limit"), default=5, minimum=1, maximum=5)
+                source_results: dict[str, Any] = {}
+                errors: list[dict[str, str]] = []
+
+                if "vault" in sources:
+                    try:
+                        vault_args = dict(arguments)
+                        vault_args["limit"] = per_source_limit
+                        query_args = _qmd_query_arguments(vault_args)
+                        search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
+                        source_results["vault"] = {
+                            "ok": True,
+                            "qmd_url": cfg.qmd_url,
+                            "query": query_args["searches"][0]["query"],
+                            "collections": query_args["collections"],
+                            "search": _compact_qmd_search_result(search_result, cfg=cfg),
+                            "rerank": False,
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append({"source": "vault", "error": str(exc)})
+
+                if "notion" in sources:
+                    try:
+                        notion_result = notion_search(
+                            conn,
+                            cfg,
+                            agent_id=agent_id,
+                            query_text=query,
+                            limit=per_source_limit,
+                            rerank=_bool_arg(arguments, "rerank"),
+                            requested_by_actor=actor,
+                        )
+                        source_results["notion"] = {
+                            "ok": True,
+                            "search": _compact_notion_search_result(notion_result),
+                            "rerank": _bool_arg(arguments, "rerank"),
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append({"source": "notion", "error": str(exc)})
+
+                return {
+                    "ok": bool(source_results),
+                    "agent_id": agent_id,
+                    "query": query,
+                    "sources": sources,
+                    "source_results": source_results,
+                    "results": _knowledge_flat_hits(source_results),
+                    "errors": errors,
+                    "partial": bool(errors and source_results),
+                }
+
+            if tool_name == "knowledge.search-and-fetch":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                agent_id = str(token_row["agent_id"])
+                actor = str(arguments.get("actor") or agent_id)
+                sources = _knowledge_sources_arg(arguments)
+                query = str(arguments.get("query") or "").strip()
+                if not query:
+                    raise ValueError("query required")
+                per_source_limit = _clamp_int(arguments.get("search_limit"), default=5, minimum=1, maximum=5)
+                body_char_limit = _clamp_int(arguments.get("body_char_limit"), default=6000, minimum=200, maximum=12000)
+                source_results: dict[str, Any] = {}
+                errors: list[dict[str, str]] = []
+
+                if "vault" in sources:
+                    try:
+                        vault_args = dict(arguments)
+                        vault_args["search_limit"] = per_source_limit
+                        vault_args["fetch_limit"] = _clamp_int(
+                            arguments.get("vault_fetch_limit"),
+                            default=1,
+                            minimum=0,
+                            maximum=2,
+                        )
+                        vault_args["body_char_limit"] = body_char_limit
+                        query_args = _qmd_query_arguments(vault_args, limit_key="search_limit")
+                        try:
+                            search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
+                            search_fallback_used = False
+                        except Exception:
+                            query_args = _qmd_query_arguments(vault_args, limit_key="search_limit", include_vec=False)
+                            search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args, timeout=8)
+                            search_fallback_used = True
+                        search = _compact_qmd_search_result(search_result, cfg=cfg)
+                        fetched: list[dict[str, Any]] = []
+                        seen_files: set[str] = set()
+                        for hit in search.get("results", []):
+                            if not isinstance(hit, dict):
+                                continue
+                            file_value = str(hit.get("file") or hit.get("docid") or "").strip()
+                            if not file_value or file_value in seen_files:
+                                continue
+                            seen_files.add(file_value)
+                            try:
+                                fetched.append(
+                                    {
+                                        "search_hit": hit,
+                                        "fetch": _qmd_fetch_file(cfg, vault_args, file_value=file_value),
+                                    }
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                fetched.append({"search_hit": hit, "fetch_error": str(exc)})
+                            if len(fetched) >= int(vault_args["fetch_limit"]):
+                                break
+                        source_results["vault"] = {
+                            "ok": True,
+                            "qmd_url": cfg.qmd_url,
+                            "query": query_args["searches"][0]["query"],
+                            "collections": query_args["collections"],
+                            "search": search,
+                            "fetched": fetched,
+                            "fetch_limit": int(vault_args["fetch_limit"]),
+                            "rerank": False,
+                            "search_fallback_used": search_fallback_used,
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append({"source": "vault", "error": str(exc)})
+
+                if "notion" in sources:
+                    try:
+                        notion_result = notion_search(
+                            conn,
+                            cfg,
+                            agent_id=agent_id,
+                            query_text=query,
+                            limit=per_source_limit,
+                            rerank=_bool_arg(arguments, "rerank"),
+                            requested_by_actor=actor,
+                        )
+                        notion_fetch_limit = _clamp_int(
+                            arguments.get("notion_fetch_limit"),
+                            default=2,
+                            minimum=0,
+                            maximum=3,
+                        )
+                        fetched: list[dict[str, Any]] = []
+                        seen_targets: set[str] = set()
+                        raw_hits = notion_result.get("results") if isinstance(notion_result.get("results"), list) and notion_fetch_limit > 0 else []
+                        for hit in raw_hits:
+                            if not isinstance(hit, dict):
+                                continue
+                            target_id = _notion_search_hit_target_id(hit)
+                            if not target_id or target_id in seen_targets:
+                                continue
+                            seen_targets.add(target_id)
+                            try:
+                                fetch_result = notion_fetch(
+                                    conn,
+                                    cfg,
+                                    agent_id=agent_id,
+                                    target_id=target_id,
+                                    requested_by_actor=actor,
+                                )
+                                fetched.append(
+                                    {
+                                        "search_hit": _compact_notion_search_hit(hit),
+                                        "fetch": _compact_notion_fetch_result(fetch_result, body_char_limit=body_char_limit),
+                                    }
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                fetched.append({"search_hit": _compact_notion_search_hit(hit), "fetch_error": str(exc)})
+                            if len(fetched) >= notion_fetch_limit:
+                                break
+                        source_results["notion"] = {
+                            "ok": True,
+                            "search": _compact_notion_search_result(notion_result),
+                            "fetched": fetched,
+                            "fetch_limit": notion_fetch_limit,
+                            "body_char_limit": body_char_limit,
+                            "rerank": _bool_arg(arguments, "rerank"),
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append({"source": "notion", "error": str(exc)})
+
+                return {
+                    "ok": bool(source_results),
+                    "agent_id": agent_id,
+                    "query": query,
+                    "sources": sources,
+                    "source_results": source_results,
+                    "results": _knowledge_flat_hits(source_results),
+                    "errors": errors,
+                    "partial": bool(errors and source_results),
                 }
 
             if tool_name == "notion.fetch":

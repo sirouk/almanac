@@ -44,7 +44,7 @@ Do not read `/home/almanac/almanac/almanac-priv/config/almanac.env`, `.almanac-o
 
 When the user asks a question that could plausibly be answered by shared private documents, team notes, uploaded PDFs, internal terminology, company-specific plans, codenames, or a follow-up grounded in the current discussion, query qmd before you search the public web or answer from general model memory.
 
-When Almanac MCP is available, prefer `vault.search-and-fetch` for normal user-facing knowledge questions. It wraps qmd search plus fetch and returns the fetched body as plain structured text, including `vault-pdf-ingest` by default. Results include `source_metadata` so you can tell whether a hit came from a normal vault file, a generated PDF sidecar, or a cloned Git repo with branch/commit/remote provenance. Keep it fast: do not request reranking, large result sets, or multiple fetched bodies unless the user explicitly asks for a broad literature review. Use raw qmd MCP (`query`, `get`, `multi_get`) for debugging, advanced retrieval control, or when the Almanac MCP bridge itself is unavailable.
+When Almanac MCP is available and the source is unclear, prefer `knowledge.search-and-fetch` first. It searches vault/PDF and shared Notion together, returns source-tagged buckets, and prevents wrong-lane misses. When the user clearly asks for vault/PDF/file knowledge, prefer `vault.search-and-fetch`. It wraps qmd search plus fetch and returns the fetched body as plain structured text, including `vault-pdf-ingest` by default. Results include `source_metadata` so you can tell whether a hit came from a normal vault file, a generated PDF sidecar, or a cloned Git repo with branch/commit/remote provenance. Keep it fast: do not request reranking, large result sets, or multiple fetched bodies unless the user explicitly asks for a broad literature review. Use raw qmd MCP (`query`, `get`, `multi_get`) for debugging, advanced retrieval control, or when the Almanac MCP bridge itself is unavailable.
 
 ## Fast path on a deployed Almanac host
 
@@ -53,7 +53,7 @@ If the agent is already running on the Almanac host and the task is topic lookup
 1. read the current user's local Almanac routing state first:
    - `$HERMES_HOME/state/almanac-vault-reconciler.json`
    - `$HERMES_HOME/state/almanac-recent-events.json` when recent drift or fresh uploads may matter
-2. call Almanac MCP `vault.search-and-fetch` with the user's phrase, usually `search_limit: 5`, `fetch_limit: 1`, and no reranking
+2. call Almanac MCP `knowledge.search-and-fetch` when the source is unclear, or `vault.search-and-fetch` when the user clearly asks for files/PDFs/vault content
 3. only if that bridge fails, use `[managed:qmd-ref]` or the default local raw qmd rail `http://127.0.0.1:8181/mcp`
 4. only if the qmd path itself fails, inspect `docs/hermes-qmd-config.yaml`
 5. only if qmd still looks broken, inspect daemon/health files such as `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, or `bin/health.sh`
@@ -68,7 +68,7 @@ So:
 2. use `almanac-vaults` for subscription / catalog work
 3. use `almanac-vault-reconciler` when the stub layer or sync rail is in doubt
 
-For a simple knowledge question like "what is MESH?" on a deployed host, the first retrieval call should usually be `vault.search-and-fetch`, not a raw file search.
+For a simple knowledge question like "what is MESH?" on a deployed host, the first retrieval call should usually be `knowledge.search-and-fetch`, not a raw file search. If the user says "in the vault" or "in the PDF", narrow to `vault.search-and-fetch`.
 
 ## Minimal working qmd MCP recipe
 

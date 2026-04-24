@@ -79,6 +79,14 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
     expect(vault_combo["properties"]["lineNumbers"]["default"] is False, str(vault_combo))
     expect("rerank" not in vault_combo["properties"], str(vault_combo))
 
+    knowledge_combo = mod._tool_schema("knowledge.search-and-fetch")
+    expect(knowledge_combo["required"] == ["query"], str(knowledge_combo))
+    expect(knowledge_combo["properties"]["search_limit"]["maximum"] == 5, str(knowledge_combo))
+    expect(knowledge_combo["properties"]["vault_fetch_limit"]["maximum"] == 2, str(knowledge_combo))
+    expect(knowledge_combo["properties"]["notion_fetch_limit"]["maximum"] == 3, str(knowledge_combo))
+    expect(knowledge_combo["properties"]["body_char_limit"]["maximum"] == 12000, str(knowledge_combo))
+    expect(knowledge_combo["properties"]["sources"]["items"]["enum"] == ["vault", "notion"], str(knowledge_combo))
+
     ssot_status = mod._tool_schema("ssot.status")
     expect(ssot_status["required"] == ["pending_id"], str(ssot_status))
 
@@ -89,6 +97,8 @@ def test_almanac_mcp_tools_advertise_actionable_input_schemas() -> None:
         "vault.search",
         "vault.fetch",
         "vault.search-and-fetch",
+        "knowledge.search",
+        "knowledge.search-and-fetch",
         "agents.managed-memory",
         "agents.consume-notifications",
         "ssot.read",
@@ -142,6 +152,21 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "fetch_limit": 1,
             "body_char_limit": 6000,
         },
+        "knowledge.search": {
+            "query": "Chutes MESH",
+            "sources": ["vault", "notion"],
+            "limit": 5,
+            "rerank": False,
+        },
+        "knowledge.search-and-fetch": {
+            "query": "Chutes MESH",
+            "sources": ["vault", "notion"],
+            "search_limit": 5,
+            "vault_fetch_limit": 1,
+            "notion_fetch_limit": 2,
+            "body_char_limit": 6000,
+            "rerank": False,
+        },
         "ssot.write": {
             "operation": "append",
             "target_id": "page-id",
@@ -177,6 +202,8 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "vault.search": ("Prefer vault.search-and-fetch when you need the body",),
         "vault.fetch": ("return plain structured text", "Prefer over raw qmd.get"),
         "vault.search-and-fetch": ("One-shot replacement for qmd.query followed by qmd.get", "vault-pdf-ingest", "does not rerank"),
+        "knowledge.search": ("both vault/PDF and shared Notion", "source is unclear"),
+        "knowledge.search-and-fetch": ("vault/PDF and shared Notion", "files, PDFs, cloned docs, or shared Notion pages"),
     }
     for tool, needles in expectations.items():
         description = mod.TOOLS[tool]
@@ -216,6 +243,14 @@ def test_runtime_helpers_close_schema_bypass_gaps() -> None:
         expect("valid JSON object string" in str(exc), str(exc))
     else:
         raise AssertionError("malformed JSON object string should fail clearly")
+    expect(mod._knowledge_sources_arg({}) == ["vault", "notion"], "default knowledge sources should include both rails")
+    expect(mod._knowledge_sources_arg({"sources": ["notion", "vault", "notion"]}) == ["notion", "vault"], "knowledge sources should dedupe while preserving order")
+    try:
+        mod._knowledge_sources_arg({"sources": ["filesystem"]})
+    except ValueError as exc:
+        expect("vault and notion" in str(exc), str(exc))
+    else:
+        raise AssertionError("invalid knowledge source should fail clearly")
     print("PASS test_runtime_helpers_close_schema_bypass_gaps")
 
 

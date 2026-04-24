@@ -154,6 +154,8 @@ _TOKEN_TOOL_SUFFIXES = {
     "vault_search": "vault.search",
     "vault_fetch": "vault.fetch",
     "vault_search_and_fetch": "vault.search-and-fetch",
+    "knowledge_search": "knowledge.search",
+    "knowledge_search_and_fetch": "knowledge.search-and-fetch",
     "agents_managed_memory": "agents.managed-memory",
     "agents_consume_notifications": "agents.consume-notifications",
     "ssot_read": "ssot.read",
@@ -179,6 +181,30 @@ _TOKEN_TOOL_NAMES = set(_TOKEN_TOOL_SUFFIXES.values()) | {
 # managed-memory context.
 _MAX_RECIPES_PER_TURN = 2
 _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "knowledge.search-and-fetch",
+        (
+            "what do we know about",
+            "what do you know about",
+            "search our knowledge",
+            "search almanac knowledge",
+            "look across almanac",
+            "look across our docs",
+            "look across the knowledge base",
+            "knowledge base",
+            "find everything about",
+            "docs about",
+            "documents about",
+            "files or notion",
+            "vault or notion",
+        ),
+        (
+            "knowledge.search-and-fetch — source-agnostic Almanac retrieval. The plugin injects token automatically; omit token. Required: query. "
+            "Searches both vault/PDF and shared Notion by default; use sources:[\"vault\"] or [\"notion\"] to narrow. "
+            "Bounded defaults: search_limit ≤ 5 per source, vault_fetch_limit ≤ 2, notion_fetch_limit ≤ 3, body_char_limit ≤ 12000. "
+            "Best first call when the user did not clearly say whether the answer lives in files/PDFs or Notion."
+        ),
+    ),
     (
         "ssot.write",
         (

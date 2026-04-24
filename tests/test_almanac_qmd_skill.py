@@ -24,8 +24,9 @@ def test_qmd_skill_includes_literal_mcp_recipe() -> None:
     expect("combining `lex` and `vec` searches" in body, body)
     expect("structuredContent" in body, body)
     expect("prefer `vault.search-and-fetch`" in body, body)
+    expect("prefer `knowledge.search-and-fetch` first" in body, body)
     expect("including `vault-pdf-ingest` by default" in body, body)
-    expect("the first retrieval call should usually be `vault.search-and-fetch`" in body, body)
+    expect("the first retrieval call should usually be `knowledge.search-and-fetch`" in body, body)
     print("PASS test_qmd_skill_includes_literal_mcp_recipe")
 
 

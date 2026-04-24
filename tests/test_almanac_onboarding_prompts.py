@@ -416,11 +416,128 @@ def test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth() -> None:
             os.environ.update(old_env)
 
 
+def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_model_picker_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_model_picker_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:auto-failover",
+                "ALMANAC_CURATOR_CHANNELS": "discord",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            desired_unix_user = "almanac-model-picker"
+            try:
+                pwd.getpwnam(desired_unix_user)
+            except KeyError:
+                pass
+            else:
+                desired_unix_user = "almanac-model-picker-01"
+
+            def send(text: str):
+                return onboarding.process_onboarding_message(
+                    cfg,
+                    onboarding.IncomingMessage(
+                        platform="discord",
+                        chat_id="456",
+                        sender_id="456",
+                        text=text,
+                        sender_username="sirouk",
+                        sender_display_name="Chris",
+                    ),
+                    validate_bot_token=lambda raw: None,
+                )
+
+            expect("What should I call you?" in send("/start")[0].text, "missing opening prompt")
+            send("Chris")
+            send("Build impossible things calmly")
+            send(desired_unix_user)
+            model_prompt = send("Jeef")[0].text
+            expect("Which model provider" in model_prompt, model_prompt)
+            expect(model_prompt.index("1. Chutes") < model_prompt.index("2. Claude Opus"), model_prompt)
+            expect(model_prompt.index("2. Claude Opus") < model_prompt.index("3. OpenAI Codex"), model_prompt)
+
+            model_id_prompt = send("1")[0].text
+            expect("Which Chutes model" in model_id_prompt, model_id_prompt)
+            expect("auto-failover" in model_id_prompt, model_id_prompt)
+
+            thinking_prompt = send("zai-org/GLM-4.7")[0].text
+            expect("Pick the agent's thinking level" in thinking_prompt, thinking_prompt)
+            expect("1. medium" in thinking_prompt, thinking_prompt)
+            expect("6. none" in thinking_prompt, thinking_prompt)
+            expect("Chutes thinking mode" in thinking_prompt, thinking_prompt)
+
+            approval_prompt = send("3")[0].text
+            expect("operator for approval" in approval_prompt, approval_prompt)
+            session = control.find_active_onboarding_session(
+                conn,
+                platform="discord",
+                sender_id="456",
+            )
+            answers = session.get("answers") or {}
+            expect(answers["model_preset"] == "chutes", str(answers))
+            expect(answers["model_id"] == "zai-org/GLM-4.7", str(answers))
+            expect(answers["reasoning_effort"] == "xhigh", str(answers))
+
+            review = onboarding._operator_review_message(cfg, session)  # noqa: SLF001
+            expect("Model provider: Chutes (`chutes`)" in review, review)
+            expect("Model id: zai-org/GLM-4.7" in review, review)
+            expect("Thinking level: xhigh" in review, review)
+
+            provider_setup = onboarding.resolve_provider_setup(  # noqa: SLF001
+                cfg,
+                "chutes",
+                model_id="zai-org/GLM-4.7",
+                reasoning_effort="xhigh",
+            )
+            expect(provider_setup.provider_id == "chutes", str(provider_setup))
+            expect(provider_setup.base_url == "https://llm.chutes.ai/v1", str(provider_setup))
+            expect(provider_setup.model_id == "zai-org/GLM-4.7:THINKING", str(provider_setup))
+            expect(provider_setup.reasoning_effort == "xhigh", str(provider_setup))
+            print("PASS test_onboarding_model_picker_is_chutes_first_and_collects_reasoning")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_discord_prompt_and_operator_review_reflect_primary_control_channel()
     test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
     test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth()
-    print("PASS all 3 onboarding prompt regression tests")
+    test_onboarding_model_picker_is_chutes_first_and_collects_reasoning()
+    print("PASS all 4 onboarding prompt regression tests")
     return 0
 
 

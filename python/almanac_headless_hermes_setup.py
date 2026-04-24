@@ -52,6 +52,42 @@ def _ensure_model_config(default_model: str) -> dict[str, Any]:
     return config
 
 
+def _normalized_reasoning_effort(spec: dict[str, Any]) -> str:
+    raw = str(spec.get("reasoning_effort") or "").strip().lower().replace(" ", "")
+    aliases = {
+        "default": "medium",
+        "recommended": "medium",
+        "normal": "medium",
+        "standard": "medium",
+        "med": "medium",
+        "extra": "xhigh",
+        "extrahigh": "xhigh",
+        "veryhigh": "xhigh",
+        "max": "xhigh",
+        "maximum": "xhigh",
+        "off": "none",
+        "disabled": "none",
+        "disable": "none",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in {"minimal", "low", "medium", "high", "xhigh", "none"} else ""
+
+
+def _write_reasoning_effort(spec: dict[str, Any]) -> None:
+    from hermes_cli.config import load_config, save_config
+
+    effort = _normalized_reasoning_effort(spec)
+    if not effort:
+        return
+    config = load_config()
+    agent_cfg = config.get("agent")
+    if not isinstance(agent_cfg, dict):
+        agent_cfg = {}
+    agent_cfg["reasoning_effort"] = effort
+    config["agent"] = agent_cfg
+    save_config(config)
+
+
 def _seed_openai_codex(spec: dict[str, Any], secret_path: str) -> None:
     from hermes_cli.auth import _save_codex_tokens, _update_config_for_provider
 
@@ -374,12 +410,17 @@ def _validate_runtime(spec: dict[str, Any]) -> dict[str, Any]:
     else:
         model_id = str(model_cfg or "")
         provider_id = ""
+    agent_cfg = config.get("agent")
+    reasoning_effort = ""
+    if isinstance(agent_cfg, dict):
+        reasoning_effort = str(agent_cfg.get("reasoning_effort") or "").strip()
     return {
         "provider": runtime.get("provider"),
         "base_url": runtime.get("base_url"),
         "api_mode": runtime.get("api_mode"),
         "model": model_id,
         "configured_provider": provider_id,
+        "reasoning_effort": reasoning_effort,
     }
 
 
@@ -427,6 +468,7 @@ def main() -> None:
     else:
         _seed_api_key_provider(spec, args.secret_path)
 
+    _write_reasoning_effort(spec)
     payload = _validate_runtime(spec)
     payload.update(identity_paths)
     print(json.dumps(payload, sort_keys=True))

@@ -194,10 +194,42 @@ def test_render_soul_fails_loudly_on_unknown_placeholder() -> None:
     print("PASS test_render_soul_fails_loudly_on_unknown_placeholder")
 
 
+def test_reasoning_effort_is_written_to_hermes_agent_config() -> None:
+    module = load_module(SCRIPT, "almanac_headless_setup_reasoning_effort_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fake_pkg_root = write_fake_hermes_cli(root)
+        hermes_config = root / "fake-hermes-config.json"
+        hermes_config.write_text("{}\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        old_path = list(sys.path)
+        os.environ["FAKE_HERMES_CONFIG_PATH"] = str(hermes_config)
+        sys.path.insert(0, str(fake_pkg_root))
+        try:
+            module._write_reasoning_effort({"reasoning_effort": "xhigh"})
+            cfg = json.loads(hermes_config.read_text(encoding="utf-8"))
+            expect(cfg["agent"]["reasoning_effort"] == "xhigh", cfg)
+
+            module._write_reasoning_effort({"reasoning_effort": "turbo"})
+            cfg = json.loads(hermes_config.read_text(encoding="utf-8"))
+            expect(cfg["agent"]["reasoning_effort"] == "xhigh", cfg)
+
+            module._write_reasoning_effort({"reasoning_effort": "off"})
+            cfg = json.loads(hermes_config.read_text(encoding="utf-8"))
+            expect(cfg["agent"]["reasoning_effort"] == "none", cfg)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+            sys.path[:] = old_path
+    print("PASS test_reasoning_effort_is_written_to_hermes_agent_config")
+
+
 def main() -> int:
     test_identity_only_writes_soul_and_dual_surface_prefill_config()
     test_render_soul_fails_loudly_on_unknown_placeholder()
-    print("PASS all 2 headless Hermes setup tests")
+    test_reasoning_effort_is_written_to_hermes_agent_config()
+    print("PASS all 3 headless Hermes setup tests")
     return 0
 
 

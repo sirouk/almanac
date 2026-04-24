@@ -22,6 +22,7 @@ ANTHROPIC_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 ANTHROPIC_OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
 ANTHROPIC_OAUTH_SCOPES = "org:create_api_key user:profile user:inference"
 CHUTES_BASE_URL = "https://llm.chutes.ai/v1"
+REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "none")
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class ProviderSetupSpec:
     base_url: str = ""
     api_mode: str = ""
     is_custom: bool = False
+    reasoning_effort: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,10 +60,51 @@ def provider_setup_from_dict(raw: dict[str, Any] | None) -> ProviderSetupSpec | 
         base_url=str(raw.get("base_url") or "").strip(),
         api_mode=str(raw.get("api_mode") or "").strip(),
         is_custom=bool(raw.get("is_custom")),
+        reasoning_effort=normalize_reasoning_effort(str(raw.get("reasoning_effort") or ""), default="medium"),
     )
 
 
-def resolve_provider_setup(cfg: Any, preset: str) -> ProviderSetupSpec:
+def normalize_reasoning_effort(raw_value: str, *, default: str = "") -> str:
+    value = str(raw_value or "").strip().lower().replace(" ", "")
+    aliases = {
+        "": default,
+        "default": default or "medium",
+        "recommended": default or "medium",
+        "normal": "medium",
+        "standard": "medium",
+        "med": "medium",
+        "extra": "xhigh",
+        "extrahigh": "xhigh",
+        "veryhigh": "xhigh",
+        "max": "xhigh",
+        "maximum": "xhigh",
+        "off": "none",
+        "disabled": "none",
+        "disable": "none",
+        "no": "none",
+        "false": "none",
+    }
+    value = aliases.get(value, value)
+    return value if value in REASONING_EFFORTS else ""
+
+
+def _chutes_model_for_reasoning(model_id: str, reasoning_effort: str) -> str:
+    base_model = str(model_id or "").strip()
+    if base_model.upper().endswith(":THINKING"):
+        base_model = base_model[: -len(":THINKING")]
+    effort = normalize_reasoning_effort(reasoning_effort)
+    if effort and effort != "none":
+        return f"{base_model}:THINKING"
+    return base_model
+
+
+def resolve_provider_setup(
+    cfg: Any,
+    preset: str,
+    *,
+    model_id: str = "",
+    reasoning_effort: str = "",
+) -> ProviderSetupSpec:
     normalized_preset = str(preset or "").strip().lower() or "codex"
     raw_target = str(getattr(cfg, "model_presets", {}).get(normalized_preset) or "").strip()
     if not raw_target or ":" not in raw_target:
@@ -70,6 +113,8 @@ def resolve_provider_setup(cfg: Any, preset: str) -> ProviderSetupSpec:
     provider_hint, model_hint = raw_target.split(":", 1)
     provider_hint = provider_hint.strip().lower()
     model_hint = model_hint.strip()
+    requested_model_id = str(model_id or "").strip() or model_hint
+    normalized_reasoning_effort = normalize_reasoning_effort(reasoning_effort, default="medium")
     if not provider_hint or not model_hint:
         raise ValueError(f"Model preset `{normalized_preset}` is incomplete: {raw_target}")
 
@@ -77,51 +122,62 @@ def resolve_provider_setup(cfg: Any, preset: str) -> ProviderSetupSpec:
         return ProviderSetupSpec(
             preset=normalized_preset,
             provider_id="openai-codex",
-            model_id="gpt-5.4",
+            model_id=requested_model_id
+            if requested_model_id.lower() not in {"codex", "openai:codex"}
+            else "gpt-5.4",
             display_name="OpenAI Codex",
             auth_flow="codex-device",
             base_url=CODEX_BASE_URL,
+            reasoning_effort=normalized_reasoning_effort,
         )
 
     if provider_hint == "anthropic" and model_hint.lower() in {"claude-opus", "opus"}:
         return ProviderSetupSpec(
             preset=normalized_preset,
             provider_id="anthropic",
-            model_id="claude-opus-4-6",
+            model_id=_normalize_anthropic_model(
+                requested_model_id
+                if requested_model_id.lower() not in {"claude-opus", "opus"}
+                else "claude-opus-4-6"
+            ),
             display_name="Claude Opus",
             auth_flow="anthropic-credential",
+            reasoning_effort=normalized_reasoning_effort,
         )
 
     if provider_hint == "chutes":
         return ProviderSetupSpec(
             preset=normalized_preset,
             provider_id="chutes",
-            model_id=model_hint,
+            model_id=_chutes_model_for_reasoning(requested_model_id, normalized_reasoning_effort),
             display_name="Chutes",
             auth_flow="api-key",
             key_env="CHUTES_API_KEY",
             base_url=CHUTES_BASE_URL,
             api_mode="chat_completions",
             is_custom=True,
+            reasoning_effort=normalized_reasoning_effort,
         )
 
     if provider_hint == "openai-codex":
         return ProviderSetupSpec(
             preset=normalized_preset,
             provider_id="openai-codex",
-            model_id=model_hint or "gpt-5.4",
+            model_id=requested_model_id or "gpt-5.4",
             display_name="OpenAI Codex",
             auth_flow="codex-device",
             base_url=CODEX_BASE_URL,
+            reasoning_effort=normalized_reasoning_effort,
         )
 
     if provider_hint == "anthropic":
         return ProviderSetupSpec(
             preset=normalized_preset,
             provider_id="anthropic",
-            model_id=_normalize_anthropic_model(model_hint),
+            model_id=_normalize_anthropic_model(requested_model_id),
             display_name="Anthropic",
             auth_flow="anthropic-credential",
+            reasoning_effort=normalized_reasoning_effort,
         )
 
     generic_api_key_providers: dict[str, tuple[str, str, str]] = {
@@ -141,11 +197,12 @@ def resolve_provider_setup(cfg: Any, preset: str) -> ProviderSetupSpec:
         return ProviderSetupSpec(
             preset=normalized_preset,
             provider_id=provider_hint,
-            model_id=model_hint,
+            model_id=requested_model_id,
             display_name=display_name,
             auth_flow="api-key",
             key_env=key_env,
             base_url=base_url,
+            reasoning_effort=normalized_reasoning_effort,
         )
 
     raise ValueError(
@@ -170,7 +227,12 @@ def provider_credential_prompt(spec: ProviderSetupSpec) -> str:
             "This path is for the user's Claude account sign-in, not an Anthropic API key."
         )
     if spec.auth_flow == "api-key":
-        label = spec.key_env or "API key"
+        if spec.provider_id == "chutes":
+            return (
+                "One more thing. Send your Chutes API key now. "
+                f"I’ll store it privately and configure Hermes through Chutes at {CHUTES_BASE_URL} "
+                f"with `{spec.model_id}`."
+            )
         return f"One more thing. Send the {spec.display_name} API key now and I’ll wire it into your agent privately."
     if spec.auth_flow == "codex-device":
         return "One more thing. I’m minting an OpenAI Codex sign-in code for you now."

@@ -38,6 +38,7 @@ from almanac_onboarding_provider_auth import (
     ProviderSetupSpec,
     complete_anthropic_pkce_authorization,
     normalize_api_key_credential,
+    normalize_reasoning_effort,
     provider_browser_auth_prompt,
     provider_credential_prompt,
     provider_secret_name,
@@ -64,6 +65,37 @@ PLATFORM_ALIASES = {
     "discord": "discord",
     "dc": "discord",
 }
+MODEL_PROVIDER_ORDER = ("chutes", "opus", "codex")
+MODEL_PROVIDER_LABELS = {
+    "chutes": "Chutes",
+    "opus": "Claude Opus",
+    "codex": "OpenAI Codex",
+}
+MODEL_PROVIDER_DESCRIPTIONS = {
+    "chutes": "recommended; Chutes API key + model id, wired as a custom OpenAI-compatible Hermes provider",
+    "opus": "Claude account OAuth; best for long, careful collaboration",
+    "codex": "OpenAI Codex sign-in; best for code-heavy lanes",
+}
+MODEL_PROVIDER_ALIASES = {
+    "chute": "chutes",
+    "chutes": "chutes",
+    "chutesai": "chutes",
+    "chutes.ai": "chutes",
+    "claude": "opus",
+    "anthropic": "opus",
+    "opus": "opus",
+    "openai": "codex",
+    "openaicodex": "codex",
+    "codex": "codex",
+}
+REASONING_EFFORT_OPTIONS = (
+    ("medium", "Recommended default; balanced speed and depth"),
+    ("high", "Deeper thinking for harder work"),
+    ("xhigh", "Maximum depth where the provider supports it"),
+    ("low", "Faster, lighter thinking"),
+    ("minimal", "Smallest reasoning budget"),
+    ("none", "Disable provider thinking/reasoning hints"),
+)
 
 
 @dataclass(frozen=True)
@@ -210,13 +242,71 @@ def _parse_platform_choice(raw_text: str) -> str:
 
 def _parse_model_preset(cfg: Config, raw_text: str) -> str:
     normalized = raw_text.strip().lower()
+    rows = _model_option_rows(cfg)
+    if normalized.isdigit():
+        index = int(normalized) - 1
+        if 0 <= index < len(rows):
+            return rows[index][0]
     if normalized in cfg.model_presets:
         return normalized
     compact = normalized.replace(" ", "").replace("-", "").replace("_", "")
+    alias = MODEL_PROVIDER_ALIASES.get(compact) or MODEL_PROVIDER_ALIASES.get(normalized)
+    if alias in cfg.model_presets:
+        return alias
     for key in cfg.model_presets:
         if compact == key.replace("-", "").replace("_", ""):
             return key
     return ""
+
+
+def _model_option_rows(cfg: Config) -> list[tuple[str, str, str]]:
+    ordered_keys = [key for key in MODEL_PROVIDER_ORDER if key in cfg.model_presets]
+    ordered_keys.extend(sorted(key for key in cfg.model_presets if key not in ordered_keys))
+    rows: list[tuple[str, str, str]] = []
+    for key in ordered_keys:
+        rows.append(
+            (
+                key,
+                MODEL_PROVIDER_LABELS.get(key, key),
+                MODEL_PROVIDER_DESCRIPTIONS.get(key, str(cfg.model_presets.get(key) or "")),
+            )
+        )
+    return rows
+
+
+def _model_options(cfg: Config) -> str:
+    lines = []
+    for index, (key, label, description) in enumerate(_model_option_rows(cfg), start=1):
+        lines.append(f"{index}. {label} (`{key}`) - {description}")
+    return "\n".join(lines)
+
+
+def _configured_model_id(cfg: Config, preset: str) -> str:
+    target = str(cfg.model_presets.get(preset) or "").strip()
+    if ":" not in target:
+        return target
+    return target.split(":", 1)[1].strip()
+
+
+def _parse_model_id(cfg: Config, preset: str, raw_text: str) -> tuple[str, str]:
+    value = raw_text.strip().strip("`")
+    default_model = _configured_model_id(cfg, preset)
+    if value.lower() in {"", "default", "recommended", "auto"}:
+        return default_model, ""
+    if any(char.isspace() for char in value):
+        return "", "Use a single model id with no spaces, like `auto-failover` or `deepseek-ai/DeepSeek-V3.2-Speciale`."
+    if value.upper().endswith(":THINKING"):
+        value = value[: -len(":THINKING")]
+    return value, ""
+
+
+def _parse_reasoning_effort(raw_text: str) -> str:
+    normalized = raw_text.strip().lower()
+    if normalized.isdigit():
+        index = int(normalized) - 1
+        if 0 <= index < len(REASONING_EFFORT_OPTIONS):
+            return REASONING_EFFORT_OPTIONS[index][0]
+    return normalize_reasoning_effort(normalized, default="medium")
 
 
 def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
@@ -229,6 +319,8 @@ def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
     )
     session_id = str(session.get("session_id") or "")
     model_preset = str(answers.get("model_preset") or "codex")
+    model_id = str(answers.get("model_id") or "").strip()
+    reasoning_effort = str(answers.get("reasoning_effort") or "").strip()
     bot_platform = str(answers.get("bot_platform") or "telegram")
     lines = [
         f"Onboarding request {session_id}",
@@ -239,7 +331,9 @@ def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
         f"Purpose: {answers.get('purpose') or '(missing)'}",
         f"Bot platform: {bot_platform}",
         f"Preferred bot name: {answers.get('preferred_bot_name') or '(missing)'}",
-        f"Model preset: {model_preset}",
+        f"Model provider: {MODEL_PROVIDER_LABELS.get(model_preset, model_preset)} (`{model_preset}`)",
+        f"Model id: {model_id or _configured_model_id(cfg, model_preset) or '(provider default)'}",
+        f"Thinking level: {reasoning_effort or 'medium'}",
         f"Approve: ./bin/almanac-ctl onboarding approve {session_id}",
         f"Deny: ./bin/almanac-ctl onboarding deny {session_id} --reason 'optional reason'",
     ]
@@ -284,10 +378,6 @@ def _bot_platform_name(session: dict[str, Any]) -> str:
 
 def _preferred_bot_name(session: dict[str, Any]) -> str:
     return str(session.get("answers", {}).get("preferred_bot_name") or "your bot")
-
-
-def _model_options(cfg: Config) -> str:
-    return ", ".join(sorted(cfg.model_presets))
 
 
 def _session_requester_identity(session: dict[str, Any]) -> str:
@@ -514,7 +604,39 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "awaiting-bot-name":
         return f"What name should your own {bot_platform or 'chat'} bot carry? A short plain-English name is enough."
     if state == "awaiting-model-preset":
-        return f"Which model preset should this agent use? Available presets: `{_model_options(cfg)}`."
+        return (
+            "Which model provider should power this agent?\n"
+            "Reply with the number or name:\n"
+            f"{_model_options(cfg)}"
+        )
+    if state == "awaiting-model-id":
+        model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
+        default_model = _configured_model_id(cfg, model_preset) or "auto-failover"
+        label = MODEL_PROVIDER_LABELS.get(model_preset, model_preset)
+        if model_preset == "chutes":
+            return (
+                "Which Chutes model should this agent use?\n"
+                f"Reply with a model id, or `default` for `{default_model}`.\n"
+                "Examples: `auto-failover`, `deepseek-ai/DeepSeek-V3.2-Speciale`, `zai-org/GLM-4.7`."
+            )
+        return f"Which {label} model should this agent use? Reply with a model id, or `default` for `{default_model}`."
+    if state == "awaiting-thinking-level":
+        model_preset = str(answers.get("model_preset") or "").strip().lower()
+        chutes_note = (
+            "\nFor Chutes, any level except `none` enables Chutes thinking mode when the selected model supports it."
+            if model_preset == "chutes"
+            else ""
+        )
+        options = "\n".join(
+            f"{index}. {effort} - {description}"
+            for index, (effort, description) in enumerate(REASONING_EFFORT_OPTIONS, start=1)
+        )
+        return (
+            "Pick the agent's thinking level.\n"
+            "Reply with the number or name:\n"
+            f"{options}"
+            f"{chutes_note}"
+        )
     if state == "awaiting-operator-approval":
         notified_at = str(session.get("operator_notified_at") or "").strip()
         waiting_note = ""
@@ -839,12 +961,42 @@ def process_onboarding_message(
         if state == "awaiting-model-preset":
             model_preset = _parse_model_preset(cfg, text)
             if not model_preset:
-                return [OutboundMessage(incoming.chat_id, f"Choose one of: `{_model_options(cfg)}`.")]
+                return [OutboundMessage(incoming.chat_id, "Choose one of these providers:\n" + _model_options(cfg))]
+            next_state = "awaiting-thinking-level"
+            answers_update: dict[str, Any] = {"model_preset": model_preset}
+            if model_preset == "chutes":
+                next_state = "awaiting-model-id"
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state=next_state,
+                answers=answers_update,
+            )
+            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+
+        if state == "awaiting-model-id":
+            answers = session.get("answers", {})
+            model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
+            model_id, reason = _parse_model_id(cfg, model_preset, text)
+            if not model_id:
+                return [OutboundMessage(incoming.chat_id, reason or session_prompt(cfg, session))]
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-thinking-level",
+                answers={"model_id": model_id},
+            )
+            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+
+        if state == "awaiting-thinking-level":
+            reasoning_effort = _parse_reasoning_effort(text)
+            if not reasoning_effort:
+                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
                 state="awaiting-operator-approval",
-                answers={"model_preset": model_preset},
+                answers={"reasoning_effort": reasoning_effort},
             )
             if not updated.get("operator_notified_at"):
                 _notify_operator(conn, cfg, updated)
@@ -872,7 +1024,12 @@ def process_onboarding_message(
                     bot_platform,
                     text,
                 )
-                provider_setup = resolve_provider_setup(cfg, str(answers.get("model_preset") or "codex"))
+                provider_setup = resolve_provider_setup(
+                    cfg,
+                    str(answers.get("model_preset") or "codex"),
+                    model_id=str(answers.get("model_id") or ""),
+                    reasoning_effort=str(answers.get("reasoning_effort") or ""),
+                )
             except Exception as exc:  # noqa: BLE001
                 return [OutboundMessage(incoming.chat_id, f"I couldn't continue onboarding yet: {exc}")]
 

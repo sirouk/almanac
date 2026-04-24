@@ -894,7 +894,12 @@ def _migrate_legacy_onboarding_session(conn, cfg: Config, session: dict[str, Any
         return session
 
     model_preset = str(answers.get("model_preset") or "codex").strip().lower() or "codex"
-    provider_setup = resolve_provider_setup(cfg, model_preset)
+    provider_setup = resolve_provider_setup(
+        cfg,
+        model_preset,
+        model_id=str(answers.get("model_id") or ""),
+        reasoning_effort=str(answers.get("reasoning_effort") or ""),
+    )
     update_answers: dict[str, Any] = {"provider_setup": provider_setup.as_dict()}
     new_state = "awaiting-provider-credential"
     if provider_setup.auth_flow == "codex-device":

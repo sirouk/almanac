@@ -64,6 +64,7 @@ def send_text(
     *,
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
+    parse_mode: str = "",
 ) -> None:
     telegram_send_message(
         bot_token=bot_token,
@@ -71,6 +72,7 @@ def send_text(
         text=text,
         reply_to_message_id=reply_to_message_id,
         reply_markup=reply_markup,
+        parse_mode=parse_mode,
     )
 
 
@@ -563,6 +565,7 @@ def _handle_user_message(
             reply.text,
             reply_to_message_id=reply.reply_to_message_id,
             reply_markup=reply.telegram_reply_markup,
+            parse_mode=reply.telegram_parse_mode,
         )
 
 

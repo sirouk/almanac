@@ -153,9 +153,10 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             scrubbed_text = str(bundle["scrubbed_text"])
             followup_text = str(bundle["followup_text"])
 
-            expect("Shared password: sup3r-secret" in full_text, full_text)
+            expect("Shared password:\n```\nsup3r-secret\n```" in full_text, full_text)
             expect("Shared password: sup3r-secret" not in scrubbed_text, scrubbed_text)
             expect("Shared password: removed after confirmation." in scrubbed_text, scrubbed_text)
+            expect(str(bundle.get("telegram_parse_mode") or "") == "", str(bundle))
             expect("Your lane is ready." in full_text, full_text)
             expect("send the rest of your links" in full_text, full_text)
             expect(f"- Nextcloud login: {unix_user} (same shared password)" in followup_text, followup_text)
@@ -183,6 +184,25 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
                 discord_button["custom_id"] == completion.completion_ack_callback_data(str(session["session_id"])),
                 discord_button,
             )
+
+            telegram_bundle = completion.completion_message_bundle(
+                cfg,
+                session_id="onb_telegram",
+                bot_reference="@Jeef",
+                access={
+                    "unix_user": unix_user,
+                    "username": unix_user,
+                    "password": "copy<&secret",
+                    "dashboard_url": "https://kor.tail77f45e.ts.net:30011/",
+                    "code_url": "https://kor.tail77f45e.ts.net:40011/",
+                },
+                home=user_home,
+                bot_platform="telegram",
+            )
+            telegram_text = str(telegram_bundle["full_text"])
+            expect(str(telegram_bundle.get("telegram_parse_mode") or "") == "HTML", str(telegram_bundle))
+            expect("Shared password:\n<code>copy&lt;&amp;secret</code>" in telegram_text, telegram_text)
+            expect("copy<&secret" not in telegram_text, telegram_text)
             print("PASS test_completion_bundle_lists_resources_and_scrubs_password")
         finally:
             os.environ.clear()

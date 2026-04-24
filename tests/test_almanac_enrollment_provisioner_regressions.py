@@ -299,9 +299,10 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
                 },
             )()
             provisioner._notify_user_via_curator = (
-                lambda cfg, *, session, message, telegram_reply_markup=None, discord_components=None: deliveries.append(
+                lambda cfg, *, session, message, telegram_reply_markup=None, telegram_parse_mode="", discord_components=None: deliveries.append(
                     {
                         "message": message,
+                        "telegram_parse_mode": telegram_parse_mode,
                         "session_id": str(session.get("session_id") or ""),
                     }
                 )

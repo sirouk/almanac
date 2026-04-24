@@ -241,6 +241,7 @@ def _notify_user_via_curator(
     session: dict,
     message: str,
     telegram_reply_markup: dict[str, Any] | None = None,
+    telegram_parse_mode: str = "",
     discord_components: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     try:
@@ -249,6 +250,7 @@ def _notify_user_via_curator(
             session,
             message,
             telegram_reply_markup=telegram_reply_markup,
+            telegram_parse_mode=telegram_parse_mode,
             discord_components=discord_components,
         )
     except Exception:
@@ -482,6 +484,7 @@ def _send_completion_bundle(conn, cfg: Config, session: dict[str, Any]) -> None:
             session=session,
             message=str(completion_bundle.get("full_text") or ""),
             telegram_reply_markup=completion_bundle.get("telegram_reply_markup"),
+            telegram_parse_mode=str(completion_bundle.get("telegram_parse_mode") or ""),
             discord_components=completion_bundle.get("discord_components"),
         )
     if isinstance(delivery, dict):

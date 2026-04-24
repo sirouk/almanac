@@ -6,6 +6,7 @@ import pwd
 import shutil
 import shlex
 import subprocess
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 
@@ -172,6 +173,7 @@ def completion_message_bundle(
     home: Path,
     notion_status_line: str = "",
     notion_followup_line: str = "",
+    bot_platform: str = "",
     discord_note: bool = False,
 ) -> dict[str, Any]:
     nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
@@ -229,10 +231,26 @@ def completion_message_bundle(
         followup_lines.append(
             "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
         )
-    full_lines = list(first_lines)
-    full_lines.append(f"Shared password: {access.get('password')}")
+    password = str(access.get("password") or "")
+    platform = str(bot_platform or "").strip().lower()
+    ack_line = "After you record it safely, click the button below. I’ll remove the password from this message and then send the rest of your links."
+
+    telegram_parse_mode = ""
+    if platform == "discord":
+        full_lines = list(first_lines)
+        full_lines.extend(["Shared password:", "```", password, "```"])
+        ack_text = ack_line
+    elif platform == "telegram":
+        full_lines = [html_escape(line, quote=False) for line in first_lines]
+        full_lines.extend(["Shared password:", f"<code>{html_escape(password, quote=False)}</code>"])
+        telegram_parse_mode = "HTML"
+        ack_text = html_escape(ack_line, quote=False)
+    else:
+        full_lines = list(first_lines)
+        full_lines.append(f"Shared password: {password}")
+        ack_text = ack_line
     full_lines.append("")
-    full_lines.append("After you record it safely, click the button below. I’ll remove the password from this message and then send the rest of your links.")
+    full_lines.append(ack_text)
 
     scrubbed_lines = list(first_lines)
     scrubbed_lines.append("Shared password: removed after confirmation.")
@@ -242,6 +260,7 @@ def completion_message_bundle(
         "scrubbed_text": "\n".join(scrubbed_lines),
         "followup_text": "\n".join(followup_lines),
         "telegram_reply_markup": completion_ack_telegram_markup(session_id),
+        "telegram_parse_mode": telegram_parse_mode,
         "discord_components": completion_ack_discord_components(session_id),
     }
 
@@ -305,6 +324,7 @@ def completion_bundle_for_session(
         home=home,
         notion_status_line=notion_status_line,
         notion_followup_line=notion_followup_line,
+        bot_platform=bot_platform,
         discord_note=(bot_platform == "discord"),
     )
 

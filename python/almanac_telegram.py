@@ -49,6 +49,7 @@ def telegram_send_message(
     text: str,
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
+    parse_mode: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -58,6 +59,8 @@ def telegram_send_message(
         payload["reply_to_message_id"] = int(reply_to_message_id)
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     return _request_json(
         _telegram_url(bot_token, "sendMessage"),
         method="POST",
@@ -114,6 +117,7 @@ def telegram_edit_message_text(
     message_id: int,
     text: str,
     reply_markup: dict[str, Any] | None = None,
+    parse_mode: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -122,6 +126,8 @@ def telegram_edit_message_text(
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     return _request_json(
         _telegram_url(bot_token, "editMessageText"),
         method="POST",

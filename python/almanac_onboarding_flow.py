@@ -122,6 +122,7 @@ class OutboundMessage:
     text: str
     reply_to_message_id: int | None = None
     telegram_reply_markup: dict[str, Any] | None = None
+    telegram_parse_mode: str = ""
     discord_components: list[dict[str, Any]] | None = None
 
 
@@ -178,6 +179,7 @@ def send_session_message(
     text: str,
     *,
     telegram_reply_markup: dict[str, Any] | None = None,
+    telegram_parse_mode: str = "",
     discord_components: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     platform = str(session.get("platform") or "").strip().lower()
@@ -193,6 +195,7 @@ def send_session_message(
                     chat_id=chat_id,
                     text=text,
                     reply_markup=telegram_reply_markup,
+                    parse_mode=telegram_parse_mode,
                 )
             except Exception:
                 return None
@@ -869,6 +872,7 @@ def _completion_reply_for_session(
             str(session.get("chat_id") or ""),
             str(bundle.get("full_text") or fallback_text),
             telegram_reply_markup=bundle.get("telegram_reply_markup"),
+            telegram_parse_mode=str(bundle.get("telegram_parse_mode") or ""),
             discord_components=bundle.get("discord_components"),
         )
     ]

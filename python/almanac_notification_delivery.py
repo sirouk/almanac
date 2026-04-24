@@ -86,6 +86,7 @@ def deliver_telegram(
     bot_token: str,
     chat_id: str,
     reply_markup: dict[str, Any] | None = None,
+    parse_mode: str = "",
 ) -> str | None:
     if not bot_token:
         return "TELEGRAM_BOT_TOKEN is not configured"
@@ -97,6 +98,7 @@ def deliver_telegram(
             chat_id=chat_id,
             text=message,
             reply_markup=reply_markup,
+            parse_mode=parse_mode,
         )
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown telegram delivery error"
@@ -200,11 +202,13 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
             reply_markup = extra.get("telegram_reply_markup")
             if not isinstance(reply_markup, dict):
                 reply_markup = None
+            parse_mode = str(extra.get("telegram_parse_mode") or "")
             return deliver_telegram(
                 row["message"],
                 bot_token=bot_token,
                 chat_id=chat_id,
                 reply_markup=reply_markup,
+                parse_mode=parse_mode,
             )
         # tui-only: no external delivery; row stays readable via notifications.list.
         return None

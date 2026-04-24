@@ -310,6 +310,9 @@ def test_completion_bundle_pins_remote_setup_helper_to_deployed_commit() -> None
                 in followup_text,
                 followup_text,
             )
+            expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user in followup_text, followup_text)
+            expect("reply here with `/ssh-key <public key>`" in followup_text, followup_text)
+            expect(f"Remote SSH target after key install: {unix_user}@kor.tail77f45e.ts.net" in followup_text, followup_text)
             expect(
                 "https://raw.githubusercontent.com/sirouk/almanac/main/bin/setup-remote-hermes-client.sh"
                 not in followup_text,
@@ -393,6 +396,7 @@ def test_completion_bundle_falls_back_to_branch_when_deployed_commit_lacks_helpe
                 in followup_text,
                 followup_text,
             )
+            expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user in followup_text, followup_text)
             expect(
                 "https://raw.githubusercontent.com/sirouk/almanac/3d2f51bb8d532f03a9869244c357b73ef6afddbf/bin/setup-remote-hermes-client.sh"
                 not in followup_text,

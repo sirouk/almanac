@@ -34,6 +34,7 @@ from almanac_control import (
     get_agent,
     get_agent_identity,
     get_notion_identity_claim,
+    get_onboarding_session,
     get_pending_operator_action,
     issue_auto_provision_token,
     json_loads,
@@ -158,6 +159,34 @@ def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedPro
     with log_path.open("w", encoding="utf-8") as handle:
         return subprocess.run(
             [str(cfg.repo_dir / "deploy.sh"), "upgrade"],
+            cwd=str(cfg.repo_dir),
+            env=env,
+            text=True,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+
+
+def _run_install_agent_ssh_key(
+    cfg: Config,
+    *,
+    unix_user: str,
+    pubkey: str,
+    log_path: Path,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["ALMANAC_CONFIG_FILE"] = str(cfg.config_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as handle:
+        return subprocess.run(
+            [
+                str(cfg.repo_dir / "bin" / "install-agent-ssh-key.sh"),
+                "--unix-user",
+                unix_user,
+                "--pubkey",
+                pubkey,
+            ],
             cwd=str(cfg.repo_dir),
             env=env,
             text=True,
@@ -1460,6 +1489,126 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
     )
 
 
+def _run_pending_remote_ssh_key_actions(conn, cfg: Config) -> None:
+    while True:
+        action = get_pending_operator_action(conn, action_kind="install-agent-ssh-key")
+        if action is None:
+            return
+        action_id = int(action["id"])
+        requested_by = str(action.get("requested_by") or "user").strip() or "user"
+        try:
+            payload = json.loads(str(action.get("requested_target") or "{}"))
+            if not isinstance(payload, dict):
+                raise ValueError("requested_target is not a JSON object")
+            unix_user = str(payload.get("unix_user") or "").strip()
+            pubkey = str(payload.get("pubkey") or "").strip()
+            tailnet_host = str(payload.get("tailscale_host") or "").strip()
+            session_id = str(payload.get("session_id") or "").strip()
+            if not unix_user:
+                raise ValueError("missing unix_user")
+            if not pubkey:
+                raise ValueError("missing pubkey")
+        except Exception as exc:  # noqa: BLE001
+            finish_operator_action(
+                conn,
+                action_id=action_id,
+                status="failed",
+                note=f"invalid remote ssh key action payload: {exc}",
+            )
+            _queue_operator_message(
+                conn,
+                cfg,
+                f"Remote SSH key install request {action_id} failed before execution: {exc}",
+            )
+            continue
+
+        log_path = _operator_action_log_dir(cfg) / f"install-agent-ssh-key-{action_id}.log"
+        mark_operator_action_running(
+            conn,
+            action_id=action_id,
+            note=f"installing remote SSH key for {unix_user} requested by {requested_by}",
+            log_path=str(log_path),
+        )
+        note_refresh_job(
+            conn,
+            job_name="operator-install-agent-ssh-key",
+            job_kind="operator-action",
+            target_id=unix_user,
+            schedule="on demand via onboarding remote SSH key intake",
+            status="warn",
+            note=f"installing remote SSH key action {action_id} for {unix_user}",
+        )
+        result = _run_install_agent_ssh_key(cfg, unix_user=unix_user, pubkey=pubkey, log_path=log_path)
+        tail = _tail_text(log_path)
+        if result.returncode == 0:
+            finish_operator_action(
+                conn,
+                action_id=action_id,
+                status="completed",
+                note=f"installed remote SSH key for {unix_user}",
+                log_path=str(log_path),
+            )
+            note_refresh_job(
+                conn,
+                job_name="operator-install-agent-ssh-key",
+                job_kind="operator-action",
+                target_id=unix_user,
+                schedule="on demand via onboarding remote SSH key intake",
+                status="ok",
+                note=f"installed remote SSH key action {action_id} for {unix_user}",
+            )
+            session = get_onboarding_session(conn, session_id, redact_secrets=False) if session_id else None
+            if session is not None:
+                target = f"{unix_user}@{tailnet_host}" if tailnet_host else unix_user
+                send_session_message(
+                    cfg,
+                    session,
+                    (
+                        "Remote SSH key installed. "
+                        f"You can now connect over Tailscale with `ssh {target}` or run your generated remote Hermes wrapper."
+                    ),
+                )
+            _queue_operator_message(
+                conn,
+                cfg,
+                f"Installed remote SSH key for {unix_user}. Log: {log_path}",
+            )
+            continue
+
+        finish_operator_action(
+            conn,
+            action_id=action_id,
+            status="failed",
+            note=f"remote SSH key install failed with exit code {result.returncode}",
+            log_path=str(log_path),
+        )
+        note_refresh_job(
+            conn,
+            job_name="operator-install-agent-ssh-key",
+            job_kind="operator-action",
+            target_id=unix_user,
+            schedule="on demand via onboarding remote SSH key intake",
+            status="fail",
+            note=f"failed remote SSH key action {action_id} for {unix_user}",
+        )
+        message = (
+            f"Remote SSH key install failed for {unix_user}.\n"
+            f"Requested by: {requested_by}\n"
+            f"Exit code: {result.returncode}\n"
+            f"Log: {log_path}"
+        )
+        if tail:
+            message += "\nRecent output:\n" + tail
+        _queue_operator_message(conn, cfg, message)
+        session = get_onboarding_session(conn, session_id, redact_secrets=False) if session_id else None
+        if session is not None:
+            send_session_message(
+                cfg,
+                session,
+                "I could not install that remote SSH key yet. The operator has the failure log and can retry after repair.",
+            )
+
+
 def _schedule_failure(
     conn,
     cfg: Config,
@@ -1672,6 +1821,7 @@ def main() -> None:
             _run_one(conn, cfg, row)
         _run_pending_onboarding_gateway_configs(conn, cfg)
         _run_pending_onboarding_notion_verifications(conn, cfg)
+        _run_pending_remote_ssh_key_actions(conn, cfg)
         _run_pending_operator_actions(conn, cfg)
 
 

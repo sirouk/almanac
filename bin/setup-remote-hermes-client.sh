@@ -144,10 +144,13 @@ Remote Hermes client prepared
   wrapper: $wrapper_path
   target: $TARGET_USER@$TARGET_HOST
 
-Public key to send to Curator:
+Public key to send back to Curator:
 $(sed 's/^/  /' "${KEY_PATH}.pub")
 
-Ask Curator to install that key for Unix user $TARGET_USER with Almanac's install-agent-ssh-key.sh helper.
+Reply to Curator with:
+  /ssh-key $(cat "${KEY_PATH}.pub")
+
+Curator will bind that key to Unix user $TARGET_USER and install it on the host with Tailscale-only SSH restrictions.
 After they do, run:
   $wrapper_path chat
 EOF

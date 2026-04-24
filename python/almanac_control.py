@@ -3632,11 +3632,28 @@ def request_operator_action(
     requested_by: str,
     request_source: str = "",
     requested_target: str = "",
+    dedupe_by_target: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     normalized_kind = str(action_kind or "").strip().lower()
     if not normalized_kind:
         raise ValueError("action_kind is required")
-    active = get_active_operator_action(conn, action_kind=normalized_kind)
+    requested_target_value = str(requested_target or "").strip()
+    if dedupe_by_target:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM operator_actions
+            WHERE action_kind = ?
+              AND requested_target = ?
+              AND status IN ('pending', 'running')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (normalized_kind, requested_target_value),
+        ).fetchone()
+        active = _operator_action_row_to_dict(row)
+    else:
+        active = get_active_operator_action(conn, action_kind=normalized_kind)
     if active is not None:
         return active, False
     now_iso = utc_now_iso()
@@ -3648,7 +3665,7 @@ def request_operator_action(
         """,
         (
             normalized_kind,
-            str(requested_target or "").strip(),
+            requested_target_value,
             str(requested_by or "").strip() or "operator",
             str(request_source or "").strip(),
             now_iso,

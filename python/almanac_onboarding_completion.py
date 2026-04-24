@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import pwd
 import shutil
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -156,6 +157,12 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
     return ["Shared Almanac links:", *[f"- {line}" for line in human_lines]]
 
 
+def _remote_ssh_target(access: dict[str, Any]) -> tuple[str, str]:
+    remote_user = str(access.get("unix_user") or access.get("username") or "").strip()
+    remote_host = str(access.get("tailscale_host") or _shared_tailnet_host()).strip()
+    return remote_user, remote_host
+
+
 def completion_message_bundle(
     cfg: Config,
     *,
@@ -189,12 +196,21 @@ def completion_message_bundle(
     ]
     remote_setup_url = _remote_client_setup_url(cfg)
     if remote_setup_url:
-        followup_lines.append(
-            f"Optional tailnet-only remote CLI from your own machine: curl -fsSL {remote_setup_url} | bash"
-        )
-        followup_lines.append(
-            "That helper creates a local SSH key and wrapper; send the printed public key back to Curator so it can be installed for your Unix user."
-        )
+        remote_user, remote_host = _remote_ssh_target(access)
+        if remote_user and remote_host:
+            followup_lines.append(
+                "Optional tailnet-only remote CLI from your own machine: "
+                f"curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}"
+            )
+            followup_lines.append(
+                "That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
+                "`/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
+            )
+            followup_lines.append(f"Remote SSH target after key install: {remote_user}@{remote_host}")
+        else:
+            followup_lines.append(
+                "Optional tailnet-only remote CLI: unavailable until this host has a Tailscale DNS name and your Unix user is recorded."
+            )
     first_lines = [line for line in first_lines if line]
     followup_lines = [line for line in followup_lines if line]
     if discord_note:

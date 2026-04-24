@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import pwd
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from almanac_agent_access import load_access_state
 from almanac_control import (
     Config,
     RateLimitError,
@@ -17,11 +19,13 @@ from almanac_control import (
     connect_db,
     find_latest_onboarding_session_for_sender,
     find_active_onboarding_session,
+    get_agent,
     get_notion_identity_claim,
     onboarding_session_has_started_provisioning,
     operator_telegram_action_extra,
     queue_notification,
     request_bootstrap,
+    request_operator_action,
     save_onboarding_session,
     start_notion_identity_claim,
     start_onboarding_session,
@@ -51,6 +55,9 @@ CANCEL_COMMANDS = {"/cancel", "cancel"}
 VERIFY_NOTION_COMMANDS = {"/verify-notion", "verify-notion", "verify notion"}
 NOTION_READY_COMMANDS = {"ready"}
 UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
+SSH_PUBLIC_KEY_PATTERN = re.compile(
+    r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\s+[A-Za-z0-9+/=]+(?:\s+.*)?$"
+)
 PLATFORM_ALIASES = {
     "telegram": "telegram",
     "tg": "telegram",
@@ -302,6 +309,121 @@ def _provider_auth_state(session: dict[str, Any]) -> dict[str, Any]:
     answers = session.get("answers", {})
     raw = answers.get("provider_browser_auth")
     return raw if isinstance(raw, dict) else {}
+
+
+def _shared_tailnet_host() -> str:
+    try:
+        from almanac_resource_map import shared_tailnet_host
+
+        return shared_tailnet_host(
+            tailscale_serve_enabled=(config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() == "1"),
+            tailscale_dns_name=config_env_value("TAILSCALE_DNS_NAME", "").strip(),
+            nextcloud_trusted_domain=config_env_value("NEXTCLOUD_TRUSTED_DOMAIN", "").strip(),
+        )
+    except Exception:
+        return ""
+
+
+def _extract_remote_ssh_pubkey(raw_text: str) -> tuple[bool, str]:
+    text = raw_text.strip()
+    if not text:
+        return False, ""
+    lowered = text.lower()
+    for prefix in ("/ssh-key", "/sshkey", "ssh-key", "sshkey"):
+        if lowered == prefix:
+            return True, ""
+        if lowered.startswith(prefix + " "):
+            return True, text[len(prefix):].strip()
+    if SSH_PUBLIC_KEY_PATTERN.fullmatch(text):
+        return True, text
+    return False, ""
+
+
+def _remote_ssh_target_for_agent(agent: dict[str, Any]) -> tuple[str, str]:
+    unix_user = str(agent.get("unix_user") or "").strip()
+    hermes_home = Path(str(agent.get("hermes_home") or "")).expanduser()
+    access = load_access_state(hermes_home) if hermes_home else {}
+    return unix_user, str(access.get("tailscale_host") or _shared_tailnet_host()).strip()
+
+
+def _queue_remote_ssh_key_install(
+    conn,
+    cfg: Config,
+    incoming: IncomingMessage,
+    *,
+    pubkey: str,
+) -> list[OutboundMessage]:
+    if not SSH_PUBLIC_KEY_PATTERN.fullmatch(pubkey.strip()):
+        return [
+            OutboundMessage(
+                incoming.chat_id,
+                "That does not look like an SSH public key. Run the remote helper again and reply with `/ssh-key ` followed by the printed `ssh-ed25519 ...` line.",
+            )
+        ]
+    session = find_latest_onboarding_session_for_sender(
+        conn,
+        platform=incoming.platform,
+        sender_id=incoming.sender_id,
+        redact_secrets=False,
+    )
+    if session is None or str(session.get("state") or "") != "completed":
+        return [
+            OutboundMessage(
+                incoming.chat_id,
+                "I can install a remote SSH key after your agent lane is completed. Finish onboarding first, then send `/ssh-key <public key>` here.",
+            )
+        ]
+    agent_id = str(session.get("linked_agent_id") or "").strip()
+    if not agent_id:
+        return [OutboundMessage(incoming.chat_id, "I found your completed onboarding session, but it is not linked to an agent yet.")]
+    agent = get_agent(conn, agent_id)
+    if agent is None:
+        return [OutboundMessage(incoming.chat_id, "I found your lane record, but the linked agent is missing. Ask the operator to run a health check.")]
+    unix_user, tailnet_host = _remote_ssh_target_for_agent(agent)
+    if not unix_user:
+        return [OutboundMessage(incoming.chat_id, "I found your agent, but its Unix user is missing. Ask the operator to repair the enrollment record.")]
+    if not tailnet_host:
+        return [
+            OutboundMessage(
+                incoming.chat_id,
+                "I can queue the key, but this host does not have a Tailscale hostname recorded yet. Ask the operator to set `TAILSCALE_DNS_NAME` or enable Tailscale Serve first.",
+            )
+        ]
+    payload = {
+        "session_id": str(session.get("session_id") or ""),
+        "agent_id": agent_id,
+        "unix_user": unix_user,
+        "pubkey": pubkey.strip(),
+        "platform": incoming.platform,
+        "chat_id": incoming.chat_id,
+        "sender_id": incoming.sender_id,
+        "tailscale_host": tailnet_host,
+    }
+    action, created = request_operator_action(
+        conn,
+        action_kind="install-agent-ssh-key",
+        requested_by=format_user_label(
+            incoming.platform,
+            incoming.sender_username,
+            incoming.sender_display_name,
+            incoming.sender_id,
+        ),
+        request_source=f"{incoming.platform}-remote-ssh-key",
+        requested_target=json.dumps(payload, sort_keys=True),
+        dedupe_by_target=True,
+    )
+    queued_text = "queued" if created else "already queued"
+    ssh_target = f"{unix_user}@{tailnet_host}"
+    return [
+        OutboundMessage(
+            incoming.chat_id,
+            (
+                f"Remote SSH key install {queued_text} for `{unix_user}`. "
+                "The root maintenance loop will install it with Tailscale-only restrictions. "
+                f"After it confirms, connect to `{ssh_target}` or run your generated remote Hermes wrapper."
+            ),
+        )
+    ]
 
 def _codex_browser_auth_error_state(message: str) -> dict[str, Any]:
     compact = message.strip() or "unknown OpenAI Codex auth error"
@@ -627,6 +749,10 @@ def process_onboarding_message(
             except RateLimitError as exc:
                 return [OutboundMessage(incoming.chat_id, f"Slow down a bit. Try again in about {exc.retry_after_seconds}s.")]
             return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session), incoming.reply_to_message_id)]
+
+        is_remote_ssh_key, remote_ssh_pubkey = _extract_remote_ssh_pubkey(text)
+        if is_remote_ssh_key:
+            return _queue_remote_ssh_key_install(conn, cfg, incoming, pubkey=remote_ssh_pubkey)
 
         session = find_active_onboarding_session(conn, platform=incoming.platform, sender_id=incoming.sender_id)
         if session is None and lower in VERIFY_NOTION_COMMANDS:

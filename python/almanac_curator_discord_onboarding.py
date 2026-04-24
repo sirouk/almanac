@@ -331,6 +331,11 @@ async def main() -> None:
     async def verify_notion_command(interaction) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, "/verify-notion")
 
+    @tree.command(name="ssh-key", description="Install your local remote-Hermes SSH public key for tailnet access.")
+    @app_commands.describe(public_key="The ssh-ed25519/ssh-rsa public key printed by the remote Hermes helper")
+    async def ssh_key_command(interaction, public_key: str) -> None:  # type: ignore[no-untyped-def]
+        await _handle_dm_command(interaction, f"/ssh-key {public_key.strip()}")
+
     @tree.command(name="approve", description="Approve an onboarding session, provisioning request, or pending SSOT write.")
     @app_commands.describe(target_id="onb_xxx, req_xxx, or ssotw_xxx")
     async def approve_command(interaction, target_id: str) -> None:  # type: ignore[no-untyped-def]

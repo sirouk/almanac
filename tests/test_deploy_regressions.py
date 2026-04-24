@@ -1597,9 +1597,20 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     expect(
         "ensure_gateway_running_without_interrupting_active_turns" in refresh_helper
         and "is-active almanac-user-agent-gateway.service" in refresh_helper
-        and "restart almanac-user-agent-gateway.service" not in refresh_helper
+        and 'if [[ "$RESTART_GATEWAY" == "1" ]]' in refresh_helper
         and "restart deferred to avoid interrupting user work" in refresh_helper,
-        "refresh-agent-install should not restart an active Hermes gateway and interrupt user turns",
+        "refresh-agent-install should defer active gateway restarts unless explicitly told the shared runtime changed",
+    )
+    expect(
+        "--restart-gateway" in refresh_helper
+        and "Hermes gateway runtime restart" in refresh_helper,
+        "refresh-agent-install should support an explicit runtime-upgrade gateway restart path",
+    )
+    expect(
+        "shared_hermes_runtime_commit" in text
+        and "report_shared_hermes_runtime_transition" in text
+        and "gateway_restart_policy" in helper,
+        "active-agent realignment should have an explicit Hermes-runtime transition policy",
     )
     expect(
         "update_agent_display_name" in helper,
@@ -1610,12 +1621,26 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "run_root_install should repair enrolled-user runtime access after syncing the shared repo",
     )
     expect(
+        "hermes_runtime_before" in install
+        and "hermes_runtime_after" in install
+        and 'gateway_restart_policy="restart"' in install
+        and 'realign_active_enrolled_agents_root "$gateway_restart_policy"' in install,
+        "run_root_install should restart enrolled gateways only when the shared Hermes runtime commit changes",
+    )
+    expect(
         "chown_managed_paths" in install,
         "run_root_install should use the scoped ownership helper instead of blanket chowning private state",
     )
     expect(
         "repair_active_agent_runtime_access" in upgrade,
         "run_root_upgrade should repair enrolled-user runtime access after syncing the shared repo",
+    )
+    expect(
+        "hermes_runtime_before" in upgrade
+        and "hermes_runtime_after" in upgrade
+        and 'gateway_restart_policy="restart"' in upgrade
+        and 'realign_active_enrolled_agents_root "$gateway_restart_policy"' in upgrade,
+        "run_root_upgrade should restart enrolled gateways only when the shared Hermes runtime commit changes",
     )
     expect(
         "chown_managed_paths" in upgrade,

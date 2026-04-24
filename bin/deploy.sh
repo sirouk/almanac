@@ -3335,8 +3335,41 @@ PY
   )
 }
 
+shared_hermes_runtime_commit() {
+  local repo_dir="${RUNTIME_DIR:-}/hermes-agent-src"
+
+  if [[ -z "${RUNTIME_DIR:-}" || ! -d "$repo_dir/.git" ]]; then
+    return 0
+  fi
+  git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true
+}
+
+report_shared_hermes_runtime_transition() {
+  local before_commit="${1:-}"
+  local after_commit="${2:-}"
+
+  if [[ -z "$after_commit" ]]; then
+    return 0
+  fi
+  if [[ "$before_commit" == "$after_commit" ]]; then
+    echo "Hermes runtime unchanged at ${after_commit:0:12}; active gateways stay undisturbed."
+    return 0
+  fi
+  if [[ -n "$before_commit" ]]; then
+    echo "Hermes runtime updated ${before_commit:0:12} -> ${after_commit:0:12}; enrolled agent gateways will restart to pick up the new runtime."
+  else
+    echo "Hermes runtime installed at ${after_commit:0:12}; enrolled agent gateways will be aligned to it."
+  fi
+}
+
 realign_active_enrolled_agents_root() {
   local agent_id="" unix_user="" hermes_home="" bot_label="" user_name="" uid=""
+  local gateway_restart_policy="${1:-defer}"
+  local restart_gateway_arg=()
+
+  if [[ "$gateway_restart_policy" == "restart" ]]; then
+    restart_gateway_arg=(--restart-gateway)
+  fi
 
   while IFS=$'\t' read -r agent_id unix_user hermes_home bot_label user_name; do
     [[ -n "$agent_id" && -n "$unix_user" && -n "$hermes_home" ]] || continue
@@ -3369,7 +3402,8 @@ PY
       --hermes-home "$hermes_home" \
       --repo-dir "$ALMANAC_REPO_DIR" \
       --bot-name "$bot_label" \
-      --user-name "$user_name" >/dev/null
+      --user-name "$user_name" \
+      "${restart_gateway_arg[@]}" >/dev/null
   done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
 import json
 import sqlite3
@@ -3582,6 +3616,9 @@ run_root_install() {
   local source_commit=""
   local source_branch=""
   local source_repo_url=""
+  local hermes_runtime_before=""
+  local hermes_runtime_after=""
+  local gateway_restart_policy="defer"
 
   env \
     ALMANAC_USER="$ALMANAC_USER" \
@@ -3610,7 +3647,13 @@ run_root_install() {
   init_public_repo_if_needed
   configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
 
+  hermes_runtime_before="$(shared_hermes_runtime_commit)"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
+  hermes_runtime_after="$(shared_hermes_runtime_commit)"
+  report_shared_hermes_runtime_transition "$hermes_runtime_before" "$hermes_runtime_after"
+  if [[ -n "$hermes_runtime_after" && "$hermes_runtime_before" != "$hermes_runtime_after" ]]; then
+    gateway_restart_policy="restart"
+  fi
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
@@ -3619,7 +3662,7 @@ run_root_install() {
   configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
-  realign_active_enrolled_agents_root
+  realign_active_enrolled_agents_root "$gateway_restart_policy"
 
   local uid=""
   restart_shared_user_services_root
@@ -3690,6 +3733,9 @@ run_root_upgrade() {
   local upstream_commit=""
   local uid=""
   local agent_payload_file=""
+  local hermes_runtime_before=""
+  local hermes_runtime_after=""
+  local gateway_restart_policy="defer"
 
   tmp_dir="$(mktemp -d /tmp/almanac-upgrade.XXXXXX)"
   checkout_dir="$tmp_dir/repo"
@@ -3730,7 +3776,13 @@ run_root_upgrade() {
     ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
     "$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
+  hermes_runtime_before="$(shared_hermes_runtime_commit)"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
+  hermes_runtime_after="$(shared_hermes_runtime_commit)"
+  report_shared_hermes_runtime_transition "$hermes_runtime_before" "$hermes_runtime_after"
+  if [[ -n "$hermes_runtime_after" && "$hermes_runtime_before" != "$hermes_runtime_after" ]]; then
+    gateway_restart_policy="restart"
+  fi
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
@@ -3739,7 +3791,7 @@ run_root_upgrade() {
   configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
-  realign_active_enrolled_agents_root
+  realign_active_enrolled_agents_root "$gateway_restart_policy"
 
   restart_shared_user_services_root
   uid="$(id -u "$ALMANAC_USER")"

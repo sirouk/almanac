@@ -7,12 +7,14 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: refresh-agent-install.sh --unix-user <user> [--bot-name <name>] [--user-name <name>] [--hermes-home <path>] [--repo-dir <path>]
+Usage: refresh-agent-install.sh --unix-user <user> [--bot-name <name>] [--user-name <name>] [--hermes-home <path>] [--repo-dir <path>] [--restart-gateway]
 
 Re-sync Almanac skills/plugins into an enrolled user's Hermes home, upsert the
 default Almanac MCP server entries without interactive prompts, refresh the
 identity prompt, then kick the managed-memory refresh and restart agent-facing
-services.
+services. By default, an already-running gateway is left alone to avoid
+interrupting user work. Pass --restart-gateway only when the shared Hermes
+runtime itself changed and the live gateway process must pick up new code.
 EOF
 }
 
@@ -21,6 +23,7 @@ BOT_NAME=""
 USER_NAME=""
 HERMES_HOME_ARG=""
 REPO_DIR_ARG=""
+RESTART_GATEWAY="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
     --repo-dir)
       REPO_DIR_ARG="${2:-}"
       shift 2
+      ;;
+    --restart-gateway)
+      RESTART_GATEWAY="1"
+      shift
       ;;
     -h|--help)
       usage
@@ -282,6 +289,10 @@ PY
 ensure_gateway_running_without_interrupting_active_turns() {
   local state=""
   if run_user_systemctl is-active almanac-user-agent-gateway.service >/dev/null 2>&1; then
+    if [[ "$RESTART_GATEWAY" == "1" ]]; then
+      try_user_systemctl "Hermes gateway runtime restart" restart almanac-user-agent-gateway.service
+      return 0
+    fi
     SERVICE_NOTES+=("    - Hermes gateway: already active; restart deferred to avoid interrupting user work")
     return 0
   fi

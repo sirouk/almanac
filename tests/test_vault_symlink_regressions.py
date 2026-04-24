@@ -49,6 +49,27 @@ UNIX_USER={unix_user!r}
 """
 
 
+def bash_script_for_user_links(*, root: Path, vault_dir: Path, unix_user: str, extra: str = "") -> str:
+    """Build a harness for ensure_user_vault_link and its alias fanout."""
+    text = REFRESH_SH.read_text(encoding="utf-8")
+    one_link_fn = extract_function(text, "ensure_one_vault_link")
+    user_link_fn = extract_function(text, "ensure_user_vault_link")
+    home_dir = root / "home" / "user"
+    hermes_home = home_dir / ".local" / "share" / "almanac-agent" / "hermes-home"
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+VAULT_DIR={str(vault_dir)!r}
+UNIX_USER={unix_user!r}
+TARGET_VAULT_LINK_PATH={str(home_dir / "Vault")!r}
+TARGET_ALMANAC_LINK_PATH={str(home_dir / "Almanac")!r}
+TARGET_HERMES_HOME={str(hermes_home)!r}
+{one_link_fn}
+{user_link_fn}
+
+{extra}
+"""
+
+
 def run_bash(script: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "-c", script], text=True, capture_output=True, check=False
@@ -146,12 +167,34 @@ def test_vault_symlink_is_idempotent_when_already_correct() -> None:
     print("PASS test_vault_symlink_is_idempotent_when_already_correct")
 
 
+def test_user_vault_links_create_vault_and_almanac_aliases() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        vault_dir.mkdir()
+        script = bash_script_for_user_links(
+            root=root,
+            vault_dir=vault_dir,
+            unix_user=os.environ.get("USER", "nobody"),
+            extra="ensure_user_vault_link",
+        )
+        result = run_bash(script)
+        expect(result.returncode == 0, f"user link fanout failed: {result.stderr!r}")
+        home_dir = root / "home" / "user"
+        hermes_home = home_dir / ".local" / "share" / "almanac-agent" / "hermes-home"
+        for path in (home_dir / "Vault", home_dir / "Almanac", hermes_home / "Vault", hermes_home / "Almanac"):
+            expect(path.is_symlink(), f"expected symlink at {path}")
+            expect(os.readlink(path) == str(vault_dir), f"bad target for {path}: {os.readlink(path)!r}")
+    print("PASS test_user_vault_links_create_vault_and_almanac_aliases")
+
+
 def main() -> int:
     test_vault_symlink_creates_fresh_link_to_vault_dir()
     test_vault_symlink_replaces_stale_symlink_to_wrong_target()
     test_vault_symlink_refuses_to_overwrite_real_directory()
     test_vault_symlink_is_idempotent_when_already_correct()
-    print("PASS all 4 vault symlink regression tests")
+    test_user_vault_links_create_vault_and_almanac_aliases()
+    print("PASS all 5 vault symlink regression tests")
     return 0
 
 

@@ -87,6 +87,7 @@ RUNTIME_HERMES="$(require_runtime_hermes)"
 ALMANAC_QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
 TARGET_LOCAL_BIN_DIR="$HOME_DIR/.local/bin"
 TARGET_VAULT_LINK_PATH="${ALMANAC_USER_VAULT_LINK_PATH:-$HOME_DIR/Vault}"
+TARGET_ALMANAC_LINK_PATH="${ALMANAC_USER_ALMANAC_LINK_PATH:-$HOME_DIR/Almanac}"
 
 run_as_target() {
   local -a cmd=("$@")
@@ -190,8 +191,12 @@ ensure_one_vault_link() {
 }
 
 ensure_user_vault_link() {
-  ensure_one_vault_link "$TARGET_VAULT_LINK_PATH" || return 1
-  ensure_one_vault_link "$TARGET_HERMES_HOME/Vault" || return 1
+  local status=0
+  ensure_one_vault_link "$TARGET_VAULT_LINK_PATH" || status=1
+  ensure_one_vault_link "$TARGET_ALMANAC_LINK_PATH" || status=1
+  ensure_one_vault_link "$TARGET_HERMES_HOME/Vault" || status=1
+  ensure_one_vault_link "$TARGET_HERMES_HOME/Almanac" || status=1
+  return "$status"
 }
 
 install_local_user_wrappers() {

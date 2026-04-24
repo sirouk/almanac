@@ -37,14 +37,41 @@ data_dir = code_state_dir / "data"
 app_name = f"Almanac Agent Code ({state.get('unix_user') or 'agent'})"
 
 vault_dir = ""
-for candidate in (workspace_home / "Vault", hermes_home / "Vault"):
+vault_alias = ""
+
+def symlink_target_dir(candidate: Path) -> str:
     if candidate.is_symlink():
         target = os.readlink(candidate)
         if not os.path.isabs(target):
             target = str((candidate.parent / target).resolve(strict=False))
         if Path(target).is_dir():
+            return target
+    return ""
+
+for alias_name in ("Almanac", "Vault"):
+    target = symlink_target_dir(workspace_home / alias_name)
+    if target:
+        vault_dir = target
+        vault_alias = alias_name
+        break
+
+if not vault_dir:
+    for alias_name in ("Almanac", "Vault"):
+        target = symlink_target_dir(hermes_home / alias_name)
+        if target:
             vault_dir = target
             break
+
+if vault_dir and vault_alias != "Almanac":
+    almanac_alias = workspace_home / "Almanac"
+    if not almanac_alias.exists() and not almanac_alias.is_symlink():
+        try:
+            almanac_alias.symlink_to(vault_dir)
+            vault_alias = "Almanac"
+        except OSError:
+            pass
+
+open_path = f"/workspace/{vault_alias}" if vault_alias else "/workspace"
 
 values = {
     "CODE_PORT": str(state["code_port"]),
@@ -54,6 +81,7 @@ values = {
     "CONFIG_DIR": str(config_dir),
     "DATA_DIR": str(data_dir),
     "VAULT_DIR": vault_dir,
+    "OPEN_PATH": open_path,
     "APP_NAME": app_name,
 }
 for key, value in values.items():
@@ -144,4 +172,4 @@ exec podman run \
   --bind-addr 0.0.0.0:8080 \
   --auth password \
   --app-name "$APP_NAME" \
-  /workspace
+  "$OPEN_PATH"

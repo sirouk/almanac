@@ -62,9 +62,13 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect(settings_path.is_file(), f"expected settings.json to exist at {settings_path}")
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
         expect(settings.get("workbench.colorTheme") == "Default Dark Modern", settings_path.read_text(encoding="utf-8"))
+        almanac_alias = workspace_home / "Almanac"
+        expect(almanac_alias.is_symlink(), f"expected friendly Almanac symlink at {almanac_alias}")
+        expect(os.readlink(almanac_alias) == str(vault_dir), f"bad Almanac alias target: {os.readlink(almanac_alias)!r}")
         podman_args = podman_log.read_text(encoding="utf-8")
         expect(f"{workspace_home}:/workspace:rw" in podman_args, podman_args)
         expect(f"{vault_dir}:{vault_dir}:rw" in podman_args, podman_args)
+        expect("/workspace/Almanac" in podman_args, podman_args)
 
         settings_path.write_text(
             json.dumps({"workbench.colorTheme": "Solarized Light"}, indent=2) + "\n",

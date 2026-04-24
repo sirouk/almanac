@@ -21,18 +21,31 @@ if ! command -v podman >/dev/null 2>&1; then
 fi
 
 eval "$(
-  python3 - "$ACCESS_STATE_FILE" "$HERMES_HOME" <<'PY'
+  python3 - "$ACCESS_STATE_FILE" "$WORKSPACE_HOME" "$HERMES_HOME" <<'PY'
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
 
 state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-hermes_home = Path(sys.argv[2])
+workspace_home = Path(sys.argv[2])
+hermes_home = Path(sys.argv[3])
 code_state_dir = hermes_home / "state" / "code-server"
 config_dir = code_state_dir / "config"
 data_dir = code_state_dir / "data"
 app_name = f"Almanac Agent Code ({state.get('unix_user') or 'agent'})"
+
+vault_dir = ""
+for candidate in (workspace_home / "Vault", hermes_home / "Vault"):
+    if candidate.is_symlink():
+        target = os.readlink(candidate)
+        if not os.path.isabs(target):
+            target = str((candidate.parent / target).resolve(strict=False))
+        if Path(target).is_dir():
+            vault_dir = target
+            break
+
 values = {
     "CODE_PORT": str(state["code_port"]),
     "PASSWORD": str(state["password"]),
@@ -40,6 +53,7 @@ values = {
     "CONTAINER_NAME": str(state.get("code_container_name") or "almanac-agent-code"),
     "CONFIG_DIR": str(config_dir),
     "DATA_DIR": str(data_dir),
+    "VAULT_DIR": vault_dir,
     "APP_NAME": app_name,
 }
 for key, value in values.items():
@@ -49,7 +63,7 @@ PY
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 
-python3 - "$CONFIG_DIR" <<'PY'
+python3 - "$CONFIG_DIR" "$DATA_DIR" <<'PY'
 import json
 import os
 import sys
@@ -57,7 +71,9 @@ import tempfile
 from pathlib import Path
 
 config_dir = Path(sys.argv[1])
-user_dir = config_dir / "User"
+data_dir = Path(sys.argv[2])
+legacy_user_dir = config_dir / "User"
+user_dir = data_dir / "User"
 settings_path = user_dir / "settings.json"
 user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,13 +85,22 @@ if settings_path.is_file():
             settings = {}
     except Exception:
         settings = {}
+elif (legacy_user_dir / "settings.json").is_file():
+    # Older Almanac builds seeded this file under the config dir, but
+    # code-server reads VS Code user settings from the data dir.
+    try:
+        legacy_settings = json.loads((legacy_user_dir / "settings.json").read_text(encoding="utf-8"))
+        if isinstance(legacy_settings, dict):
+            settings = legacy_settings
+    except Exception:
+        settings = {}
 
 changed = False
 if not str(settings.get("workbench.colorTheme") or "").strip():
-    settings["workbench.colorTheme"] = "Default Dark+"
+    settings["workbench.colorTheme"] = "Default Dark Modern"
     changed = True
 
-if changed:
+if changed or not settings_path.is_file():
     fd, tmp_path = tempfile.mkstemp(dir=str(user_dir), prefix=".settings-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -92,6 +117,19 @@ if changed:
         raise
 PY
 
+mount_args=(
+  -v "$WORKSPACE_HOME:/workspace:rw"
+  -v "$CONFIG_DIR:/home/coder/.config/code-server:rw"
+  -v "$DATA_DIR:/home/coder/.local/share/code-server:rw"
+)
+
+if [[ -n "${VAULT_DIR:-}" && -d "$VAULT_DIR" ]]; then
+  # The visible ~/Vault shortcut is an absolute symlink to the shared vault.
+  # Mount that absolute target too; otherwise it is valid on the host but
+  # dangling inside the code-server container's /workspace bind mount.
+  mount_args+=(-v "$VAULT_DIR:$VAULT_DIR:rw")
+fi
+
 exec podman run \
   --rm \
   --replace \
@@ -101,9 +139,7 @@ exec podman run \
   -p "127.0.0.1:${CODE_PORT}:8080" \
   -e PASSWORD="$PASSWORD" \
   -e HOME=/home/coder \
-  -v "$WORKSPACE_HOME:/workspace:rw" \
-  -v "$CONFIG_DIR:/home/coder/.config/code-server:rw" \
-  -v "$DATA_DIR:/home/coder/.local/share/code-server:rw" \
+  "${mount_args[@]}" \
   "$IMAGE" \
   --bind-addr 0.0.0.0:8080 \
   --auth password \

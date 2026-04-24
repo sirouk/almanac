@@ -32,9 +32,12 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
 
         hermes_home = root / "hermes-home"
         workspace_home = root / "workspace"
+        vault_dir = root / "shared" / "vault"
         access_state = hermes_home / "state" / "almanac-web-access.json"
         access_state.parent.mkdir(parents=True, exist_ok=True)
         workspace_home.mkdir(parents=True, exist_ok=True)
+        vault_dir.mkdir(parents=True, exist_ok=True)
+        (workspace_home / "Vault").symlink_to(vault_dir)
         access_state.write_text(
             json.dumps(
                 {
@@ -55,10 +58,13 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         )
         expect(result.returncode == 0, f"run-agent-code-server failed: stdout={result.stdout!r} stderr={result.stderr!r}")
 
-        settings_path = hermes_home / "state" / "code-server" / "config" / "User" / "settings.json"
+        settings_path = hermes_home / "state" / "code-server" / "data" / "User" / "settings.json"
         expect(settings_path.is_file(), f"expected settings.json to exist at {settings_path}")
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        expect(settings.get("workbench.colorTheme") == "Default Dark+", settings_path.read_text(encoding="utf-8"))
+        expect(settings.get("workbench.colorTheme") == "Default Dark Modern", settings_path.read_text(encoding="utf-8"))
+        podman_args = podman_log.read_text(encoding="utf-8")
+        expect(f"{workspace_home}:/workspace:rw" in podman_args, podman_args)
+        expect(f"{vault_dir}:{vault_dir}:rw" in podman_args, podman_args)
 
         settings_path.write_text(
             json.dumps({"workbench.colorTheme": "Solarized Light"}, indent=2) + "\n",

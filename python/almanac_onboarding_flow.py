@@ -1115,7 +1115,7 @@ def process_onboarding_message(
                     return [
                         OutboundMessage(
                             incoming.chat_id,
-                            "Claude Opus onboarding here is OAuth-only. Reply `oauth` and I’ll open the Claude browser authorization flow.",
+                            "Claude Opus onboarding here is OAuth-only. Reply `oauth` and I’ll open the Claude Code OAuth flow.",
                         )
                     ]
                 provider_secret = normalize_api_key_credential(provider_setup, text)

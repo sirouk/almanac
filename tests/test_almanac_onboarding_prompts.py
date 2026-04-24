@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
 CONTROL_PY = PYTHON_DIR / "almanac_control.py"
 ONBOARDING_PY = PYTHON_DIR / "almanac_onboarding_flow.py"
+PROVIDER_AUTH_PY = PYTHON_DIR / "almanac_onboarding_provider_auth.py"
 
 
 def load_module(path: Path, name: str):
@@ -363,6 +364,7 @@ def test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth() -> None:
             prompt = onboarding.session_prompt(cfg, session)
             expect("Claude account" in prompt, prompt)
             expect("Claude Max" in prompt or "Max" in prompt, prompt)
+            expect("Claude Code credentials" in prompt, prompt)
             expect("sk-ant-api" not in prompt, prompt)
             expect("sk-ant-oat" not in prompt, prompt)
 
@@ -414,6 +416,48 @@ def test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth() -> None:
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+
+def test_anthropic_callback_exchange_returns_claude_code_credentials_payload() -> None:
+    provider_auth = load_module(PROVIDER_AUTH_PY, "almanac_provider_auth_anthropic_payload_test")
+    captured: dict[str, object] = {}
+
+    def fake_request_json(url: str, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return {
+            "access_token": "access-test-token",
+            "refresh_token": "refresh-test-token",
+            "expires_in": 1800,
+            "scope": "user:inference user:profile",
+        }
+
+    provider_auth._request_json = fake_request_json  # noqa: SLF001
+    before_ms = int(provider_auth.time.time() * 1000)
+    secret, auth_state = provider_auth.complete_anthropic_pkce_authorization(
+        {
+            "flow": "claude_code_oauth",
+            "provider": "anthropic",
+            "state": "state-from-start",
+            "verifier": "verifier-from-start",
+        },
+        "callback-code#state-from-callback",
+    )
+    payload = json.loads(secret)
+    expect(payload["kind"] == "claude_code_oauth", payload)
+    expect(payload["accessToken"] == "access-test-token", payload)
+    expect(payload["refreshToken"] == "refresh-test-token", payload)
+    expect(payload["expiresAt"] >= before_ms + (1700 * 1000), payload)
+    expect(payload["scopes"] == ["user:inference", "user:profile"], payload)
+    expect(auth_state["status"] == "approved", auth_state)
+    expect(auth_state["credential_shape"] == "claude_code_credentials", auth_state)
+
+    request_payload = captured["kwargs"]["payload"]  # type: ignore[index]
+    expect(captured["url"] == provider_auth.ANTHROPIC_OAUTH_TOKEN_URL, str(captured))
+    expect(request_payload["code"] == "callback-code", str(captured))
+    expect(request_payload["state"] == "state-from-callback", str(captured))
+    expect(request_payload["code_verifier"] == "verifier-from-start", str(captured))
+    print("PASS test_anthropic_callback_exchange_returns_claude_code_credentials_payload")
 
 
 def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> None:
@@ -536,8 +580,9 @@ def main() -> int:
     test_discord_prompt_and_operator_review_reflect_primary_control_channel()
     test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
     test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth()
+    test_anthropic_callback_exchange_returns_claude_code_credentials_payload()
     test_onboarding_model_picker_is_chutes_first_and_collects_reasoning()
-    print("PASS all 4 onboarding prompt regression tests")
+    print("PASS all 5 onboarding prompt regression tests")
     return 0
 
 

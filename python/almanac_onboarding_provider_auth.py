@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import secrets
 import time
 import urllib.parse
@@ -21,6 +22,7 @@ ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
 ANTHROPIC_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 ANTHROPIC_OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
 ANTHROPIC_OAUTH_SCOPES = "org:create_api_key user:profile user:inference"
+ANTHROPIC_OAUTH_SCOPE_LIST = tuple(scope for scope in ANTHROPIC_OAUTH_SCOPES.split() if scope)
 CHUTES_BASE_URL = "https://llm.chutes.ai/v1"
 REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "none")
 
@@ -223,8 +225,9 @@ def provider_secret_name(spec: ProviderSetupSpec) -> str:
 def provider_credential_prompt(spec: ProviderSetupSpec) -> str:
     if spec.auth_flow == "anthropic-credential":
         return (
-            f"One more thing. To finish wiring {spec.display_name}, reply `oauth` and I’ll open the Claude browser authorization flow.\n"
-            "This path is for the user's Claude account sign-in, not an Anthropic API key."
+            f"One more thing. To finish wiring {spec.display_name}, reply `oauth` and I’ll open the Claude Code OAuth flow.\n"
+            "This uses the user's Claude account/subscription and seeds Hermes' refreshable Claude Code credentials. "
+            "No Anthropic API key or setup token is accepted in chat."
         )
     if spec.auth_flow == "api-key":
         if spec.provider_id == "chutes":
@@ -261,7 +264,8 @@ def provider_browser_auth_prompt(spec: ProviderSetupSpec, auth_state: dict[str, 
             f"Open this link to authorize {spec.display_name} with your Claude account:\n"
             f"{auth_state.get('auth_url') or '(missing auth url)'}\n"
             "Use the Claude account and plan you want tied to this lane, such as Claude Max.\n"
-            "When Claude shows you the authorization code, paste that whole code string back to me here.\n"
+            "When the Claude callback page shows the authorization code, paste that whole callback code string back here.\n"
+            "No Anthropic API key or setup token is needed; Almanac exchanges the callback code and seeds refreshable Claude Code credentials privately.\n"
             "If the link goes stale, reply `restart` and I’ll mint a fresh one."
         )
 
@@ -366,7 +370,7 @@ def start_anthropic_pkce_authorization() -> dict[str, Any]:
         "state": verifier,
     }
     return {
-        "flow": "pkce",
+        "flow": "claude_code_oauth",
         "provider": "anthropic",
         "status": "pending",
         "verifier": verifier,
@@ -405,19 +409,40 @@ def complete_anthropic_pkce_authorization(
     access_token = str(response.get("access_token") or "").strip()
     if not access_token:
         raise RuntimeError("Claude token exchange did not return an access token.")
+    refresh_token = str(response.get("refresh_token") or "").strip()
+    if not refresh_token:
+        raise RuntimeError("Claude token exchange did not return a refresh token.")
+    try:
+        expires_in = int(response.get("expires_in") or 3600)
+    except (TypeError, ValueError):
+        expires_in = 3600
+    expires_at_ms = int(time.time() * 1000) + (max(60, expires_in) * 1000)
+    raw_scope = response.get("scope")
+    if isinstance(raw_scope, str) and raw_scope.strip():
+        scopes = [scope for scope in raw_scope.split() if scope]
+    elif isinstance(raw_scope, list):
+        scopes = [str(scope).strip() for scope in raw_scope if str(scope).strip()]
+    else:
+        scopes = list(ANTHROPIC_OAUTH_SCOPE_LIST)
 
     updated["status"] = "approved"
     updated["approved_at"] = int(time.time())
-    return access_token, updated
+    updated["credential_shape"] = "claude_code_credentials"
+    credential_payload = {
+        "kind": "claude_code_oauth",
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "expiresAt": expires_at_ms,
+        "scopes": scopes,
+    }
+    return json.dumps(credential_payload, sort_keys=True), updated
 
 
 def normalize_anthropic_credential(raw_value: str) -> str:
-    value = str(raw_value or "").strip()
-    if not value:
-        raise RuntimeError("That Anthropic credential was empty.")
-    if value.startswith("sk-ant-api-") or value.startswith("sk-ant-oat-"):
-        return value
-    raise RuntimeError("Send `oauth`, an Anthropic API key (`sk-ant-api-...`), or a Claude setup-token (`sk-ant-oat-...`).")
+    raise RuntimeError(
+        "Claude Opus onboarding is OAuth-only. Reply `oauth` to use the Claude Code OAuth flow; "
+        "do not send Anthropic API keys or Claude setup tokens."
+    )
 
 
 def normalize_api_key_credential(spec: ProviderSetupSpec, raw_value: str) -> str:

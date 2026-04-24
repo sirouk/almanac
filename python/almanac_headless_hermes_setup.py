@@ -109,10 +109,40 @@ def _seed_openai_codex(spec: dict[str, Any], secret_path: str) -> None:
 
 
 def _seed_anthropic(spec: dict[str, Any], secret_path: str) -> None:
-    from hermes_cli.config import load_config, save_anthropic_api_key, save_anthropic_oauth_token, save_config
+    from hermes_cli.config import (
+        load_config,
+        save_anthropic_api_key,
+        save_anthropic_oauth_token,
+        save_config,
+        use_anthropic_claude_code_credentials,
+    )
 
     secret = _read_secret(secret_path)
-    if secret.startswith("sk-ant-api-"):
+    try:
+        credential_payload = json.loads(secret)
+    except json.JSONDecodeError:
+        credential_payload = None
+    if isinstance(credential_payload, dict) and credential_payload.get("kind") == "claude_code_oauth":
+        from agent.anthropic_adapter import _write_claude_code_credentials
+
+        access_token = str(credential_payload.get("accessToken") or "").strip()
+        refresh_token = str(credential_payload.get("refreshToken") or "").strip()
+        try:
+            expires_at_ms = int(credential_payload.get("expiresAt") or 0)
+        except (TypeError, ValueError):
+            expires_at_ms = 0
+        scopes_raw = credential_payload.get("scopes")
+        scopes = [str(scope).strip() for scope in scopes_raw if str(scope).strip()] if isinstance(scopes_raw, list) else None
+        if not access_token or not refresh_token or expires_at_ms <= 0:
+            raise SystemExit("Claude Code OAuth credential payload is incomplete")
+        _write_claude_code_credentials(
+            access_token,
+            refresh_token,
+            expires_at_ms,
+            scopes=scopes,
+        )
+        use_anthropic_claude_code_credentials()
+    elif secret.startswith("sk-ant-api-"):
         save_anthropic_api_key(secret)
     else:
         save_anthropic_oauth_token(secret)

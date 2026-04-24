@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,8 @@ def expect(condition: bool, message: str) -> None:
 
 
 def write_fake_hermes_cli(root: Path) -> Path:
-    package_dir = root / "fakepkgs" / "hermes_cli"
+    fake_root = root / "fakepkgs"
+    package_dir = fake_root / "hermes_cli"
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "__init__.py").write_text("", encoding="utf-8")
     (package_dir / "default_soul.py").write_text(
@@ -45,6 +47,7 @@ def write_fake_hermes_cli(root: Path) -> Path:
         "from pathlib import Path\n"
         "\n"
         "_CONFIG_PATH = Path(os.environ['FAKE_HERMES_CONFIG_PATH'])\n"
+        "_ENV_PATH = Path(os.environ.get('FAKE_HERMES_ENV_PATH', str(_CONFIG_PATH.with_suffix('.env.json'))))\n"
         "\n"
         "def load_config():\n"
         "    if _CONFIG_PATH.exists():\n"
@@ -53,10 +56,67 @@ def write_fake_hermes_cli(root: Path) -> Path:
         "\n"
         "def save_config(config):\n"
         "    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)\n"
-        "    _CONFIG_PATH.write_text(json.dumps(config, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n",
+        "    _CONFIG_PATH.write_text(json.dumps(config, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "\n"
+        "def _load_env():\n"
+        "    if _ENV_PATH.exists():\n"
+        "        return json.loads(_ENV_PATH.read_text(encoding='utf-8'))\n"
+        "    return {}\n"
+        "\n"
+        "def _save_env(payload):\n"
+        "    _ENV_PATH.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    _ENV_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "\n"
+        "def save_env_value(key, value):\n"
+        "    payload = _load_env()\n"
+        "    payload[str(key)] = str(value)\n"
+        "    _save_env(payload)\n"
+        "\n"
+        "def _delete_env_value(key):\n"
+        "    payload = _load_env()\n"
+        "    payload.pop(str(key), None)\n"
+        "    _save_env(payload)\n"
+        "\n"
+        "def save_anthropic_api_key(value):\n"
+        "    save_env_value('ANTHROPIC_API_KEY', value)\n"
+        "    _delete_env_value('ANTHROPIC_TOKEN')\n"
+        "    _delete_env_value('CLAUDE_CODE_OAUTH_TOKEN')\n"
+        "\n"
+        "def save_anthropic_oauth_token(value):\n"
+        "    save_env_value('ANTHROPIC_TOKEN', value)\n"
+        "    _delete_env_value('ANTHROPIC_API_KEY')\n"
+        "    _delete_env_value('CLAUDE_CODE_OAUTH_TOKEN')\n"
+        "\n"
+        "def use_anthropic_claude_code_credentials(save_fn=save_env_value):\n"
+        "    _delete_env_value('ANTHROPIC_API_KEY')\n"
+        "    _delete_env_value('ANTHROPIC_TOKEN')\n"
+        "    _delete_env_value('CLAUDE_CODE_OAUTH_TOKEN')\n",
         encoding="utf-8",
     )
-    return package_dir.parent
+    agent_dir = fake_root / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "__init__.py").write_text("", encoding="utf-8")
+    (agent_dir / "anthropic_adapter.py").write_text(
+        "from __future__ import annotations\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "\n"
+        "def _write_claude_code_credentials(access_token, refresh_token, expires_at_ms, scopes=None):\n"
+        "    path = Path(os.environ['FAKE_CLAUDE_CREDENTIALS_PATH'])\n"
+        "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    payload = {\n"
+        "        'claudeAiOauth': {\n"
+        "            'accessToken': str(access_token),\n"
+        "            'refreshToken': str(refresh_token),\n"
+        "            'expiresAt': int(expires_at_ms),\n"
+        "            'scopes': list(scopes or []),\n"
+        "        }\n"
+        "    }\n"
+        "    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "    path.chmod(0o600)\n",
+        encoding="utf-8",
+    )
+    return fake_root
 
 
 def write_almanac_config(path: Path) -> None:
@@ -225,11 +285,105 @@ def test_reasoning_effort_is_written_to_hermes_agent_config() -> None:
     print("PASS test_reasoning_effort_is_written_to_hermes_agent_config")
 
 
+def test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_tokens() -> None:
+    module = load_module(SCRIPT, "almanac_headless_setup_anthropic_claude_code_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fake_pkg_root = write_fake_hermes_cli(root)
+        hermes_config = root / "fake-hermes-config.json"
+        hermes_env = root / "fake-hermes-env.json"
+        claude_credentials = root / "home" / ".claude" / ".credentials.json"
+        secret_path = root / "anthropic-secret.json"
+        hermes_config.write_text(
+            json.dumps(
+                {
+                    "model": {
+                        "provider": "anthropic",
+                        "default": "claude-opus-legacy",
+                        "base_url": "https://legacy.example.invalid",
+                    }
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        hermes_env.write_text(
+            json.dumps(
+                {
+                    "ANTHROPIC_API_KEY": "legacy-api-key",
+                    "ANTHROPIC_TOKEN": "legacy-oauth-token",
+                    "CLAUDE_CODE_OAUTH_TOKEN": "legacy-setup-token",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        secret_path.write_text(
+            json.dumps(
+                {
+                    "kind": "claude_code_oauth",
+                    "accessToken": "access-test-token",
+                    "refreshToken": "refresh-test-token",
+                    "expiresAt": 1_810_000_000_000,
+                    "scopes": ["user:inference", "user:profile"],
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        old_path = list(sys.path)
+        old_modules = {
+            name: sys.modules.pop(name)
+            for name in ["hermes_cli", "hermes_cli.config", "agent", "agent.anthropic_adapter"]
+            if name in sys.modules
+        }
+        os.environ["FAKE_HERMES_CONFIG_PATH"] = str(hermes_config)
+        os.environ["FAKE_HERMES_ENV_PATH"] = str(hermes_env)
+        os.environ["FAKE_CLAUDE_CREDENTIALS_PATH"] = str(claude_credentials)
+        sys.path.insert(0, str(fake_pkg_root))
+        try:
+            module._seed_anthropic({"model_id": "claude-opus-4-7"}, str(secret_path))
+
+            credentials = json.loads(claude_credentials.read_text(encoding="utf-8"))
+            oauth = credentials["claudeAiOauth"]
+            expect(oauth["accessToken"] == "access-test-token", credentials)
+            expect(oauth["refreshToken"] == "refresh-test-token", credentials)
+            expect(oauth["expiresAt"] == 1_810_000_000_000, credentials)
+            expect(oauth["scopes"] == ["user:inference", "user:profile"], credentials)
+            expect(stat.S_IMODE(claude_credentials.stat().st_mode) == 0o600, oct(claude_credentials.stat().st_mode))
+
+            env_payload = json.loads(hermes_env.read_text(encoding="utf-8"))
+            expect("ANTHROPIC_API_KEY" not in env_payload, env_payload)
+            expect("ANTHROPIC_TOKEN" not in env_payload, env_payload)
+            expect("CLAUDE_CODE_OAUTH_TOKEN" not in env_payload, env_payload)
+
+            cfg = json.loads(hermes_config.read_text(encoding="utf-8"))
+            expect(cfg["model"]["provider"] == "anthropic", cfg)
+            expect(cfg["model"]["default"] == "claude-opus-4-7", cfg)
+            expect("base_url" not in cfg["model"], cfg)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+            sys.path[:] = old_path
+            for name in ["hermes_cli", "hermes_cli.config", "agent", "agent.anthropic_adapter"]:
+                sys.modules.pop(name, None)
+            sys.modules.update(old_modules)
+    print("PASS test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_tokens")
+
+
 def main() -> int:
     test_identity_only_writes_soul_and_dual_surface_prefill_config()
     test_render_soul_fails_loudly_on_unknown_placeholder()
     test_reasoning_effort_is_written_to_hermes_agent_config()
-    print("PASS all 3 headless Hermes setup tests")
+    test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_tokens()
+    print("PASS all 4 headless Hermes setup tests")
     return 0
 
 

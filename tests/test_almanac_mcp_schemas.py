@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -369,6 +370,55 @@ def test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars() ->
         expect(pdf_meta["source_rel_path"] == "Research/MESH Paper.pdf", str(pdf_meta))
         expect(pdf_meta["generated_metadata"]["generated_markdown_rel_path"] == "Research/MESH Paper-pdf.md", str(pdf_meta))
         expect(pdf_meta["source_exists"] is True, str(pdf_meta))
+
+        manifest = state_dir / "pdf-ingest" / "manifest.sqlite3"
+        conn = sqlite3.connect(manifest)
+        conn.execute(
+            """
+            CREATE TABLE pdf_ingest_manifest (
+              source_rel_path TEXT PRIMARY KEY,
+              source_abs_path TEXT NOT NULL,
+              generated_abs_path TEXT NOT NULL,
+              source_sha256 TEXT,
+              source_size INTEGER NOT NULL,
+              source_mtime INTEGER NOT NULL,
+              extractor TEXT,
+              pipeline_signature TEXT,
+              status TEXT NOT NULL,
+              error TEXT,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO pdf_ingest_manifest (
+              source_rel_path, source_abs_path, generated_abs_path, source_sha256,
+              source_size, source_mtime, extractor, pipeline_signature, status, error, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL, ?)
+            """,
+            (
+                "Research/MESH Paper.pdf",
+                str(pdf_source),
+                str(generated),
+                "manifest-sha",
+                12,
+                42,
+                "pdftotext",
+                "pipeline",
+                "2026-04-24T00:00:00Z",
+            ),
+        )
+        conn.commit()
+        conn.close()
+        normalized_pdf_meta = mod._vault_source_metadata(
+            cfg,
+            "qmd://vault-pdf-ingest/research/mesh-paper-pdf.md",
+            include_hash=False,
+        )
+        expect(normalized_pdf_meta["source_type"] == "pdf", str(normalized_pdf_meta))
+        expect(normalized_pdf_meta["source_rel_path"] == "Research/MESH Paper.pdf", str(normalized_pdf_meta))
+        expect(normalized_pdf_meta["generated_metadata"]["source_sha256"] == "manifest-sha", str(normalized_pdf_meta))
     print("PASS test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars")
 
 

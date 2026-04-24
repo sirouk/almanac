@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import subprocess
 import time
 from http import HTTPStatus
@@ -670,6 +671,52 @@ def _qmd_source_parts(source_ref: str) -> tuple[str, str]:
     return collection.strip(), rel_path.strip("/")
 
 
+def _loose_path_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _pdf_manifest_metadata_for_rel_path(cfg: Config, rel_path: str) -> dict[str, str]:
+    manifest_path = cfg.state_dir / "pdf-ingest" / "manifest.sqlite3"
+    markdown_root = cfg.state_dir / "pdf-ingest" / "markdown"
+    if not manifest_path.is_file():
+        return {}
+    wanted_key = _loose_path_key(rel_path)
+    try:
+        conn = sqlite3.connect(manifest_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT source_rel_path, source_abs_path, generated_abs_path, source_sha256,
+                   source_size, source_mtime, extractor, pipeline_signature, status, updated_at
+              FROM pdf_ingest_manifest
+             WHERE status = 'ok'
+            """
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return {}
+    for row in rows:
+        generated_abs_path = Path(str(row["generated_abs_path"] or ""))
+        generated_rel_path = _safe_relative(generated_abs_path, markdown_root) or generated_abs_path.name
+        if _loose_path_key(generated_rel_path) != wanted_key:
+            continue
+        return {
+            "almanac_generated": "true",
+            "almanac_source_type": "pdf",
+            "source_rel_path": str(row["source_rel_path"] or ""),
+            "source_host_path": str(row["source_abs_path"] or ""),
+            "source_sha256": str(row["source_sha256"] or ""),
+            "source_size_bytes": str(row["source_size"] or ""),
+            "source_mtime_epoch": str(row["source_mtime"] or ""),
+            "extractor": str(row["extractor"] or ""),
+            "pipeline_signature": str(row["pipeline_signature"] or ""),
+            "generated_markdown_path": str(generated_abs_path),
+            "generated_markdown_rel_path": generated_rel_path,
+            "manifest_updated_at": str(row["updated_at"] or ""),
+        }
+    return {}
+
+
 def _vault_source_path_for_qmd_ref(cfg: Config, source_ref: str) -> tuple[str, str, Path | None, dict[str, str]]:
     collection, rel_path = _qmd_source_parts(source_ref)
     if collection == "vault":
@@ -677,6 +724,11 @@ def _vault_source_path_for_qmd_ref(cfg: Config, source_ref: str) -> tuple[str, s
     if collection == "vault-pdf-ingest":
         generated_path = (cfg.state_dir / "pdf-ingest" / "markdown" / rel_path).resolve()
         frontmatter = _markdown_frontmatter(generated_path)
+        if not frontmatter:
+            frontmatter = _pdf_manifest_metadata_for_rel_path(cfg, rel_path)
+            manifest_generated_path = str(frontmatter.get("generated_markdown_path") or "").strip()
+            if manifest_generated_path:
+                generated_path = Path(manifest_generated_path).resolve()
         source_rel_path = str(frontmatter.get("source_rel_path") or "").strip()
         source_path = (cfg.vault_dir / source_rel_path).resolve() if source_rel_path else None
         return collection, source_rel_path or rel_path, source_path, {

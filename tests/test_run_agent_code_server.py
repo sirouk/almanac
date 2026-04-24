@@ -65,10 +65,23 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         almanac_alias = workspace_home / "Almanac"
         expect(almanac_alias.is_symlink(), f"expected friendly Almanac symlink at {almanac_alias}")
         expect(os.readlink(almanac_alias) == str(vault_dir), f"bad Almanac alias target: {os.readlink(almanac_alias)!r}")
+        workspace_file = hermes_home / "state" / "code-server" / "workspace" / "almanac.code-workspace"
+        expect(workspace_file.is_file(), f"expected code workspace file at {workspace_file}")
+        workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
+        expect(
+            {"name": "Almanac", "path": "/almanac-vault"} in workspace.get("folders", []),
+            workspace_file.read_text(encoding="utf-8"),
+        )
+        expect(
+            {"name": "Workspace", "path": "/workspace"} in workspace.get("folders", []),
+            workspace_file.read_text(encoding="utf-8"),
+        )
         podman_args = podman_log.read_text(encoding="utf-8")
         expect(f"{workspace_home}:/workspace:rw" in podman_args, podman_args)
+        expect(f"{vault_dir}:/almanac-vault:rw" in podman_args, podman_args)
+        expect(f"{workspace_file.parent}:/almanac-workspace:ro" in podman_args, podman_args)
         expect(f"{vault_dir}:{vault_dir}:rw" in podman_args, podman_args)
-        expect("/workspace/Almanac" in podman_args, podman_args)
+        expect("/almanac-workspace/almanac.code-workspace" in podman_args, podman_args)
 
         settings_path.write_text(
             json.dumps({"workbench.colorTheme": "Solarized Light"}, indent=2) + "\n",

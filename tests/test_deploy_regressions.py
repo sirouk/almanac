@@ -1623,6 +1623,11 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "refresh-agent-install should support an explicit runtime-upgrade gateway restart path",
     )
     expect(
+        'restart almanac-user-agent-code.service' in refresh_helper
+        and 'code workspace' in refresh_helper,
+        "refresh-agent-install should restart the code workspace so launcher/mount fixes take effect",
+    )
+    expect(
         "shared_hermes_runtime_commit" in text
         and "report_shared_hermes_runtime_transition" in text
         and "gateway_restart_policy" in helper,

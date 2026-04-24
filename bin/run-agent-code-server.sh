@@ -34,6 +34,8 @@ hermes_home = Path(sys.argv[3])
 code_state_dir = hermes_home / "state" / "code-server"
 config_dir = code_state_dir / "config"
 data_dir = code_state_dir / "data"
+workspace_dir = code_state_dir / "workspace"
+workspace_file = workspace_dir / "almanac.code-workspace"
 app_name = f"Almanac Agent Code ({state.get('unix_user') or 'agent'})"
 
 vault_dir = ""
@@ -71,7 +73,10 @@ if vault_dir and vault_alias != "Almanac":
         except OSError:
             pass
 
-open_path = f"/workspace/{vault_alias}" if vault_alias else "/workspace"
+vault_container_dir = "/almanac-vault"
+workspace_container_dir = "/almanac-workspace"
+workspace_container_file = f"{workspace_container_dir}/almanac.code-workspace"
+open_path = workspace_container_file if vault_dir else "/workspace"
 
 values = {
     "CODE_PORT": str(state["code_port"]),
@@ -80,7 +85,11 @@ values = {
     "CONTAINER_NAME": str(state.get("code_container_name") or "almanac-agent-code"),
     "CONFIG_DIR": str(config_dir),
     "DATA_DIR": str(data_dir),
+    "WORKSPACE_DIR": str(workspace_dir),
+    "WORKSPACE_FILE": str(workspace_file),
     "VAULT_DIR": vault_dir,
+    "VAULT_CONTAINER_DIR": vault_container_dir,
+    "WORKSPACE_CONTAINER_DIR": workspace_container_dir,
     "OPEN_PATH": open_path,
     "APP_NAME": app_name,
 }
@@ -89,9 +98,9 @@ for key, value in values.items():
 PY
 )"
 
-mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$WORKSPACE_DIR"
 
-python3 - "$CONFIG_DIR" "$DATA_DIR" <<'PY'
+python3 - "$CONFIG_DIR" "$DATA_DIR" "$WORKSPACE_FILE" "${VAULT_DIR:-}" "${VAULT_CONTAINER_DIR:-/almanac-vault}" <<'PY'
 import json
 import os
 import sys
@@ -100,6 +109,9 @@ from pathlib import Path
 
 config_dir = Path(sys.argv[1])
 data_dir = Path(sys.argv[2])
+workspace_file = Path(sys.argv[3])
+vault_dir = sys.argv[4].strip()
+vault_container_dir = sys.argv[5].strip() or "/almanac-vault"
 legacy_user_dir = config_dir / "User"
 user_dir = data_dir / "User"
 settings_path = user_dir / "settings.json"
@@ -143,6 +155,35 @@ if changed or not settings_path.is_file():
         except OSError:
             pass
         raise
+
+if vault_dir:
+    workspace_file.parent.mkdir(parents=True, exist_ok=True)
+    workspace = {
+        "folders": [
+            {"name": "Workspace", "path": "/workspace"},
+            {"name": "Almanac", "path": vault_container_dir},
+        ],
+        "settings": {},
+    }
+    fd, tmp_path = tempfile.mkstemp(dir=str(workspace_file.parent), prefix=".workspace-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(workspace, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, workspace_file)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+else:
+    try:
+        workspace_file.unlink()
+    except FileNotFoundError:
+        pass
 PY
 
 mount_args=(
@@ -152,10 +193,14 @@ mount_args=(
 )
 
 if [[ -n "${VAULT_DIR:-}" && -d "$VAULT_DIR" ]]; then
-  # The visible ~/Vault shortcut is an absolute symlink to the shared vault.
-  # Mount that absolute target too; otherwise it is valid on the host but
-  # dangling inside the code-server container's /workspace bind mount.
-  mount_args+=(-v "$VAULT_DIR:$VAULT_DIR:rw")
+  # Present Almanac as a first-class VS Code workspace folder instead of
+  # relying on symlink traversal across container bind-mount boundaries.
+  mount_args+=(
+    -v "$VAULT_DIR:$VAULT_CONTAINER_DIR:rw"
+    -v "$WORKSPACE_DIR:$WORKSPACE_CONTAINER_DIR:ro"
+    # Keep the host-level ~/Almanac symlink valid inside the container too.
+    -v "$VAULT_DIR:$VAULT_DIR:rw"
+  )
 fi
 
 exec podman run \

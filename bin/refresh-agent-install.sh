@@ -353,6 +353,7 @@ try_user_systemctl "user manager daemon-reload" daemon-reload
 try_user_systemctl "managed-memory refresh service" start almanac-user-agent-refresh.service
 ensure_gateway_running_without_interrupting_active_turns
 try_user_systemctl "Hermes dashboard/proxy" restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service
+try_user_systemctl "code workspace" restart almanac-user-agent-code.service
 
 cat <<EOF
 Refreshed Almanac install for $UNIX_USER

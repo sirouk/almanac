@@ -10683,7 +10683,6 @@ def build_managed_memory_payload(
     catalog = list_vaults(conn)
     subscriptions = effective_subscriptions_for_agent(conn, agent_id)
     active_subscriptions = [row["vault_name"] for row in subscriptions if bool(row.get("push_enabled"))]
-    vault_root = str(cfg.vault_dir)
 
     topology_lines: list[str] = []
     for subscription in subscriptions:
@@ -10720,6 +10719,7 @@ def build_managed_memory_payload(
             workspace_root = hermes_home.parents[3]
         except IndexError:
             workspace_root = Path("/home") / agent_unix_user if agent_unix_user else hermes_home
+    vault_root = str(workspace_root / "Almanac")
     shared_host = shared_tailnet_host(
         tailscale_serve_enabled=(config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() == "1"),
         tailscale_dns_name=config_env_value("TAILSCALE_DNS_NAME", "").strip(),
@@ -10727,7 +10727,8 @@ def build_managed_memory_payload(
     )
     vault_ref = (
         f"Vault root: {vault_root}\n"
-        f"Shared deployment root: {cfg.repo_dir}\n"
+        "Use this user-visible path for vault file references in chat and VS Code.\n"
+        "The shared vault is mounted through this alias; central service-user paths are internal infrastructure.\n"
         f"Agent id: {agent_id}\n"
         f"Dedicated agent name: {display_name or agent_id}\n"
         f"Assigned unix user: {agent_unix_user or '(unknown)'}\n"
@@ -10757,7 +10758,7 @@ def build_managed_memory_payload(
         "- Human-facing completion or onboarding messages may omit machine-facing MCP/control rails for simplicity; [managed:resource-ref] is the authoritative map of the rails that this agent can try.\n"
         "- Do not decide that a rail is unavailable just because raw env vars are absent in a chat turn; use the installed skills, managed stubs, and Almanac-provisioned rails as the source of truth.\n"
         "- When a brokered action is refused, explain whether the block is verification, ownership scope, or an unsupported archive/delete request instead of saying the skill is missing.\n"
-        "- On a shared host, the shared deployment root may live under /home/almanac/almanac; treat that as read-only shared infrastructure, not another enrolled user's workspace."
+        "- On a shared host, central service-user deployment paths are read-only shared infrastructure; use the current user's ~/Almanac alias for vault files."
     )
     qmd_ref = (
         f"qmd MCP (deep retrieval): {cfg.qmd_url}\n"
@@ -10894,6 +10895,7 @@ def build_managed_memory_payload(
         "catalog": catalog,
         "subscriptions": subscriptions,
         "active_subscriptions": active_subscriptions,
+        "vault_path_contract": "user-home-almanac-v1",
     }
     payload["managed_memory_revision"] = _compute_managed_memory_revision(payload)
     payload["managed_payload_cache_key"] = _compute_managed_payload_cache_key(payload)
@@ -10912,7 +10914,14 @@ _MANAGED_MEMORY_KEYS = (
     "today-plate",
 )
 _MANAGED_MEMORY_PREFIXES = tuple(f"[managed:{key}]" for key in _MANAGED_MEMORY_KEYS)
-_MANAGED_PAYLOAD_CACHE_KEYS = ("agent_id", *_MANAGED_MEMORY_KEYS, "catalog", "subscriptions", "active_subscriptions")
+_MANAGED_PAYLOAD_CACHE_KEYS = (
+    "agent_id",
+    *_MANAGED_MEMORY_KEYS,
+    "catalog",
+    "subscriptions",
+    "active_subscriptions",
+    "vault_path_contract",
+)
 
 
 def _compute_managed_memory_revision(payload: dict[str, Any]) -> str:
@@ -11030,9 +11039,8 @@ def write_managed_memory_stubs(
         " Almanac setup or diagnostic checks. All vaults remain retrievable"
         " through Almanac/qmd even when a vault is unsubscribed; subscriptions"
         " only shape managed-memory awareness and Curator push behavior. On a"
-        " shared host, the shared deployment root may live under"
-        " /home/almanac/almanac; treat that as read-only shared infrastructure,"
-        " not another enrolled user's workspace.",
+        " shared host, central service-user deployment paths are read-only shared"
+        " infrastructure; use the current user's ~/Almanac alias for vault files.",
     )
     payload.setdefault(
         "resource-ref",

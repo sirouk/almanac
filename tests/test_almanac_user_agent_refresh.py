@@ -52,6 +52,7 @@ def write_fake_rpc_client(path: Path) -> None:
         "        'notion-ref': 'Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
         "        'today-plate': 'Today plate:\\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\\n- Work candidates:\\n  - Chutes Unicorn launch — status In Progress — due today 2026-04-23',\n"
+        "        'vault_path_contract': 'user-home-almanac-v1',\n"
         "        'catalog': [\n"
         "            {'vault_name': 'Projects', 'default_subscribed': 1, 'description': 'Active project workspaces'},\n"
         "            {'vault_name': 'Teams', 'default_subscribed': 0, 'description': 'Team coordination'},\n"
@@ -123,6 +124,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                     "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
                     "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
                     "today-plate": "Today plate:\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\n- Work candidates:\n  - Chutes Unicorn launch — status In Progress — due today 2026-04-23",
+                    "vault_path_contract": "user-home-almanac-v1",
                     "catalog": [
                         {"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"},
                         {"vault_name": "Teams", "default_subscribed": 0, "description": "Team coordination"},

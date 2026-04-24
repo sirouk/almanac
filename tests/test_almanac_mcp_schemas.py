@@ -383,6 +383,17 @@ def test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars() ->
         expect(direct["repo"]["branch"] == "main", str(direct))
         expect(direct["repo"]["commit"], str(direct))
         expect(len(direct["source_sha256"]) == 64, str(direct))
+        displayed = mod._vault_source_metadata(
+            cfg,
+            "qmd://vault/TeamDocs/README.md",
+            include_hash=False,
+            include_repo_details=True,
+            display_vault_root="/home/alice/Almanac",
+        )
+        expect(displayed["vault_root_path"] == "/home/alice/Almanac", str(displayed))
+        expect(displayed["source_host_path"] == "/home/alice/Almanac/TeamDocs/README.md", str(displayed))
+        expect(displayed["nearest_vault_root"]["host_path"] == "/home/alice/Almanac/TeamDocs", str(displayed))
+        expect(displayed["repo"]["root_host_path"] == "/home/alice/Almanac/TeamDocs", str(displayed))
 
         pdf_source = vault_dir / "Research" / "MESH Paper.pdf"
         pdf_source.parent.mkdir(parents=True)

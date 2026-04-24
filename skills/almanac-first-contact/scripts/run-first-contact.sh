@@ -73,8 +73,27 @@ managed_payload_path=""
 if [[ -n "$agent_id" ]]; then
   managed_payload_path="$ALMANAC_AGENTS_STATE_DIR/$agent_id/managed-memory.json"
 fi
-if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]]; then
-  cp "$managed_payload_path" "$managed_file"
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$managed_file" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+try:
+    payload = json.loads(source.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if not isinstance(payload, dict):
+    raise SystemExit(1)
+required = ("agent_id", "vault-ref", "qmd-ref", "catalog", "subscriptions", "vault_path_contract")
+if any(key not in payload for key in required):
+    raise SystemExit(1)
+shutil.copyfile(source, target)
+PY
+then
+  :
 else
   "$RPC" --url "$ALMANAC_MCP_URL" --tool "agents.managed-memory" \
     --json-args "$(python3 - "$TOKEN" <<'PY'

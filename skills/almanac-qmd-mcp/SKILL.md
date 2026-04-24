@@ -21,24 +21,25 @@ Check these local files first:
 
 - `$HERMES_HOME/state/almanac-vault-reconciler.json` and `$HERMES_HOME/memories/almanac-managed-stubs.md` for safe, agent-local Almanac routing state
 - `$HERMES_HOME/state/almanac-recent-events.json` for recent Curator/SSOT nudges that may explain why the current session should restub or re-query qmd
+- `~/Almanac` for the shared vault as the current user sees it in shell and VS Code
 - `docs/hermes-qmd-config.yaml` for the default MCP client snippet
 - `bin/qmd-daemon.sh` for how the qmd MCP server is started
 - `bin/qmd-refresh.sh` for index refresh and embeddings
 - `bin/health.sh` for the expected service and port state
-- `/home/almanac/almanac/skills/almanac-qmd-mcp` and `/home/almanac/almanac/skills/almanac-vault-reconciler` when Hermes is running on the same host as the deployed Almanac instance and needs the shared skill text, not central secrets or private config
+- the installed local skill copies under `$HERMES_HOME/skills` when Hermes needs the shared skill text, not central secrets or private config
 
 Typical deployed paths:
 
-- public repo: `/home/almanac/almanac`
-- private repo: `/home/almanac/almanac/almanac-priv`
+- user-visible vault root: `~/Almanac`
+- public repo: the shared service deployment root from `ALMANAC_SHARED_REPO_DIR`
 - local MCP endpoint: `http://127.0.0.1:8181/mcp`
 - tailnet MCP endpoint: `https://<almanac-node>.<tailnet>/mcp`
 - default qmd index name: `almanac`
 - default qmd collection name: `vault`
 
-On a shared-host user agent, `/home/almanac/almanac` is the service-user deployment root. Reading shared repo content there is expected. Treat it as read-only shared infrastructure, not as another enrolled user's workspace.
+On a shared-host user agent, the service-user deployment root is read-only shared infrastructure, not another enrolled user's workspace. Use `~/Almanac` when referring to vault files.
 
-Do not read `/home/almanac/almanac/almanac-priv/config/almanac.env`, `.almanac-operator.env`, or source `bin/common.sh` from a user-agent session.
+Do not read central deployment secrets such as `almanac.env`, `.almanac-operator.env`, or source `bin/common.sh` from a user-agent session.
 
 ## Answering vault-backed questions
 

@@ -388,12 +388,13 @@ def render_markdown(
     pipeline_signature: str,
 ) -> str:
     source_vault_path = f"{NEXTCLOUD_VAULT_MOUNT_POINT.rstrip('/')}/{relative_source_path}"
+    source_almanac_path = f"~/Almanac/{relative_source_path}"
     frontmatter = [
         "---",
         "almanac_generated: true",
         "almanac_source_type: pdf",
         f"source_vault_path: {yaml_quote(source_vault_path)}",
-        f"source_host_path: {yaml_quote(str(source_path))}",
+        f"source_almanac_path: {yaml_quote(source_almanac_path)}",
         f"source_rel_path: {yaml_quote(relative_source_path)}",
         f"source_sha256: {yaml_quote(sha256)}",
         f"source_size_bytes: {size}",

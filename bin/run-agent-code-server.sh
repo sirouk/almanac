@@ -40,6 +40,7 @@ app_name = f"Almanac Agent Code ({state.get('unix_user') or 'agent'})"
 
 vault_dir = ""
 vault_alias = ""
+almanac_container_dir = ""
 
 def symlink_target_dir(candidate: Path) -> str:
     if candidate.is_symlink():
@@ -72,6 +73,8 @@ if vault_dir and vault_alias != "Almanac":
             vault_alias = "Almanac"
         except OSError:
             pass
+if vault_dir and symlink_target_dir(workspace_home / "Almanac"):
+    almanac_container_dir = "/workspace/Almanac"
 
 vault_container_dir = "/almanac-vault"
 workspace_container_dir = "/almanac-workspace"
@@ -89,6 +92,7 @@ values = {
     "WORKSPACE_FILE": str(workspace_file),
     "VAULT_DIR": vault_dir,
     "VAULT_CONTAINER_DIR": vault_container_dir,
+    "ALMANAC_CONTAINER_DIR": almanac_container_dir or vault_container_dir,
     "WORKSPACE_CONTAINER_DIR": workspace_container_dir,
     "OPEN_PATH": open_path,
     "APP_NAME": app_name,
@@ -100,7 +104,7 @@ PY
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$WORKSPACE_DIR"
 
-python3 - "$CONFIG_DIR" "$DATA_DIR" "$WORKSPACE_FILE" "${VAULT_DIR:-}" "${VAULT_CONTAINER_DIR:-/almanac-vault}" <<'PY'
+python3 - "$CONFIG_DIR" "$DATA_DIR" "$WORKSPACE_FILE" "${VAULT_DIR:-}" "${ALMANAC_CONTAINER_DIR:-/almanac-vault}" <<'PY'
 import json
 import os
 import sys
@@ -111,7 +115,7 @@ config_dir = Path(sys.argv[1])
 data_dir = Path(sys.argv[2])
 workspace_file = Path(sys.argv[3])
 vault_dir = sys.argv[4].strip()
-vault_container_dir = sys.argv[5].strip() or "/almanac-vault"
+almanac_container_dir = sys.argv[5].strip() or "/almanac-vault"
 legacy_user_dir = config_dir / "User"
 user_dir = data_dir / "User"
 settings_path = user_dir / "settings.json"
@@ -161,7 +165,7 @@ if vault_dir:
     workspace = {
         "folders": [
             {"name": "Workspace", "path": "/workspace"},
-            {"name": "Almanac", "path": vault_container_dir},
+            {"name": "Almanac", "path": almanac_container_dir},
         ],
         "settings": {},
     }

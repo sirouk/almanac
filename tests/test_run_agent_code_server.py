@@ -69,7 +69,7 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect(workspace_file.is_file(), f"expected code workspace file at {workspace_file}")
         workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
         expect(
-            {"name": "Almanac", "path": "/almanac-vault"} in workspace.get("folders", []),
+            {"name": "Almanac", "path": "/workspace/Almanac"} in workspace.get("folders", []),
             workspace_file.read_text(encoding="utf-8"),
         )
         expect(

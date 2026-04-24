@@ -103,7 +103,7 @@ if not isinstance(payload, dict):
     print(f"Ignoring invalid central managed-memory payload at {source}: not a JSON object", file=sys.stderr)
     raise SystemExit(1)
 
-required = ("agent_id", "vault-ref", "qmd-ref", "catalog", "subscriptions")
+required = ("agent_id", "vault-ref", "qmd-ref", "catalog", "subscriptions", "vault_path_contract")
 missing = [key for key in required if key not in payload]
 if missing:
     print(

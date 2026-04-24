@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import logging
+import pwd
 import re
 import secrets
 import sqlite3
@@ -783,6 +784,39 @@ def _pdf_manifest_metadata_for_rel_path(cfg: Config, rel_path: str) -> dict[str,
     return {}
 
 
+def _agent_workspace_root(conn: sqlite3.Connection, agent_id: str) -> Path | None:
+    row = conn.execute(
+        "SELECT unix_user, hermes_home FROM agents WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    unix_user = str(row["unix_user"] or "").strip()
+    if unix_user:
+        try:
+            return Path(pwd.getpwnam(unix_user).pw_dir)
+        except KeyError:
+            pass
+    hermes_home = Path(str(row["hermes_home"] or "")).expanduser()
+    try:
+        return hermes_home.parents[3]
+    except IndexError:
+        return Path("/home") / unix_user if unix_user else None
+
+
+def _agent_vault_display_root(conn: sqlite3.Connection, agent_id: str) -> str:
+    workspace_root = _agent_workspace_root(conn, agent_id)
+    return str(workspace_root / "Almanac") if workspace_root is not None else ""
+
+
+def _display_vault_path(display_vault_root: str | None, rel_path: str) -> str:
+    root = str(display_vault_root or "").strip()
+    rel = str(rel_path or "").strip("/")
+    if not root:
+        return ""
+    return str(Path(root) / rel) if rel else root
+
+
 def _vault_source_path_for_qmd_ref(cfg: Config, source_ref: str) -> tuple[str, str, Path | None, dict[str, str]]:
     collection, rel_path = _qmd_source_parts(source_ref)
     if collection == "vault":
@@ -818,16 +852,22 @@ def _vault_source_metadata(
     *,
     include_hash: bool = False,
     include_repo_details: bool = False,
+    display_vault_root: str | None = None,
 ) -> dict[str, Any]:
     collection, rel_path, source_path, generated_metadata = _vault_source_path_for_qmd_ref(cfg, source_ref)
+    vault_root_path = str(display_vault_root or "").strip() or str(cfg.vault_dir)
     metadata: dict[str, Any] = {
         "qmd_collection": collection,
         "qmd_source": str(source_ref or "").strip(),
         "vault_dir_name": cfg.vault_dir.name,
-        "vault_root_path": str(cfg.vault_dir),
+        "vault_root_path": vault_root_path,
         "source_rel_path": rel_path,
     }
     if generated_metadata:
+        generated_metadata = dict(generated_metadata)
+        displayed_source = _display_vault_path(vault_root_path, str(generated_metadata.get("source_rel_path") or rel_path))
+        if displayed_source:
+            generated_metadata["source_host_path"] = displayed_source
         metadata["generated"] = True
         metadata["generated_metadata"] = generated_metadata
         metadata["source_type"] = str(generated_metadata.get("almanac_source_type") or "generated")
@@ -838,7 +878,7 @@ def _vault_source_metadata(
     if source_path is None:
         return metadata
 
-    metadata["source_host_path"] = str(source_path)
+    metadata["source_host_path"] = _display_vault_path(vault_root_path, rel_path) or str(source_path)
     metadata["source_exists"] = source_path.exists()
     if source_path.exists():
         try:
@@ -857,7 +897,7 @@ def _vault_source_metadata(
         metadata["nearest_vault_root"] = {
             "name": vault_meta.get("name") or vault_root.name or cfg.vault_dir.name,
             "rel_path": vault_rel or ".",
-            "host_path": str(vault_root),
+            "host_path": _display_vault_path(vault_root_path, vault_rel) or str(vault_root),
             "category": vault_meta.get("category", ""),
             "owner": vault_meta.get("owner", ""),
             "default_subscribed": vault_meta.get("default_subscribed", ""),
@@ -866,7 +906,7 @@ def _vault_source_metadata(
         metadata["nearest_vault_root"] = {
             "name": cfg.vault_dir.name,
             "rel_path": ".",
-            "host_path": str(cfg.vault_dir),
+            "host_path": vault_root_path,
         }
 
     repo_root = _nearest_parent_with_file(source_path, cfg.vault_dir, ".git")
@@ -875,7 +915,7 @@ def _vault_source_metadata(
         metadata["repo"] = {
             "root_name": repo_root.name,
             "root_rel_path": _safe_relative(repo_root, cfg.vault_dir) or ".",
-            "root_host_path": str(repo_root),
+            "root_host_path": _display_vault_path(vault_root_path, _safe_relative(repo_root, cfg.vault_dir)) or str(repo_root),
         }
         if include_repo_details:
             metadata["repo"].update(
@@ -888,7 +928,13 @@ def _vault_source_metadata(
     return metadata
 
 
-def _compact_qmd_search_hit(hit: dict[str, Any], *, cfg: Config | None = None, snippet_char_limit: int = 700) -> dict[str, Any]:
+def _compact_qmd_search_hit(
+    hit: dict[str, Any],
+    *,
+    cfg: Config | None = None,
+    display_vault_root: str | None = None,
+    snippet_char_limit: int = 700,
+) -> dict[str, Any]:
     snippet, snippet_truncated = _trim_text(hit.get("snippet"), snippet_char_limit)
     result = {
         "docid": str(hit.get("docid") or ""),
@@ -902,17 +948,29 @@ def _compact_qmd_search_hit(hit: dict[str, Any], *, cfg: Config | None = None, s
     if cfg is not None:
         source_ref = result["file"] or result["docid"]
         if source_ref:
-            result["source_metadata"] = _vault_source_metadata(cfg, source_ref, include_hash=False, include_repo_details=False)
+            result["source_metadata"] = _vault_source_metadata(
+                cfg,
+                source_ref,
+                include_hash=False,
+                include_repo_details=False,
+                display_vault_root=display_vault_root,
+            )
     return result
 
 
-def _compact_qmd_search_result(result: dict[str, Any], *, cfg: Config | None = None, snippet_char_limit: int = 700) -> dict[str, Any]:
+def _compact_qmd_search_result(
+    result: dict[str, Any],
+    *,
+    cfg: Config | None = None,
+    display_vault_root: str | None = None,
+    snippet_char_limit: int = 700,
+) -> dict[str, Any]:
     structured = _qmd_structured_content(result)
     hits = structured.get("results") if isinstance(structured.get("results"), list) else []
     return {
         "ok": True,
         "results": [
-            _compact_qmd_search_hit(hit, cfg=cfg, snippet_char_limit=snippet_char_limit)
+            _compact_qmd_search_hit(hit, cfg=cfg, display_vault_root=display_vault_root, snippet_char_limit=snippet_char_limit)
             for hit in hits
             if isinstance(hit, dict)
         ],
@@ -967,7 +1025,13 @@ def _qmd_fetch_arguments(arguments: dict[str, Any], *, file_value: str | None = 
     }
 
 
-def _qmd_fetch_file(cfg: Config, arguments: dict[str, Any], *, file_value: str | None = None) -> dict[str, Any]:
+def _qmd_fetch_file(
+    cfg: Config,
+    arguments: dict[str, Any],
+    *,
+    file_value: str | None = None,
+    display_vault_root: str | None = None,
+) -> dict[str, Any]:
     body_char_limit = _clamp_int(
         arguments.get("body_char_limit"),
         default=8000,
@@ -986,6 +1050,7 @@ def _qmd_fetch_file(cfg: Config, arguments: dict[str, Any], *, file_value: str |
         compact.get("uri") or compact.get("file") or fetch_args["file"],
         include_hash=True,
         include_repo_details=True,
+        display_vault_root=display_vault_root,
     )
     return compact
 
@@ -1515,6 +1580,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if tool_name == "vault.search":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
+                display_vault_root = _agent_vault_display_root(conn, str(token_row["agent_id"]))
                 query_args = _qmd_query_arguments(arguments)
                 search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
                 return {
@@ -1523,18 +1589,20 @@ class Handler(BaseHTTPRequestHandler):
                     "qmd_url": cfg.qmd_url,
                     "query": query_args["searches"][0]["query"],
                     "collections": query_args["collections"],
-                    "search": _compact_qmd_search_result(search_result, cfg=cfg),
+                    "search": _compact_qmd_search_result(search_result, cfg=cfg, display_vault_root=display_vault_root),
                 }
 
             if tool_name == "vault.fetch":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
+                display_vault_root = _agent_vault_display_root(conn, str(token_row["agent_id"]))
                 return {
                     "agent_id": str(token_row["agent_id"]),
-                    "fetch": _qmd_fetch_file(cfg, arguments),
+                    "fetch": _qmd_fetch_file(cfg, arguments, display_vault_root=display_vault_root),
                 }
 
             if tool_name == "vault.search-and-fetch":
                 token_row = validate_token(conn, str(arguments.get("token") or ""))
+                display_vault_root = _agent_vault_display_root(conn, str(token_row["agent_id"]))
                 query_args = _qmd_query_arguments(arguments, limit_key="search_limit")
                 try:
                     search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args)
@@ -1547,7 +1615,7 @@ class Handler(BaseHTTPRequestHandler):
                     query_args = _qmd_query_arguments(arguments, limit_key="search_limit", include_vec=False)
                     search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args, timeout=8)
                     search_fallback_used = True
-                search = _compact_qmd_search_result(search_result, cfg=cfg)
+                search = _compact_qmd_search_result(search_result, cfg=cfg, display_vault_root=display_vault_root)
                 fetch_limit = _clamp_int(arguments.get("fetch_limit"), default=1, minimum=0, maximum=2)
                 fetched: list[dict[str, Any]] = []
                 seen_files: set[str] = set()
@@ -1562,7 +1630,12 @@ class Handler(BaseHTTPRequestHandler):
                         fetched.append(
                             {
                                 "search_hit": hit,
-                                "fetch": _qmd_fetch_file(cfg, arguments, file_value=file_value),
+                                "fetch": _qmd_fetch_file(
+                                    cfg,
+                                    arguments,
+                                    file_value=file_value,
+                                    display_vault_root=display_vault_root,
+                                ),
                             }
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -1707,6 +1780,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 if "vault" in sources:
                     try:
+                        display_vault_root = _agent_vault_display_root(conn, agent_id)
                         vault_args = dict(arguments)
                         vault_args["limit"] = per_source_limit
                         query_args = _qmd_query_arguments(vault_args)
@@ -1716,7 +1790,7 @@ class Handler(BaseHTTPRequestHandler):
                             "qmd_url": cfg.qmd_url,
                             "query": query_args["searches"][0]["query"],
                             "collections": query_args["collections"],
-                            "search": _compact_qmd_search_result(search_result, cfg=cfg),
+                            "search": _compact_qmd_search_result(search_result, cfg=cfg, display_vault_root=display_vault_root),
                             "rerank": False,
                         }
                     except Exception as exc:  # noqa: BLE001
@@ -1767,6 +1841,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 if "vault" in sources:
                     try:
+                        display_vault_root = _agent_vault_display_root(conn, agent_id)
                         vault_args = dict(arguments)
                         vault_args["search_limit"] = per_source_limit
                         vault_args["fetch_limit"] = _clamp_int(
@@ -1784,7 +1859,7 @@ class Handler(BaseHTTPRequestHandler):
                             query_args = _qmd_query_arguments(vault_args, limit_key="search_limit", include_vec=False)
                             search_result = _mcp_tool_call(cfg.qmd_url, "query", query_args, timeout=8)
                             search_fallback_used = True
-                        search = _compact_qmd_search_result(search_result, cfg=cfg)
+                        search = _compact_qmd_search_result(search_result, cfg=cfg, display_vault_root=display_vault_root)
                         fetched: list[dict[str, Any]] = []
                         seen_files: set[str] = set()
                         for hit in search.get("results", []):
@@ -1798,7 +1873,12 @@ class Handler(BaseHTTPRequestHandler):
                                 fetched.append(
                                     {
                                         "search_hit": hit,
-                                        "fetch": _qmd_fetch_file(cfg, vault_args, file_value=file_value),
+                                        "fetch": _qmd_fetch_file(
+                                            cfg,
+                                            vault_args,
+                                            file_value=file_value,
+                                            display_vault_root=display_vault_root,
+                                        ),
                                     }
                                 )
                             except Exception as exc:  # noqa: BLE001

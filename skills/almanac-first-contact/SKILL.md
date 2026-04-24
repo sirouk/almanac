@@ -26,7 +26,7 @@ The script expects these environment variables (all normally exported by `init.s
 
 Its output is a JSON summary on stdout. A non-zero exit code means first-contact failed a hard check; the operator should inspect before proceeding.
 
-On a shared host, `ALMANAC_SHARED_REPO_DIR` may live under `/home/almanac/almanac`. Treat that as the shared deployment root, not as another enrolled user's workspace.
+On a shared host, `ALMANAC_SHARED_REPO_DIR` is the shared deployment root, not another enrolled user's workspace. Use `~/Almanac` as the user-visible vault root.
 
 ## Goals
 

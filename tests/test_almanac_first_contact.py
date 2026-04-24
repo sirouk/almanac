@@ -35,7 +35,7 @@ def write_fake_rpc(path: Path) -> None:
         "elif args.tool == 'vaults.refresh':\n"
         "    print(json.dumps({'active_subscriptions': ['Projects']}))\n"
         "elif args.tool == 'agents.managed-memory':\n"
-        "    print(json.dumps({'agent_id': 'agent-test', 'qmd-ref': 'ok'}))\n"
+        "    print(json.dumps({'agent_id': 'agent-test', 'qmd-ref': 'ok', 'vault_path_contract': 'user-home-almanac-v1'}))\n"
         "elif args.tool == 'status':\n"
         "    print(json.dumps({'vault_warning_count': 0, 'vault_warnings': []}))\n"
         "elif args.tool == 'notion.search':\n"
@@ -187,6 +187,7 @@ def test_first_contact_runs_real_qmd_probe() -> None:
                         "resource-ref": "Canonical user access rails.",
                         "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
                         "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.",
+                        "vault_path_contract": "user-home-almanac-v1",
                     },
                     indent=2,
                     sort_keys=True,

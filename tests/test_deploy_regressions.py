@@ -1234,6 +1234,38 @@ printf 'ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE=%s\\n' "$ALMANAC_UPSTREAM_KNOWN_HOSTS_
     print("PASS test_collect_install_answers_guides_upstream_deploy_key_setup")
 
 
+def test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access() -> None:
+    text = DEPLOY_SH.read_text()
+    expect(
+        "Public key to paste into GitHub as a deploy key" in text,
+        "upstream deploy-key setup must print the actual public key, not just the .pub path",
+    )
+    expect(
+        "prompt_and_verify_upstream_deploy_key_access" in text
+        and "verify_upstream_git_deploy_key_access" in text,
+        "upstream deploy-key setup must prompt for GitHub setup and verify access",
+    )
+    expect(
+        'git ls-remote "$remote" HEAD' in text,
+        "upstream deploy-key verification must prove read access with git ls-remote",
+    )
+    expect(
+        "-o BatchMode=yes" in text,
+        "upstream deploy-key SSH checks must fail closed instead of prompting interactively",
+    )
+    expect(
+        "git -C \"$tmp_dir\" push --dry-run" in text
+        and "Allow write access" in text
+        and "dry-run write access" in text,
+        "upstream deploy-key verification must prove write access with git push --dry-run",
+    )
+    expect(
+        "ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED" in text,
+        "upstream deploy-key verification should not prompt twice once it has passed",
+    )
+    print("PASS test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access")
+
+
 def test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable() -> None:
     text = DEPLOY_SH.read_text()
     helpers = extract(text, "github_owner_repo_from_remote() {", "collect_install_answers() {")
@@ -1830,6 +1862,7 @@ def main() -> int:
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,
         test_collect_install_answers_guides_upstream_deploy_key_setup,
+        test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access,
         test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,
         test_require_supported_host_mode_rejects_native_macos_install,
         test_require_supported_host_mode_guides_wsl_without_systemd,

@@ -2460,7 +2460,7 @@ upstream_git_ssh_command() {
   known_hosts="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
   printf -v quoted_key '%q' "$key_path"
   printf -v quoted_known_hosts '%q' "$known_hosts"
-  printf 'ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
+  printf 'ssh -i %s -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
     "$quoted_key" "$quoted_known_hosts"
 }
 
@@ -2512,6 +2512,15 @@ collect_upstream_git_answers() {
         echo "    $repo_page/settings/keys"
         echo "  Required GitHub setting:"
         echo "    Enable Allow write access."
+      fi
+      if id -u "$key_user" >/dev/null 2>&1; then
+        ensure_upstream_git_deploy_key_material_for_user "$key_user"
+        print_upstream_deploy_key_public_key
+        prompt_and_verify_upstream_deploy_key_access
+      else
+        echo "  Public key:"
+        echo "    Will be generated after Unix user '$key_user' exists on this host."
+        echo "    Re-run deploy.sh, or run upgrade after creating the user, to print and verify it."
       fi
       return 0
     fi
@@ -2580,8 +2589,27 @@ ensure_upstream_git_deploy_key_material_root() {
   ensure_upstream_git_deploy_key_material_for_user "$key_user"
 }
 
+print_upstream_deploy_key_public_key() {
+  local pub_path="" pub_key=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  if [[ ! -f "$pub_path" ]]; then
+    echo "  Public key to paste into GitHub:"
+    echo "    Not generated yet: $pub_path"
+    return 1
+  fi
+
+  pub_key="$(<"$pub_path")"
+  echo "  Public key to paste into GitHub as a deploy key:"
+  printf '    %s\n' "$pub_key"
+}
+
 print_upstream_deploy_key_instructions() {
-  local repo_page="" pub_path="" pub_key=""
+  local repo_page="" pub_path=""
 
   if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
@@ -2589,9 +2617,6 @@ print_upstream_deploy_key_instructions() {
 
   pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
   repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
-  if [[ -f "$pub_path" ]]; then
-    pub_key="$(<"$pub_path")"
-  fi
   echo
   echo "Almanac upstream deploy key"
   echo "  SSH remote:"
@@ -2605,10 +2630,7 @@ print_upstream_deploy_key_instructions() {
     echo "    $repo_page/settings/keys"
     echo "  Required GitHub setting: enable Allow write access."
   fi
-  if [[ -n "$pub_key" ]]; then
-    echo "  Public key to paste into GitHub:"
-    printf '    %s\n' "$pub_key"
-  fi
+  print_upstream_deploy_key_public_key
 }
 
 configure_upstream_git_for_repo() {
@@ -2634,9 +2656,101 @@ configure_upstream_git_for_repo() {
   git -C "$repo_dir" config core.sshCommand "$ssh_command"
 }
 
-prepare_operator_upstream_deploy_key_before_sudo() {
-  local pub_path="" repo_page=""
+verify_upstream_git_deploy_key_access() {
+  local remote="" ssh_command="" branch="" tmp_dir="" output="" write_ref=""
 
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  remote="${ALMANAC_UPSTREAM_REPO_URL:-}"
+  if ! git_remote_uses_ssh "$remote"; then
+    return 0
+  fi
+
+  if [[ ! -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}" ]]; then
+    echo "Almanac upstream deploy key private file is missing; cannot verify GitHub access." >&2
+    return 1
+  fi
+  if [[ ! -f "${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}" ]]; then
+    echo "Almanac upstream deploy key known_hosts file is missing; cannot verify GitHub access." >&2
+    return 1
+  fi
+
+  ssh_command="$(upstream_git_ssh_command)"
+
+  echo "  Verifying deploy-key read access with git ls-remote..."
+  if ! output="$(GIT_SSH_COMMAND="$ssh_command" git ls-remote "$remote" HEAD 2>&1)"; then
+    echo "$output" >&2
+    echo "GitHub deploy-key read check failed for $remote." >&2
+    return 1
+  fi
+  echo "  Read check passed."
+
+  branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  write_ref="refs/heads/almanac-deploy-key-write-check"
+  tmp_dir="$(mktemp -d)"
+  if ! (
+    set -e
+    git -C "$tmp_dir" init -b almanac-deploy-key-write-check >/dev/null
+    git -C "$tmp_dir" config user.name "Almanac Deploy Key Check"
+    git -C "$tmp_dir" config user.email "almanac-deploy-key-check@localhost"
+    printf 'Almanac deploy key write check for %s\n' "$branch" > "$tmp_dir/README.md"
+    git -C "$tmp_dir" add README.md
+    git -C "$tmp_dir" commit -m "Almanac deploy key write check" >/dev/null
+  ); then
+    rm -rf "$tmp_dir"
+    echo "Failed to prepare a temporary dry-run push repo for deploy-key verification." >&2
+    return 1
+  fi
+
+  echo "  Verifying deploy-key write access with git push --dry-run..."
+  if ! output="$(GIT_SSH_COMMAND="$ssh_command" git -C "$tmp_dir" push --dry-run "$remote" "HEAD:$write_ref" 2>&1)"; then
+    rm -rf "$tmp_dir"
+    echo "$output" >&2
+    echo "GitHub deploy-key write check failed for $remote." >&2
+    echo "Make sure the deploy key is added to the repo and Allow write access is enabled." >&2
+    return 1
+  fi
+  rm -rf "$tmp_dir"
+  echo "  Write check passed (dry-run only; no branch or commit was pushed)."
+}
+
+prompt_and_verify_upstream_deploy_key_access() {
+  local pub_path="" repo_page="" retry=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
+  if [[ ! -t 0 || -z "$repo_page" || ! -f "$pub_path" ]]; then
+    return 0
+  fi
+
+  echo
+  read -r -p "Press ENTER after adding this deploy key in GitHub with Allow write access, or Ctrl-C to stop: " _
+  while true; do
+    if verify_upstream_git_deploy_key_access; then
+      ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED=1
+      return 0
+    fi
+    echo
+    echo "The deploy key is not ready yet. GitHub must accept both read and dry-run write access before deploy continues."
+    retry="$(ask_yes_no "Retry the upstream deploy key access check after fixing GitHub settings" "1")"
+    if [[ "$retry" != "1" ]]; then
+      echo "Cannot continue with upstream deploy-key setup enabled until GitHub access verifies." >&2
+      return 1
+    fi
+    read -r -p "Press ENTER after fixing the deploy key in GitHub: " _
+  done
+}
+
+prepare_operator_upstream_deploy_key_before_sudo() {
   if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
@@ -2647,13 +2761,7 @@ prepare_operator_upstream_deploy_key_before_sudo() {
   ensure_upstream_git_deploy_key_material_for_user "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
   configure_upstream_git_for_repo "$BOOTSTRAP_DIR"
   print_upstream_deploy_key_instructions
-
-  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
-  repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
-  if [[ -t 0 && -n "$repo_page" && -f "$pub_path" ]]; then
-    echo
-    read -r -p "Press ENTER after adding this deploy key in GitHub, or Ctrl-C to stop and do it later: " _
-  fi
+  prompt_and_verify_upstream_deploy_key_access
 }
 
 collect_backup_git_answers() {

@@ -76,31 +76,46 @@ flowchart LR
     Operator[Operator] --> Curator[Curator Hermes]
     User[Enrolled user] --> Onboarding[Discord/Telegram onboarding]
     Onboarding --> Curator
-    Curator --> Control[almanac-mcp]
+    Curator --> Control[almanac-mcp control plane]
     Control --> Provisioner[Enrollment provisioner]
-    Provisioner --> Agent[User Hermes agent]
     Provisioner --> Unix[Unix user + systemd user services]
-
-    Vault[Shared vault] --> QMD[qmd MCP]
-    PDF[PDF ingest] --> QMD
-    NotionIndex[Notion index] --> QMD
+    Provisioner --> Agent[User Hermes agent]
 
     Agent --> Control
-    Agent --> QMD
-    Agent --> NotionBroker[Notion SSOT broker]
+    Agent --> QMD[qmd MCP retrieval]
+    Control --> NotionBroker[Notion SSOT broker]
     NotionBroker --> Notion[Shared Notion workspace]
 
-    Nextcloud[Nextcloud /Vault] --> Vault
+    Vault[Shared vault]
+    Nextcloud[Nextcloud /Vault] <--> Vault
+    HermesDocs[Hermes docs sync] --> Vault
+    RepoSync[Explicit git checkout sync] --> Vault
     Watcher[Vault watcher] --> Vault
-    Watcher --> PDF
-    Watcher --> QMD
-    Watcher --> Control
+    Watcher --> PDF[PDF ingest]
+    PDF --> PDFMarkdown[Generated PDF markdown]
+    Vault --> QMD
+    PDFMarkdown --> QMD
 
-    Tailscale[Tailscale Serve] --> Nextcloud
-    Tailscale --> Control
-    Tailscale --> QMD
+    Notion --> NotionWebhook[Notion webhook]
+    NotionWebhook --> SSOTBatcher[SSOT batcher]
+    SSOTBatcher --> NotionIndex[Notion markdown index]
+    NotionIndex --> QMD
 
-    Backup[GitHub backups] --> PrivateRepo[almanac-priv]
+    CuratorRefresh[Curator refresh timer] --> Control
+    CuratorRefresh --> RepoSync
+    CuratorRefresh --> NotionIndex
+    Control --> Notifications[Notification outbox]
+    Notifications --> Delivery[Notification delivery]
+    Delivery --> Curator
+    Delivery --> Agent
+
+    TailscaleServe[Tailscale Serve tailnet] --> Nextcloud
+    TailscaleServe --> Control
+    TailscaleServe --> QMD
+    TailscaleFunnel[Tailscale Funnel public webhook] --> NotionWebhook
+
+    PrivateRepo[almanac-priv] --> Backup[GitHub backup job]
+    Backup --> GitHub[Private GitHub backup repo]
 ```
 
 ## Repository Layout

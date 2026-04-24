@@ -833,6 +833,9 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_upstream_git_answers() {{
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+}}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
   BACKUP_GIT_DEPLOY_KEY_PATH=""
@@ -892,6 +895,9 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_upstream_git_answers() {{
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+}}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
   BACKUP_GIT_DEPLOY_KEY_PATH=""
@@ -976,6 +982,9 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_upstream_git_answers() {{
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+}}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
   BACKUP_GIT_DEPLOY_KEY_PATH=""
@@ -1037,6 +1046,9 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 0; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_upstream_git_answers() {{
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+}}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
   BACKUP_GIT_DEPLOY_KEY_PATH=""
@@ -1077,7 +1089,7 @@ printf 'NEXTCLOUD_ADMIN_PASSWORD=%s\\n' "$NEXTCLOUD_ADMIN_PASSWORD"
 
 def test_collect_install_answers_guides_backup_remote_setup() -> None:
     text = DEPLOY_SH.read_text()
-    helpers = extract(text, "backup_github_owner_repo_from_remote() {", "collect_install_answers() {")
+    helpers = extract(text, "github_owner_repo_from_remote() {", "collect_install_answers() {")
     collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
     script = f"""
 {helpers}
@@ -1138,9 +1150,88 @@ printf 'BACKUP_GIT_KNOWN_HOSTS_FILE=%s\\n' "$BACKUP_GIT_KNOWN_HOSTS_FILE"
     print("PASS test_collect_install_answers_guides_backup_remote_setup")
 
 
+def test_collect_install_answers_guides_upstream_deploy_key_setup() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "github_owner_repo_from_remote() {", "collect_install_answers() {")
+    collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    script = f"""
+{helpers}
+{collect}
+ask() {{
+  case "$1" in
+    GitHub\\ owner/repo\\ for\\ Almanac\\ upstream\\ deploy\\ key*) printf '%s' "${{2:-}}" ;;
+    *) printf '%s' "${{2:-}}" ;;
+  esac
+}}
+ask_yes_no() {{
+  case "$1" in
+    Set\\ up\\ an\\ operator\\ deploy\\ key\\ for\\ the\\ Almanac\\ upstream\\ repo*) printf '%s' 1 ;;
+    *) printf '%s' "${{2:-0}}" ;;
+  esac
+}}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+random_secret() {{ printf '%s' "generated-secret"; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME=""
+  TAILSCALE_IPV4=""
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ALMANAC_UPSTREAM_REPO_URL=https://github.com/sirouk/almanac.git
+  ALMANAC_UPSTREAM_DEPLOY_KEY_USER=operator-svc
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  return 0
+}}
+MODE=write-config
+collect_install_answers
+printf 'ALMANAC_UPSTREAM_REPO_URL=%s\\n' "$ALMANAC_UPSTREAM_REPO_URL"
+printf 'ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=%s\\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED"
+printf 'ALMANAC_UPSTREAM_DEPLOY_KEY_USER=%s\\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
+printf 'ALMANAC_UPSTREAM_DEPLOY_KEY_PATH=%s\\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_PATH"
+printf 'ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE=%s\\n' "$ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"upstream deploy-key collect_install_answers case failed: {result.stderr}")
+    expect(
+        "ALMANAC_UPSTREAM_REPO_URL=git@github.com:sirouk/almanac.git" in result.stdout,
+        f"expected upstream remote to switch to SSH, got: {result.stdout!r}",
+    )
+    expect("ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=1" in result.stdout, result.stdout)
+    expect("ALMANAC_UPSTREAM_DEPLOY_KEY_USER=operator-svc" in result.stdout, result.stdout)
+    expect(
+        "ALMANAC_UPSTREAM_DEPLOY_KEY_PATH=/srv/operator-svc/.ssh/almanac-upstream-ed25519" in result.stdout,
+        f"expected upstream deploy key under operator/service home, got: {result.stdout!r}",
+    )
+    expect(
+        "ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/almanac-upstream-known_hosts" in result.stdout,
+        f"expected upstream known_hosts path, got: {result.stdout!r}",
+    )
+    expect(
+        "Read-only is enough for upgrades" in result.stdout and "Allow write access" in result.stdout,
+        f"expected deploy-key guidance to explain read/write tradeoff, got: {result.stdout!r}",
+    )
+    print("PASS test_collect_install_answers_guides_upstream_deploy_key_setup")
+
+
 def test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable() -> None:
     text = DEPLOY_SH.read_text()
-    helpers = extract(text, "backup_github_owner_repo_from_remote() {", "collect_install_answers() {")
+    helpers = extract(text, "github_owner_repo_from_remote() {", "collect_install_answers() {")
     collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -1266,6 +1357,9 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
+collect_upstream_git_answers() {{
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+}}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
   BACKUP_GIT_DEPLOY_KEY_PATH=""
@@ -1730,6 +1824,7 @@ def main() -> int:
         test_collect_install_answers_randomizes_placeholder_passwords,
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,
+        test_collect_install_answers_guides_upstream_deploy_key_setup,
         test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,
         test_require_supported_host_mode_rejects_native_macos_install,
         test_require_supported_host_mode_guides_wsl_without_systemd,

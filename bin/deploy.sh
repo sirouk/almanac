@@ -43,6 +43,10 @@ SEED_SAMPLE_VAULT="${SEED_SAMPLE_VAULT:-1}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
 BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-}"
 BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-}"
+ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
+ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
+ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
 ALMANAC_MCP_HOST="${ALMANAC_MCP_HOST:-127.0.0.1}"
 ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
 ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
@@ -1511,6 +1515,10 @@ emit_runtime_config() {
     write_kv CHUTES_MCP_URL "${CHUTES_MCP_URL:-}"
     write_kv ALMANAC_UPSTREAM_REPO_URL "${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
     write_kv ALMANAC_UPSTREAM_BRANCH "${ALMANAC_UPSTREAM_BRANCH:-main}"
+    write_kv ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+    write_kv ALMANAC_UPSTREAM_DEPLOY_KEY_USER "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
+    write_kv ALMANAC_UPSTREAM_DEPLOY_KEY_PATH "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
+    write_kv ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE "${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
     write_kv ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE "${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
     write_kv ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE "${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
     write_kv ALMANAC_AGENT_CODE_PORT_BASE "${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
@@ -1668,8 +1676,14 @@ checkout_upstream_release() {
   fi
 
   rm -rf "$checkout_dir"
-  git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
-    "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$ALMANAC_UPSTREAM_REPO_URL"; then
+    GIT_SSH_COMMAND="$(upstream_git_ssh_command)" \
+      git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
+      "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
+  else
+    git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
+      "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
+  fi
 }
 
 write_operator_checkout_artifact() {
@@ -1976,6 +1990,28 @@ print_post_install_guide() {
   echo "    ${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
   echo "  Upgrade command:"
   echo "    $ALMANAC_REPO_DIR/deploy.sh upgrade"
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]]; then
+    local upstream_repo_page="" upstream_pub_key_path="" upstream_pub_key=""
+    upstream_repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
+    upstream_pub_key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+    if [[ -f "$upstream_pub_key_path" ]]; then
+      upstream_pub_key="$(<"$upstream_pub_key_path")"
+    fi
+    echo "  Upstream deploy key:"
+    echo "    ${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+    if [[ -n "$upstream_repo_page" ]]; then
+      echo "  Add or review that deploy key here:"
+      echo "    $upstream_repo_page/settings/keys"
+      echo "  Read-only is enough for upgrades; enable write access if this operator/agent should push."
+    fi
+    if [[ -n "$upstream_pub_key" ]]; then
+      echo "  Public key to paste into GitHub:"
+      printf '    %s\n' "$upstream_pub_key"
+    fi
+  else
+    echo "  Optional deploy key:"
+    echo "    rerun install or write-config and answer yes to the Almanac upstream deploy-key prompt"
+  fi
   echo "  Manual upstream check:"
   echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl upgrade check"
   echo "  Curator routine:"
@@ -2284,7 +2320,7 @@ wipe_nextcloud_state_if_requested() {
   install -d -m 0750 -o "$ALMANAC_USER" -g "$ALMANAC_USER" "$NEXTCLOUD_STATE_DIR"
 }
 
-backup_github_owner_repo_from_remote() {
+github_owner_repo_from_remote() {
   local remote="${1:-}"
   local owner_repo=""
 
@@ -2307,17 +2343,27 @@ backup_github_owner_repo_from_remote() {
   printf '%s' "$owner_repo"
 }
 
-backup_github_repo_page_from_remote() {
+github_repo_page_from_remote() {
   local owner_repo=""
 
-  owner_repo="$(backup_github_owner_repo_from_remote "${1:-}")"
+  owner_repo="$(github_owner_repo_from_remote "${1:-}")"
   if [[ -n "$owner_repo" ]]; then
     printf 'https://github.com/%s' "$owner_repo"
   fi
 }
 
-backup_git_remote_uses_ssh() {
-  local remote="${1:-$BACKUP_GIT_REMOTE}"
+github_ssh_remote_from_owner_repo() {
+  local owner_repo="${1:-}"
+
+  owner_repo="${owner_repo#/}"
+  owner_repo="${owner_repo%/}"
+  if [[ "$owner_repo" == */* && "$owner_repo" != */ && "$owner_repo" != /* ]]; then
+    printf 'git@github.com:%s.git' "$owner_repo"
+  fi
+}
+
+git_remote_uses_ssh() {
+  local remote="${1:-}"
 
   case "$remote" in
     git@*|ssh://*)
@@ -2326,6 +2372,18 @@ backup_git_remote_uses_ssh() {
   esac
 
   return 1
+}
+
+backup_github_owner_repo_from_remote() {
+  github_owner_repo_from_remote "${1:-}"
+}
+
+backup_github_repo_page_from_remote() {
+  github_repo_page_from_remote "${1:-}"
+}
+
+backup_git_remote_uses_ssh() {
+  git_remote_uses_ssh "${1:-$BACKUP_GIT_REMOTE}"
 }
 
 backup_private_repo_origin_remote() {
@@ -2358,6 +2416,240 @@ default_backup_git_deploy_key_path() {
 
 default_backup_git_known_hosts_file() {
   printf '%s' "${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}/.ssh/almanac-backup-known_hosts"
+}
+
+upstream_deploy_key_user_default() {
+  if [[ -n "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" ]]; then
+    printf '%s\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
+    return 0
+  fi
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER:-}" != "root" ]]; then
+    printf '%s\n' "$SUDO_USER"
+    return 0
+  fi
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    id -un
+    return 0
+  fi
+  printf '%s\n' "${ALMANAC_USER:-almanac}"
+}
+
+default_upstream_git_deploy_key_path() {
+  local key_user="" key_home=""
+
+  key_user="$(upstream_deploy_key_user_default)"
+  if [[ "$key_user" == "${ALMANAC_USER:-}" && -n "${ALMANAC_HOME:-}" ]]; then
+    key_home="$ALMANAC_HOME"
+  else
+    key_home="$(resolve_user_home "$key_user" 2>/dev/null || default_home_for_user "$key_user")"
+  fi
+  printf '%s' "$key_home/.ssh/almanac-upstream-ed25519"
+}
+
+default_upstream_git_known_hosts_file() {
+  local key_path=""
+
+  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  printf '%s' "$(dirname "$key_path")/almanac-upstream-known_hosts"
+}
+
+upstream_git_ssh_command() {
+  local key_path="" known_hosts="" quoted_key="" quoted_known_hosts=""
+
+  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  known_hosts="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+  printf -v quoted_key '%q' "$key_path"
+  printf -v quoted_known_hosts '%q' "$known_hosts"
+  printf 'ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
+    "$quoted_key" "$quoted_known_hosts"
+}
+
+collect_upstream_git_answers() {
+  local default_remote="" default_owner_repo="" owner_repo="" default_enabled="" repo_page=""
+  local key_user=""
+
+  default_remote="${ALMANAC_UPSTREAM_REPO_URL:-$(git_origin_url "$BOOTSTRAP_DIR")}"
+  default_owner_repo="$(github_owner_repo_from_remote "$default_remote")"
+  default_enabled="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+  if [[ -n "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" && -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
+    default_enabled="1"
+  fi
+
+  echo
+  echo "GitHub deploy key for Almanac upstream"
+  echo "  Optional but recommended for operators who want this host to pull/push via SSH instead of HTTPS prompts."
+  echo "  Read-only is enough for upgrades. Enable GitHub Allow write access only if this operator/agent should push to the repo."
+
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="$(ask_yes_no "Set up an operator deploy key for the Almanac upstream repo" "$default_enabled")"
+  if [[ "$ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED" != "1" ]]; then
+    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
+    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
+    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
+    return 0
+  fi
+
+  while true; do
+    owner_repo="$(ask "GitHub owner/repo for Almanac upstream deploy key" "$default_owner_repo")"
+    owner_repo="${owner_repo#/}"
+    owner_repo="${owner_repo%/}"
+    if [[ "$owner_repo" == */* && "$owner_repo" != */ && "$owner_repo" != /* ]]; then
+      ALMANAC_UPSTREAM_REPO_URL="$(github_ssh_remote_from_owner_repo "$owner_repo")"
+      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+      ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+      ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+      key_user="$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
+      repo_page="$(github_repo_page_from_remote "$ALMANAC_UPSTREAM_REPO_URL")"
+      echo "  Upstream SSH remote:"
+      echo "    $ALMANAC_UPSTREAM_REPO_URL"
+      echo "  Key owner on this host:"
+      echo "    $key_user"
+      echo "  Deploy key public file:"
+      echo "    ${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH}.pub"
+      if [[ -n "$repo_page" ]]; then
+        echo "  Add the public key to GitHub here:"
+        echo "    $repo_page/settings/keys"
+      fi
+      return 0
+    fi
+    echo "Please enter GitHub owner/repo, for example sirouk/almanac."
+  done
+}
+
+ensure_upstream_git_deploy_key_material_for_user() {
+  local key_user="${1:-$(upstream_deploy_key_user_default)}"
+  local key_path="" pub_path="" key_dir="" known_hosts="" key_comment="" quoted_key="" quoted_pub="" quoted_dir="" quoted_known_hosts=""
+  local key_script=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if ! git_remote_uses_ssh "${ALMANAC_UPSTREAM_REPO_URL:-}"; then
+    return 0
+  fi
+
+  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  pub_path="${key_path}.pub"
+  key_dir="$(dirname "$key_path")"
+  known_hosts="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+  key_comment="almanac-upstream@$(hostname -f 2>/dev/null || hostname)"
+
+  printf -v quoted_key '%q' "$key_path"
+  printf -v quoted_pub '%q' "$pub_path"
+  printf -v quoted_dir '%q' "$key_dir"
+  printf -v quoted_known_hosts '%q' "$known_hosts"
+
+  key_script="
+    set -e
+    mkdir -p $quoted_dir
+    chmod 700 $quoted_dir
+    if [[ ! -f $quoted_key ]]; then
+      ssh-keygen -q -t ed25519 -N '' -C $(printf '%q' "$key_comment") -f $quoted_key
+    elif [[ ! -f $quoted_pub ]]; then
+      ssh-keygen -y -f $quoted_key > $quoted_pub
+    fi
+    chmod 600 $quoted_key
+    chmod 644 $quoted_pub
+    touch $quoted_known_hosts
+    chmod 644 $quoted_known_hosts
+    ssh-keyscan github.com >> $quoted_known_hosts 2>/dev/null || true
+    sort -u -o $quoted_known_hosts $quoted_known_hosts 2>/dev/null || true
+  "
+
+  if [[ "$(id -un)" == "$key_user" ]]; then
+    bash -lc "$key_script"
+  else
+    run_as_user "$key_user" "$key_script"
+  fi
+}
+
+ensure_upstream_git_deploy_key_material_root() {
+  local key_user=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  key_user="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  if ! id -u "$key_user" >/dev/null 2>&1; then
+    echo "Configured Almanac upstream deploy key user '$key_user' does not exist on this host." >&2
+    return 1
+  fi
+  ensure_upstream_git_deploy_key_material_for_user "$key_user"
+}
+
+print_upstream_deploy_key_instructions() {
+  local repo_page="" pub_path="" pub_key=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
+  if [[ -f "$pub_path" ]]; then
+    pub_key="$(<"$pub_path")"
+  fi
+  echo
+  echo "Almanac upstream deploy key"
+  echo "  SSH remote:"
+  echo "    ${ALMANAC_UPSTREAM_REPO_URL:-}"
+  echo "  Key owner:"
+  echo "    ${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  echo "  Public key file:"
+  echo "    $pub_path"
+  if [[ -n "$repo_page" ]]; then
+    echo "  Add it to GitHub here:"
+    echo "    $repo_page/settings/keys"
+    echo "  Use read-only for upgrades; enable Allow write access if this operator/agent should push."
+  fi
+  if [[ -n "$pub_key" ]]; then
+    echo "  Public key to paste into GitHub:"
+    printf '    %s\n' "$pub_key"
+  fi
+}
+
+configure_upstream_git_for_repo() {
+  local repo_dir="${1:-}"
+  local ssh_command=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ -z "$repo_dir" || ! -d "$repo_dir/.git" ]]; then
+    return 0
+  fi
+  if ! git_remote_uses_ssh "${ALMANAC_UPSTREAM_REPO_URL:-}"; then
+    return 0
+  fi
+
+  ssh_command="$(upstream_git_ssh_command)"
+  if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo_dir" remote set-url origin "$ALMANAC_UPSTREAM_REPO_URL"
+  else
+    git -C "$repo_dir" remote add origin "$ALMANAC_UPSTREAM_REPO_URL"
+  fi
+  git -C "$repo_dir" config core.sshCommand "$ssh_command"
+}
+
+prepare_operator_upstream_deploy_key_before_sudo() {
+  local pub_path="" repo_page=""
+
+  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    return 0
+  fi
+
+  ensure_upstream_git_deploy_key_material_for_user "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  configure_upstream_git_for_repo "$BOOTSTRAP_DIR"
+  print_upstream_deploy_key_instructions
+
+  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
+  if [[ -t 0 && -n "$repo_page" && -f "$pub_path" ]]; then
+    echo
+    read -r -p "Press ENTER after adding this deploy key in GitHub, or Ctrl-C to stop and do it later: " _
+  fi
 }
 
 collect_backup_git_answers() {
@@ -2563,6 +2855,7 @@ collect_install_answers() {
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  collect_upstream_git_answers
   ALMANAC_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
   collect_backup_git_answers
   BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
@@ -2785,6 +3078,10 @@ prepare_deployed_context() {
   ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/sirouk/almanac.git}"
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+  ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
+  ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
+  ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
 }
 
 ensure_deployed_config_exists() {
@@ -3194,16 +3491,20 @@ run_root_install() {
   seed_private_repo "$ALMANAC_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
   chown_managed_paths
+  ensure_upstream_git_deploy_key_material_root
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
   wipe_nextcloud_state_if_requested
 
   init_public_repo_if_needed
+  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
 
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  ensure_upstream_git_deploy_key_material_root
+  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
   realign_active_enrolled_agents_root
@@ -3282,6 +3583,8 @@ run_root_upgrade() {
   checkout_dir="$tmp_dir/repo"
   trap 'rm -rf "${tmp_dir:-}"' EXIT
 
+  ensure_upstream_git_deploy_key_material_root
+
   echo "Fetching Almanac upstream..."
   echo "  repo:   $ALMANAC_UPSTREAM_REPO_URL"
   echo "  branch: $ALMANAC_UPSTREAM_BRANCH"
@@ -3296,6 +3599,7 @@ run_root_upgrade() {
   seed_private_repo "$ALMANAC_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
   chown_managed_paths
+  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
 
   env \
     ALMANAC_USER="$ALMANAC_USER" \
@@ -3319,6 +3623,8 @@ run_root_upgrade() {
   chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  ensure_upstream_git_deploy_key_material_root
+  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
   realign_active_enrolled_agents_root
@@ -4972,6 +5278,10 @@ run_upgrade_flow() {
       ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
       ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
       ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
+      ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
+      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
+      ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+      ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
       "$SELF_PATH" --apply-upgrade; then
       return 1
     fi
@@ -5002,6 +5312,10 @@ run_upgrade_flow() {
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
     ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
     ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
+    ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
+    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
+    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
     "$SELF_PATH" --apply-upgrade; then
     return 1
   fi
@@ -5055,6 +5369,8 @@ run_install_flow() {
     echo "Private repo scaffold: $ALMANAC_PRIV_DIR"
     return 0
   fi
+
+  prepare_operator_upstream_deploy_key_before_sudo
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     run_root_install

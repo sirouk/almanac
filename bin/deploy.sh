@@ -3341,7 +3341,7 @@ shared_hermes_runtime_commit() {
   if [[ -z "${RUNTIME_DIR:-}" || ! -d "$repo_dir/.git" ]]; then
     return 0
   fi
-  git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true
+  git -c safe.directory="$repo_dir" -C "$repo_dir" rev-parse HEAD 2>/dev/null || true
 }
 
 report_shared_hermes_runtime_transition() {

@@ -1613,6 +1613,10 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "active-agent realignment should have an explicit Hermes-runtime transition policy",
     )
     expect(
+        'git -c safe.directory="$repo_dir" -C "$repo_dir" rev-parse HEAD' in text,
+        "root deploy should compare the managed Hermes checkout without tripping Git dubious-ownership protection",
+    )
+    expect(
         "update_agent_display_name" in helper,
         "active-agent realignment should keep the stored agent display name aligned with the saved bot label",
     )

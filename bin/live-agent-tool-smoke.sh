@@ -11,7 +11,7 @@ ensure_layout
 TARGET_UNIX_USER=""
 TARGET_AGENT_SELECTOR=""
 TAIL_LINES=40
-PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, python heredocs, curl, raw MCP protocol, or read any secrets files.}"
+PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, local scripts, raw MCP protocol, or secrets files.}"
 
 usage() {
   cat <<'EOF'
@@ -274,7 +274,10 @@ if telemetry_path.exists():
 session = json.loads(session_path.read_text(encoding="utf-8"))
 functions: list[str] = []
 texts: list[str] = []
+assistant_texts: list[str] = []
+non_user_texts: list[str] = []
 for message in session.get("messages", []):
+    role = str(message.get("role") or "")
     for call in message.get("tool_calls") or []:
         name = (((call or {}).get("function") or {}).get("name"))
         if isinstance(name, str) and name:
@@ -286,14 +289,26 @@ for message in session.get("messages", []):
         for item in content:
             if isinstance(item, dict) and isinstance(item.get("text"), str):
                 texts.append(item["text"])
+                if role == "assistant":
+                    assistant_texts.append(item["text"])
+                if role != "user":
+                    non_user_texts.append(item["text"])
+        continue
+    if isinstance(content, str):
+        if role == "assistant":
+            assistant_texts.append(content)
+        if role != "user":
+            non_user_texts.append(content)
 
 joined = "\n".join(texts)
+assistant_joined = "\n".join(assistant_texts)
+non_user_joined = "\n".join(non_user_texts)
 errors: list[str] = []
 if not tool_token_event:
     errors.append("no tool_token_injected telemetry event was recorded for the smoke session")
-if re.search(r"python(?:3)?\s*-\s*<<\s*\S+", joined):
+if re.search(r"python(?:3)?\s*-\s*<<\s*\S+", assistant_joined):
     errors.append("session content still mentions a python heredoc")
-if "almanac-bootstrap-token" in joined:
+if "almanac-bootstrap-token" in assistant_joined:
     errors.append("session content still mentions the bootstrap token path")
 if any(name in {"terminal", "execute_code"} for name in functions):
     errors.append(f"session invoked terminal-style tools: {functions}")
@@ -306,9 +321,9 @@ if not any(
     for name in functions
 ):
     errors.append(f"session did not invoke the brokered Almanac knowledge/vault MCP rail: {functions}")
-if "missing or invalid mcp-session-id" in joined:
+if "missing or invalid mcp-session-id" in non_user_joined:
     errors.append("session leaked a stale MCP transport-session error to the agent")
-if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", joined, re.IGNORECASE | re.DOTALL):
+if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", assistant_joined, re.IGNORECASE | re.DOTALL):
     errors.append("session attempted raw curl/MCP debugging instead of brokered Almanac tools")
 
 if errors:

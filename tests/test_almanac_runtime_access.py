@@ -51,6 +51,7 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
         (runtime_dir / "hermes-agent-src").mkdir(parents=True, exist_ok=True)
         (repo_dir / "bin").mkdir(parents=True, exist_ok=True)
         (repo_dir / "python").mkdir(parents=True, exist_ok=True)
+        (private_dir / "vault" / "Repos").mkdir(parents=True, exist_ok=True)
         (runtime_dir / "hermes-venv" / "bin" / "python3").write_text(
             "#!/usr/bin/env python3\n",
             encoding="utf-8",
@@ -121,6 +122,14 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
         expect(str(runtime_dir / "hermes-venv") in joined, f"expected hermes runtime ACL call, saw: {joined}")
         expect(str(runtime_dir / "hermes-agent-src") in joined, f"expected hermes source ACL call, saw: {joined}")
         expect(str(activation_dir) in joined, f"expected activation dir ACL call, saw: {joined}")
+        expect(
+            any(cmd[:5] == ["/usr/bin/setfacl", "-R", "-m", "u:alice:rwX", str(private_dir / "vault")] for cmd in commands),
+            f"expected shared vault rw ACL call, saw: {joined}",
+        )
+        expect(
+            any(cmd[:4] == ["/usr/bin/setfacl", "-m", "d:u:alice:rwX", str(private_dir / "vault")] for cmd in commands),
+            f"expected shared vault default ACL on root, saw: {joined}",
+        )
         expect(
             any(cmd[:4] == ["/usr/bin/setfacl", "-m", "u:alice:--x", str(almanac_home)] for cmd in commands),
             f"expected traverse ACL for almanac home, saw: {joined}",

@@ -5285,9 +5285,14 @@ def grant_agent_runtime_access(
     ]
     if runtime_python_root is not None:
         readable_trees.append(runtime_python_root)
+    writable_trees = [
+        cfg.vault_dir,
+    ]
 
     applied_traverse: list[str] = []
     applied_readable: list[str] = []
+    applied_writable: list[str] = []
+    applied_default_acl_dirs: list[str] = []
     for target in traverse_only:
         if target.exists():
             subprocess.run([setfacl_bin, "-m", f"u:{unix_user}:--x", str(target)], check=True)
@@ -5296,12 +5301,23 @@ def grant_agent_runtime_access(
         if target.exists():
             subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rX", str(target)], check=True)
             applied_readable.append(str(target))
+    for target in writable_trees:
+        if target.exists():
+            subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rwX", str(target)], check=True)
+            applied_writable.append(str(target))
+            for root, dirs, _files in os.walk(target):
+                root_path = Path(root)
+                subprocess.run([setfacl_bin, "-m", f"d:u:{unix_user}:rwX", str(root_path)], check=True)
+                applied_default_acl_dirs.append(str(root_path))
+                dirs[:] = [name for name in dirs if not (root_path / name).is_symlink()]
 
     return {
         "unix_user": unix_user,
         "agent_id": agent_id,
         "traverse_only": applied_traverse,
         "readable_trees": applied_readable,
+        "writable_trees": applied_writable,
+        "default_acl_dirs": applied_default_acl_dirs,
     }
 
 

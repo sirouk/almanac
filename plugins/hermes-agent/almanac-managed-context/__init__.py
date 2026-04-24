@@ -158,6 +158,7 @@ _TOKEN_TOOL_SUFFIXES = {
     "agents_consume_notifications": "agents.consume-notifications",
     "ssot_read": "ssot.read",
     "ssot_pending": "ssot.pending",
+    "ssot_preflight": "ssot.preflight",
     "ssot_status": "ssot.status",
     "ssot_write": "ssot.write",
     "notion_search": "notion.search",
@@ -911,6 +912,22 @@ def _pre_tool_call(
             "action": "block",
             "message": "Almanac MCP call was blocked because tool arguments were not an object.",
         }
+
+    canonical_tool_name = str(tool_name or "").strip()
+    if canonical_tool_name in {
+        "ssot.write",
+        "ssot.preflight",
+        "mcp_almanac_mcp_ssot_write",
+        "mcp_almanac_mcp_ssot_preflight",
+    }:
+        raw_payload = args.get("payload")
+        if isinstance(raw_payload, str):
+            try:
+                parsed_payload = json.loads(raw_payload)
+            except Exception:
+                parsed_payload = None
+            if isinstance(parsed_payload, dict):
+                args["payload"] = parsed_payload
 
     token = _bootstrap_token()
     if not token:

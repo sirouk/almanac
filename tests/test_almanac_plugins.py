@@ -957,6 +957,37 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             )
             expect(vault_args["token"] == "tok_live_test", vault_args)
 
+            ssot_write_args = {
+                "operation": "insert",
+                "target_id": "3497afde-ade5-812f-87f5-efb86f98de50",
+                "payload": '{"properties":{"title":{"title":[{"text":{"content":"Chutes MESH"}}]}}}',
+            }
+            hook(
+                tool_name="mcp_almanac_mcp_ssot_write",
+                args=ssot_write_args,
+                session_id="session-token",
+                task_id="task-ssot-write",
+                tool_call_id="call-ssot-write",
+            )
+            expect(ssot_write_args["token"] == "tok_live_test", ssot_write_args)
+            expect(isinstance(ssot_write_args["payload"], dict), ssot_write_args)
+            expect(ssot_write_args["payload"]["properties"]["title"]["title"][0]["text"]["content"] == "Chutes MESH", ssot_write_args)
+
+            ssot_preflight_args = {
+                "operation": "insert",
+                "target_id": "3497afde-ade5-812f-87f5-efb86f98de50",
+                "payload": '{"properties":{"title":{"title":[{"text":{"content":"Chutes MESH Preflight"}}]}}}',
+            }
+            hook(
+                tool_name="mcp_almanac_mcp_ssot_preflight",
+                args=ssot_preflight_args,
+                session_id="session-token",
+                task_id="task-ssot-preflight",
+                tool_call_id="call-ssot-preflight",
+            )
+            expect(ssot_preflight_args["token"] == "tok_live_test", ssot_preflight_args)
+            expect(isinstance(ssot_preflight_args["payload"], dict), ssot_preflight_args)
+
             canonical_args = {"pending_id": "ssotw_123"}
             hook(tool_name="ssot.status", args=canonical_args, session_id="session-token")
             expect(canonical_args["token"] == "tok_live_test", canonical_args)
@@ -988,14 +1019,23 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
 
             os.environ["HERMES_HOME"] = str(hermes_home)
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            expect(len(lines) == 2, lines)
+            expect(len(lines) == 4, lines)
             expect(all(record.get("tool_token_injected") is True for record in lines), lines)
             expect(
                 {record.get("tool_name") for record in lines}
-                == {"mcp_almanac_mcp_notion_search_and_fetch", "mcp_almanac_mcp_vault_search_and_fetch"},
+                == {
+                    "mcp_almanac_mcp_notion_search_and_fetch",
+                    "mcp_almanac_mcp_vault_search_and_fetch",
+                    "mcp_almanac_mcp_ssot_write",
+                    "mcp_almanac_mcp_ssot_preflight",
+                },
                 lines,
             )
-            expect({record.get("task_id") for record in lines} == {"task-1", "task-2"}, lines)
+            expect(
+                {record.get("task_id") for record in lines}
+                == {"task-1", "task-2", "task-ssot-write", "task-ssot-preflight"},
+                lines,
+            )
             telemetry_body = telemetry_path.read_text(encoding="utf-8")
             expect("tok_live_test" not in telemetry_body, telemetry_body)
             print("PASS test_almanac_managed_context_pre_tool_call_injects_bootstrap_token")

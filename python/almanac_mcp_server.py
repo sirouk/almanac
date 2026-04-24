@@ -807,9 +807,14 @@ class Handler(BaseHTTPRequestHandler):
         if extra_data:
             error["data"] = extra_data
         raw = json.dumps({"jsonrpc": "2.0", "id": request_id, "error": error}).encode("utf-8")
-        self.send_response(status)
+        # Keep MCP JSON-RPC errors on HTTP 200 transport status. The Python
+        # streamable_http client raises on non-2xx before surfacing the JSON-RPC
+        # body, which can terminate the client session and make fast broker
+        # validation failures look like timeouts to Hermes agents.
+        self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        self.send_header("X-Almanac-MCP-Error-Status", str(status))
         for key, value in (extra_headers or {}).items():
             self.send_header(key, value)
         self.end_headers()

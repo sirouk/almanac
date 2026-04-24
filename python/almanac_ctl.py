@@ -1250,7 +1250,29 @@ def _resolve_deployed_commit(cfg: Config, release_state: dict[str, object]) -> s
     return result.stdout.strip()
 
 
-def _query_upstream_head(repo_url: str, branch: str) -> str:
+def _git_remote_uses_ssh(repo_url: str) -> bool:
+    return repo_url.startswith("git@") or repo_url.startswith("ssh://")
+
+
+def _upstream_git_env(cfg: Config, repo_url: str) -> dict[str, str] | None:
+    if not cfg.upstream_deploy_key_enabled or not _git_remote_uses_ssh(repo_url):
+        return None
+    key_path = str(cfg.upstream_deploy_key_path or "").strip()
+    known_hosts = str(cfg.upstream_known_hosts_file or "").strip()
+    if not key_path or not known_hosts:
+        return None
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = (
+        f"ssh -i {shlex.quote(key_path)} "
+        "-o BatchMode=yes "
+        "-o IdentitiesOnly=yes "
+        "-o StrictHostKeyChecking=yes "
+        f"-o UserKnownHostsFile={shlex.quote(known_hosts)}"
+    )
+    return env
+
+
+def _query_upstream_head(repo_url: str, branch: str, env: dict[str, str] | None = None) -> str:
     if shutil.which("git") is None:
         raise RuntimeError("git is not installed")
     result = subprocess.run(
@@ -1259,6 +1281,7 @@ def _query_upstream_head(repo_url: str, branch: str) -> str:
         text=True,
         check=False,
         timeout=30,
+        env=env,
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
@@ -1367,7 +1390,11 @@ def upgrade_check(
     }
 
     try:
-        upstream_commit = _query_upstream_head(upstream_repo_url, upstream_branch)
+        upstream_commit = _query_upstream_head(
+            upstream_repo_url,
+            upstream_branch,
+            _upstream_git_env(cfg, upstream_repo_url),
+        )
     except Exception as exc:  # noqa: BLE001
         note = f"upstream check failed for {upstream_repo_url}#{upstream_branch}: {exc}"
         note_refresh_job(

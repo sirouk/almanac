@@ -290,6 +290,14 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             provisioner._restart_user_agent_gateway_if_enabled = (
                 lambda *, unix_user, home, hermes_home, uid: refresh_calls.append(("gateway-restart", unix_user)) or True
             )
+            provisioner.pwd.getpwnam = lambda unix_user: type(
+                "Passwd",
+                (),
+                {
+                    "pw_dir": str(root / "home" / unix_user),
+                    "pw_uid": 1000,
+                },
+            )()
             provisioner._notify_user_via_curator = (
                 lambda cfg, *, session, message, telegram_reply_markup=None, discord_components=None: deliveries.append(
                     {

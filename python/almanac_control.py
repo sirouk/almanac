@@ -339,6 +339,9 @@ class Config:
     chutes_mcp_url: str
     upstream_repo_url: str
     upstream_branch: str
+    upstream_deploy_key_enabled: bool
+    upstream_deploy_key_path: str
+    upstream_known_hosts_file: str
     model_presets: dict[str, str]
     agent_dashboard_backend_port_base: int
     agent_dashboard_proxy_port_base: int
@@ -447,6 +450,13 @@ class Config:
             chutes_mcp_url=chutes_mcp_url,
             upstream_repo_url=env.get("ALMANAC_UPSTREAM_REPO_URL", "https://github.com/sirouk/almanac.git"),
             upstream_branch=env.get("ALMANAC_UPSTREAM_BRANCH", "main"),
+            upstream_deploy_key_enabled=bool_env(
+                "ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED",
+                default=False,
+                env=env,
+            ),
+            upstream_deploy_key_path=env.get("ALMANAC_UPSTREAM_DEPLOY_KEY_PATH", ""),
+            upstream_known_hosts_file=env.get("ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE", ""),
             model_presets=model_presets,
             agent_dashboard_backend_port_base=int(env.get("ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE", "19000")),
             agent_dashboard_proxy_port_base=int(env.get("ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE", "29000")),

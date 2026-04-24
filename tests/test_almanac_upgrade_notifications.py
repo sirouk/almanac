@@ -119,7 +119,7 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
             )
             conn.commit()
 
-            ctl._query_upstream_head = lambda repo_url, branch: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._query_upstream_head = lambda repo_url, branch, env=None: "bbbbbbbbbbbb2222222222222222222222222222"
             ctl._classify_upstream_relation = lambda *args, **kwargs: "behind"
             result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
             expect(result["notification_sent"] is True, result)
@@ -205,7 +205,7 @@ def test_upgrade_check_adds_discord_buttons_for_operator_channel() -> None:
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            ctl._query_upstream_head = lambda repo_url, branch: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._query_upstream_head = lambda repo_url, branch, env=None: "bbbbbbbbbbbb2222222222222222222222222222"
             ctl._classify_upstream_relation = lambda *args, **kwargs: "behind"
             result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
             expect(result["notification_sent"] is True, result)
@@ -275,7 +275,7 @@ def test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs() ->
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            ctl._query_upstream_head = lambda repo_url, branch: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._query_upstream_head = lambda repo_url, branch, env=None: "bbbbbbbbbbbb2222222222222222222222222222"
             ctl._classify_upstream_relation = lambda *args, **kwargs: "different"
             result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
 
@@ -343,7 +343,7 @@ def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            ctl._query_upstream_head = lambda repo_url, branch: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._query_upstream_head = lambda repo_url, branch, env=None: "bbbbbbbbbbbb2222222222222222222222222222"
             ctl._classify_upstream_relation = lambda *args, **kwargs: "ahead"
             result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
 
@@ -360,12 +360,71 @@ def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
             os.environ.update(old_env)
 
 
+def test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_upgrade_deploy_key_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_upgrade_deploy_key_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        key_path = root / ".ssh" / "almanac-upstream-ed25519"
+        known_hosts = root / ".ssh" / "almanac-upstream-known_hosts"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_UPSTREAM_REPO_URL": "git@github.com:sirouk/almanac.git",
+                "ALMANAC_UPSTREAM_BRANCH": "main",
+                "ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED": "1",
+                "ALMANAC_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
+                "ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            git_env = ctl._upstream_git_env(cfg, "git@github.com:sirouk/almanac.git")
+            expect(git_env is not None, "expected SSH deploy-key env for configured upstream")
+            ssh_command = str(git_env["GIT_SSH_COMMAND"])
+            expect(str(key_path) in ssh_command, ssh_command)
+            expect(str(known_hosts) in ssh_command, ssh_command)
+            expect("-o BatchMode=yes" in ssh_command, ssh_command)
+            expect("-o IdentitiesOnly=yes" in ssh_command, ssh_command)
+            expect(
+                ctl._upstream_git_env(cfg, "https://github.com/sirouk/almanac.git") is None,
+                "HTTPS remotes should not get SSH deploy-key env",
+            )
+            print("PASS test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_upgrade_check_notifies_operator_and_user_agents_once_per_sha()
     test_upgrade_check_adds_discord_buttons_for_operator_channel()
     test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs()
     test_upgrade_check_does_not_notify_when_deployed_is_ahead()
-    print("PASS all 4 upgrade notification regression tests")
+    test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes()
+    print("PASS all 5 upgrade notification regression tests")
     return 0
 
 

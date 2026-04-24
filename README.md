@@ -1,227 +1,154 @@
 # Almanac
 
-`Almanac` is the public infrastructure repo for a shared-host Hermes agent
-harness built around a set of Vaults: durable knowledge spaces for operators
-and agents to train against, retrieve from, and keep in sync.
+Almanac is a shared-host operating layer for Hermes agents.
 
-The tone of the project is intentional:
+It gives an operator one steady Curator agent, gives each enrolled user their
+own isolated Hermes lane, and keeps everyone pointed at the same living
+knowledge base: files in the vault, PDF-derived notes, synced documentation,
+and shared Notion context.
 
-- the Vaults should feel like a training deck, not a random file dump
-- Curator should feel like a steady guide: knowledgeable, clueful, and mostly
-  on mission
-- human-facing copy should nod at that world lightly without slipping into
-  full roleplay
-- operational instructions should stay concrete even when the framing has a
-  little style
+The vibe is a control room, not a toy box. Almanac should feel calm, useful,
+and a little magical because the boring parts are handled correctly: Unix
+accounts, service repair, deploy keys, qmd indexing, Notion guardrails,
+backups, onboarding, and recovery paths.
 
-It provisions:
+## What Ships Today
 
-- one operator-owned Curator Hermes agent
-- one isolated Hermes user agent per enrolled Unix user on the host
-- a shared qmd-backed knowledge plane over the Almanac vault
-- an `almanac-mcp` control plane for enrollment, subscriptions, notifications,
-  and SSOT refresh work
+Almanac currently provisions and manages:
 
-Recommended service user: `almanac`
+- A public infrastructure repo plus a nested private `almanac-priv/` repo.
+- A shared vault on disk, exposed in Nextcloud as `/Vault`.
+- qmd collections for authored vault files, PDF-ingested markdown, and indexed
+  shared Notion pages.
+- One operator-owned Curator Hermes agent.
+- One isolated user Hermes agent per enrolled Unix account.
+- Telegram and Discord onboarding, approval, user-agent gateway, and operator
+  notification flows.
+- Chutes, Claude Opus, and OpenAI Codex model onboarding.
+- Claude Opus through Claude Code OAuth credentials, not Anthropic API keys.
+- Chutes through `https://llm.chutes.ai/v1` as an OpenAI-compatible Hermes
+  custom provider.
+- Thinking-level selection for agents, with Chutes `:THINKING` model handling
+  when enabled.
+- Shared Notion SSOT reads and safe writes through an Almanac broker.
+- Vault, skills, plugins, Notion, upgrade, and assigned-work notifications.
+- PDF extraction into generated markdown, with optional vision captions.
+- Repo sync for explicitly cloned git checkouts inside the vault.
+- GitHub backup for `almanac-priv/`.
+- Optional per-user Hermes-home backups.
+- Optional remote control of a user agent over Tailscale SSH.
+- Health, repair, enrollment cleanup, and upgrade tooling.
 
-Stack:
+The important design choice: agents do not need to rummage around blindly.
+They get high-level MCP tools that know the shape of Almanac.
 
-- Nextcloud with PostgreSQL for browser access, uploads, and folder management over Tailscale
-- PDF ingestion that converts uploaded PDFs into generated Markdown sidecars for search
-- A host filesystem watcher that notices vault changes no matter whether they came from Nextcloud or direct disk edits
-- Hermes Agent + qmd for local retrieval/search
-- `almanac-mcp`, Notion webhook intake, and SSOT batching as the shared control plane
-- one Curator Hermes agent for the operator plus one isolated Hermes agent per enrolled user
-- GitHub private repo for history/backup via `almanac-priv`
-- Quarto as an optional publish layer
+## Mental Model
 
-## Deployment Model
+```text
+operator
+  owns Curator
+  approves enrollments
+  repairs and upgrades the host
 
-Almanac is shared-host in v1.
+Curator
+  handles onboarding
+  routes notifications
+  keeps vault and Notion context fresh
 
-- the operator runs `deploy.sh` to stand up shared services and the Curator
-- the Curator runs under the operator service user and always has a local TUI
-  recovery path
-- each enrolled user gets their own Unix account, `HERMES_HOME`, and
-  user systemd instance
-- user enrollment is gated by Curator approval over the Almanac control plane
-- user agents retrieve knowledge through qmd MCP and `almanac-mcp`, not by
-  direct access to the shared vault or Curator state
+enrolled user
+  gets a Unix account
+  gets a private Hermes home
+  gets a bot lane and optional remote SSH lane
 
-## Roles
-
-- Operator: deploys Almanac, owns the Curator, approves or denies enrollments,
-  and retains TUI godmode
-- Curator: Almanac's own Hermes agent; the operator-owned guide who gates
-  onboarding, refreshes vault definitions, manages notifications, and fans out
-  managed-memory updates
-- User agent: one per enrolled user on the same host
-- Enrolled user: starts with the public bootstrap handshake; Almanac provisions
-  the host-side Unix user and agent after approval
-
-## Component Roles
-
-- Shared vault: the authoritative markdown tree on disk
-- Vaults: the named training rooms inside that shared memory surface, each with
-  its own purpose and subscription behavior
-- Nextcloud: browser access to that same shared vault over Tailscale
-- Vault watcher: watches the shared vault on disk and triggers reconciliation/index refresh in the right order
-- PDF ingestion: converts PDFs found in the shared vault into generated Markdown for qmd before refresh
-- Hermes + qmd: read-oriented retrieval/search surface for agents and shells across authored notes and generated PDF Markdown
-- Curator: operator-owned Hermes agent that keeps people on the rails, handles
-  enrollment, refreshes vault definitions, and owns token lifecycle
-- `almanac-mcp`: bootstrap, enrollment, subscriptions, notification outbox, and shared SQLite state
-- GitHub: backup/history for `almanac-priv`, not live collaboration
-- Quarto: optional human-facing published output, not required for collaboration
-
-## System UML
-
-### Structure
-
-```mermaid
-classDiagram
-direction LR
-
-class Operator
-class EnrolledUser
-class Curator
-class EnrollmentProvisioner
-class UserAgent
-class AlmanacPriv
-class SharedVault
-class Vaults
-class Nextcloud
-class VaultWatcher
-class PdfIngest
-class QmdMcp
-class AlmanacMcp
-class NotionWebhook
-class SSOTBatcher
-class TailscaleServe
-class GitHubBackup
-class Quarto
-
-Operator --> Curator : owns, deploys, repairs
-Operator --> TailscaleServe : publishes tailnet surfaces
-EnrolledUser --> Curator : private onboarding DM
-Curator --> AlmanacMcp : approvals, notifications, subscriptions
-Curator --> EnrollmentProvisioner : approve host provisioning
-EnrollmentProvisioner --> UserAgent : create unix user and services
-UserAgent --> QmdMcp : retrieve Vault knowledge
-UserAgent --> AlmanacMcp : control plane actions
-AlmanacPriv --> SharedVault : contains vault, config, state
-SharedVault --> Vaults : contains named training rooms
-Nextcloud --> SharedVault : browser read and write
-VaultWatcher --> SharedVault : watch disk changes
-VaultWatcher --> PdfIngest : schedule PDF extraction
-PdfIngest --> SharedVault : write markdown sidecars
-VaultWatcher --> QmdMcp : trigger refresh
-NotionWebhook --> SSOTBatcher : queue inbound SSOT work
-AlmanacMcp --> SSOTBatcher : queue SSOT and notifications
-Quarto --> SharedVault : render published output
-GitHubBackup --> AlmanacPriv : backup and history
-TailscaleServe --> Nextcloud : tailnet HTTPS
-TailscaleServe --> QmdMcp : publish /mcp
-TailscaleServe --> AlmanacMcp : publish /almanac-mcp
+user agent
+  retrieves from qmd
+  writes through the Notion SSOT broker
+  receives vault/skill/plugin/Notion/work notifications
 ```
 
-### Primary Flow
+The vault is the durable memory deck. qmd is the fast retrieval engine. Notion
+is the shared work surface. Curator is the pit crew.
+
+## Architecture
 
 ```mermaid
-sequenceDiagram
-    actor User as Enrolled User
-    actor Operator
-    participant Curator
-    participant MCP as Almanac MCP
-    participant Provisioner as Enrollment Provisioner
-    participant Agent as User Agent
-    participant QMD as qmd MCP
-    participant Vault as Shared Vault
+flowchart LR
+    Operator[Operator] --> Curator[Curator Hermes]
+    User[Enrolled user] --> Onboarding[Discord/Telegram onboarding]
+    Onboarding --> Curator
+    Curator --> Control[almanac-mcp]
+    Control --> Provisioner[Enrollment provisioner]
+    Provisioner --> Agent[User Hermes agent]
+    Provisioner --> Unix[Unix user + systemd user services]
 
-    User->>Curator: Start private onboarding
-    Curator->>MCP: Open session and bootstrap request
-    Curator-->>Operator: Send approval review
-    Operator->>Curator: Approve onboarding
-    Curator->>Provisioner: Mark request approved
-    Provisioner->>Agent: Create unix account, HERMES_HOME, services
-    Provisioner-->>User: Deliver bot, dashboard, code workspace, password
-    Agent->>QMD: Retrieve Vault context
-    Agent->>MCP: Use subscriptions, notifications, SSOT tools
-    QMD->>Vault: Read notes and PDF-derived markdown
-    MCP-->>Curator: Feed notifications and refresh signals
+    Vault[Shared vault] --> QMD[qmd MCP]
+    PDF[PDF ingest] --> QMD
+    NotionIndex[Notion index] --> QMD
+
+    Agent --> Control
+    Agent --> QMD
+    Agent --> NotionBroker[Notion SSOT broker]
+    NotionBroker --> Notion[Shared Notion workspace]
+
+    Nextcloud[Nextcloud /Vault] --> Vault
+    Watcher[Vault watcher] --> Vault
+    Watcher --> PDF
+    Watcher --> QMD
+    Watcher --> Control
+
+    Tailscale[Tailscale Serve] --> Nextcloud
+    Tailscale --> Control
+    Tailscale --> QMD
+
+    Backup[GitHub backups] --> PrivateRepo[almanac-priv]
 ```
 
-## Repo Split
+## Repository Layout
 
-The intended deployment shape is a nested private repo:
+The intended deployed layout is:
 
 ```text
 /home/almanac/
-  almanac/                 # public repo: scripts, units, compose, templates
-    almanac-priv/          # private nested repo: vault, config, private content
+  almanac/                 # public repo: scripts, units, templates, skills
+    almanac-priv/          # private nested repo: config, vault, runtime state
 ```
 
-`almanac-priv` is where the private state lives:
+`almanac-priv/` contains the sensitive and living parts:
 
 ```text
-/home/almanac/almanac/almanac-priv/
+almanac-priv/
   config/
     almanac.env
   vault/
-  quarto/
   published/
+  quarto/
   state/
+    agents/
+    curator/
     nextcloud/
+    notion-index/
     pdf-ingest/
     runtime/
 ```
 
-The outer `almanac` repo ignores `almanac-priv/`, and the inner `almanac-priv`
-repo is the thing you back up to GitHub. Runtime-heavy directories stay ignored
-via its own `.gitignore`.
+The public repo ignores `almanac-priv/`. Back up the inner private repo, not
+the outer infrastructure repo.
 
-## Installer
+## Host Requirements
 
-The main entrypoint is the interactive deploy script:
+Supported shared-host environments:
 
-```bash
-/path/to/almanac/deploy.sh
-```
+- Debian or Ubuntu-style Linux with `apt`, `systemd`, and `loginctl`.
+- WSL2 Ubuntu when systemd is enabled.
+- An Ubuntu VM.
 
-It opens a small menu with modes for:
+Not supported as a full host:
 
-- install or repair from the checkout you are currently running
-- upgrade from the configured upstream repo and branch
-- config-only writes
-- shared Notion SSOT setup plus live credential handshake
-- Curator repair
-- health
-- remove/teardown
+- Native macOS.
+- Machines without systemd user services.
 
-When a deployed `almanac.env` is found, remove/teardown offers to use it
-automatically so you do not have to re-enter the paths.
-
-Install or repair from the current checkout asks for:
-
-- whether to use `almanac` as the service user, defaulting to `almanac`
-- service user and home
-- public repo path
-- private repo path
-- whether to initialize the public repo if it isn't already a git repo
-- org name, mission, primary project, timezone, and quiet hours for per-agent `SOUL.md` seeding
-- Tailscale/Nextcloud domain and port, with Tailscale auto-detected when available
-- whether to enable the tailnet-only Tailscale HTTPS proxy for Nextcloud
-- which local user should be allowed to manage Tailscale Serve after install
-- whether to install `podman` now if the host is missing it
-- whether to install `tailscale` now if the host is missing it
-- whether to wipe existing Nextcloud state for a clean reinstall when prior state is detected
-- Nextcloud admin username/password
-- GitHub private remote for `almanac-priv`
-- Git author name/email
-- whether to enable Quarto
-- whether to initialize `almanac-priv` as a git repo
-
-It asks first, then uses `sudo` inline only for the steps that need root.
+You can still use helper commands from macOS or another workstation, but the
+actual shared-host stack expects Linux system services.
 
 ## Quick Start
 
@@ -231,588 +158,407 @@ From the repo root:
 ./deploy.sh
 ```
 
-Useful direct modes:
+Common direct modes:
 
 ```bash
-./deploy.sh install
-./deploy.sh upgrade
-./deploy.sh curator-setup
-./deploy.sh agent-payload
-./deploy.sh write-config
-./deploy.sh health
-./deploy.sh remove
-./bin/almanac-ctl upgrade check
-./init.sh agent
-./init.sh update
-sudo ./bin/almanac-ctl user prepare <unix-user>   # optional manual repair path
-./bin/almanac-ctl provision list
-```
-
-Host notes:
-
-- Full shared-host deployment is supported on Debian/Ubuntu-style Linux with
-  `apt`, `systemd`, and `loginctl`.
-- WSL2 Ubuntu works the same way once systemd is enabled inside the guest.
-- Native macOS is not a supported Almanac host or runtime environment. You may
-  still use helper commands like `./deploy.sh write-config` or
-  `./deploy.sh agent-payload` from an operator checkout there, but the actual
-  shared-host stack still needs Debian/Ubuntu Linux, WSL2 Ubuntu with systemd,
-  or an Ubuntu VM.
-
-## Operator Runbook
-
-### 1. Deploy the shared host
-
-Clone the repo onto the host, then run:
-
-```bash
-./deploy.sh install
-```
-
-That flow stands up the shared infrastructure, writes `almanac-priv`, installs
-the shared systemd services, records the deployed release state, and then
-launches Curator onboarding.
-
-If you later update the org interview fields in `almanac.env` and want every
-enrolled user agent to pick up the refreshed `SOUL.md` and prefill wiring, run:
-
-```bash
+./deploy.sh install                 # install or repair from this checkout
+./deploy.sh upgrade                 # upgrade deployed host from configured upstream
+./deploy.sh health                  # full host health check
+./deploy.sh curator-setup           # repair Curator only
+./deploy.sh notion-ssot             # configure shared Notion
+./deploy.sh enrollment-status
 ./deploy.sh enrollment-align
+./deploy.sh enrollment-reset
+./deploy.sh rotate-nextcloud-secrets
+./bin/almanac-ctl upgrade check
 ```
 
-When you run deploy or health commands from a separate operator checkout, that
-checkout also writes a local maintenance pointer at `.almanac-operator.env`.
-It is not part of the live deploy and is ignored by git. It simply remembers
-which deployed `almanac.env` that checkout should manage on later `health`,
-`upgrade`, and `almanac-ctl` runs.
+Install asks for the service user, repo paths, org identity fields, Tailscale
+and Nextcloud settings, model presets, Notion, deploy keys, private backup
+remote, and optional Quarto support. It asks first, then uses `sudo` only for
+the steps that need root.
 
-Run those operator-facing commands from the operator's own Unix account and
-checkout, not by logging in as the service user. The wrappers are written to
-use `sudo` inline and switch to the deployed service user when a step needs
-root or service-user context. In practice, `deploy.sh`, `deploy.sh health`,
-`deploy.sh curator-setup`, and `./bin/almanac-ctl ...` should normally be run
-from the operator-maintained checkout, while direct login as the service user
-is reserved for focused debugging or recovery.
+## First Install Checklist
 
-Curator setup includes:
+Before a serious install, have these ready:
 
-- Hermes setup under the operator service user
-- seeded model presets for Codex, Opus, and Chutes failover
-- optional Discord and Telegram gateway setup
-- mandatory local TUI access
-- operator notification channel setup and validation
+- A Linux host where the operator can use `sudo`.
+- A GitHub repo for this public `almanac` codebase.
+- A private GitHub repo for `almanac-priv` backup.
+- Tailscale on the host if you want tailnet-only browser, MCP, and remote
+  agent access.
+- A Discord or Telegram operator channel if you want chat approvals.
+- Optional Notion internal integration token for the shared SSOT workspace.
+- Optional Chutes API key for Chutes-powered agents.
+- Claude account access for Claude Code OAuth lanes.
+- OpenAI/Codex sign-in if you want Codex lanes.
 
-If shared infra is already installed and you just need to repair or reconfigure
-Curator, run:
+## Deploy Keys
 
-```bash
-./deploy.sh curator-setup
-```
+Almanac intentionally keeps deploy keys separate:
 
-That flow is intended to be idempotent: it should repair Curator state without
-duplicating manifests or blindly overwriting a working operator channel.
+- **Almanac upstream deploy key**: read/write key for operator or agent code
+  pushes to the public `almanac` repo.
+- **`almanac-priv` backup deploy key**: read/write key for private host
+  backup.
+- **Per-user agent backup deploy key**: read/write key for that user's private
+  Hermes-home backup repo.
 
-When you enable Discord or Telegram for Curator, treat the user-facing gateway
-as a separate surface from operator notifications:
+Do not reuse those keys. Different blast radius, different job.
 
-- The operator notification channel only handles outbound operator notices. A
-  Discord webhook or Telegram operator chat ID does not make Curator reachable
-  to users.
-- Discord user DMs require Curator's real Discord bot app, invited with the
-  `bot` and `applications.commands` scopes. In the server where users discover
-  Curator, grant at least View Channels, Send Messages, and Read Message
-  History. Users can DM Curator once the bot shares a server with them. For a
-  DM-first onboarding flow, keep Direct Messages enabled for server members and
-  do not rely on a webhook-only install. If Curator needs to read ordinary
-  guild messages beyond DMs, mentions, or interactions, enable Message Content
-  intent in the Developer Portal.
-- Telegram user DMs require Curator's BotFather bot token and public username.
-  Each user must open a DM and press Start before Curator can reply. Telegram
-  privacy mode only affects groups, so leave it on unless you explicitly want
-  Curator to read ordinary group traffic.
+During `deploy.sh install`, Almanac can generate the upstream key, print the
+public key, print the GitHub deploy-key settings URL, and verify read plus
+dry-run write access once you enable **Allow write access** in GitHub.
 
-### 2. Verify health
+For `almanac-priv`, health checks refuse unsafe backup shapes. A backup target
+should be private.
 
-After install or repair:
+## Upgrades
 
-```bash
-./deploy.sh health
-```
-
-This checks the shared services, Curator registration and refresh state, qmd,
-vault warnings, notification delivery, the root auto-provision timer, and
-enrolled-agent service health.
-
-### 2a. Upgrade the deployed host from upstream
-
-When you want to roll the shared host forward from the tracked upstream repo and
-branch in `almanac.env`, run:
+Use:
 
 ```bash
 ./deploy.sh upgrade
 ```
 
-That path does not use the local dev checkout as the live source of truth. It
-fetches the configured upstream, syncs the deployed public repo, refreshes the
-shared services, repairs Curator noninteractively, records the new release
-state, and finishes with a strict health check.
+Upgrade fetches the configured upstream repo and branch from `almanac.env`,
+syncs the deployed public repo, refreshes shared services, repairs Curator,
+records the release state, and ends with health.
 
-The manual check command is:
+Curator also runs:
 
 ```bash
 ./bin/almanac-ctl upgrade check
 ```
 
-Curator also runs that check hourly from `almanac-curator-refresh.timer` and
-nudges the operator when a new upstream commit appears. It also queues a user
-agent nudge so enrolled agents can mention the pending shared-host update to
-their users. The Curator maintenance skill for that flow is
-`almanac-upgrade-orchestrator`.
+on a timer. It can notify the operator when upstream has moved. If the
+operator deploy key is owned by a human account, the service-side upgrade
+check can fall back to public GitHub HTTPS for read-only status checks. Private
+upstreams still require service-readable credentials.
 
-### 3. Use the recovery surfaces
+## User Onboarding
 
-Curator is meant to stay operable even if chat gateways break.
+Users normally start in a Discord or Telegram DM with Curator:
 
-- Curator TUI: `./bin/curator-tui.sh`
-- Operator CLI: `./bin/almanac-ctl`
-- Curator repair: `./deploy.sh curator-setup`
+1. Curator asks for name, purpose, Unix username, bot name, model provider,
+   model id, and thinking level.
+2. The operator approves the onboarding request.
+3. Almanac creates the Unix user, enables linger, and provisions the user
+   Hermes home.
+4. The user gives Curator their own bot token for the same platform.
+5. Curator wires the user's agent gateway.
+6. If shared Notion is configured, Curator walks the user through Notion
+   identity verification.
+7. Curator offers agent backup setup and remote SSH control setup.
 
-Typical operator commands:
-
-```bash
-./bin/almanac-ctl request list
-./bin/almanac-ctl request approve <request-id>
-./bin/almanac-ctl request deny <request-id>
-./bin/almanac-ctl onboarding list
-./bin/almanac-ctl onboarding show <session-id>
-./bin/almanac-ctl onboarding approve <session-id>
-./bin/almanac-ctl onboarding deny <session-id>
-./bin/almanac-ctl provision list
-./bin/almanac-ctl provision cancel <request-id>
-./bin/almanac-ctl provision retry <request-id>
-./bin/almanac-ctl token list
-./bin/almanac-ctl token revoke <agent-id-or-token-id>
-./bin/almanac-ctl token reinstate <token-id>
-./bin/almanac-ctl agent list
-./bin/almanac-ctl agent show <agent-id>
-sudo ./bin/almanac-ctl agent deenroll <agent-id>
-./bin/almanac-ctl vault list
-./bin/almanac-ctl vault reload-defs
-./bin/almanac-ctl vault refresh <vault-name>
-./bin/almanac-ctl channel reconfigure operator
-```
-
-The operator control surface is the configured primary operator channel:
-
-- Telegram: the operator chat handles notifications plus `/approve` / `/deny`
-- Discord: the operator channel handles notifications plus `/approve` / `/deny`
-- TUI / CLI remain the recovery path if chat access is unavailable
-
-## Enrolling a User
-
-User onboarding now starts with the public handshake, not with precreating a
-Unix account.
-
-If Curator onboarding is enabled on Telegram or Discord, a user can instead DM
-Curator with `/start`, answer the step-by-step intake questions, wait for
-operator approval, and then hand Curator the token for their own bot on that
-same platform. Almanac will provision the Unix user on the host, wire that bot
-into the user agent, and then finish any required shared Notion verification
-before the user sees the full handoff bundle.
-
-For Discord handoff, the user should also install the app from the Discord
-Developer Portal Installation page or add it to a shared server so the final DM
-path is reachable.
-
-### 1. Give the user the enrollment command
-
-If the repo is public, the user can enroll with the curl-friendly bootstrap:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh \
-  | ALMANAC_TARGET_HOST=almanac.your-tailnet.ts.net bash -s -- agent
-```
-
-Or, without relying on environment-variable placement in a pipe:
+The public curl bootstrap also exists for laptop-originated enrollment:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/init.sh \
   | bash -s -- agent --target-host almanac.your-tailnet.ts.net
 ```
 
-When run from a non-Linux client such as a Mac, that bootstrap now:
+That submits a tailnet-scoped enrollment request. The host-side install still
+happens only after operator approval.
 
-- requires the target Almanac hostname, either through `ALMANAC_TARGET_HOST`
-  on the `bash` side of the pipe or via `--target-host`
-- asks for the Unix username Almanac should provision on the host, defaulting
-  to the current local username
-- calls the public tailnet-scoped control-plane endpoint directly
-  (`https://<host>/almanac-mcp`)
-- submits `bootstrap.handshake` immediately without SSHing to the host first
-- exits after printing the request id the operator should approve
+## Model Provider Onboarding
 
-That keeps the shared-host model intact: the actual Hermes install still
-happens on the Almanac machine under the user's Unix account, but the approval
-handshake no longer requires that account to exist ahead of time.
+The user-facing provider list is intentionally small and practical:
 
-Approval creates the Unix account, enables linger, and kicks off host-side
-agent provisioning automatically. SSH or Tailscale SSH is only needed later if
-the user wants local TUI access on the host.
+- **Chutes**: first in the list. Curator asks for the API key, model id, and
+  thinking level. Hermes is configured as a custom OpenAI-compatible provider
+  using `https://llm.chutes.ai/v1`.
+- **Claude Opus**: uses Claude Code OAuth. Curator gives the user the Claude
+  authorization URL, the user completes the browser flow, and Almanac exchanges
+  the callback code privately. Almanac seeds refreshable Claude Code
+  credentials for Hermes. It does not ask for an Anthropic API key or a setup
+  token in chat.
+- **OpenAI Codex**: uses the Codex device sign-in flow.
 
-Do not write the command as `ALMANAC_TARGET_HOST=... curl ... | bash ...`.
-That sets the variable for `curl`, not for `bash`, so the bootstrap process
-will not see the target host.
+Thinking levels are normalized to Hermes' agent config. For Chutes, any level
+except `none` enables the Chutes thinking model form when the selected model
+supports it.
 
-If the repo is private or already cloned on the host, the equivalent local
-command is:
+## User Agent Surfaces
 
-```bash
-./init.sh agent
+An enrolled user gets:
+
+- A Unix account on the shared host.
+- A private `HERMES_HOME` under `~/.local/share/almanac-agent/hermes-home`.
+- A chat bot lane on Discord or Telegram.
+- User systemd services for refresh, gateway, dashboard, and code workspace
+  when enabled.
+- A `~/Vault` symlink to the shared vault for VS Code / code-server file
+  explorer convenience.
+- A `$HERMES_HOME/Vault` symlink for agent-local discovery.
+- Optional Nextcloud user access.
+- Optional private agent backup to a user-owned GitHub repo.
+- Optional remote SSH control over Tailscale using a user-provided public key.
+
+The vault symlink refuses to overwrite a real directory. Stale symlinks are
+repaired; real user data is not bulldozed.
+
+## Vaults And Knowledge
+
+The vault is a normal directory tree with `.vault` metadata files marking
+named knowledge rooms:
+
+```text
+vault/
+  Projects/
+    .vault
+    roadmap.md
+  Skills/
+    .vault
+  Repos/
+    .vault
+    hermes-agent-docs/
 ```
 
-### 2. Approve the request
+Vault rules:
 
-The operator can approve from:
+- `.vault` files define name, purpose, owner, category, and default
+  subscription behavior.
+- Nested vault roots are invalid in v1 and appear as health warnings.
+- Retrieval is available to approved agents through MCP/qmd.
+- Subscriptions control managed-memory fanout and notifications, not raw
+  retrieval permission.
+- Vault notifications are category-aware: skills, plugins, Hermes docs, and
+  general project updates get different copy.
 
-- the dedicated operator notification channel
-- Curator TUI
-- `./bin/almanac-ctl request approve <request-id>`
+## qmd Retrieval
 
-After approval, Almanac automatically:
+Almanac indexes three active knowledge lanes:
 
-1. creates the requested Unix user when needed
-2. enables linger and starts the user's systemd context
-3. runs the host-side `bin/init.sh agent` flow noninteractively as that user
-4. registers the user agent, installs the refresh timer, and runs first
-   contact on the host
-5. during DM onboarding, wires the user's chosen Telegram or Discord bot on
-   that same platform and then continues into the shared Notion verification
-   step when it is configured on the host
+- `vault`: authored markdown/text files in the shared vault.
+- `vault-pdf-ingest`: generated markdown sidecars created from PDFs.
+- `notion-shared`: indexed shared Notion pages.
 
-`sudo ./bin/almanac-ctl user prepare <unix-user>` still exists as a manual
-repair path, but it is no longer the normal onboarding prerequisite.
+Agents should prefer Almanac MCP wrappers over raw qmd calls:
 
-### 3. What the user flow does
-
-Remote public bootstrap:
-
-1. calls the unauthenticated, tailnet-scoped `bootstrap.handshake`
-2. receives a pending enrollment request id immediately
-3. if the same user reruns enrollment from the same source while approval is
-   still pending, reuses the existing pending request instead of minting a
-   second token
-4. stops there and waits for Curator/operator approval to provision the host
-   user and agent automatically
-
-Operator tools for that queue:
-
-- `./bin/almanac-ctl provision list`
-- `./bin/almanac-ctl provision cancel <request-id>`
-- `./bin/almanac-ctl provision retry <request-id>`
-
-Host-side `init.sh agent` when already running on the Almanac machine:
-
-1. calls the unauthenticated, tailnet-scoped `bootstrap.handshake`
-2. receives a pending bootstrap key immediately
-3. if the same user reruns enrollment from the same source while approval is
-   still pending, reuses the existing pending handshake instead of minting a
-   second token
-4. installs Hermes if needed
-5. runs explicit `hermes setup`
-6. optionally runs `hermes gateway setup` for Discord or Telegram
-7. installs the default Almanac skills plus `almanac-mcp`, qmd MCP, and Chutes KB MCP when configured
-8. installs exactly one 4-hour user refresh timer and the optional user gateway service
-9. persists the pending key locally and tries activation once right away
-10. waits asynchronously for operator approval; after approval, Almanac writes a
-    per-agent activation trigger that wakes the user's local systemd path unit
-    immediately, auto-registers the user agent, runs first contact, resolves
-    default `.vault` subscriptions, and keeps bidirectional Almanac
-    notifications flowing without waiting for the next 4-hour timer tick
-
-## Public Repo Bootstrap
-
-The curl entrypoint is the repo-root [init.sh](./init.sh). It is designed to be
-safe to publish because it only bootstraps the checked-out repo and then
-either submits the remote public handshake or, when already on the host,
-delegates to [bin/init.sh](./bin/init.sh).
-
-On non-Linux clients it uses the supplied target host, or prompts for one when
-a TTY is available; otherwise it exits with a copy-paste usage hint. For remote
-client enrollment it does not SSH to the host first. On the host itself it just
-runs the local enrollment flow.
-
-Useful overrides for remote bootstrap:
-
-```bash
-ALMANAC_INIT_REPO_URL=https://github.com/sirouk/almanac.git
-ALMANAC_INIT_RAW_URL=https://raw.githubusercontent.com/sirouk/almanac/main/init.sh
-ALMANAC_TARGET_HOST=almanac.your-tailnet.ts.net
-ALMANAC_TARGET_USER=ian
-ALMANAC_PUBLIC_MCP_URL=https://almanac.your-tailnet.ts.net/almanac-mcp
-ALMANAC_PUBLIC_MCP_PATH=/almanac-mcp
-ALMANAC_BOOTSTRAP_URL=https://almanac.your-tailnet.ts.net/almanac-mcp
-ALMANAC_MCP_URL=http://127.0.0.1:8282/mcp
-ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
-CHUTES_MCP_URL=https://example.invalid/mcp
+```text
+knowledge.search-and-fetch   # best first move when source is unclear
+vault.search-and-fetch       # vault + PDF body retrieval
+vault.fetch                  # exact qmd hit/docid fetch
+notion.search-and-fetch      # shared Notion discovery + live fetch
+notion.fetch                 # exact Notion page/database/data source fetch
+ssot.read                    # scoped shared database reads
+ssot.write                   # insert/update/append through brokered writes
+ssot.status                  # follow queued writes
 ```
 
-For a typical shared-host enrollment from a user laptop, the important inputs
-are the target hostname, the requested Unix username, and the published
-tailnet control-plane URL when you want to override the default
-`/almanac-mcp` path.
+Those wrappers normalize qmd resource shapes, include PDF-ingest by default,
+bound fetch sizes, and fall back from vector+lex search to lex-only when a
+fast retrieval path needs to stay alive.
 
-The remote bootstrap entrypoint also accepts:
+## PDFs And Files
 
-```bash
---target-host <hostname>
---target-user <unix-user>
---public-mcp-url <https-url>
---public-mcp-path </almanac-mcp>
+qmd indexes text-like files directly:
+
+```text
+*.md, *.markdown, *.mdx, *.txt, *.text
 ```
 
-After `install`, the script prints a short operator guide that tells you:
+PDFs are reconciled by Almanac before qmd refresh:
 
-- where the authoritative vault lives on disk
-- where Nextcloud is listening and, when enabled, its tailnet-only Tailscale HTTPS URL
-- which Nextcloud admin user was configured and where the password is stored
-- which shared vault mount appears inside Nextcloud
-- how to point Hermes at qmd
-- a copy-and-paste agent payload with the qmd MCP URL, same-host local skill paths, GitHub skill paths, the raw `SKILL.md` URLs, and the recurring 4-hour vault-memory reconciliation instructions
-- how to enable GitHub backup pushes
-- where Quarto reads from and writes to
+- `pdf-ingest` extracts text with the configured backend.
+- Generated markdown lands under `state/pdf-ingest/markdown`.
+- qmd indexes that generated markdown in `vault-pdf-ingest`.
+- Optional vision captioning can add page-image context for the first N pages.
+- The authored PDF remains in the vault; the generated markdown is the
+  retrieval sidecar.
 
-If you just want it to write the private config and scaffold without changing
-the system yet:
+That means a dropped PDF becomes searchable even when qmd itself is only
+indexing text collections.
+
+## Explicit Repo Sync
+
+Almanac does not crawl every GitHub URL in the vault.
+
+The repo-sync rail now means:
+
+1. Clone a repo into the vault yourself.
+2. Almanac discovers real `.git/` checkouts.
+3. On refresh, it hard-syncs each checkout to `origin/<current-branch>`.
+
+The sync behavior is intentionally mirror-like:
 
 ```bash
-/path/to/almanac/deploy.sh write-config
+git fetch --prune origin <branch>
+git reset --hard origin/<branch>
+git clean -fd
 ```
 
-Treat that as an operator helper, not as proof that the full Almanac stack is
-supported on the current machine. The live runtime still expects Ubuntu-style
-Linux services.
+Local commits and dirty edits are overwritten. Untracked non-ignored files are
+removed. Gitignored build caches survive. Pinned Almanac sync trees such as
+`Repos/hermes-agent-docs/` are skipped via `.almanac-source.json`.
+
+## Hermes Docs
+
+Almanac syncs Hermes documentation into:
+
+```text
+vault/Repos/hermes-agent-docs/
+```
+
+That sync is pinned to the same `ALMANAC_HERMES_AGENT_REF` as the shared
+runtime by default. Agents can search their own operating documentation
+without reading docs for a Hermes version they are not running.
+
+## Notion SSOT
+
+Configure the shared Notion workspace with:
+
+```bash
+./deploy.sh notion-ssot
+```
+
+The shared Notion lane uses one operator-managed internal integration, not
+per-user OAuth. Almanac verifies each user's local Notion identity through a
+self-serve claim page, then uses that verified identity to scope reads and
+writes.
+
+Notion write behavior:
+
+- `insert`, `update`, and `append` are supported.
+- `archive`, `delete`, `trash`, and destructive operations are rejected.
+- Writes inside a verified user's lane can apply immediately.
+- Out-of-scope writes queue for approval instead of pretending they worked.
+- Successful page writes return receipt fields such as URL/page id.
+- Notion's native edit history shows the integration; Almanac keeps local
+  attribution and audit context, and can stamp `Changed By` when the database
+  exposes that people property.
+
+For broad knowledge questions, agents should use `notion.search-and-fetch` or
+`knowledge.search-and-fetch`. For structured work rows owned or assigned to a
+verified user, use `ssot.read` and `ssot.write`.
+
+## Notifications
+
+Almanac is designed to nudge agents without turning them into notification
+confetti.
+
+Event lanes include:
+
+- Vault content updates.
+- Skill updates.
+- Plugin updates.
+- Hermes docs updates.
+- Shared Notion webhook changes.
+- SSOT digests and `[managed:today-plate]`.
+- Pending write approvals.
+- Assigned or due work.
+- Host upgrade notices.
+- Backup and health problems.
+
+Curator delivers ambient context through managed memory and hot events through
+notification delivery. Agents should verify live state before writing shared
+systems.
+
+## Security Boundaries
+
+The default posture is local-first and tailnet-first:
+
+- Core MCP services bind to loopback.
+- Tailscale Serve publishes selected routes when enabled.
+- Funnel is only used for the explicitly configured public webhook route.
+- Shared Notion deletes are blocked at the broker.
+- Public repo code and private `almanac-priv` state are separate.
+- Backup deploy keys are separate from code-push deploy keys.
+- User agents get isolated Unix accounts and private Hermes homes.
+- User-facing write access goes through scoped broker rails, not raw Notion
+  access.
+- Health checks flag placeholder secrets, missing keys, inaccessible ports,
+  vault metadata problems, and stale upgrade state.
+
+## Recovery And Operations
+
+Curator is important, but the system does not depend on chat being healthy.
+
+Recovery surfaces:
+
+```bash
+./bin/curator-tui.sh
+./bin/almanac-ctl
+./deploy.sh health
+./deploy.sh curator-setup
+./deploy.sh enrollment-align
+./deploy.sh enrollment-reset
+```
+
+Useful operator commands:
+
+```bash
+./bin/almanac-ctl onboarding list
+./bin/almanac-ctl onboarding approve <session-id>
+./bin/almanac-ctl onboarding deny <session-id>
+./bin/almanac-ctl provision list
+./bin/almanac-ctl provision retry <request-id>
+./bin/almanac-ctl agent list
+./bin/almanac-ctl agent show <agent-id>
+./bin/almanac-ctl vault list
+./bin/almanac-ctl vault reload-defs
+./bin/almanac-ctl upgrade check
+```
+
+For deliberate cleanup and re-testing of a user lane:
+
+```bash
+./deploy.sh enrollment-reset
+```
+
+That can remove the Unix user, user services, onboarding sessions,
+auto-provision rows, notification rows, Nextcloud user, and archived state
+when requested and confirmed.
 
 ## Manual Components
 
-- [bootstrap-system.sh](./bin/bootstrap-system.sh): root/system setup
-- [bootstrap-userland.sh](./bin/bootstrap-userland.sh): install Hermes, qmd, and private repo scaffolding. The shared Hermes source and venv live under `ALMANAC_PRIV_DIR/state/runtime/` as `hermes-agent-src/` and `hermes-venv/`; managed services are expected to use that runtime rather than any unrelated install under `$HOME`. The upstream Hermes checkout is pinned by `ALMANAC_HERMES_AGENT_REF` so fresh installs do not silently float to a new upstream revision.
-- [bootstrap-curator.sh](./bin/bootstrap-curator.sh): Curator bootstrap and repair flow
-- [install-system-services.sh](./bin/install-system-services.sh): install root-owned systemd units such as the enrollment provisioner timer
-- [install-user-services.sh](./bin/install-user-services.sh): install systemd user units
-- [install-agent-user-services.sh](./bin/install-agent-user-services.sh): install per-user agent refresh/gateway units
-- [almanac-ctl](./bin/almanac-ctl): operator CLI for users, tokens, auto-provision requests, vaults, and channel repair
-- [init.sh](./init.sh): curl-friendly user enrollment/update entrypoint
-- [user-agent-refresh.sh](./bin/user-agent-refresh.sh): 4-hour user-agent subscription, managed-memory, and notification refresh
-- [almanac-context-telemetry](./bin/almanac-context-telemetry): summarize `almanac-managed-context` JSONL injection telemetry
-- [curator-tui.sh](./bin/curator-tui.sh): Curator TUI recovery surface
-- [health.sh](./bin/health.sh): quick status for qmd, timers, backup, and Nextcloud
-- [vault-watch.sh](./bin/vault-watch.sh): host filesystem watcher for the shared vault
-- [pdf-ingest.sh](./bin/pdf-ingest.sh): reconcile PDFs into generated Markdown and refresh qmd when needed
+Most operators should use `deploy.sh`, but the pieces are intentionally plain:
 
-## Private Repo Workflow
+- `bin/bootstrap-system.sh`: root/system packages and directories.
+- `bin/bootstrap-userland.sh`: Hermes runtime, qmd, private repo scaffolding.
+- `bin/bootstrap-curator.sh`: Curator bootstrap and repair.
+- `bin/install-system-services.sh`: root-owned timers/services.
+- `bin/install-user-services.sh`: service-user timers/services.
+- `bin/install-agent-user-services.sh`: per-user agent services.
+- `bin/refresh-agent-install.sh`: repair a user's Hermes install and links.
+- `bin/vault-watch.sh`: filesystem watcher for vault updates.
+- `bin/pdf-ingest.sh`: PDF-to-markdown reconciliation.
+- `bin/sync-hermes-docs-into-vault.sh`: pinned Hermes docs sync.
+- `bin/vault-repo-sync.sh`: explicit local `.git/` checkout hard-sync.
+- `bin/backup-to-github.sh`: `almanac-priv` backup.
+- `bin/configure-agent-backup.sh`: per-user Hermes-home backup setup.
+- `bin/setup-remote-hermes-client.sh`: remote Hermes client helper.
+- `bin/almanac-ctl`: operator CLI.
 
-The public `almanac` repo should not contain private content.
+## Day Two Checklist
 
-- commit infrastructure changes in the outer `almanac` repo
-- commit vault content and `config/almanac.env` in the inner `almanac-priv` repo
+After install:
 
-Example:
+1. Run `./deploy.sh health`.
+2. Confirm `Summary: ... 0 warn, 0 fail`.
+3. Configure Notion with `./deploy.sh notion-ssot` if you want shared SSOT.
+4. Add the `almanac-priv` backup deploy key to a private repo.
+5. Enroll a test user from Discord or Telegram.
+6. Ask the agent to create a harmless Notion page.
+7. Ask the agent to refuse a delete request.
+8. Drop a markdown file and a PDF into `/Vault`.
+9. Confirm `knowledge.search-and-fetch` can retrieve both.
+10. Clone a docs repo into `vault/Repos/` if you want it mirrored locally.
 
-```bash
-git -C /home/almanac/almanac/almanac-priv status
-git -C /home/almanac/almanac/almanac-priv add config/almanac.env vault
-git -C /home/almanac/almanac/almanac-priv commit -m "Update Almanac state"
-```
+## Project Posture
 
-## After Install
+Almanac is meant to supercharge a team, not bury it in ceremony.
 
-1. Run `./deploy.sh health` to confirm qmd, timers, and Nextcloud state.
-2. Treat `/home/almanac/almanac/almanac-priv/vault` as the source-of-truth vault path on disk.
-3. Use Nextcloud with the admin account stored in `almanac-priv/config/almanac.env`; the shared vault appears there as `/Vault`.
-4. Drop markdown or PDFs into the shared vault and let the host watcher reconcile and refresh qmd automatically.
-5. Point Hermes at `http://127.0.0.1:8181/mcp` using [hermes-qmd-config.yaml](./docs/hermes-qmd-config.yaml).
-6. Set `BACKUP_GIT_REMOTE` in `almanac-priv/config/almanac.env` if you want backup pushes to GitHub.
-7. Enroll users by handing them the public `curl ... init.sh | bash -s -- agent` bootstrap once the repo is public; Almanac creates the host-side Unix user after approval.
-8. Use Quarto only if you want a published human-facing site.
+The right outcome is:
 
-## Client Setup
+- Humans can drop files, PDFs, docs repos, and Notion work into familiar
+  places.
+- Agents can find the right context quickly.
+- Writes are useful but bounded.
+- Operators can see what happened and repair it.
+- The system feels smooth when it works and honest when it cannot.
 
-### Nextcloud
-
-- use it as the browser surface for the shared vault
-- the installer configures Nextcloud against PostgreSQL and writes the initial admin credentials into `almanac-priv/config/almanac.env`
-- Almanac disables the stock Nextcloud skeleton/demo files so fresh user homes start empty
-- Almanac exposes the same host vault path that qmd indexes as a global Nextcloud mount at `/Vault`
-- uploads in the browser land on the same host-mounted vault path that exists on disk outside the container
-- PDF uploads into that shared vault are reconciled by the host watcher plus the periodic ingest timer and converted into generated Markdown for retrieval
-- by default the app listens on the configured local port
-- if enabled during install, Almanac configures `tailscale serve` so the app stays bound to `127.0.0.1` while HTTPS access is available to tailnet devices only
-- public internet exposure does not happen unless you separately turn on Tailscale Funnel or place another internet-facing proxy in front of it
-
-### Hermes + qmd
-
-- qmd serves retrieval locally over MCP HTTP
-- qmd keeps the authored vault collection and a second generated-PDF collection in the same index
-- `almanac-vault-watch.service` watches the shared vault on disk and runs PDF reconciliation before qmd update
-- `almanac-qmd-update.timer` remains enabled as a periodic backstop and embedding pass
-- `almanac-mcp` serves the shared control plane locally on `http://127.0.0.1:8282/mcp`
-- when Tailscale Serve is enabled, Almanac also publishes the control plane on `https://<tailnet-host>/almanac-mcp` for bootstrap handshakes
-- Hermes should point at `http://127.0.0.1:8181/mcp`
-- the included snippet in [hermes-qmd-config.yaml](./docs/hermes-qmd-config.yaml) is the starting point
-- when Tailscale Serve is enabled, deploy also prints the tailnet MCP URL for remote agents
-- the matching skill lives at `skills/almanac-qmd-mcp/SKILL.md`
-- the recurring memory-maintenance skill lives at `skills/almanac-vault-reconciler/SKILL.md`
-- user enrollment also installs `almanac-first-contact`, `almanac-vaults`, `almanac-ssot`, plus the optional personal-Notion helpers `almanac-ssot-connect` and `almanac-notion-mcp`
-- first contact registers `almanac-mcp`, qmd MCP, and Chutes KB MCP when configured, then resolves default `.vault` subscriptions
-- if `sirouk/almanac` is public, remote host users can bootstrap with the raw `init.sh` URL
-- if `sirouk/almanac` is still private, users should enroll from a local clone on the host
-
-### Notion SSOT + User Notion
-
-- configure the shared organizational Notion target with `./deploy.sh notion-ssot`
-- make one normal Notion page for Almanac, such as `The Almanac`, and paste
-  that page URL when prompted
-- do not use the workspace Home screen itself; use a normal page inside the
-  workspace instead
-- before running that flow in Notion:
-  - create that normal Almanac page in the Teamspace you want to use
-  - start here: `https://www.notion.so/profile/integrations/internal`
-  - if Notion lands you back in the workspace UI, open the workspace switcher
-    in the top-left, then go to `Settings -> Integrations`
-  - click `Create new integration`
-  - name it something like **Almanac Curator**
-  - optionally upload an icon; the Curator Discord avatar in this repo works
-    well for that
-  - choose the associated workspace and click `Create`
-  - on the capabilities screen:
-    - turn on every checkbox capability Notion offers on that screen
-    - for user information, choose `Read user information including email addresses` so Almanac can
-      verify users against their Notion email
-    - click `Save`
-  - if you land on the `Discover new connections` gallery and see entries like
-    `Notion MCP`, `GitHub`, or `Slack`, do **not** pick one of those for the
-    shared SSOT setup
-  - open that internal integration and, near **Internal integration secret**,
-    click `Show` and then copy the key
-  - in that integration, open **Manage page access** and grant access to the
-    parent page or Teamspace root Almanac should live under
-  - new child pages and databases under that granted subtree inherit access
-    automatically; you only need to manage access again for pages outside it
-  - Notion does not expose a supported API for Almanac to press that
-    **Manage page access** UI for you; the workable pattern is to grant one
-    stable root/parent subtree once, then keep Almanac-managed content under it
-- Almanac uses that page as its shared Notion home and creates its verification
-  scaffolding under it when needed
-- that flow stores the shared page URL plus the internal integration secret
-  in `almanac-priv/config/almanac.env`
-- it tests a live handshake against Notion before persisting the target
-- shared SSOT databases should expose `Owner` and/or `Assignee` people
-  properties so Almanac can scope reads to the current verified user
-- if the database also exposes a `Changed By` people property, Almanac stamps
-  the verified human there automatically on every shared write
-- the shared target should live on a page or under a page-owned database so
-  Almanac can create its self-serve verification database nearby
-- the shared organizational lane is brokered through Almanac's own
-  `ssot.read` / `ssot.write` rails backed by the Notion REST API
-- the hosted Notion MCP is only for each user's optional private Notion lane
-- the shared organizational rail is for `almanac-ssot`
-- shared SSOT reads now go through a central brokered `ssot.read` rail and
-  shared SSOT writes support `insert`, `update`, and append-only page notes;
-  they apply immediately when the caller has a verified local Notion identity
-  in `verified_limited` mode and the target stays inside that caller's scoped
-  ownership rails
-- plain shared pages can also stay editable within the same user/agent edit
-  lane: Almanac accepts the verified user's own last human edit and the same
-  agent's prior brokered write history as continuity for later page updates
-- when a shared write falls outside that lane, Almanac now queues a pending
-  approval instead of asking the user to re-touch the page, and operators can
-  resolve it from Curator or `almanac-ctl ssot ...`
-- shared Notion onboarding is self-serve inside the Curator DM: once the lane
-  is provisioned, Curator asks for the user's Notion email, creates a
-  verification page in the shared workspace, and waits for a human edit before
-  marking that user verified
-- verification claim rows live in a shared verification database inside the
-  workspace; that is a practical Notion limitation today, so treat the claim
-  fields there as operator-visible workspace metadata rather than secrets
-- verification is local-first: Almanac stores the agent/user registry and audit
-  log locally, while Notion is only the proof surface and work surface
-- Notion's native edit history still shows the Almanac integration for brokered
-  writes; the human attribution surface is the local audit log plus the
-  `Changed By` people property on each touched row when that property exists
-- Curator also pushes a shared Notion digest into each user's managed memory:
-  personal scoped counts when verified, plus a team-level aggregate summary
-  that never exposes raw cross-user page contents
-- when a user is verified, that managed-memory digest may also include titles
-  for up to five of their own scoped current-focus rows, so operators should
-  treat those titles as part of the user's local agent memory surface
-- Curator also publishes `[managed:today-plate]`, a compact user-scoped
-  snapshot of owned/assigned SSOT work, due pressure, pending write approvals,
-  and up to five suggested work candidates; agents use it for orientation and
-  verify live details before changing shared state
-- the delivery model is two-pipe: managed-memory stubs are the ambient map,
-  while webhook notifications are the hot event stream that nudges agents to
-  refresh and react
-- operator registry helpers live in:
-  - `./bin/almanac-ctl notion identity-list`
-  - `./bin/almanac-ctl notion claim-email <agent-id|unix-user> <email>`
-  - `./bin/almanac-ctl notion verify-identity <agent-id|unix-user> <notion-user-id> --email <email>`
-  - `./bin/almanac-ctl notion audit --agent-id <agent-id>`
-- user-owned Notion linking uses the optional helper `almanac-ssot-connect`
-- once a user's own Notion MCP is connected, that separate personal lane can
-  use the optional helper `almanac-notion-mcp`; it is not the default shared
-  Almanac workspace-search contract
-- Almanac does not use per-user OAuth for the shared organizational rail:
-  OAuth would scope access, but Notion would still attribute the write to the
-  integration in native edit history. The shared rail stays centralized so the
-  audit trail, verification state, and scoped write controls all live in one
-  place.
-
-## Vault Semantics
-
-- vault definitions live in YAML `.vault` files at vault roots
-- discovery is recursive under the shared vault tree
-- nested vault roots are invalid in v1 and show up as health warnings
-- all approved users may retrieve from any vault through qmd
-- subscriptions only control managed memory and Curator push behavior
-- vault changes queue Curator fanout so managed-memory stubs stay fresh across enrolled agents while qmd remains the deep-retrieval source of truth
-- malformed or missing `.vault` files fail safe as non-default vaults and warn in health output
-
-## Updates and Lifecycle
-
-- shared-host repair from the current checkout: `./deploy.sh install`
-- shared-host upgrade from configured upstream: `./deploy.sh upgrade`
-- manual upstream check: `./bin/almanac-ctl upgrade check`
-- Curator-only repair: `./deploy.sh curator-setup`
-- user-agent update from the user's account: `./init.sh update`
-- token revocation: `./bin/almanac-ctl token revoke <target>`
-- de-enroll a user agent: `sudo ./bin/almanac-ctl agent deenroll <agent-id>`
-
-De-enrollment revokes the token, stops and disables the per-user services, and
-archives the agent state under:
-
-```text
-almanac-priv/state/archived-agents/<agent_id>/<timestamp>/
-```
-
-Re-enrollment requires fresh operator approval and a fresh token.
-
-### GitHub
-
-- the outer `almanac` repo holds infrastructure only
-- the inner `almanac-priv` repo holds vault content and `config/almanac.env`
-- backup/history belongs in `almanac-priv`
-
-### Quarto
-
-- optional
-- use it when you want a published site or rendered output for people
-- it is not part of the collaboration path for editing the vault
-
-## Suggested Access Pattern
-
-- keep the authoritative vault on the server
-- expose Nextcloud on Tailscale for browser access to that same vault
-- let the host watcher notice changes from either Nextcloud or direct disk edits and keep qmd fresh
-- let Almanac reconcile PDFs from that vault into generated Markdown for qmd before refresh
-- point Hermes to qmd over local MCP HTTP
-- back up `almanac-priv` to a private GitHub repo
+If something is clunky, it is a bug or a design debt. The whole point of
+Almanac is to make the sharp machinery feel like a calm room people can work
+inside.

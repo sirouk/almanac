@@ -544,7 +544,7 @@ Most operators should use `deploy.sh`, but the pieces are intentionally plain:
 - `bin/vault-repo-sync.sh`: explicit local `.git/` checkout hard-sync.
 - `bin/backup-to-github.sh`: `almanac-priv` backup.
 - `bin/configure-agent-backup.sh`: per-user Hermes-home backup setup.
-- `bin/setup-remote-hermes-client.sh`: remote Hermes client helper.
+- `bin/setup-remote-hermes-client.sh`: remote Hermes client helper that creates a local `hermes-almanac-<user>-<org>` wrapper.
 - `bin/almanac-ctl`: operator CLI.
 
 ## Day Two Checklist

@@ -1633,7 +1633,7 @@ def _run_pending_remote_ssh_key_actions(conn, cfg: Config) -> None:
                     cfg,
                     session,
                     (
-                        "Remote agent key installed. Run your generated `almanac-remote-hermes-*` wrapper from your own machine "
+                        "Remote agent key installed. Run your generated `hermes-almanac-*` wrapper from your own machine "
                         "to start Hermes inside this remote agent lane with its remote config, skills, MCP tools, and files. "
                         f"For debugging only, raw SSH is available over Tailscale as `ssh {target}`."
                     ),

@@ -39,6 +39,7 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 def config_values(root: Path) -> dict[str, str]:
     return {
         "ALMANAC_USER": "almanac",
+        "ALMANAC_ORG_NAME": "KorBon",
         "ALMANAC_HOME": str(root / "home-almanac"),
         "ALMANAC_REPO_DIR": str(REPO),
         "ALMANAC_PRIV_DIR": str(root / "priv"),
@@ -330,9 +331,9 @@ def test_completion_bundle_pins_remote_setup_helper_to_deployed_commit() -> None
                 in followup_text,
                 followup_text,
             )
-            expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user in followup_text, followup_text)
+            expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user + " --org KorBon" in followup_text, followup_text)
             expect("reply here with `/ssh-key <public key>`" in followup_text, followup_text)
-            expect("Use the generated `almanac-remote-hermes-*` wrapper, not your local `hermes` command" in followup_text, followup_text)
+            expect(f"Use the generated `hermes-almanac-{unix_user}-korbon` wrapper, not your local `hermes` command" in followup_text, followup_text)
             expect("remote config, skills, MCP tools, plugins, and files" in followup_text, followup_text)
             expect(f"Raw SSH target for debugging after key install: {unix_user}@kor.tail77f45e.ts.net" in followup_text, followup_text)
             expect(
@@ -418,7 +419,7 @@ def test_completion_bundle_falls_back_to_branch_when_deployed_commit_lacks_helpe
                 in followup_text,
                 followup_text,
             )
-            expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user in followup_text, followup_text)
+            expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user + " --org KorBon" in followup_text, followup_text)
             expect(
                 "https://raw.githubusercontent.com/sirouk/almanac/3d2f51bb8d532f03a9869244c357b73ef6afddbf/bin/setup-remote-hermes-client.sh"
                 not in followup_text,

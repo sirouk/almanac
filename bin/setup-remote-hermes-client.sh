@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: setup-remote-hermes-client.sh [--host tailnet-host] [--user remote-unix-user] [--key-path ~/.ssh/key]
+Usage: setup-remote-hermes-client.sh [--host tailnet-host] [--user remote-unix-user] [--org organization-name] [--key-path ~/.ssh/key]
 
 Create a local SSH/tailnet wrapper that starts Hermes on a remote
 Almanac-enrolled user account. This is remote-agent control, not local Hermes
@@ -13,6 +13,7 @@ EOF
 
 TARGET_HOST="${ALMANAC_REMOTE_HERMES_HOST:-}"
 TARGET_USER="${ALMANAC_REMOTE_HERMES_USER:-}"
+TARGET_ORG="${ALMANAC_REMOTE_HERMES_ORG:-}"
 KEY_PATH="${ALMANAC_REMOTE_HERMES_KEY_PATH:-$HOME/.ssh/almanac-remote-hermes-ed25519}"
 
 is_tailnet_host() {
@@ -39,6 +40,19 @@ raise SystemExit(1)
 PY
 }
 
+slugify_label() {
+  python3 - "$1" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+
+value = sys.argv[1].strip().lower()
+value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+print(value)
+PY
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)
@@ -47,6 +61,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --user)
       TARGET_USER="${2:-}"
+      shift 2
+      ;;
+    --org|--org-name)
+      TARGET_ORG="${2:-}"
       shift 2
       ;;
     --key-path)
@@ -87,6 +105,9 @@ fi
 if [[ -z "$TARGET_USER" && -t 0 ]]; then
   TARGET_USER="$(prompt_tty "Remote Unix user for your agent lane" "$(id -un 2>/dev/null || printf '')")"
 fi
+if [[ -z "$TARGET_ORG" && -t 0 ]]; then
+  TARGET_ORG="$(prompt_tty "Organization label for the local wrapper name (optional)")"
+fi
 
 if [[ -z "$TARGET_HOST" || -z "$TARGET_USER" ]]; then
   echo "Both --host and --user are required." >&2
@@ -114,8 +135,16 @@ if command -v ssh-keyscan >/dev/null 2>&1; then
   fi
 fi
 
-host_slug="$(printf '%s' "$TARGET_HOST" | tr -cs 'A-Za-z0-9._-' '-')"
-wrapper_path="$HOME/.local/bin/almanac-remote-hermes-${TARGET_USER}-${host_slug}"
+user_slug="$(slugify_label "$TARGET_USER")"
+org_slug="$(slugify_label "$TARGET_ORG")"
+if [[ -z "$org_slug" ]]; then
+  org_slug="$(slugify_label "$TARGET_HOST")"
+fi
+if [[ -z "$user_slug" || -z "$org_slug" ]]; then
+  echo "Could not derive a safe wrapper name from --user/--org." >&2
+  exit 1
+fi
+wrapper_path="$HOME/.local/bin/hermes-almanac-${user_slug}-${org_slug}"
 
 cat >"$wrapper_path" <<EOF
 #!/usr/bin/env bash
@@ -144,6 +173,7 @@ cat <<EOF
 Remote Hermes client prepared
   wrapper: $wrapper_path
   target: $TARGET_USER@$TARGET_HOST
+  organization: ${TARGET_ORG:-$TARGET_HOST}
 
 What this does:
   The wrapper runs Hermes on the remote Almanac host inside your agent lane.

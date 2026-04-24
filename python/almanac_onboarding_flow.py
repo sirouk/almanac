@@ -528,7 +528,7 @@ def _queue_remote_ssh_key_install(
             (
                 f"Remote agent key install {queued_text} for `{unix_user}`. "
                 "The root maintenance loop will install it with Tailscale-only restrictions. "
-                "After it confirms, run your generated `almanac-remote-hermes-*` wrapper. "
+                "After it confirms, run your generated `hermes-almanac-*` wrapper. "
                 "That wrapper starts Hermes on the remote agent lane, so it uses the agent's remote config, skills, MCP tools, and files. "
                 f"Raw SSH is available for debugging as `{ssh_target}`."
             ),

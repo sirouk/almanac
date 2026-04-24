@@ -36,6 +36,8 @@ def test_setup_remote_hermes_client_generates_key_and_wrapper() -> None:
                 "agent.example.ts.net",
                 "--user",
                 "sirouk",
+                "--org",
+                "KorBon",
                 "--key-path",
                 str(home / ".ssh" / "almanac-remote-hermes-ed25519"),
             ],
@@ -51,8 +53,9 @@ def test_setup_remote_hermes_client_generates_key_and_wrapper() -> None:
         expect(result.returncode == 0, f"setup-remote-hermes-client failed: stdout={result.stdout!r} stderr={result.stderr!r}")
 
         wrapper = home / ".local" / "bin"
-        wrappers = list(wrapper.glob("almanac-remote-hermes-*"))
+        wrappers = list(wrapper.glob("hermes-almanac-*"))
         expect(len(wrappers) == 1, f"expected one remote wrapper, got {wrappers!r}")
+        expect(wrappers[0].name == "hermes-almanac-sirouk-korbon", f"unexpected wrapper name: {wrappers[0].name}")
         wrapper_text = wrappers[0].read_text(encoding="utf-8")
         expect("sirouk@agent.example.ts.net" in wrapper_text, wrapper_text)
         expect('remote_cmd=\'exec "$HOME/.local/bin/almanac-agent-hermes"\'' in wrapper_text, wrapper_text)
@@ -67,6 +70,8 @@ def test_setup_remote_hermes_client_generates_key_and_wrapper() -> None:
         expect("Public key to send back to Curator:" in result.stdout, result.stdout)
         expect("Reply to Curator with:" in result.stdout, result.stdout)
         expect("/ssh-key ssh-ed25519" in result.stdout, result.stdout)
+        expect("hermes-almanac-sirouk-korbon" in result.stdout, result.stdout)
+        expect("organization: KorBon" in result.stdout, result.stdout)
         print("PASS test_setup_remote_hermes_client_generates_key_and_wrapper")
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import pwd
+import re
 import shutil
 import shlex
 import subprocess
@@ -164,6 +165,10 @@ def _remote_ssh_target(access: dict[str, Any]) -> tuple[str, str]:
     return remote_user, remote_host
 
 
+def _remote_wrapper_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+
+
 def completion_message_bundle(
     cfg: Config,
     *,
@@ -211,17 +216,26 @@ def completion_message_bundle(
     if remote_setup_url:
         remote_user, remote_host = _remote_ssh_target(access)
         if remote_user and remote_host:
+            org_name = config_env_value("ALMANAC_ORG_NAME", "").strip()
+            org_arg = f" --org {shlex.quote(org_name)}" if org_name else ""
+            wrapper_org = _remote_wrapper_slug(org_name) or _remote_wrapper_slug(remote_host)
+            wrapper_user = _remote_wrapper_slug(remote_user)
+            wrapper_name = (
+                f"hermes-almanac-{wrapper_user}-{wrapper_org}"
+                if wrapper_user and wrapper_org
+                else "hermes-almanac-*"
+            )
             followup_lines.append("")
             followup_lines.append("Optional remote agent CLI from your own machine:")
             followup_lines.append(
-                f"- Run: `curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}`"
+                f"- Run: `curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`"
             )
             followup_lines.append(
                 "- That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
                 "`/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
             )
             followup_lines.append(
-                "- Use the generated `almanac-remote-hermes-*` wrapper, not your local `hermes` command. "
+                f"- Use the generated `{wrapper_name}` wrapper, not your local `hermes` command. "
                 "The wrapper starts Hermes on this host inside your agent lane, so it uses the remote config, skills, MCP tools, plugins, and files."
             )
             followup_lines.append(f"- Raw SSH target for debugging after key install: {remote_user}@{remote_host}")

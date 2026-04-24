@@ -222,7 +222,7 @@ def provider_secret_name(spec: ProviderSetupSpec) -> str:
     return f"{spec.provider_id}-credential"
 
 
-def provider_credential_prompt(spec: ProviderSetupSpec) -> str:
+def provider_credential_prompt(spec: ProviderSetupSpec, *, shared_credential_available: bool = False) -> str:
     if spec.auth_flow == "anthropic-credential":
         return (
             f"One more thing for {spec.display_name}: this lane uses Claude Code OAuth, not an Anthropic API key.\n\n"
@@ -230,6 +230,17 @@ def provider_credential_prompt(spec: ProviderSetupSpec) -> str:
             "Almanac will store the refreshable Claude Code credentials privately for this agent."
         )
     if spec.auth_flow == "api-key":
+        if shared_credential_available:
+            if spec.provider_id == "chutes":
+                return (
+                    "Your team already provided a Chutes API key for this lane.\n\n"
+                    "Reply `default` to use it, or paste a different Chutes API key if you prefer. "
+                    f"I’ll configure Hermes with endpoint `{CHUTES_BASE_URL}` and use model `{spec.model_id}`."
+                )
+            return (
+                f"Your team already provided a {spec.display_name} API key for this lane. "
+                "Reply `default` to use it, or paste a different key if you prefer."
+            )
         if spec.provider_id == "chutes":
             return (
                 "One more thing for Chutes: send the Chutes API key for this agent lane.\n\n"

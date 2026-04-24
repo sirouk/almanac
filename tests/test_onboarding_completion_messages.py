@@ -159,7 +159,9 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("Shared password: removed after confirmation." in scrubbed_text, scrubbed_text)
             expect(str(bundle.get("telegram_parse_mode") or "") == "", str(bundle))
             expect("Your lane is ready." in full_text, full_text)
+            expect("Save this password now." in full_text, full_text)
             expect("send the rest of your links" in full_text, full_text)
+            expect(followup_text.startswith("────────\nWeb access:"), followup_text)
             expect(f"- Nextcloud login: {unix_user} (same shared password)" in followup_text, followup_text)
             expect("Shared Almanac links:" in followup_text, followup_text)
             expect("https://kor.tail77f45e.ts.net:8445/" in followup_text, followup_text)
@@ -173,6 +175,7 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("Shared Notion writes:" in full_text, full_text)
             expect(str(user_home) in followup_text, followup_text)
             expect(str(user_home / "Almanac") in followup_text, followup_text)
+            expect("edit or delete those messages" in followup_text, followup_text)
             expect("separate private GitHub repo and read/write deploy key" in followup_text, followup_text)
             expect("Do not reuse the Almanac code-push deploy key" in followup_text, followup_text)
 

@@ -192,8 +192,10 @@ def completion_message_bundle(
         "",
         "Temporary shared password:",
         "This password unlocks your Almanac dashboard, code workspace, and Nextcloud when it is enabled.",
+        "Save this password now.",
     ]
     followup_lines = [
+        "────────",
         "Web access:",
         f"- Hermes dashboard: {access.get('dashboard_url')}",
         f"- Dashboard username: {access.get('username')}",
@@ -212,6 +214,7 @@ def completion_message_bundle(
         *_shared_resource_lines(cfg),
         "- The shared Vault and control rails are already wired into your agent by default.",
         notion_followup_line,
+        "If you pasted any API keys or bot tokens during setup, scroll up and edit or delete those messages. Curator cannot remove your own messages for you.",
     ]
     remote_setup_url = _remote_client_setup_url(cfg)
     if remote_setup_url:

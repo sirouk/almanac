@@ -2637,6 +2637,10 @@ def find_latest_onboarding_session_for_sender(
     return _onboarding_row_to_dict(row, redact_secrets=redact_secrets)
 
 
+def _resolved_onboarding_full_name(sender_display_name: str) -> str:
+    return str(sender_display_name or "").strip()
+
+
 def start_onboarding_session(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -2648,7 +2652,23 @@ def start_onboarding_session(
     sender_display_name: str = "",
 ) -> dict[str, Any]:
     existing = find_active_onboarding_session(conn, platform=platform, sender_id=sender_id)
+    resolved_name = _resolved_onboarding_full_name(sender_display_name)
     if existing is not None:
+        answers = existing.get("answers", {})
+        if (
+            resolved_name
+            and str(existing.get("state") or "") == "awaiting-name"
+            and not str(answers.get("full_name") or "").strip()
+        ):
+            return save_onboarding_session(
+                conn,
+                session_id=str(existing["session_id"]),
+                state="awaiting-purpose",
+                answers={"full_name": resolved_name},
+                chat_id=chat_id,
+                sender_username=sender_username,
+                sender_display_name=resolved_name,
+            )
         conn.execute(
             """
             UPDATE onboarding_sessions
@@ -2692,13 +2712,15 @@ def start_onboarding_session(
     record_rate_limit_event(conn, "onboarding-user", subject)
     session_id = generate_onboarding_session_id()
     now_iso = utc_now_iso()
+    initial_state = "awaiting-purpose" if resolved_name else "awaiting-name"
+    initial_answers = {"full_name": resolved_name} if resolved_name else {}
     conn.execute(
         """
         INSERT INTO onboarding_sessions (
           session_id, platform, chat_id, sender_id, sender_username, sender_display_name,
           state, answers_json, created_at, updated_at, last_prompt_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'awaiting-name', '{}', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -2707,6 +2729,8 @@ def start_onboarding_session(
             sender_id,
             sender_username or None,
             sender_display_name or None,
+            initial_state,
+            json_dumps(initial_answers),
             now_iso,
             now_iso,
             now_iso,

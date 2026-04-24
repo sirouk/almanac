@@ -264,6 +264,11 @@ def test_reasoning_effort_is_written_to_hermes_agent_config() -> None:
 
         old_env = os.environ.copy()
         old_path = list(sys.path)
+        old_modules = {
+            name: sys.modules.pop(name)
+            for name in ["hermes_cli", "hermes_cli.config"]
+            if name in sys.modules
+        }
         os.environ["FAKE_HERMES_CONFIG_PATH"] = str(hermes_config)
         sys.path.insert(0, str(fake_pkg_root))
         try:
@@ -282,6 +287,7 @@ def test_reasoning_effort_is_written_to_hermes_agent_config() -> None:
             os.environ.clear()
             os.environ.update(old_env)
             sys.path[:] = old_path
+            sys.modules.update(old_modules)
     print("PASS test_reasoning_effort_is_written_to_hermes_agent_config")
 
 

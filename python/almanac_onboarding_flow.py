@@ -413,6 +413,16 @@ def _provider_setup(session: dict[str, Any]) -> ProviderSetupSpec | None:
     return provider_setup_from_dict(answers.get("provider_setup"))
 
 
+def _shared_provider_secret(spec: ProviderSetupSpec | None) -> str:
+    if spec is None or spec.auth_flow != "api-key" or not spec.key_env:
+        return ""
+    return config_env_value(spec.key_env, "").strip()
+
+
+def _shared_provider_credential_available(spec: ProviderSetupSpec | None) -> bool:
+    return bool(_shared_provider_secret(spec))
+
+
 def _provider_auth_state(session: dict[str, Any]) -> dict[str, Any]:
     answers = session.get("answers", {})
     raw = answers.get("provider_browser_auth")
@@ -703,15 +713,20 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 "1. Go to https://discord.com/developers/applications and click `New Application`.\n"
                 f"2. Name the app `{preferred_bot_name}` or any bot name you prefer.\n"
                 "3. Open the app’s `Bot` page.\n"
-                "4. Turn `Public Bot` on.\n"
+                "4. Keep `Public Bot` on.\n"
                 "5. Leave `Requires OAuth2 Code Grant` off.\n"
-                "6. Turn `Message Content Intent` on.\n"
-                "7. Turn `Server Members Intent` on.\n"
-                "8. Leave `Presence Intent` off unless you specifically want it.\n"
-                "9. Open `Installation` and copy the install link for the app.\n"
-                "10. Use that link to add the app to a server you share with it, or use Discord’s `Add App` flow so you can DM it.\n"
-                "11. Open the `Bot` page again, copy the bot token, and paste that token here.\n\n"
-                "Important: send the token for the new agent bot only, not Curator’s Discord token. After I receive it, I’ll ask for the model credential and finish the handoff."
+                "6. Turn `Server Members Intent` on.\n"
+                "7. Turn `Message Content Intent` on.\n"
+                "8. Leave `Presence Intent` off unless you specifically need it.\n"
+                "9. Click `Save Changes` before you touch the token.\n"
+                "10. Open `OAuth2` -> `URL Generator`.\n"
+                "11. Under scopes, enable `bot` and `applications.commands`.\n"
+                "12. Set the integration type to `Guild Install`.\n"
+                "13. Under bot permissions, enable `Send Messages`, `Manage Messages`, `Read Message History`, `Use External Emojis`, `Add Reactions`, and `Send Voice Messages`.\n"
+                "14. Copy the generated Guild Install URL and open it.\n"
+                "15. Add the app to a server you share with it. Once it is installed, you can talk to it there or retry the DM if Discord exposes one.\n"
+                "16. Open the `Bot` page again, reset/copy the bot token if needed, and paste that token here.\n\n"
+                "Important: send the token for the new agent bot only, not Curator’s Discord token. The confirmed working path right now is the Guild Install URL from OAuth2 -> URL Generator, not the top-left Installation page. After I receive the token, I’ll ask for the model credential and finish the handoff."
             )
         return (
             "Approved. Next I need the Telegram bot token for your private agent lane.\n\n"
@@ -725,7 +740,10 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             "Important: send the token for the new agent bot only, not Curator’s Telegram token. After I receive it, I’ll ask for the model credential and finish the handoff."
         )
     if state == "awaiting-provider-credential" and provider_setup is not None:
-        return provider_credential_prompt(provider_setup)
+        return provider_credential_prompt(
+            provider_setup,
+            shared_credential_available=_shared_provider_credential_available(provider_setup),
+        )
     if state == "awaiting-provider-browser-auth" and provider_setup is not None:
         return provider_browser_auth_prompt(provider_setup, browser_auth)
     if state == "provision-pending":
@@ -768,7 +786,17 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         if expiry:
             try:
                 expires_at = dt.datetime.fromisoformat(expiry)
-                expiry_note = f" This claim expires around {expires_at.strftime('%Y-%m-%d %H:%M UTC')}."
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=dt.timezone.utc)
+                expires_at_utc = expires_at.astimezone(dt.timezone.utc)
+                if str(session.get("platform") or "").strip().lower() == "discord":
+                    epoch = int(expires_at_utc.timestamp())
+                    expiry_note = (
+                        f" This claim expires <t:{epoch}:R> "
+                        f"(<t:{epoch}:F> / {expires_at_utc.strftime('%Y-%m-%d %H:%M UTC')})."
+                    )
+                else:
+                    expiry_note = f" This claim expires around {expires_at_utc.strftime('%Y-%m-%d %H:%M UTC')}."
             except ValueError:
                 expiry_note = ""
         lines = [
@@ -800,7 +828,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             return (
                 f"Your agent lane is live through the Discord bot `{bot_username}`. "
                 "It already has the Almanac skills active by default, plus the shared Vault/qmd wiring. "
-                "Use that bot from here on out. If Discord will not open the DM yet, add the app from the Developer Portal Installation link or place it in a server you both share, then try again."
+                "Use that bot from here on out. If Discord will not open the DM yet, go to OAuth2 -> URL Generator, create the Guild Install URL, add the app to a server you both share, and talk to it there or retry the DM afterward."
             )
         if bot_platform == "telegram" and bot_username:
             return (
@@ -1176,7 +1204,21 @@ def process_onboarding_message(
                             "Claude Opus onboarding here is OAuth-only. Reply `oauth` and I’ll open the Claude Code OAuth flow.",
                         )
                     ]
-                provider_secret = normalize_api_key_credential(provider_setup, text)
+                shared_provider_secret = _shared_provider_secret(provider_setup)
+                if shared_provider_secret and lower in {
+                    "",
+                    "default",
+                    "/default",
+                    "team",
+                    "team key",
+                    "shared",
+                    "shared key",
+                    "use team key",
+                    "use shared key",
+                }:
+                    provider_secret = shared_provider_secret
+                else:
+                    provider_secret = normalize_api_key_credential(provider_setup, text)
                 provider_secret_path = write_onboarding_secret(
                     cfg,
                     str(session["session_id"]),

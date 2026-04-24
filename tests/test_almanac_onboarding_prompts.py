@@ -118,9 +118,13 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 },
             )
             expect("Discord setup steps:" in prompt, prompt)
-            expect("Open `Installation`" in prompt, prompt)
+            expect("OAuth2" in prompt and "URL Generator" in prompt, prompt)
+            expect("Guild Install" in prompt, prompt)
+            expect("applications.commands" in prompt, prompt)
+            expect("save changes" in prompt.lower(), prompt)
+            expect(prompt.index("Server Members Intent") < prompt.index("Message Content Intent"), prompt)
             expect("new agent bot only" in prompt, prompt)
-            expect("share with it" in prompt or "`Add App`" in prompt, prompt)
+            expect("Guild Install URL" in prompt or "install URL" in prompt, prompt)
 
             notion_access_prompt = onboarding.session_prompt(
                 cfg,
@@ -148,6 +152,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 cfg,
                 {
                     "state": "awaiting-notion-verification",
+                    "platform": "discord",
                     "answers": {
                         "notion_claim_email": "chris@example.com",
                         "notion_claim_url": "https://www.notion.so/claim",
@@ -157,6 +162,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             )
             expect("https://www.notion.so/claim" in notion_verify_prompt, notion_verify_prompt)
             expect("chris@example.com" in notion_verify_prompt, notion_verify_prompt)
+            expect("<t:" in notion_verify_prompt, notion_verify_prompt)
             expect("Request access" in notion_verify_prompt, notion_verify_prompt)
             expect("Full access" in notion_verify_prompt, notion_verify_prompt)
 
@@ -259,20 +265,6 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("First up: what should I call you?" in replies[0].text, replies[0].text)
-
-            replies = onboarding.process_onboarding_message(
-                cfg,
-                onboarding.IncomingMessage(
-                    platform="telegram",
-                    chat_id="123",
-                    sender_id="123",
-                    text="Chris",
-                    sender_username="sirouk",
-                    sender_display_name="Chris",
-                ),
-                validate_bot_token=fake_validate,
-            )
             expect("practice, build, or keep moving" in replies[0].text, replies[0].text)
 
             replies = onboarding.process_onboarding_message(
@@ -305,6 +297,228 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
             expect("What should it be called?" in replies[0].text, replies[0].text)
             expect("telegram" in replies[0].text.lower(), replies[0].text)
             print("PASS test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_onboarding_uses_resolved_sender_display_name_without_reasking() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_resolved_name_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_resolved_name_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="telegram",
+                    chat_id="123",
+                    sender_id="123",
+                    text="/start",
+                    sender_username="sirouk",
+                    sender_display_name="Chris Sirouk",
+                ),
+                validate_bot_token=lambda raw: None,
+            )
+            expect(len(replies) == 1, str(replies))
+            expect("what should i call you" not in replies[0].text.lower(), replies[0].text)
+            expect("A little context helps me shape the agent properly." in replies[0].text, replies[0].text)
+
+            with control.connect_db(cfg) as conn:
+                session = control.find_active_onboarding_session(conn, platform="telegram", sender_id="123")
+            expect(session is not None, "expected active onboarding session")
+            expect(str(session.get("state") or "") == "awaiting-purpose", str(session))
+            expect(str((session.get("answers") or {}).get("full_name") or "") == "Chris Sirouk", str(session))
+            print("PASS test_onboarding_uses_resolved_sender_display_name_without_reasking")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_shared_team_key_prompt_offers_default_reply_for_chutes() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_shared_key_prompt_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_shared_key_prompt_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+                "CHUTES_API_KEY": "shared-chutes-key",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            provider_setup = onboarding.resolve_provider_setup(cfg, "chutes", model_id="model-router", reasoning_effort="medium")
+            prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "state": "awaiting-provider-credential",
+                    "answers": {"provider_setup": provider_setup.as_dict()},
+                },
+            )
+            expect("team already provided" in prompt.lower(), prompt)
+            expect("Reply `default`" in prompt, prompt)
+            expect("paste a different" in prompt.lower(), prompt)
+            print("PASS test_shared_team_key_prompt_offers_default_reply_for_chutes")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_shared_team_key_default_reply_uses_configured_secret() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_shared_key_default_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_shared_key_default_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+                "CHUTES_API_KEY": "shared-chutes-key",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="123",
+                sender_id="123",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            provider_setup = onboarding.resolve_provider_setup(cfg, "chutes", model_id="model-router", reasoning_effort="medium")
+            control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-provider-credential",
+                answers={
+                    "provider_setup": provider_setup.as_dict(),
+                    "bot_platform": "telegram",
+                    "preferred_bot_name": "Jeef",
+                    "unix_user": "sirouk",
+                },
+            )
+
+            captured: dict[str, str] = {}
+            original_write_secret = onboarding.write_onboarding_secret
+            original_begin = onboarding.begin_onboarding_provisioning
+            try:
+                onboarding.write_onboarding_secret = lambda cfg, session_id, secret_name, secret: captured.update({"session_id": session_id, "secret_name": secret_name, "secret": secret}) or "/tmp/shared-default.secret"
+                onboarding.begin_onboarding_provisioning = (
+                    lambda conn, cfg, updated, *, provider_secret_path: {
+                        **updated,
+                        "answers": {
+                            **(updated.get("answers") or {}),
+                            "unix_user": "sirouk",
+                            "bot_platform": "telegram",
+                            "bot_username": "Jeef",
+                        },
+                        "provider_secret_path": provider_secret_path,
+                    }
+                )
+                replies = onboarding.process_onboarding_message(
+                    cfg,
+                    onboarding.IncomingMessage(
+                        platform="telegram",
+                        chat_id="123",
+                        sender_id="123",
+                        text="default",
+                        sender_username="sirouk",
+                        sender_display_name="Chris",
+                    ),
+                    validate_bot_token=lambda raw: None,
+                )
+            finally:
+                onboarding.write_onboarding_secret = original_write_secret
+                onboarding.begin_onboarding_provisioning = original_begin
+
+            expect(captured["secret"] == "shared-chutes-key", str(captured))
+            expect(captured["secret_name"] == "chutes_api_key", str(captured))
+            expect("Good. I have what I need." in replies[0].text, replies[0].text)
+            print("PASS test_shared_team_key_default_reply_uses_configured_secret")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -530,8 +744,7 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
                     validate_bot_token=lambda raw: None,
                 )
 
-            expect("First up: what should I call you?" in send("/start")[0].text, "missing opening prompt")
-            send("Chris")
+            expect("practice, build, or keep moving" in send("/start")[0].text, "missing purpose prompt")
             send("Build impossible things calmly")
             send(desired_unix_user)
             model_prompt = send("Jeef")[0].text
@@ -590,10 +803,13 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
 def main() -> int:
     test_discord_prompt_and_operator_review_reflect_primary_control_channel()
     test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
+    test_onboarding_uses_resolved_sender_display_name_without_reasking()
+    test_shared_team_key_prompt_offers_default_reply_for_chutes()
+    test_shared_team_key_default_reply_uses_configured_secret()
     test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth()
     test_anthropic_callback_exchange_returns_claude_code_credentials_payload()
     test_onboarding_model_picker_is_chutes_first_and_collects_reasoning()
-    print("PASS all 5 onboarding prompt regression tests")
+    print("PASS all 8 onboarding prompt regression tests")
     return 0
 
 

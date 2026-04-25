@@ -334,14 +334,14 @@ def _run_as_user(
     uid: int,
     cmd: list[str],
     hermes_home: Path,
-    extra_env: dict[str, str] | None = None,
+    extra: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = _user_subprocess_env(
         unix_user=unix_user,
         home=home,
         uid=uid,
         hermes_home=hermes_home,
-        extra=extra_env,
+        extra=extra,
     )
     return subprocess.run(
         ["runuser", "-u", unix_user, "--", *cmd],
@@ -1019,6 +1019,8 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
             "TELEGRAM_BOT_TOKEN": pending_bot_token,
             "TELEGRAM_ALLOWED_USERS": chat_id,
             "TELEGRAM_HOME_CHANNEL": chat_id,
+            "TELEGRAM_REACTIONS": "true",
+            "DISCORD_REACTIONS": "true",
         },
     )
     try:
@@ -1149,6 +1151,8 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
             "DISCORD_ALLOWED_USERS": sender_id,
             "DISCORD_HOME_CHANNEL": str(session.get("chat_id") or ""),
             "DISCORD_HOME_CHANNEL_NAME": "Home",
+            "TELEGRAM_REACTIONS": "true",
+            "DISCORD_REACTIONS": "true",
         },
     )
     try:

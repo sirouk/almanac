@@ -243,12 +243,14 @@ def test_run_as_user_scrubs_ambient_env() -> None:
             uid=1234,
             hermes_home=Path("/home/scrubtest/.local/share/almanac-agent/hermes-home"),
             cmd=["systemctl", "--user", "is-active", "dummy.service"],
+            extra={"ALMANAC_AGENT_VAULT_DIR": "/srv/almanac/vault"},
         )
         expect(calls, "expected _run_as_user to invoke subprocess.run")
         env = calls[-1].get("env") or {}
         expect(env.get("HOME") == "/home/scrubtest", env)
         expect(env.get("USER") == "scrubtest", env)
         expect(env.get("HERMES_HOME") == "/home/scrubtest/.local/share/almanac-agent/hermes-home", env)
+        expect(env.get("ALMANAC_AGENT_VAULT_DIR") == "/srv/almanac/vault", env)
         expect(env.get("LANG") == "en_US.UTF-8", env)
         expect(env.get("PATH") == provisioner._DEFAULT_USER_PATH, env)
         expect("ALMANAC_SSOT_NOTION_TOKEN" not in env, env)

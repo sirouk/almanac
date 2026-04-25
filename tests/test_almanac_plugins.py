@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO / "bin" / "install-almanac-plugins.sh"
 PLUGIN_DIR = REPO / "plugins" / "hermes-agent" / "almanac-managed-context"
 PLUGIN_INIT = PLUGIN_DIR / "__init__.py"
+START_HOOK_DIR = REPO / "hooks" / "hermes-agent" / "almanac-telegram-start"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
 
 
@@ -24,9 +25,17 @@ def expect(condition: bool, message: str) -> None:
 class FakeCtx:
     def __init__(self) -> None:
         self.hooks: dict[str, list] = {}
+        self.commands: dict[str, dict] = {}
 
     def register_hook(self, hook_name: str, callback) -> None:
         self.hooks.setdefault(hook_name, []).append(callback)
+
+    def register_command(self, name: str, handler, description: str = "", args_hint: str = "") -> None:
+        self.commands[name] = {
+            "handler": handler,
+            "description": description,
+            "args_hint": args_hint,
+        }
 
 
 def load_module(path: Path, name: str):
@@ -52,8 +61,11 @@ def test_install_almanac_plugins_installs_default_hermes_plugin() -> None:
         )
         expect(result.returncode == 0, f"expected install-almanac-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
         installed_dir = hermes_home / "plugins" / "almanac-managed-context"
+        installed_hook_dir = hermes_home / "hooks" / "almanac-telegram-start"
         expect((installed_dir / "plugin.yaml").is_file(), f"expected installed plugin manifest at {installed_dir / 'plugin.yaml'}")
         expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
+        expect((installed_hook_dir / "HOOK.yaml").is_file(), f"expected installed hook manifest at {installed_hook_dir / 'HOOK.yaml'}")
+        expect((installed_hook_dir / "handler.py").is_file(), f"expected installed hook handler at {installed_hook_dir / 'handler.py'}")
         config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
         expect("plugins:\n" in config_body, config_body)
         expect("enabled:\n  - almanac-managed-context" in config_body, config_body)
@@ -96,6 +108,40 @@ def test_install_almanac_plugins_preserves_existing_plugin_config_and_enables_de
         disabled_block = config_body.split("  disabled:\n", 1)[1].split("  enabled:\n", 1)[0]
         expect("almanac-managed-context" not in disabled_block, config_body)
         print("PASS test_install_almanac_plugins_preserves_existing_plugin_config_and_enables_default")
+
+
+def test_almanac_telegram_start_command_rewrites_to_first_message() -> None:
+    plugin = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_start_command_test")
+    ctx = FakeCtx()
+    plugin.register(ctx)
+    expect("start" in ctx.commands, f"expected plugin to register /start, got {ctx.commands}")
+    expect(ctx.commands["start"]["description"] == "Start a conversation", ctx.commands["start"])
+
+    hook = load_module(START_HOOK_DIR / "handler.py", "almanac_telegram_start_hook_test")
+    result = hook.handle(
+        "command:start",
+        {
+            "platform": "telegram",
+            "raw_args": "",
+        },
+    )
+    expect(
+        result == {"decision": "rewrite", "command_name": "steer", "raw_args": "hi"},
+        f"expected /start to rewrite through /steer hi, got {result!r}",
+    )
+    result_with_args = hook.handle(
+        "command:start",
+        {
+            "platform": "telegram",
+            "raw_args": "hello Joof",
+        },
+    )
+    expect(
+        result_with_args == {"decision": "rewrite", "command_name": "steer", "raw_args": "hello Joof"},
+        f"expected /start args to become first message text, got {result_with_args!r}",
+    )
+    expect(hook.handle("command:start", {"platform": "discord"}) is None, "Discord /start should be left alone")
+    print("PASS test_almanac_telegram_start_command_rewrites_to_first_message")
 
 
 def test_almanac_managed_context_reads_writer_materialized_notion_state() -> None:
@@ -1264,6 +1310,7 @@ def test_almanac_managed_context_recipe_tools_match_mcp_surface() -> None:
 def main() -> int:
     test_install_almanac_plugins_installs_default_hermes_plugin()
     test_install_almanac_plugins_preserves_existing_plugin_config_and_enables_default()
+    test_almanac_telegram_start_command_rewrites_to_first_message()
     test_almanac_managed_context_reads_writer_materialized_notion_state()
     test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
     test_almanac_managed_context_frames_untrusted_local_data_and_caps_messages()
@@ -1275,7 +1322,7 @@ def main() -> int:
     test_almanac_managed_context_pre_tool_call_injects_bootstrap_token()
     test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
     test_almanac_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 12 Almanac plugin tests")
+    print("PASS all 13 Almanac plugin tests")
     return 0
 
 

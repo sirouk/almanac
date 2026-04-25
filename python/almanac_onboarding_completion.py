@@ -251,7 +251,7 @@ def completion_message_bundle(
     followup_lines = [line for line in followup_lines if line]
     if discord_note:
         followup_lines.append(
-            "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again."
+            "If Discord does not open the DM yet, use the app's Installation page link to add it to My Apps, or place it in a server you both share, then try again."
         )
     password = str(access.get("password") or "")
     platform = str(bot_platform or "").strip().lower()

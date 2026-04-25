@@ -130,6 +130,8 @@ def test_generated_web_service_units_follow_access_state() -> None:
         gateway_unit = home / ".config" / "systemd" / "user" / "almanac-user-agent-gateway.service"
         local_wrapper = home / ".local" / "bin" / "almanac-agent-hermes"
         backup_wrapper = home / ".local" / "bin" / "almanac-agent-configure-backup"
+        installed_plugin = hermes_home / "plugins" / "almanac-managed-context" / "__init__.py"
+        installed_start_hook = hermes_home / "hooks" / "almanac-telegram-start" / "handler.py"
         home_almanac = home / "Almanac"
         hermes_vault = hermes_home / "Vault"
         hermes_almanac = hermes_home / "Almanac"
@@ -139,6 +141,8 @@ def test_generated_web_service_units_follow_access_state() -> None:
         expect(gateway_unit.is_file(), f"expected gateway unit: {gateway_unit}")
         expect(local_wrapper.is_file(), f"expected local Hermes wrapper: {local_wrapper}")
         expect(backup_wrapper.is_file(), f"expected local backup wrapper: {backup_wrapper}")
+        expect(installed_plugin.is_file(), f"expected Almanac plugin at first install: {installed_plugin}")
+        expect(installed_start_hook.is_file(), f"expected Telegram /start hook at first install: {installed_start_hook}")
         for link_path in (home_almanac, hermes_vault, hermes_almanac):
             expect(link_path.is_symlink(), f"expected vault symlink: {link_path}")
             expect(os.readlink(link_path) == str(vault_dir), f"bad symlink target for {link_path}: {os.readlink(link_path)!r}")
@@ -149,11 +153,18 @@ def test_generated_web_service_units_follow_access_state() -> None:
         gateway_text = gateway_unit.read_text(encoding="utf-8")
         local_wrapper_text = local_wrapper.read_text(encoding="utf-8")
         backup_wrapper_text = backup_wrapper.read_text(encoding="utf-8")
+        installed_plugin_text = installed_plugin.read_text(encoding="utf-8")
+        installed_start_hook_text = installed_start_hook.read_text(encoding="utf-8")
         expect("--port 19021" in dashboard_text, dashboard_text)
         expect("--listen-port 29021" in proxy_text, proxy_text)
         expect("run-agent-code-server.sh" in code_text, code_text)
         expect("almanac-agent-code-agent-test" in code_text, code_text)
         expect("gateway run --replace" in gateway_text, gateway_text)
+        expect("Environment=TELEGRAM_REACTIONS=true" in gateway_text, gateway_text)
+        expect("Environment=DISCORD_REACTIONS=true" in gateway_text, gateway_text)
+        install_text = SCRIPT.read_text(encoding="utf-8")
+        expect('dirname "$HERMES_BIN")/../..' in install_text, install_text)
+        expect('RUNTIME_DIR="$runtime_dir" "$mcps_script" "$HERMES_HOME"' in install_text, install_text)
         expect(f'HERMES_HOME="${{HERMES_HOME:-{hermes_home}}}"' in local_wrapper_text, local_wrapper_text)
         expect(str(hermes_bin) in local_wrapper_text, local_wrapper_text)
         expect("should_restart_gateway" in local_wrapper_text, local_wrapper_text)
@@ -161,6 +172,8 @@ def test_generated_web_service_units_follow_access_state() -> None:
         expect("systemctl --user restart almanac-user-agent-gateway.service" in local_wrapper_text, local_wrapper_text)
         expect("Restarting Almanac messaging gateway so config changes apply" in local_wrapper_text, local_wrapper_text)
         expect("configure-agent-backup.sh" in backup_wrapper_text, backup_wrapper_text)
+        expect("register_command(" in installed_plugin_text and '"start"' in installed_plugin_text, installed_plugin_text)
+        expect('"command_name": "steer"' in installed_start_hook_text, installed_start_hook_text)
         print("PASS test_generated_web_service_units_follow_access_state")
 
 

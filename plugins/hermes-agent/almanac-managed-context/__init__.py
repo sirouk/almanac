@@ -845,7 +845,7 @@ def _resource_bundle(
         [
             "",
             "Credentials and passwords are intentionally omitted from this resource reference.",
-            "If Discord does not open the DM yet, use the app's Installation link from the Discord Developer Portal to add it, or place it in a server you both share, then try again.",
+            "If Discord does not open the DM yet, use the app's Installation page link to add it to My Apps, or place it in a server you both share, then try again.",
         ]
     )
     return "\n".join(line for line in lines if line is not None).strip()
@@ -1263,6 +1263,17 @@ def _pre_tool_call(
     return None
 
 
+def _start_command(raw_args: str = "") -> str:
+    return "Starting a conversation. Send a message here if this does not continue automatically."
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", _pre_llm_call)
     ctx.register_hook("pre_tool_call", _pre_tool_call)
+    register_command = getattr(ctx, "register_command", None)
+    if callable(register_command):
+        register_command(
+            "start",
+            _start_command,
+            description="Start a conversation",
+        )

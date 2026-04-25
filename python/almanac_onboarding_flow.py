@@ -709,24 +709,19 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         if bot_platform == "discord":
             return (
                 "Approved. Next I need the Discord bot token for your private agent lane.\n\n"
+                "Install Link\n"
                 "Discord setup steps:\n"
                 "1. Go to https://discord.com/developers/applications and click `New Application`.\n"
                 f"2. Name the app `{preferred_bot_name}` or any bot name you prefer.\n"
                 "3. Open the app’s `Bot` page.\n"
-                "4. Keep `Public Bot` on.\n"
-                "5. Leave `Requires OAuth2 Code Grant` off.\n"
-                "6. Turn `Server Members Intent` on.\n"
-                "7. Turn `Message Content Intent` on.\n"
-                "8. Leave `Presence Intent` off unless you specifically need it.\n"
-                "9. Click `Save Changes` before you touch the token.\n"
-                "10. Open `OAuth2` -> `URL Generator`.\n"
-                "11. Under scopes, enable `bot` and `applications.commands`.\n"
-                "12. Set the integration type to `Guild Install`.\n"
-                "13. Under bot permissions, enable `Send Messages`, `Manage Messages`, `Read Message History`, `Use External Emojis`, `Add Reactions`, and `Send Voice Messages`.\n"
-                "14. Copy the generated Guild Install URL and open it.\n"
-                "15. Add the app to a server you share with it. Once it is installed, you can talk to it there or retry the DM if Discord exposes one.\n"
-                "16. Open the `Bot` page again, reset/copy the bot token if needed, and paste that token here.\n\n"
-                "Important: send the token for the new agent bot only, not Curator’s Discord token. The confirmed working path right now is the Guild Install URL from OAuth2 -> URL Generator, not the top-left Installation page. After I receive the token, I’ll ask for the model credential and finish the handoff."
+                "4. Turn `Message Content Intent` on.\n"
+                "5. Open the app’s `Installation` page.\n"
+                "6. Copy `Install Link` by clicking the copy button.\n"
+                "7. Paste the link into a new tab and visit the link.\n"
+                "8. Choose `Add to My Apps` so the bot can DM you.\n"
+                "9. Optionally visit the link again to `Add to Server`.\n"
+                "10. Return to the `Bot` page, click `Reset Token`, copy the bot token, and paste that token here.\n\n"
+                "Important: send the token for the new agent bot only, not Curator’s Discord token. After I receive the token, I’ll ask for the model credential and finish the handoff."
             )
         return (
             "Approved. Next I need the Telegram bot token for your private agent lane.\n\n"
@@ -828,7 +823,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             return (
                 f"Your agent lane is live through the Discord bot `{bot_username}`. "
                 "It already has the Almanac skills active by default, plus the shared Vault/qmd wiring. "
-                "Use that bot from here on out. If Discord will not open the DM yet, go to OAuth2 -> URL Generator, create the Guild Install URL, add the app to a server you both share, and talk to it there or retry the DM afterward."
+                "Use that bot from here on out. If Discord will not open the DM yet, use the app's Installation page link to add it to My Apps, or add it to a server you both share, then try again."
             )
         if bot_platform == "telegram" and bot_username:
             return (

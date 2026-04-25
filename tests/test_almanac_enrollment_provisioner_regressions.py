@@ -141,10 +141,15 @@ def test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed() ->
 def test_discord_onboarding_writes_home_channel_env() -> None:
     text = PROVISIONER_PY.read_text(encoding="utf-8")
     writer = extract(text, "def _write_env_values", "def _notify_user_via_curator")
+    telegram = extract(text, "def _configure_user_telegram_gateway", "def _configure_user_discord_gateway")
     discord = extract(text, "def _configure_user_discord_gateway", "def _run_pending_onboarding_gateway_configs")
 
+    expect('"TELEGRAM_REACTIONS": "true"' in telegram, telegram)
+    expect('"DISCORD_REACTIONS": "true"' in telegram, telegram)
     expect('"DISCORD_HOME_CHANNEL": str(session.get("chat_id") or "")' in discord, discord)
     expect('"DISCORD_HOME_CHANNEL_NAME": "Home"' in discord, discord)
+    expect('"TELEGRAM_REACTIONS": "true"' in discord, discord)
+    expect('"DISCORD_REACTIONS": "true"' in discord, discord)
     expect("path.chmod(0o600)" in writer, "gateway env files should be user-only because they contain bot tokens")
     print("PASS test_discord_onboarding_writes_home_channel_env")
 

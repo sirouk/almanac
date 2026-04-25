@@ -77,6 +77,26 @@ ensure_user_vault_links() {
   return "$status"
 }
 
+install_almanac_runtime_assets() {
+  local skills_script="$SHARED_REPO_DIR/bin/install-almanac-skills.sh"
+  local plugins_script="$SHARED_REPO_DIR/bin/install-almanac-plugins.sh"
+  local mcps_script="$SHARED_REPO_DIR/bin/upsert-hermes-mcps.sh"
+  local runtime_dir=""
+
+  if [[ -x "$skills_script" ]]; then
+    "$skills_script" "$SHARED_REPO_DIR" "$HERMES_HOME"
+  fi
+  if [[ -x "$plugins_script" ]]; then
+    "$plugins_script" "$SHARED_REPO_DIR" "$HERMES_HOME"
+  fi
+  if [[ -x "$mcps_script" ]]; then
+    runtime_dir="$(cd "$(dirname "$HERMES_BIN")/../.." && pwd -P)"
+    if [[ -x "$runtime_dir/hermes-venv/bin/python3" ]]; then
+      RUNTIME_DIR="$runtime_dir" "$mcps_script" "$HERMES_HOME"
+    fi
+  fi
+}
+
 install_local_user_wrappers() {
   local target_local_bin_dir="$HOME/.local/bin"
   local wrapper_path="$target_local_bin_dir/almanac-agent-hermes"
@@ -135,6 +155,7 @@ EOF
   chmod 755 "$backup_wrapper"
 }
 
+install_almanac_runtime_assets
 install_local_user_wrappers
 ensure_user_vault_links
 
@@ -272,6 +293,8 @@ Description=Almanac user-agent messaging gateway for $AGENT_ID
 
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
+Environment=TELEGRAM_REACTIONS=true
+Environment=DISCORD_REACTIONS=true
 WorkingDirectory=$HERMES_HOME
 # Use Hermes's replace semantics so stale PID files or pre-reboot gateway
 # ownership are reclaimed on startup rather than crash-looping on "race lost".

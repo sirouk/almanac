@@ -14,6 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 DEPLOY_SH = REPO / "bin" / "deploy.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
+CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
 
 
@@ -1612,6 +1613,16 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "refresh-agent-install should repair gateway home-channel env from enrollment state",
     )
     expect(
+        "TELEGRAM_REACTIONS" in refresh_helper
+        and "DISCORD_REACTIONS" in refresh_helper,
+        "refresh-agent-install should keep messaging reactions enabled by default",
+    )
+    expect(
+        refresh_helper.index('"TELEGRAM_REACTIONS": "true"')
+        < refresh_helper.index('home_channel = state.get("home_channel")'),
+        "refresh-agent-install should write reaction defaults even when old state lacks a messaging home_channel",
+    )
+    expect(
         "ensure_gateway_running_without_interrupting_active_turns" in refresh_helper
         and "is-active almanac-user-agent-gateway.service" in refresh_helper
         and 'if [[ "$RESTART_GATEWAY" == "1" ]]' in refresh_helper
@@ -1683,6 +1694,13 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "run_enrollment_align should reuse the shared active-agent realignment helper",
     )
     print("PASS test_deploy_reapplies_runtime_access_after_repo_sync")
+
+
+def test_curator_gateway_defaults_reactions_on() -> None:
+    text = CURATOR_GATEWAY_SH.read_text(encoding="utf-8")
+    expect('export TELEGRAM_REACTIONS="${TELEGRAM_REACTIONS:-true}"' in text, text)
+    expect('export DISCORD_REACTIONS="${DISCORD_REACTIONS:-true}"' in text, text)
+    print("PASS test_curator_gateway_defaults_reactions_on")
 
 
 def test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools() -> None:
@@ -1996,6 +2014,7 @@ def main() -> int:
         test_write_answers_file_persists_host_dependency_choices,
         test_shell_scripts_avoid_bash4_only_features,
         test_deploy_reapplies_runtime_access_after_repo_sync,
+        test_curator_gateway_defaults_reactions_on,
         test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,

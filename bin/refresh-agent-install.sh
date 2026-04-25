@@ -285,23 +285,20 @@ try:
 except Exception:
     raise SystemExit(0)
 
+updates = {
+    "TELEGRAM_REACTIONS": "true",
+    "DISCORD_REACTIONS": "true",
+}
 home_channel = state.get("home_channel")
-if not isinstance(home_channel, dict):
-    raise SystemExit(0)
-platform = str(home_channel.get("platform") or "").strip().lower()
-channel_id = str(home_channel.get("channel_id") or "").strip()
-if not platform or not channel_id:
-    raise SystemExit(0)
-
-updates = {}
-if platform == "discord":
-    updates["DISCORD_HOME_CHANNEL"] = channel_id
-    updates["DISCORD_HOME_CHANNEL_NAME"] = "Home"
-elif platform == "telegram":
-    updates["TELEGRAM_HOME_CHANNEL"] = channel_id
-    updates["TELEGRAM_HOME_CHANNEL_NAME"] = "Home"
-else:
-    raise SystemExit(0)
+if isinstance(home_channel, dict):
+    platform = str(home_channel.get("platform") or "").strip().lower()
+    channel_id = str(home_channel.get("channel_id") or "").strip()
+    if platform == "discord" and channel_id:
+        updates["DISCORD_HOME_CHANNEL"] = channel_id
+        updates["DISCORD_HOME_CHANNEL_NAME"] = "Home"
+    elif platform == "telegram" and channel_id:
+        updates["TELEGRAM_HOME_CHANNEL"] = channel_id
+        updates["TELEGRAM_HOME_CHANNEL_NAME"] = "Home"
 
 existing = {}
 order = []

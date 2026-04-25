@@ -17,6 +17,8 @@ fi
 
 PLUGINS_ROOT="$REPO_DIR/plugins/hermes-agent"
 TARGET_ROOT="$HERMES_HOME/plugins"
+HOOKS_ROOT="$REPO_DIR/hooks/hermes-agent"
+TARGET_HOOKS_ROOT="$HERMES_HOME/hooks"
 mkdir -p "$TARGET_ROOT"
 
 install_one_plugin() {
@@ -120,7 +122,28 @@ config_file.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
 PY
 }
 
+install_default_hooks() {
+  local hook_name="almanac-telegram-start"
+  local src_dir="$HOOKS_ROOT/$hook_name"
+  local dst_dir="$TARGET_HOOKS_ROOT/$hook_name"
+
+  if [[ ! -f "$src_dir/HOOK.yaml" || ! -f "$src_dir/handler.py" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$TARGET_HOOKS_ROOT" "$dst_dir"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$src_dir"/ "$dst_dir"/
+  else
+    rm -rf "$dst_dir"
+    mkdir -p "$dst_dir"
+    cp -R "$src_dir"/. "$dst_dir"/
+  fi
+}
+
 for plugin_name in "$@"; do
   install_one_plugin "$plugin_name"
   enable_one_plugin "$plugin_name"
 done
+
+install_default_hooks

@@ -121,6 +121,8 @@ PY
 fi
 
 export HERMES_HOME="$gateway_home"
+export TELEGRAM_REACTIONS="${TELEGRAM_REACTIONS:-true}"
+export DISCORD_REACTIONS="${DISCORD_REACTIONS:-true}"
 hermes_env_file="$HERMES_HOME/.env"
 if ! has_curator_telegram_onboarding && [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",telegram,"* ]]; then
   hermes_telegram_token="$(env_file_value "$hermes_env_file" "TELEGRAM_BOT_TOKEN")"

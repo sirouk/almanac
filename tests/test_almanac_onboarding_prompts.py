@@ -118,13 +118,18 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                 },
             )
             expect("Discord setup steps:" in prompt, prompt)
-            expect("OAuth2" in prompt and "URL Generator" in prompt, prompt)
-            expect("Guild Install" in prompt, prompt)
-            expect("applications.commands" in prompt, prompt)
-            expect("save changes" in prompt.lower(), prompt)
-            expect(prompt.index("Server Members Intent") < prompt.index("Message Content Intent"), prompt)
+            expect("Install Link" in prompt, prompt)
+            expect("Installation" in prompt, prompt)
+            expect("Add to My Apps" in prompt, prompt)
+            expect("Add to Server" in prompt, prompt)
+            expect("Message Content Intent" in prompt, prompt)
+            expect("OAuth2" not in prompt and "URL Generator" not in prompt, prompt)
+            expect("Guild Install" not in prompt, prompt)
+            expect("Server Members Intent" not in prompt, prompt)
             expect("new agent bot only" in prompt, prompt)
-            expect("Guild Install URL" in prompt or "install URL" in prompt, prompt)
+            expect("Reset Token" in prompt, prompt)
+            expect("copy the bot token" in prompt, prompt)
+            expect("paste that token here" in prompt, prompt)
 
             notion_access_prompt = onboarding.session_prompt(
                 cfg,

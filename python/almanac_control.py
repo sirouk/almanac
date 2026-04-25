@@ -10818,6 +10818,7 @@ def build_managed_memory_payload(
         "- Curator publishes [managed:today-plate] as the compact owned/assigned work snapshot for the current user; use it for orientation, then verify live details before changing shared state.\n"
         "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local managed-memory stubs and recent events.\n"
         "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
+        "- The almanac-managed-context plugin also injects [local:model-runtime] from Hermes's actual current-turn model argument, so model self-identification uses the live runtime instead of stale session prompts, saved memory, onboarding records, or config defaults after setup or model switches.\n"
         "- Treat the skill as the workflow and guardrail layer, and the wired broker/MCP/tool as the actuation layer.\n"
         "- For private/shared-vault questions, start with [managed:qmd-ref] and the current user's local Almanac state; do not rediscover the qmd rail by repo-wide search unless that rail actually fails.\n"
         "- Human-facing completion or onboarding messages may omit machine-facing MCP/control rails for simplicity; [managed:resource-ref] is the authoritative map of the rails that this agent can try.\n"

@@ -24,6 +24,7 @@ _MANAGED_KEYS = (
     "today-plate",
 )
 _LOCAL_KEYS = (
+    "model-runtime",
     "resource-ref-live",
     "recent-events",
     "identity",
@@ -38,6 +39,7 @@ _SECTION_LIMITS = {
     "vault-topology": 900,
     "notion-stub": 1400,
     "today-plate": 1400,
+    "model-runtime": 1000,
     "resource-ref-live": 700,
     "recent-events": 1200,
     "identity": 900,
@@ -99,6 +101,8 @@ _RELEVANT_TERMS = (
     "files",
     "knowledge",
     "latest",
+    "model",
+    "models",
     "meeting",
     "meetings",
     "milestone",
@@ -174,6 +178,7 @@ _FOLLOWUP_TERMS = (
 )
 _HISTORY_RELEVANCE_LOOKBACK = 8
 _SESSION_REVISIONS: dict[str, str] = {}
+_SESSION_RUNTIME_REVISIONS: dict[str, str] = {}
 _TOKEN_CACHE: dict[str, object] = {}
 _TOKEN_TOOL_SUFFIXES = {
     "catalog_vaults": "catalog.vaults",
@@ -450,6 +455,10 @@ def _local_state_path(filename: str) -> Path:
     return _hermes_home() / "state" / filename
 
 
+def _config_path() -> Path:
+    return _hermes_home() / "config.yaml"
+
+
 def _trim(text: str, limit: int) -> str:
     value = str(text or "").strip()
     if len(value) <= limit:
@@ -474,6 +483,93 @@ def _load_json_dict(path: Path) -> dict[str, object]:
 
 def _load_state() -> dict[str, object]:
     return _load_json_dict(_state_path())
+
+
+def _strip_scalar(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw[0:1] == raw[-1:] and raw[0] in {"'", '"'}:
+        return raw[1:-1].strip()
+    return raw
+
+
+def _load_model_config() -> dict[str, str]:
+    """Read the simple Hermes ``model`` block without depending on PyYAML."""
+    path = _config_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    result: dict[str, str] = {}
+    in_model = False
+    model_indent: int | None = None
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if not in_model:
+            if not raw_line.startswith("model:"):
+                continue
+            _, value = raw_line.split(":", 1)
+            scalar = _strip_scalar(value)
+            if scalar:
+                result["default"] = scalar
+                return result
+            in_model = True
+            model_indent = indent
+            continue
+
+        if indent <= (model_indent or 0) and not raw_line.startswith(" "):
+            break
+        if indent <= (model_indent or 0):
+            continue
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        if key in {"default", "model", "provider", "base_url", "api_mode"}:
+            result[key] = _strip_scalar(value)
+    return result
+
+
+def _model_runtime_section(runtime_model: str) -> str:
+    config = _load_model_config()
+    current_model = str(runtime_model or "").strip()
+    configured_default = config.get("default") or config.get("model") or ""
+    configured_provider = config.get("provider") or ""
+    api_mode = config.get("api_mode") or ""
+    base_url = config.get("base_url") or ""
+    if not any((current_model, configured_default, configured_provider, api_mode, base_url)):
+        return ""
+
+    lines = [
+        "Current turn runtime snapshot:",
+        f"- Current turn model (authoritative): {current_model or '(not provided by runtime hook)'}",
+    ]
+    if configured_default:
+        lines.append(f"- Config default model: {configured_default}")
+    if configured_provider:
+        lines.append(f"- Config default provider: {configured_provider}")
+    if api_mode:
+        lines.append(f"- Config default API mode: {api_mode}")
+    if base_url:
+        lines.append(f"- Config default endpoint: {base_url}")
+    lines.extend(
+        [
+            "- For self-identification, use only the current turn model above.",
+            "- This plugin does not receive an authoritative current provider; do not present config defaults as the current provider.",
+            "- Treat config defaults as fallback/setup metadata, not proof of a session-scoped runtime switch.",
+            "- If an older session prompt, saved memory, onboarding record, or config default names a different model/provider, treat that older value as stale for self-identification.",
+        ]
+    )
+    if configured_provider in {"chutes", "custom"} or "chutes.ai" in base_url.lower():
+        lines.append(
+            "- Chutes/custom-provider model changes are setup-level configuration; chat /model may not switch those custom-provider defaults."
+        )
+    return "\n".join(lines)
 
 
 def _state_mtime_iso(path: Path) -> str:
@@ -971,6 +1067,7 @@ def _render_local_json_block(title: str, payload: object, *, as_of: str = "") ->
 def _build_sections(
     managed_payload: dict[str, object],
     *,
+    runtime_model: str = "",
     access_path: Path,
     access_payload: dict[str, object],
     events_path: Path,
@@ -980,6 +1077,10 @@ def _build_sections(
 ) -> tuple[dict[str, object], dict[str, str]]:
     sections: dict[str, object] = {}
     freshness: dict[str, str] = {}
+
+    runtime = _model_runtime_section(runtime_model)
+    if runtime:
+        sections["model-runtime"] = runtime
 
     for key in _MANAGED_KEYS:
         raw = str(managed_payload.get(key) or "").strip()
@@ -1051,6 +1152,8 @@ def _render_context(
                     value,
                     as_of=freshness.get(key, ""),
                 )
+            elif key == "model-runtime":
+                raw = str(value).strip()
             else:
                 raw = _render_local_json_block(
                     "Live identity / org snapshot",
@@ -1125,6 +1228,7 @@ def _pre_llm_call(
 
     sections, freshness = _build_sections(
         payload,
+        runtime_model=model,
         access_path=access_path,
         access_payload=access_payload,
         events_path=events_path,
@@ -1141,11 +1245,23 @@ def _pre_llm_call(
     previous_revision = _SESSION_REVISIONS.get(session_key)
     revision_changed = previous_revision is not None and previous_revision != revision
     _SESSION_REVISIONS[session_key] = revision
+    runtime_section = str(sections.get("model-runtime") or "").strip()
+    runtime_revision = _context_revision({"model-runtime": runtime_section}) if runtime_section else ""
+    previous_runtime_revision = _SESSION_RUNTIME_REVISIONS.get(session_key)
+    runtime_changed = previous_runtime_revision is not None and previous_runtime_revision != runtime_revision
+    runtime_first_seen_existing_session = (
+        previous_runtime_revision is None
+        and bool(runtime_revision)
+        and not is_first_turn
+        and bool(conversation_history)
+    )
+    _SESSION_RUNTIME_REVISIONS[session_key] = runtime_revision
 
     context_relevant = _is_relevant(user_message)
     context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)
     recipes = _matching_recipes(user_message)
-    full_context_gate = is_first_turn or revision_changed or context_relevant or context_followup
+    runtime_gate = runtime_changed or runtime_first_seen_existing_session
+    full_context_gate = is_first_turn or revision_changed or runtime_gate or context_relevant or context_followup
     if not (full_context_gate or recipes):
         _emit_telemetry(
             {
@@ -1178,6 +1294,8 @@ def _pre_llm_call(
         gate.append("first_turn")
     if revision_changed:
         gate.append("revision_changed")
+    if runtime_gate:
+        gate.append("model_runtime")
     if context_relevant:
         gate.append("relevant")
     if context_followup:

@@ -220,6 +220,14 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
         hermes_home = root / "hermes-home"
         state_dir = hermes_home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "config.yaml").write_text(
+            "model:\n"
+            "  default: test-model\n"
+            "  provider: chutes\n"
+            "  base_url: https://llm.chutes.ai/v1\n"
+            "  api_mode: chat_completions\n",
+            encoding="utf-8",
+        )
         state_path = state_dir / "almanac-vault-reconciler.json"
         access_state_path = state_dir / "almanac-web-access.json"
         recent_events_path = state_dir / "almanac-recent-events.json"
@@ -339,6 +347,10 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
             expect("Vault update: Projects" in first["context"], first["context"])
             expect("[local:identity]" in first["context"], first["context"])
             expect('"quiet_hours": "22:00-08:00 weekdays"' in first["context"], first["context"])
+            expect("[local:model-runtime]" in first["context"], first["context"])
+            expect("Current turn model (authoritative): test-model" in first["context"], first["context"])
+            expect("Config default provider: chutes" in first["context"], first["context"])
+            expect("treat that older value as stale for self-identification" in first["context"], first["context"])
 
             second = hook(
                 session_id="session-1",
@@ -350,6 +362,43 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
                 sender_id="user-1",
             )
             expect(second is None, f"expected no injection for unrelated turn with unchanged revision, got {second!r}")
+
+            switch_seed = hook(
+                session_id="session-model-switch",
+                user_message="hello there",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            expect(isinstance(switch_seed, dict) and switch_seed.get("context"), f"expected seed context, got {switch_seed!r}")
+            switched = hook(
+                session_id="session-model-switch",
+                user_message="tell me a joke",
+                conversation_history=[{"role": "user", "content": "hello there"}],
+                is_first_turn=False,
+                model="gpt-5.5",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            expect(isinstance(switched, dict) and switched.get("context"), f"expected model-runtime injection after switch, got {switched!r}")
+            expect("[local:model-runtime]" in switched["context"], switched["context"])
+            expect("Current turn model (authoritative): gpt-5.5" in switched["context"], switched["context"])
+            expect("Config default model: test-model" in switched["context"], switched["context"])
+
+            resumed = hook(
+                session_id="session-resumed-after-restart",
+                user_message="tell me a joke",
+                conversation_history=[{"role": "user", "content": "which model are you?"}],
+                is_first_turn=False,
+                model="gpt-5.5",
+                platform="telegram",
+                sender_id="user-1",
+            )
+            expect(isinstance(resumed, dict) and resumed.get("context"), f"expected model-runtime injection for resumed session, got {resumed!r}")
+            expect("[local:model-runtime]" in resumed["context"], resumed["context"])
+            expect("Current turn model (authoritative): gpt-5.5" in resumed["context"], resumed["context"])
 
             followup = hook(
                 session_id="session-1",

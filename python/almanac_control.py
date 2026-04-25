@@ -9306,10 +9306,12 @@ def _build_today_plate(
         return "\n".join(lines)
 
     if settings["space_kind"] != "database":
-        lines.append("- Structured work plate unavailable: shared SSOT is page-scoped, not an owner/assignee database.")
+        lines.append("- Structured work plate is built from page-scoped SSOT via the live qmd notion-shared index, not a single owner/assignee database.")
+        lines.append("- Real-time awareness path: Notion webhook -> ssot batcher (1 min) -> qmd reindex; child pages and database rows under the SSOT root reach the index within ~1 minute of the change.")
         if pending_lines:
             lines.extend(pending_lines)
-        lines.append("- Use ssot.read for the scoped live page and ssot.write for permitted brokered page updates.")
+        lines.append("- When the user asks about tasks, owned work, recent SSOT activity, or what's on their plate: query knowledge.search-and-fetch (or notion-shared via qmd) for terms like 'task', 'todo', 'assigned', and the user's name; verify via ssot.read or notion.query before acting on shared state.")
+        lines.append("- For brokered shared-page updates use ssot.write; ssot.read returns the latest live page contents.")
         return "\n".join(lines)
 
     verification_status = str((identity or {}).get("verification_status") or "").strip()

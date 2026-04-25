@@ -144,7 +144,7 @@ if [[ -z "$user_slug" || -z "$org_slug" ]]; then
   echo "Could not derive a safe wrapper name from --user/--org." >&2
   exit 1
 fi
-wrapper_path="$HOME/.local/bin/hermes-almanac-${user_slug}-${org_slug}"
+wrapper_path="$HOME/.local/bin/hermes-${org_slug}-remote-${user_slug}"
 
 cat >"$wrapper_path" <<EOF
 #!/usr/bin/env bash

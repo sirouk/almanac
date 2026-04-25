@@ -354,7 +354,7 @@ def test_completion_bundle_pins_remote_setup_helper_to_deployed_commit() -> None
             expect("\n```\n- That helper creates" in followup_text, followup_text)
             expect("- Run: `curl -fsSL" not in followup_text, followup_text)
             expect("reply here with `/ssh-key <public key>`" in followup_text, followup_text)
-            expect(f"Use the generated `hermes-almanac-{unix_user}-OrgName` wrapper, not your local `hermes` command" in followup_text, followup_text)
+            expect(f"Use the generated `hermes-orgname-remote-{unix_user}` wrapper, not your local `hermes` command" in followup_text, followup_text)
             expect("remote config, skills, MCP tools, plugins, and files" in followup_text, followup_text)
             expect(f"Raw SSH target for debugging after key install: {unix_user}@kor.tail77f45e.ts.net" in followup_text, followup_text)
             expect(

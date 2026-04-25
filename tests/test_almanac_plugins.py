@@ -904,7 +904,7 @@ def test_almanac_managed_context_answers_resource_request_without_secrets() -> N
             expect("almanac-agent-configure-backup" in context, context)
             expect("curl -fsSL https://raw.githubusercontent.com/example/almanac/feature/bin/setup-remote-hermes-client.sh" in context, context)
             expect("--host kor.tail77f45e.ts.net --user sirouk --org OrgName" in context, context)
-            expect("hermes-almanac-sirouk-OrgName" in context, context)
+            expect("hermes-orgname-remote-sirouk" in context, context)
             expect("sirouk@kor.tail77f45e.ts.net" in context, context)
             expect("sup3r-secret" not in context, context)
             expect("same shared password" not in context.lower(), context)

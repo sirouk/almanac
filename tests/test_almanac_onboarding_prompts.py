@@ -836,6 +836,7 @@ def test_org_provided_model_choice_skips_user_model_and_credential_prompts() -> 
                 "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
                 "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
                 "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+                "ALMANAC_ORG_NAME": "KorBon",
                 "ALMANAC_ORG_PROVIDER_ENABLED": "1",
                 "ALMANAC_ORG_PROVIDER_PRESET": "chutes",
                 "ALMANAC_ORG_PROVIDER_MODEL_ID": "moonshotai/Kimi-K2.6-TEE",
@@ -879,7 +880,7 @@ def test_org_provided_model_choice_skips_user_model_and_credential_prompts() -> 
             approval_prompt = send("org")[0].text
             expect("Using organization-provided Chutes" in approval_prompt, approval_prompt)
             expect("moonshotai/Kimi-K2.6-TEE" in approval_prompt, approval_prompt)
-            expect("almanac-agent-hermes setup model" in approval_prompt, approval_prompt)
+            expect("hermes-korbon-remote-orgtest setup model" in approval_prompt, approval_prompt)
             expect("does not switch Chutes" in approval_prompt, approval_prompt)
             expect("operator for approval" in approval_prompt, approval_prompt)
 

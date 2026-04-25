@@ -107,7 +107,7 @@ def remote_lines(access: dict[str, object], identity: dict[str, object]) -> list
     org_arg = f" --org {shlex.quote(org_name)}" if org_name else ""
     wrapper_org = slug(org_name) or slug(remote_host)
     wrapper_user = slug(remote_user)
-    wrapper_name = f"hermes-almanac-{wrapper_user}-{wrapper_org}" if wrapper_user and wrapper_org else "hermes-almanac-*"
+    wrapper_name = f"hermes-{wrapper_org}-remote-{wrapper_user}" if wrapper_user and wrapper_org else "hermes-<org>-remote-<user>"
     return [
         f"Run: `curl -fsSL {setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`",
         "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",

@@ -47,6 +47,7 @@ from almanac_onboarding_provider_auth import (
     start_anthropic_pkce_authorization,
     start_codex_device_authorization,
 )
+from almanac_onboarding_completion import remote_hermes_wrapper_name
 from almanac_telegram import telegram_send_message
 
 
@@ -527,15 +528,19 @@ def _org_provider_selection_note(cfg: Config, session: dict[str, Any]) -> str:
     lines = [
         f"Using organization-provided {spec.display_name} with default model `{model_id}`.",
     ]
+    wrapper_name = remote_hermes_wrapper_name(
+        remote_user=str(answers.get("unix_user") or "").strip(),
+        org_name=config_env_value("ALMANAC_ORG_NAME", "").strip() or config_env_value("ALMANAC_NAME", "almanac").strip(),
+    )
     if spec.provider_id == "chutes":
         lines.append(
-            "To change Chutes models later, use the lane CLI: `almanac-agent-hermes setup model`. "
+            f"To change Chutes models later, use the remote Hermes wrapper: `{wrapper_name} setup model`. "
             "Chat `/model <model name>` does not switch Chutes custom-provider models."
         )
     else:
         lines.append(
             "To change models later, send your agent `/model <model name>`, "
-            "or use the lane CLI: `almanac-agent-hermes setup model`."
+            f"or use the remote Hermes wrapper: `{wrapper_name} setup model`."
         )
     return "\n\n".join(lines)
 
@@ -655,7 +660,7 @@ def _queue_remote_ssh_key_install(
             (
                 f"Remote agent key install {queued_text} for `{unix_user}`. "
                 "The root maintenance loop will install it with Tailscale-only restrictions. "
-                "After it confirms, run your generated `hermes-almanac-*` wrapper. "
+                "After it confirms, run your generated `hermes-<org>-remote-<user>` wrapper. "
                 "That wrapper starts Hermes on the remote agent lane, so it uses the agent's remote config, skills, MCP tools, and files. "
                 f"Raw SSH is available for debugging as `{ssh_target}`."
             ),

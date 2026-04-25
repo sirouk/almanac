@@ -772,9 +772,9 @@ def _remote_cli_lines(
     wrapper_org = _slug(org_name) or _slug(remote_host)
     wrapper_user = _slug(remote_user)
     wrapper_name = (
-        f"hermes-almanac-{wrapper_user}-{wrapper_org}"
+        f"hermes-{wrapper_org}-remote-{wrapper_user}"
         if wrapper_user and wrapper_org
-        else "hermes-almanac-*"
+        else "hermes-<org>-remote-<user>"
     )
     return [
         f"Run: `curl -fsSL {setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`",

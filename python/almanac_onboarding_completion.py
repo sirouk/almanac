@@ -173,6 +173,16 @@ def _remote_wrapper_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
 
 
+def remote_hermes_wrapper_name(*, remote_user: str = "", org_name: str = "", remote_host: str = "") -> str:
+    wrapper_org = _remote_wrapper_slug(org_name) or _remote_wrapper_slug(remote_host)
+    wrapper_user = _remote_wrapper_slug(remote_user)
+    if wrapper_user and wrapper_org:
+        return f"hermes-{wrapper_org}-remote-{wrapper_user}"
+    if wrapper_org:
+        return f"hermes-{wrapper_org}-remote"
+    return "hermes-<org>-remote-<user>"
+
+
 def _telegram_followup_html(lines: list[str], *, remote_setup_command: str = "") -> str:
     html_lines: list[str] = []
     remote_setup_command = remote_setup_command.strip()
@@ -243,12 +253,10 @@ def completion_message_bundle(
                 f"curl -fsSL {remote_setup_url} | bash -s -- "
                 f"--host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}"
             )
-            wrapper_org = _remote_wrapper_slug(org_name) or _remote_wrapper_slug(remote_host)
-            wrapper_user = _remote_wrapper_slug(remote_user)
-            wrapper_name = (
-                f"hermes-almanac-{wrapper_user}-{wrapper_org}"
-                if wrapper_user and wrapper_org
-                else "hermes-almanac-*"
+            wrapper_name = remote_hermes_wrapper_name(
+                remote_user=remote_user,
+                org_name=org_name,
+                remote_host=remote_host,
             )
             followup_lines.append("")
             followup_lines.append("Optional remote agent CLI from your own machine:")

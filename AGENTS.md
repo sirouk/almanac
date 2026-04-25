@@ -107,6 +107,18 @@ If you just committed local changes and need them included in an upgrade,
 make sure they are pushed to the configured upstream first. `upgrade` consumes
 the remote, not unpushed local commits.
 
+When the operator asks to commit/deploy/upgrade/restart after repo changes,
+the expected sequence is:
+
+1. Run the focused tests for the changed surface.
+2. Commit the scoped repo changes.
+3. Push the commit to the configured upstream before upgrading.
+4. Run `./deploy.sh upgrade`.
+5. Treat the upgrade as the restart step: it realigns agents, restarts shared
+   services, records release state, runs strict health, and runs live smoke
+   when available.
+6. Report the deployed release and health/smoke result.
+
 ## Deploy Keys
 
 Almanac has multiple deploy-key lanes. Do not conflate them.

@@ -540,6 +540,62 @@ def test_operator_upgrade_stale_running_action_fails_closed() -> None:
             os.environ.update(old_env)
 
 
+def test_run_host_upgrade_seeds_home_when_missing() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_run_host_upgrade_home_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_run_host_upgrade_home_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ.pop("HOME", None)
+        try:
+            cfg = control.Config.from_env()
+            captured: dict[str, dict[str, str]] = {}
+
+            def fake_subprocess_run(*args, **kwargs):
+                captured["env"] = dict(kwargs.get("env") or {})
+                captured["cwd"] = str(kwargs.get("cwd") or "")
+                return subprocess.CompletedProcess(args=args[0], returncode=0)
+
+            original_run = provisioner.subprocess.run
+            provisioner.subprocess.run = fake_subprocess_run
+            try:
+                provisioner._run_host_upgrade(cfg, log_path=root / "upgrade.log")
+            finally:
+                provisioner.subprocess.run = original_run
+
+            env = captured.get("env") or {}
+            home = env.get("HOME") or ""
+            expect(bool(home), f"HOME must be set when subprocess starts: {env}")
+            expect(os.path.isabs(home), f"HOME must be absolute: {home!r}")
+            print("PASS test_run_host_upgrade_seeds_home_when_missing")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_install_system_services_seeds_home_in_root_units() -> None:
+    install_script = REPO / "bin" / "install-system-services.sh"
+    text = install_script.read_text(encoding="utf-8")
+    for unit_target in (
+        '"$TARGET_DIR/almanac-enrollment-provision.service"',
+        '"$TARGET_DIR/almanac-notion-claim-poll.service"',
+    ):
+        opener = f"cat >{unit_target} <<EOF\n"
+        start = text.index(opener) + len(opener)
+        end = text.index("\nEOF\n", start)
+        block = text[start:end]
+        expect(
+            "Environment=HOME=/root" in block,
+            f"{unit_target} unit must seed HOME for root systemd:\n{block}",
+        )
+    print("PASS test_install_system_services_seeds_home_in_root_units")
+
+
 def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
@@ -550,7 +606,9 @@ def main() -> int:
     test_gateway_failures_notify_user_with_provision_error_status()
     test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
     test_operator_upgrade_stale_running_action_fails_closed()
-    print("PASS all 9 enrollment provisioner regression tests")
+    test_run_host_upgrade_seeds_home_when_missing()
+    test_install_system_services_seeds_home_in_root_units()
+    print("PASS all 11 enrollment provisioner regression tests")
     return 0
 
 

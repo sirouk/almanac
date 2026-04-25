@@ -159,6 +159,11 @@ def _tail_text(path: Path, *, max_lines: int = 16) -> str:
 def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["ALMANAC_CONFIG_FILE"] = _config_file_for_child_process(cfg)
+    if not env.get("HOME"):
+        try:
+            env["HOME"] = pwd.getpwuid(os.geteuid()).pw_dir
+        except KeyError:
+            env["HOME"] = "/root"
     if cfg.upstream_repo_url:
         env.setdefault("ALMANAC_UPSTREAM_REPO_URL", str(cfg.upstream_repo_url))
     if cfg.upstream_branch:

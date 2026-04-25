@@ -22,6 +22,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=HOME=/root
 Environment=ALMANAC_CONFIG_FILE=$CONFIG_PATH
 ExecStart=$ALMANAC_REPO_DIR/bin/almanac-enrollment-provision.sh
 EOF
@@ -48,6 +49,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=HOME=/root
 Environment=ALMANAC_CONFIG_FILE=$CONFIG_PATH
 ExecStart=$ALMANAC_REPO_DIR/bin/almanac-enrollment-provision.sh --claims-only
 EOF

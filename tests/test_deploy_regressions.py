@@ -1359,6 +1359,43 @@ def test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access() ->
     print("PASS test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access")
 
 
+def test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works() -> None:
+    text = DEPLOY_SH.read_text()
+    body = extract(
+        text,
+        "prompt_and_verify_upstream_deploy_key_access() {",
+        "\n}\n",
+    )
+    expect(
+        'verify_upstream_git_deploy_key_access >/dev/null 2>&1' in body,
+        "prompt_and_verify_upstream_deploy_key_access must verify access silently before prompting the operator",
+    )
+    expect(
+        '"Reuse existing Almanac upstream deploy key"' in body,
+        'prompt_and_verify_upstream_deploy_key_access must offer a "Reuse existing" choice when verification already passes',
+    )
+    reuse_index = body.index('"Reuse existing Almanac upstream deploy key"')
+    press_enter_index = body.index('Press ENTER after adding this deploy key')
+    expect(
+        reuse_index < press_enter_index,
+        'the "Reuse existing" prompt must come before the "Press ENTER after adding" prompt so an already-verified key skips the manual paste step',
+    )
+    expect(
+        'rotate_upstream_git_deploy_key_material' in text,
+        'a helper must exist to rotate the Almanac upstream deploy key when the operator declines to reuse it',
+    )
+    rotate_body = extract(
+        text,
+        "rotate_upstream_git_deploy_key_material() {",
+        "\n}\n",
+    )
+    expect(
+        'rm -f --' in rotate_body and 'ensure_upstream_git_deploy_key_material_for_user' in rotate_body,
+        "rotate_upstream_git_deploy_key_material must remove old key files and regenerate via the user-scoped ensure helper",
+    )
+    print("PASS test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works")
+
+
 def test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable() -> None:
     text = DEPLOY_SH.read_text()
     helpers = extract(text, "github_owner_repo_from_remote() {", "collect_install_answers() {")
@@ -2085,6 +2122,7 @@ def main() -> int:
         test_collect_install_answers_guides_backup_remote_setup,
         test_collect_install_answers_guides_upstream_deploy_key_setup,
         test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access,
+        test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works,
         test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,
         test_require_supported_host_mode_rejects_native_macos_install,
         test_require_supported_host_mode_guides_wsl_without_systemd,

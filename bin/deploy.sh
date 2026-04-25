@@ -2746,8 +2746,30 @@ verify_upstream_git_deploy_key_access() {
   echo "  Write check passed (dry-run only; no branch or commit was pushed)."
 }
 
+rotate_upstream_git_deploy_key_material() {
+  local key_user="" key_path="" pub_path="" quoted_key="" quoted_pub=""
+
+  key_user="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  pub_path="${key_path}.pub"
+
+  printf -v quoted_key '%q' "$key_path"
+  printf -v quoted_pub '%q' "$pub_path"
+
+  echo "  Removing the existing key files:"
+  echo "    $key_path"
+  echo "    $pub_path"
+  if [[ "$(id -un)" == "$key_user" ]]; then
+    bash -lc "rm -f -- $quoted_key $quoted_pub"
+  else
+    run_as_user "$key_user" "rm -f -- $quoted_key $quoted_pub"
+  fi
+  ensure_upstream_git_deploy_key_material_for_user "$key_user"
+  echo "  Generated a new Almanac upstream deploy key. Remove the previous deploy key entry from GitHub and add the new public key below."
+}
+
 prompt_and_verify_upstream_deploy_key_access() {
-  local pub_path="" repo_page="" retry=""
+  local pub_path="" repo_page="" retry="" reuse=""
 
   if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
@@ -2760,6 +2782,22 @@ prompt_and_verify_upstream_deploy_key_access() {
   repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
   if [[ ! -t 0 || -z "$repo_page" || ! -f "$pub_path" ]]; then
     return 0
+  fi
+
+  # Pre-flight: if the existing key already authenticates against GitHub for
+  # both read and dry-run write, mirror the "Reuse existing" pattern used for
+  # org-provided credentials and let the operator skip the manual paste step.
+  if verify_upstream_git_deploy_key_access >/dev/null 2>&1; then
+    echo
+    echo "  Detected an existing Almanac upstream deploy key with verified GitHub read+write access."
+    reuse="$(ask_yes_no "Reuse existing Almanac upstream deploy key" "1")"
+    if [[ "$reuse" == "1" ]]; then
+      ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED=1
+      return 0
+    fi
+    echo
+    rotate_upstream_git_deploy_key_material
+    print_upstream_deploy_key_public_key
   fi
 
   echo

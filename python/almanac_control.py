@@ -7260,11 +7260,11 @@ def _notion_index_markdown_dir(cfg: Config) -> Path:
 
 
 def _notion_index_full_sweep_interval_seconds() -> int:
-    raw = str(config_env_value("ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS", "14400") or "").strip()
+    raw = str(config_env_value("ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS", "3600") or "").strip()
     try:
         return max(300, int(raw))
     except ValueError:
-        return 14400
+        return 3600
 
 
 def _configured_notion_index_root_refs() -> list[str]:
@@ -7346,6 +7346,96 @@ def _resolve_notion_index_roots(
         seen.add(dedupe_key)
         roots.append(root)
     return roots
+
+
+def _notion_database_title(payload: dict[str, Any]) -> str:
+    title = payload.get("title") if isinstance(payload, dict) else None
+    if isinstance(title, list):
+        return "".join(
+            str(item.get("plain_text") or "")
+            for item in title
+            if isinstance(item, dict)
+        ).strip()
+    return str(title or "").strip()
+
+
+def _walk_notion_parents_to_root(
+    *,
+    entity_id: str,
+    entity_kind: str,
+    settings: dict[str, str],
+    roots: list[dict[str, str]],
+    notion_kwargs: dict[str, Any],
+    max_depth: int = 12,
+) -> tuple[dict[str, str], list[str]] | None:
+    """Walk an orphan entity's parent chain until a configured root is reached.
+
+    Returns (root, breadcrumb_prefix) where breadcrumb_prefix lists ancestor
+    titles from immediately-below-root down to the orphan's immediate parent
+    (the orphan's own title is NOT included, matching what `_crawl_notion_*`
+    helpers expect). Returns None when the chain hits the workspace, an
+    inaccessible parent, or exceeds max_depth without matching a root.
+    """
+    root_index: dict[tuple[str, str], dict[str, str]] = {}
+    for root in roots:
+        kind = (str(root.get("root_kind") or "page").strip() or "page")
+        rid = extract_notion_space_id(str(root.get("root_id") or ""))
+        if rid:
+            root_index[(kind, rid)] = root
+    visited: set[str] = set()
+    ancestors: list[str] = []
+    current_id = extract_notion_space_id(str(entity_id or ""))
+    current_kind = entity_kind if entity_kind in ("page", "database") else "page"
+    iteration = 0
+    while iteration < max_depth and current_id and current_id not in visited:
+        visited.add(current_id)
+        iteration += 1
+        try:
+            if current_kind == "database":
+                payload = retrieve_notion_database(
+                    database_id=current_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                    **notion_kwargs,
+                )
+            else:
+                payload = retrieve_notion_page(
+                    page_id=current_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                    **notion_kwargs,
+                )
+        except Exception:
+            return None
+        match = root_index.get((current_kind, current_id))
+        if match is not None:
+            return match, list(reversed(ancestors))
+        if iteration > 1:
+            current_title = (
+                _notion_title_from_page(payload)
+                if current_kind == "page"
+                else _notion_database_title(payload)
+            ) or current_id
+            cleaned = str(current_title or "").strip()
+            if cleaned:
+                ancestors.append(cleaned)
+        parent = payload.get("parent") if isinstance(payload, dict) else None
+        if not isinstance(parent, dict):
+            return None
+        parent_type = str(parent.get("type") or "").strip()
+        if parent_type == "page_id":
+            next_id = extract_notion_space_id(str(parent.get("page_id") or "").strip())
+            next_kind = "page"
+        elif parent_type == "database_id":
+            next_id = extract_notion_space_id(str(parent.get("database_id") or "").strip())
+            next_kind = "database"
+        else:
+            return None
+        if not next_id:
+            return None
+        current_id = next_id
+        current_kind = next_kind
+    return None
 
 
 def _load_notion_collection_schema(
@@ -8623,7 +8713,29 @@ def sync_shared_notion_index(
                 (page_id,),
             ).fetchall()
             if not rows:
-                unresolved_pages.append(page_id)
+                walk = _walk_notion_parents_to_root(
+                    entity_id=page_id,
+                    entity_kind="page",
+                    settings=settings,
+                    roots=roots,
+                    notion_kwargs=notion_kwargs,
+                )
+                if walk is None:
+                    unresolved_pages.append(page_id)
+                    continue
+                walked_root, walked_prefix = walk
+                changed_docs += _crawl_notion_page_tree(
+                    conn,
+                    cfg,
+                    root=walked_root,
+                    page_id=page_id,
+                    breadcrumb_prefix=walked_prefix,
+                    visited_pages=set(),
+                    visited_databases=set(),
+                    active_doc_keys=set(),
+                    notion_kwargs=notion_kwargs,
+                )
+                page_rows.setdefault(page_id, set()).add(walked_root["root_id"])
                 continue
             page_payload = retrieve_notion_page(
                 page_id=page_id,
@@ -8652,20 +8764,41 @@ def sync_shared_notion_index(
                 page_rows.setdefault(page_id, set()).add(root_id)
         for database_id in normalized_database_ids:
             matched_root = next((root for root in roots if root["root_kind"] == "database" and root["root_id"] == database_id), None)
-            if matched_root is None:
+            if matched_root is not None:
+                changed_docs += _crawl_notion_database_rows(
+                    conn,
+                    cfg,
+                    root=matched_root,
+                    database_id=database_id,
+                    breadcrumb_prefix=[part for part in [matched_root.get("root_page_title"), matched_root.get("root_title")] if str(part or "").strip()],
+                    visited_databases=set(),
+                    active_doc_keys=set(),
+                    notion_kwargs=notion_kwargs,
+                )
+                processed_roots.append(matched_root["root_id"])
+                continue
+            walk = _walk_notion_parents_to_root(
+                entity_id=database_id,
+                entity_kind="database",
+                settings=settings,
+                roots=roots,
+                notion_kwargs=notion_kwargs,
+            )
+            if walk is None:
                 unresolved_databases.append(database_id)
                 continue
+            walked_root, walked_prefix = walk
             changed_docs += _crawl_notion_database_rows(
                 conn,
                 cfg,
-                root=matched_root,
+                root=walked_root,
                 database_id=database_id,
-                breadcrumb_prefix=[part for part in [matched_root.get("root_page_title"), matched_root.get("root_title")] if str(part or "").strip()],
+                breadcrumb_prefix=walked_prefix,
                 visited_databases=set(),
                 active_doc_keys=set(),
                 notion_kwargs=notion_kwargs,
             )
-            processed_roots.append(matched_root["root_id"])
+            processed_roots.append(walked_root["root_id"])
         indexed_pages.update(page_rows.keys())
 
     conn.commit()
@@ -8674,15 +8807,16 @@ def sync_shared_notion_index(
     status = "ok"
     if unresolved_pages or unresolved_databases:
         status = "warn"
+    is_full_run = bool(full or (not normalized_page_ids and not normalized_database_ids))
     note_refresh_job(
         conn,
-        job_name="notion-index-sync",
+        job_name="notion-index-sync" if is_full_run else "notion-index-sync-incremental",
         job_kind="notion-index-sync",
         target_id="notion",
-        schedule="webhook + 4h full sweep",
+        schedule="webhook + 1h full sweep" if is_full_run else "webhook event",
         status=status,
         note=(
-            f"roots={len(roots)} changed_docs={changed_docs} removed_docs={removed_docs} "
+            f"full={is_full_run} roots={len(roots)} changed_docs={changed_docs} removed_docs={removed_docs} "
             f"indexed_pages={len(indexed_pages)} unresolved_pages={len(unresolved_pages)} "
             f"unresolved_databases={len(unresolved_databases)} actor={actor}"
         ),
@@ -8690,7 +8824,7 @@ def sync_shared_notion_index(
     return {
         "ok": True,
         "status": status,
-        "full": bool(full or (not normalized_page_ids and not normalized_database_ids)),
+        "full": is_full_run,
         "roots": roots,
         "changed_docs": changed_docs,
         "removed_docs": removed_docs,
@@ -8880,12 +9014,12 @@ def consume_notion_reindex_queue(
             _record_notion_reindex_retry(conn, cfg, notification_ids=delivered_ids, error_message=str(exc))
         note_refresh_job(
             conn,
-            job_name="notion-index-sync",
+            job_name="notion-index-sync" if run_full else "notion-index-sync-incremental",
             job_kind="notion-index-sync",
             target_id="notion",
-            schedule="webhook + 4h full sweep",
+            schedule="webhook + 1h full sweep" if run_full else "webhook event",
             status="fail",
-            note=f"notion reindex failed: {exc}",
+            note=f"notion reindex failed (full={run_full}): {exc}",
         )
         return {
             "ok": False,

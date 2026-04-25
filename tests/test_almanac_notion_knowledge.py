@@ -610,12 +610,104 @@ def test_process_pending_notion_events_queues_full_reindex_for_data_source_and_f
             os.environ.update(old_env)
 
 
+def test_incremental_reindex_parent_walks_brand_new_page_under_known_root() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_notion_parent_walk_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            new_page_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+
+            mod._resolve_notion_index_roots = lambda **kwargs: [
+                {
+                    "root_ref": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_kind": "page",
+                    "root_id": root_page_id,
+                    "root_url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_title": "Workspace Root",
+                    "root_page_id": root_page_id,
+                    "root_page_url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_page_title": "Workspace Root",
+                }
+            ]
+
+            def fake_retrieve_page(**kwargs):
+                page_id = kwargs["page_id"]
+                if page_id == new_page_id:
+                    return {
+                        "id": new_page_id,
+                        "url": f"https://www.notion.so/to-do-list-{new_page_id.replace('-', '')}",
+                        "last_edited_time": "2026-04-25T16:43:00+00:00",
+                        "parent": {"type": "page_id", "page_id": root_page_id},
+                        "properties": _title_property("To Do List"),
+                    }
+                return {
+                    "id": root_page_id,
+                    "url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "last_edited_time": "2026-04-25T16:00:00+00:00",
+                    "parent": {"type": "workspace", "workspace": True},
+                    "properties": _title_property("Workspace Root"),
+                }
+
+            mod.retrieve_notion_page = fake_retrieve_page
+            mod.list_notion_block_children_all = lambda **kwargs: []
+            mod.retrieve_notion_page_markdown = lambda **kwargs: {
+                "markdown": "# Overview\n\nClaim ownership of the new task list."
+            }
+            mod._extract_notion_attachment_text = lambda ref: {"status": "metadata-only", "body": "", "content_type": ""}
+            mod._refresh_qmd_after_notion_sync = lambda cfg, embed=False: None
+
+            result = mod.sync_shared_notion_index(
+                conn,
+                cfg,
+                full=False,
+                page_ids=[new_page_id],
+                actor="parent-walk-test",
+            )
+            expect(result["ok"] is True, str(result))
+            expect(result["status"] == "ok", str(result))
+            expect(result["unresolved_pages"] == [], str(result))
+            expect(result["changed_docs"] >= 1, str(result))
+            expect(result["full"] is False, str(result))
+
+            indexed_rows = conn.execute(
+                "SELECT source_page_id, page_title, breadcrumb_json FROM notion_index_documents WHERE source_page_id = ?",
+                (new_page_id,),
+            ).fetchall()
+            expect(len(indexed_rows) >= 1, str([dict(row) for row in indexed_rows]))
+            crumbs = json.loads(str(indexed_rows[0]["breadcrumb_json"] or "[]"))
+            expect("To Do List" in crumbs, str(crumbs))
+
+            # Cooldown row split: incremental run must NOT touch the full-sweep clock.
+            full_row = conn.execute(
+                "SELECT job_name, last_status FROM refresh_jobs WHERE job_name = 'notion-index-sync'"
+            ).fetchone()
+            incremental_row = conn.execute(
+                "SELECT job_name, last_status FROM refresh_jobs WHERE job_name = 'notion-index-sync-incremental'"
+            ).fetchone()
+            expect(full_row is None, f"full-sweep row leaked from incremental run: {dict(full_row) if full_row else {}}")
+            expect(incremental_row is not None, "expected notion-index-sync-incremental refresh_jobs row")
+            expect(mod._notion_index_full_sweep_due(conn) is True, "full sweep should still be due after incremental run")
+
+            print("PASS test_incremental_reindex_parent_walks_brand_new_page_under_known_root")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs()
     test_notion_search_fetch_and_query_use_shared_index_and_live_reads()
     test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_delivered()
     test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload()
-    print("PASS all 4 shared notion knowledge regression tests")
+    test_incremental_reindex_parent_walks_brand_new_page_under_known_root()
+    print("PASS all 5 shared notion knowledge regression tests")
     return 0
 
 

@@ -682,6 +682,7 @@ def test_incremental_reindex_parent_walks_brand_new_page_under_known_root() -> N
             ).fetchall()
             expect(len(indexed_rows) >= 1, str([dict(row) for row in indexed_rows]))
             crumbs = json.loads(str(indexed_rows[0]["breadcrumb_json"] or "[]"))
+            expect(crumbs[:1] == ["Workspace Root"], f"orphan breadcrumb missing root prefix: {crumbs}")
             expect("To Do List" in crumbs, str(crumbs))
 
             # Cooldown row split: incremental run must NOT touch the full-sweep clock.
@@ -701,13 +702,92 @@ def test_incremental_reindex_parent_walks_brand_new_page_under_known_root() -> N
             os.environ.update(old_env)
 
 
+def test_incremental_reindex_removes_trashed_page_docs() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_notion_trashed_page_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            target_page_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+
+            # Seed the index as if the page was previously crawled.
+            now = mod.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO notion_index_documents (
+                  doc_key, root_id, source_page_id, source_page_url, source_kind, file_path,
+                  page_title, section_heading, section_ordinal, breadcrumb_json,
+                  owners_json, last_edited_time, content_hash, indexed_at, state
+                ) VALUES (?, ?, ?, ?, 'page', ?, 'Doomed Note', 'Overview', 0, '["Workspace Root","Doomed Note"]', '[]', ?, 'h', ?, 'active')
+                """,
+                (
+                    f"{root_page_id}:{target_page_id}:0",
+                    root_page_id,
+                    target_page_id,
+                    "https://www.notion.so/doomed",
+                    str(root / "doomed.md"),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            (root / "doomed.md").write_text("seed", encoding="utf-8")
+
+            mod._resolve_notion_index_roots = lambda **kwargs: [
+                {
+                    "root_ref": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_kind": "page",
+                    "root_id": root_page_id,
+                    "root_url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_title": "Workspace Root",
+                    "root_page_id": root_page_id,
+                    "root_page_url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_page_title": "Workspace Root",
+                }
+            ]
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": kwargs["page_id"],
+                "url": "https://www.notion.so/doomed",
+                "in_trash": True,
+                "parent": {"type": "page_id", "page_id": root_page_id},
+                "properties": _title_property("Doomed Note"),
+            }
+            mod._refresh_qmd_after_notion_sync = lambda cfg, embed=False: None
+
+            result = mod.sync_shared_notion_index(
+                conn,
+                cfg,
+                full=False,
+                page_ids=[target_page_id],
+                actor="trash-test",
+            )
+            expect(result["ok"] is True and result["status"] == "ok", str(result))
+            remaining = conn.execute(
+                "SELECT COUNT(*) AS c FROM notion_index_documents WHERE source_page_id = ?",
+                (target_page_id,),
+            ).fetchone()
+            expect(int(remaining["c"]) == 0, "trashed page should leave no rows")
+            expect(result["changed_docs"] == 1, str(result))
+            print("PASS test_incremental_reindex_removes_trashed_page_docs")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs()
     test_notion_search_fetch_and_query_use_shared_index_and_live_reads()
     test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_delivered()
     test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload()
     test_incremental_reindex_parent_walks_brand_new_page_under_known_root()
-    print("PASS all 5 shared notion knowledge regression tests")
+    test_incremental_reindex_removes_trashed_page_docs()
+    print("PASS all 6 shared notion knowledge regression tests")
     return 0
 
 

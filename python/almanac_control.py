@@ -7409,7 +7409,14 @@ def _walk_notion_parents_to_root(
             return None
         match = root_index.get((current_kind, current_id))
         if match is not None:
-            return match, list(reversed(ancestors))
+            root_prefix: list[str] = []
+            root_page_title = str(match.get("root_page_title") or "").strip()
+            root_title = str(match.get("root_title") or "").strip()
+            if root_page_title:
+                root_prefix.append(root_page_title)
+            if str(match.get("root_kind") or "").strip() == "database" and root_title and root_title != root_page_title:
+                root_prefix.append(root_title)
+            return match, root_prefix + list(reversed(ancestors))
         if iteration > 1:
             current_title = (
                 _notion_title_from_page(payload)
@@ -8312,6 +8319,25 @@ def _delete_notion_index_doc(conn: sqlite3.Connection, *, doc_key: str) -> None:
     conn.execute("DELETE FROM notion_index_documents WHERE doc_key = ?", (doc_key,))
 
 
+def _delete_notion_index_docs_for_page(
+    conn: sqlite3.Connection,
+    *,
+    root_id: str,
+    page_id: str,
+) -> int:
+    rows = conn.execute(
+        "SELECT doc_key FROM notion_index_documents WHERE root_id = ? AND source_page_id = ?",
+        (root_id, page_id),
+    ).fetchall()
+    removed = 0
+    for row in rows:
+        doc_key = str(row["doc_key"] or "")
+        if doc_key:
+            _delete_notion_index_doc(conn, doc_key=doc_key)
+            removed += 1
+    return removed
+
+
 def _index_notion_page_payload(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -8326,6 +8352,12 @@ def _index_notion_page_payload(
     if not page_id:
         return 0
     page_id = extract_notion_space_id(page_id)
+    if bool(page_payload.get("in_trash")) or bool(page_payload.get("archived")):
+        return _delete_notion_index_docs_for_page(
+            conn,
+            root_id=str(root["root_id"]),
+            page_id=page_id,
+        )
     page_title = _notion_title_from_page(page_payload) or str(page_payload.get("url") or page_id)
     page_url = normalize_notion_space_url(str(page_payload.get("url") or "").strip())
     owners = _notion_people_names(page_payload, "Owner") or _notion_people_names(page_payload, "Assignee")
@@ -8484,6 +8516,8 @@ def _crawl_notion_database_rows(
         api_version=_require_shared_notion_settings()["api_version"],
         **notion_kwargs,
     )
+    if bool(database_payload.get("in_trash")) or bool(database_payload.get("archived")):
+        return 0
     database_title = str(database_payload.get("title") or "")
     if isinstance(database_payload.get("title"), list):
         database_title = "".join(
@@ -8539,6 +8573,12 @@ def _crawl_notion_page_tree(
         api_version=_require_shared_notion_settings()["api_version"],
         **notion_kwargs,
     )
+    if bool(page_payload.get("in_trash")) or bool(page_payload.get("archived")):
+        return _delete_notion_index_docs_for_page(
+            conn,
+            root_id=str(root["root_id"]),
+            page_id=normalized_page_id,
+        )
     page_title = _notion_title_from_page(page_payload) or str(page_payload.get("id") or normalized_page_id)
     breadcrumb = [part for part in [*breadcrumb_prefix, page_title] if str(part or "").strip()]
     changed = _index_notion_page_payload(

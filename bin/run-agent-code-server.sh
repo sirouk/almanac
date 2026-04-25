@@ -130,9 +130,16 @@ elif (legacy_user_dir / "settings.json").is_file():
         settings = {}
 
 changed = False
-if not str(settings.get("workbench.colorTheme") or "").strip():
-    settings["workbench.colorTheme"] = "Default Dark Modern"
-    changed = True
+default_settings = {
+    "workbench.colorTheme": "Default Dark Modern",
+    "workbench.secondarySideBar.defaultVisibility": "hidden",
+    "workbench.startupEditor": "none",
+}
+
+for key, value in default_settings.items():
+    if not str(settings.get(key) or "").strip():
+        settings[key] = value
+        changed = True
 
 if changed or not settings_path.is_file():
     fd, tmp_path = tempfile.mkstemp(dir=str(user_dir), prefix=".settings-", suffix=".tmp")

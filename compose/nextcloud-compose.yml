@@ -42,6 +42,7 @@ services:
       - "${NEXTCLOUD_ALMANAC_CONFIG_FILE}:/almanac-config/almanac.config.php:ro"
       - "${NEXTCLOUD_HTML_DIR}:/var/www/html"
       - "${NEXTCLOUD_DATA_DIR}:/var/www/html/data"
+      - "${NEXTCLOUD_PRE_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/pre-installation"
       - "${NEXTCLOUD_POST_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/post-installation"
       - "${NEXTCLOUD_BEFORE_STARTING_HOOK_DIR}:/docker-entrypoint-hooks.d/before-starting"
       - "${NEXTCLOUD_EMPTY_SKELETON_DIR}:/srv/nextcloud-empty-skeleton"

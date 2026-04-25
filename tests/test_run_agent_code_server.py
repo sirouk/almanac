@@ -75,6 +75,8 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect(settings_path.is_file(), f"expected settings.json to exist at {settings_path}")
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
         expect(settings.get("workbench.colorTheme") == "Default Dark Modern", settings_path.read_text(encoding="utf-8"))
+        expect(settings.get("workbench.secondarySideBar.defaultVisibility") == "hidden", settings_path.read_text(encoding="utf-8"))
+        expect(settings.get("workbench.startupEditor") == "none", settings_path.read_text(encoding="utf-8"))
         almanac_alias = workspace_home / "Almanac"
         expect(almanac_alias.is_symlink(), f"expected friendly Almanac symlink at {almanac_alias}")
         expect(os.readlink(almanac_alias) == str(vault_dir), f"bad Almanac alias target: {os.readlink(almanac_alias)!r}")
@@ -87,7 +89,15 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect("/workspace\n" in podman_args or podman_args.rstrip().endswith(" /workspace"), podman_args)
 
         settings_path.write_text(
-            json.dumps({"workbench.colorTheme": "Solarized Light"}, indent=2) + "\n",
+            json.dumps(
+                {
+                    "workbench.colorTheme": "Solarized Light",
+                    "workbench.secondarySideBar.defaultVisibility": "visible",
+                    "workbench.startupEditor": "welcomePage",
+                },
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
         result = subprocess.run(
@@ -100,6 +110,8 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect(result.returncode == 0, f"run-agent-code-server second run failed: stdout={result.stdout!r} stderr={result.stderr!r}")
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
         expect(settings.get("workbench.colorTheme") == "Solarized Light", settings_path.read_text(encoding="utf-8"))
+        expect(settings.get("workbench.secondarySideBar.defaultVisibility") == "visible", settings_path.read_text(encoding="utf-8"))
+        expect(settings.get("workbench.startupEditor") == "welcomePage", settings_path.read_text(encoding="utf-8"))
         print("PASS test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_theme")
 
 

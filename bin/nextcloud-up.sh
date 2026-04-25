@@ -148,7 +148,8 @@ write_nextcloud_custom_config() {
   cat >"$NEXTCLOUD_ALMANAC_CONFIG_FILE" <<'EOF'
 <?php
 $CONFIG = array (
-  'skeletondirectory' => '/srv/nextcloud-empty-skeleton',
+  'skeletondirectory' => '',
+  'templatedirectory' => '',
 );
 EOF
   chmod 0644 "$NEXTCLOUD_ALMANAC_CONFIG_FILE"
@@ -190,6 +191,7 @@ EOF
 
 write_nextcloud_hook_scripts() {
   write_nextcloud_post_install_hook
+  write_nextcloud_hook_script "$NEXTCLOUD_PRE_INSTALL_HOOK_FILE"
   write_nextcloud_hook_script "$NEXTCLOUD_BEFORE_STARTING_HOOK_FILE"
 }
 
@@ -477,6 +479,7 @@ run_podman_nextcloud() {
       -v "${NEXTCLOUD_ALMANAC_CONFIG_FILE}:/almanac-config/almanac.config.php:ro" \
       -v "${NEXTCLOUD_HTML_DIR}:/var/www/html" \
       -v "${NEXTCLOUD_DATA_DIR}:/var/www/html/data" \
+      -v "${NEXTCLOUD_PRE_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/pre-installation" \
       -v "${NEXTCLOUD_POST_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/post-installation" \
       -v "${NEXTCLOUD_BEFORE_STARTING_HOOK_DIR}:/docker-entrypoint-hooks.d/before-starting" \
       -v "${NEXTCLOUD_EMPTY_SKELETON_DIR}:/srv/nextcloud-empty-skeleton" \

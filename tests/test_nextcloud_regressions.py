@@ -72,14 +72,18 @@ fi
     print("PASS test_ensure_nextcloud_vault_mount_skips_duplicate_option_writes")
 
 
-def test_nextcloud_bootstrap_uses_empty_skeleton_and_clears_admin_home() -> None:
+def test_nextcloud_bootstrap_disables_default_files_and_clears_admin_home() -> None:
     text = NEXTCLOUD_UP.read_text()
     custom_config = extract(text, "write_nextcloud_custom_config() {", "write_nextcloud_hook_script() {")
+    hook_writer = extract(text, "write_nextcloud_hook_script() {", "write_nextcloud_post_install_hook() {")
+    hook_scripts = extract(text, "write_nextcloud_hook_scripts() {", "wait_for_container_health() {")
     post_install = extract(text, "write_nextcloud_post_install_hook() {", "write_nextcloud_hook_scripts() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         config_dir = tmp_path / "config"
+        pre_hook_path = tmp_path / "hooks" / "pre-install.sh"
         hook_path = tmp_path / "hooks" / "post-install.sh"
+        before_hook_path = tmp_path / "hooks" / "before-start.sh"
         skeleton_dir = tmp_path / "empty-skeleton"
         app_root = tmp_path / "app-root"
         admin_files = app_root / "var" / "www" / "html" / "data" / "admin" / "files"
@@ -90,31 +94,53 @@ def test_nextcloud_bootstrap_uses_empty_skeleton_and_clears_admin_home() -> None
         (admin_files / "Photos" / "default.jpg").write_text("seed", encoding="utf-8")
         script = f"""
 {custom_config}
+{hook_writer}
 {post_install}
+{hook_scripts}
 NEXTCLOUD_CUSTOM_CONFIG_DIR={config_dir}
 NEXTCLOUD_EMPTY_SKELETON_DIR={skeleton_dir}
 NEXTCLOUD_ALMANAC_CONFIG_FILE={config_dir / 'almanac.config.php'}
+NEXTCLOUD_PRE_INSTALL_HOOK_FILE={pre_hook_path}
 NEXTCLOUD_POST_INSTALL_HOOK_FILE={hook_path}
+NEXTCLOUD_BEFORE_STARTING_HOOK_FILE={before_hook_path}
 write_nextcloud_custom_config
-write_nextcloud_post_install_hook
+write_nextcloud_hook_scripts
 """
         result = bash(script)
         expect(result.returncode == 0, f"nextcloud bootstrap snippet failed: {result.stderr}")
 
         config_body = (config_dir / "almanac.config.php").read_text(encoding="utf-8")
         expect("skeletondirectory" in config_body, config_body)
-        expect("/srv/nextcloud-empty-skeleton" in config_body, config_body)
+        expect("'skeletondirectory' => ''" in config_body, config_body)
+        expect("'templatedirectory' => ''" in config_body, config_body)
+
+        pre_hook_body = pre_hook_path.read_text(encoding="utf-8")
+        expect("/almanac-config/almanac.config.php" in pre_hook_body, pre_hook_body)
+        expect("/var/www/html/config/almanac.config.php" in pre_hook_body, pre_hook_body)
+
+        before_hook_body = before_hook_path.read_text(encoding="utf-8")
+        expect(before_hook_body == pre_hook_body, before_hook_body)
 
         hook_body = hook_path.read_text(encoding="utf-8")
         expect("/var/www/html/data/${admin_user}/files" in hook_body, hook_body)
         expect("find \"$files_dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +" in hook_body, hook_body)
-    print("PASS test_nextcloud_bootstrap_uses_empty_skeleton_and_clears_admin_home")
+    print("PASS test_nextcloud_bootstrap_disables_default_files_and_clears_admin_home")
+
+
+def test_nextcloud_runtime_mounts_pre_install_hook() -> None:
+    compose_body = (REPO / "compose" / "nextcloud-compose.yml").read_text(encoding="utf-8")
+    script_body = NEXTCLOUD_UP.read_text(encoding="utf-8")
+    mount = "${NEXTCLOUD_PRE_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/pre-installation"
+    expect(mount in compose_body, compose_body)
+    expect('-v "${NEXTCLOUD_PRE_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/pre-installation"' in script_body, script_body)
+    print("PASS test_nextcloud_runtime_mounts_pre_install_hook")
 
 
 def main() -> int:
     test_ensure_nextcloud_vault_mount_skips_duplicate_option_writes()
-    test_nextcloud_bootstrap_uses_empty_skeleton_and_clears_admin_home()
-    print("PASS all 2 nextcloud regression tests")
+    test_nextcloud_bootstrap_disables_default_files_and_clears_admin_home()
+    test_nextcloud_runtime_mounts_pre_install_hook()
+    print("PASS all 3 nextcloud regression tests")
     return 0
 
 

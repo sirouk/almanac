@@ -867,7 +867,7 @@ def test_almanac_managed_context_answers_resource_request_without_secrets() -> N
             encoding="utf-8",
         )
         (state_dir / "almanac-identity-context.json").write_text(
-            json.dumps({"org_name": "KorBon"}, indent=2, sort_keys=True) + "\n",
+            json.dumps({"org_name": "OrgName"}, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
@@ -903,8 +903,8 @@ def test_almanac_managed_context_answers_resource_request_without_secrets() -> N
             expect("Remote shell helper on the host: ~/.local/bin/almanac-agent-hermes" in context, context)
             expect("almanac-agent-configure-backup" in context, context)
             expect("curl -fsSL https://raw.githubusercontent.com/example/almanac/feature/bin/setup-remote-hermes-client.sh" in context, context)
-            expect("--host kor.tail77f45e.ts.net --user sirouk --org KorBon" in context, context)
-            expect("hermes-almanac-sirouk-korbon" in context, context)
+            expect("--host kor.tail77f45e.ts.net --user sirouk --org OrgName" in context, context)
+            expect("hermes-almanac-sirouk-OrgName" in context, context)
             expect("sirouk@kor.tail77f45e.ts.net" in context, context)
             expect("sup3r-secret" not in context, context)
             expect("same shared password" not in context.lower(), context)

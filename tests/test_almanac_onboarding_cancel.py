@@ -99,7 +99,7 @@ def test_cancel_wipes_pre_provision_onboarding_state() -> None:
                 answers={
                     "full_name": "Chris",
                     "unix_user": "sirouk",
-                    "preferred_bot_name": "KorBon",
+                    "preferred_bot_name": "OrgName",
                     "model_preset": "codex",
                     "provider_browser_auth": {"status": "pending"},
                     "pending_provider_secret_path": provider_secret_path,
@@ -178,7 +178,7 @@ def test_cancel_refuses_after_provisioning_has_started() -> None:
                 answers={
                     "full_name": "Chris",
                     "unix_user": "sirouk",
-                    "preferred_bot_name": "KorBon",
+                    "preferred_bot_name": "OrgName",
                     "model_preset": "codex",
                     "pending_provider_secret_path": provider_secret_path,
                 },

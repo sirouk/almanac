@@ -113,7 +113,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                     "state": "awaiting-bot-token",
                     "answers": {
                         "bot_platform": "discord",
-                        "preferred_bot_name": "KorBon",
+                        "preferred_bot_name": "OrgName",
                     },
                 },
             )
@@ -195,7 +195,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                         "unix_user": "operatoruser",
                         "purpose": "Keep the org moving",
                         "bot_platform": "discord",
-                        "preferred_bot_name": "KorBon",
+                        "preferred_bot_name": "OrgName",
                         "model_preset": "codex",
                     },
                 },

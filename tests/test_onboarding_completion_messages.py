@@ -205,9 +205,19 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
                 bot_platform="telegram",
             )
             telegram_text = str(telegram_bundle["full_text"])
+            telegram_followup = str(telegram_bundle["followup_text"])
             expect(str(telegram_bundle.get("telegram_parse_mode") or "") == "HTML", str(telegram_bundle))
+            expect(str(telegram_bundle.get("followup_telegram_parse_mode") or "") == "HTML", str(telegram_bundle))
             expect("Shared password:\n<code>copy&lt;&amp;secret</code>" in telegram_text, telegram_text)
             expect("copy<&secret" not in telegram_text, telegram_text)
+            expect(
+                "<code>curl -fsSL https://raw.githubusercontent.com/sirouk/almanac/main/bin/setup-remote-hermes-client.sh "
+                "| bash -s -- --host kor.tail77f45e.ts.net --user "
+                in telegram_followup,
+                telegram_followup,
+            )
+            expect("`curl -fsSL" not in telegram_followup, telegram_followup)
+            expect("`/ssh-key &lt;public key&gt;`" in telegram_followup, telegram_followup)
             print("PASS test_completion_bundle_lists_resources_and_scrubs_password")
         finally:
             os.environ.clear()
@@ -335,7 +345,14 @@ def test_completion_bundle_pins_remote_setup_helper_to_deployed_commit() -> None
                 in followup_text,
                 followup_text,
             )
+            expect(
+                "Run:\n```bash\ncurl -fsSL https://raw.githubusercontent.com/sirouk/almanac/eb41b3fc458071ac08222982d66d225518f01fbe/bin/setup-remote-hermes-client.sh"
+                in followup_text,
+                followup_text,
+            )
             expect("bash -s -- --host kor.tail77f45e.ts.net --user " + unix_user + " --org KorBon" in followup_text, followup_text)
+            expect("\n```\n- That helper creates" in followup_text, followup_text)
+            expect("- Run: `curl -fsSL" not in followup_text, followup_text)
             expect("reply here with `/ssh-key <public key>`" in followup_text, followup_text)
             expect(f"Use the generated `hermes-almanac-{unix_user}-korbon` wrapper, not your local `hermes` command" in followup_text, followup_text)
             expect("remote config, skills, MCP tools, plugins, and files" in followup_text, followup_text)

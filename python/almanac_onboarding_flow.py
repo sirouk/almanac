@@ -65,13 +65,16 @@ PLATFORM_ALIASES = {
     "discord": "discord",
     "dc": "discord",
 }
-MODEL_PROVIDER_ORDER = ("chutes", "opus", "codex")
+ORG_PROVIDED_PRESET = "org-provided"
+MODEL_PROVIDER_ORDER = (ORG_PROVIDED_PRESET, "chutes", "opus", "codex")
 MODEL_PROVIDER_LABELS = {
+    ORG_PROVIDED_PRESET: "Org-provided",
     "chutes": "Chutes",
     "opus": "Claude Opus",
     "codex": "OpenAI Codex",
 }
 MODEL_PROVIDER_DESCRIPTIONS = {
+    ORG_PROVIDED_PRESET: "organization default provider and model; no personal provider credential needed",
     "chutes": "recommended; Chutes API key + model id, wired as a custom OpenAI-compatible Hermes provider",
     "opus": "Claude account OAuth; best for long, careful collaboration",
     "codex": "OpenAI Codex sign-in; best for code-heavy lanes",
@@ -94,6 +97,15 @@ MODEL_PROVIDER_ALIASES = {
     "openai": "codex",
     "openaicodex": "codex",
     "codex": "codex",
+    "org": ORG_PROVIDED_PRESET,
+    "team": ORG_PROVIDED_PRESET,
+    "default": ORG_PROVIDED_PRESET,
+    "orgdefault": ORG_PROVIDED_PRESET,
+    "orgprovided": ORG_PROVIDED_PRESET,
+    "organizationdefault": ORG_PROVIDED_PRESET,
+    "organizationprovided": ORG_PROVIDED_PRESET,
+    "teamdefault": ORG_PROVIDED_PRESET,
+    "teamprovided": ORG_PROVIDED_PRESET,
 }
 REASONING_EFFORT_OPTIONS = (
     ("xhigh", "Maximum depth where the provider supports it"),
@@ -215,8 +227,43 @@ def send_session_message(
     return None
 
 
+def session_prompt_telegram_parse_mode(session: dict[str, Any]) -> str:
+    platform = str(session.get("platform") or "").strip().lower()
+    if platform != "telegram":
+        return ""
+    state = str(session.get("state") or "")
+    if state != "awaiting-model-id":
+        return ""
+    answers = session.get("answers", {})
+    if not isinstance(answers, dict):
+        answers = {}
+    model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
+    if model_preset == "chutes":
+        return "Markdown"
+    return ""
+
+
 def notify_session_state(cfg: Config, session: dict[str, Any]) -> None:
-    send_session_message(cfg, session, session_prompt(cfg, session))
+    send_session_message(
+        cfg,
+        session,
+        session_prompt(cfg, session),
+        telegram_parse_mode=session_prompt_telegram_parse_mode(session),
+    )
+
+
+def _session_prompt_reply(
+    cfg: Config,
+    incoming: IncomingMessage,
+    session: dict[str, Any],
+    reply_to_message_id: int | None = None,
+) -> OutboundMessage:
+    return OutboundMessage(
+        incoming.chat_id,
+        session_prompt(cfg, session),
+        reply_to_message_id,
+        telegram_parse_mode=session_prompt_telegram_parse_mode(session),
+    )
 
 
 def format_user_label(platform: str, username: str, display_name: str, sender_id: str) -> str:
@@ -269,6 +316,52 @@ def _parse_model_preset(cfg: Config, raw_text: str) -> str:
     return ""
 
 
+def _org_provider_secret() -> str:
+    return config_env_value("ALMANAC_ORG_PROVIDER_SECRET", "").strip()
+
+
+def _org_provider_reasoning_effort(cfg: Config | None = None) -> str:
+    configured = ""
+    if cfg is not None:
+        configured = str(getattr(cfg, "org_provider_reasoning_effort", "") or "").strip()
+    configured = configured or config_env_value("ALMANAC_ORG_PROVIDER_REASONING_EFFORT", "medium")
+    return normalize_reasoning_effort(configured, default="medium") or "medium"
+
+
+def _resolve_org_provider_setup(cfg: Config) -> ProviderSetupSpec | None:
+    if ORG_PROVIDED_PRESET not in cfg.model_presets:
+        return None
+    try:
+        return resolve_provider_setup(
+            cfg,
+            ORG_PROVIDED_PRESET,
+            model_id=_configured_model_id(cfg, ORG_PROVIDED_PRESET),
+            reasoning_effort=_org_provider_reasoning_effort(cfg),
+        )
+    except Exception:
+        return None
+
+
+def _model_provider_label(cfg: Config, preset: str) -> str:
+    if preset == ORG_PROVIDED_PRESET:
+        spec = _resolve_org_provider_setup(cfg)
+        if spec is not None:
+            return f"Org-provided ({spec.display_name})"
+    return MODEL_PROVIDER_LABELS.get(preset, preset)
+
+
+def _model_provider_description(cfg: Config, preset: str) -> str:
+    if preset == ORG_PROVIDED_PRESET:
+        spec = _resolve_org_provider_setup(cfg)
+        if spec is not None:
+            model_id = _configured_model_id(cfg, ORG_PROVIDED_PRESET) or spec.model_id
+            return (
+                f"organization default: {spec.display_name} with `{model_id}`; "
+                "no personal provider credential needed"
+            )
+    return MODEL_PROVIDER_DESCRIPTIONS.get(preset, str(cfg.model_presets.get(preset) or ""))
+
+
 def _model_option_rows(cfg: Config) -> list[tuple[str, str, str]]:
     ordered_keys = [key for key in MODEL_PROVIDER_ORDER if key in cfg.model_presets]
     ordered_keys.extend(sorted(key for key in cfg.model_presets if key not in ordered_keys))
@@ -277,8 +370,8 @@ def _model_option_rows(cfg: Config) -> list[tuple[str, str, str]]:
         rows.append(
             (
                 key,
-                MODEL_PROVIDER_LABELS.get(key, key),
-                MODEL_PROVIDER_DESCRIPTIONS.get(key, str(cfg.model_presets.get(key) or "")),
+                _model_provider_label(cfg, key),
+                _model_provider_description(cfg, key),
             )
         )
     return rows
@@ -349,7 +442,7 @@ def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
         f"Purpose: {answers.get('purpose') or '(missing)'}",
         f"Bot platform: {bot_platform}",
         f"Preferred bot name: {answers.get('preferred_bot_name') or '(missing)'}",
-        f"Model provider: {MODEL_PROVIDER_LABELS.get(model_preset, model_preset)} (`{model_preset}`)",
+        f"Model provider: {_model_provider_label(cfg, model_preset)} (`{model_preset}`)",
         f"Model id: {model_id or _configured_model_id(cfg, model_preset) or '(provider default)'}",
         f"Thinking level: {reasoning_effort or 'medium'}",
         f"Approve: ./bin/almanac-ctl onboarding approve {session_id}",
@@ -421,6 +514,30 @@ def _shared_provider_secret(spec: ProviderSetupSpec | None) -> str:
 
 def _shared_provider_credential_available(spec: ProviderSetupSpec | None) -> bool:
     return bool(_shared_provider_secret(spec))
+
+
+def _org_provider_selection_note(cfg: Config, session: dict[str, Any]) -> str:
+    answers = session.get("answers", {})
+    if str(answers.get("model_preset") or "").strip().lower() != ORG_PROVIDED_PRESET:
+        return ""
+    spec = _resolve_org_provider_setup(cfg)
+    if spec is None:
+        return ""
+    model_id = str(answers.get("model_id") or "").strip() or _configured_model_id(cfg, ORG_PROVIDED_PRESET) or spec.model_id
+    lines = [
+        f"Using organization-provided {spec.display_name} with default model `{model_id}`.",
+    ]
+    if spec.provider_id == "chutes":
+        lines.append(
+            "To change Chutes models later, use the lane CLI: `almanac-agent-hermes setup model`. "
+            "Chat `/model <model name>` does not switch Chutes custom-provider models."
+        )
+    else:
+        lines.append(
+            "To change models later, send your agent `/model <model name>`, "
+            "or use the lane CLI: `almanac-agent-hermes setup model`."
+        )
+    return "\n\n".join(lines)
 
 
 def _provider_auth_state(session: dict[str, Any]) -> dict[str, Any]:
@@ -591,6 +708,7 @@ def begin_onboarding_provisioning(
         auto_provision=True,
         requested_model_preset=str(answers.get("model_preset") or "codex"),
         requested_channels=[bot_platform],
+        notify_operator=False,
     )
     approve_request(
         conn,
@@ -614,6 +732,49 @@ def begin_onboarding_provisioning(
         save_kwargs["telegram_bot_id"] = str(answers.get("bot_id") or "")
         save_kwargs["telegram_bot_username"] = str(answers.get("bot_username") or "")
     return save_onboarding_session(conn, **save_kwargs)
+
+
+def _provisioning_started_reply(incoming: IncomingMessage, session: dict[str, Any]) -> OutboundMessage:
+    bot_label = str(
+        session.get("answers", {}).get("bot_username")
+        or session.get("answers", {}).get("bot_display_name")
+        or _preferred_bot_name(session)
+    )
+    unix_user = str(session.get("answers", {}).get("unix_user") or incoming.sender_id)
+    if _bot_platform_name(session) == "discord":
+        return OutboundMessage(
+            incoming.chat_id,
+            f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when the lane is ready.",
+        )
+    return OutboundMessage(
+        incoming.chat_id,
+        f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when the lane is ready.",
+    )
+
+
+def _begin_org_provider_provisioning(conn, cfg: Config, incoming: IncomingMessage, session: dict[str, Any]) -> OutboundMessage:
+    provider_setup = _provider_setup(session)
+    if provider_setup is None:
+        return OutboundMessage(incoming.chat_id, "I lost track of the provider setup for this session. Send /start and we’ll begin again.")
+    provider_secret = _org_provider_secret()
+    if not provider_secret:
+        return OutboundMessage(
+            incoming.chat_id,
+            "The organization-provided model option is enabled, but its credential is missing. Ask the operator to rerun deploy setup and provide the org provider credential.",
+        )
+    provider_secret_path = write_onboarding_secret(
+        cfg,
+        str(session["session_id"]),
+        provider_secret_name(provider_setup),
+        provider_secret,
+    )
+    updated = save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        answers={"pending_provider_secret_path": provider_secret_path},
+    )
+    updated = begin_onboarding_provisioning(conn, cfg, updated, provider_secret_path=provider_secret_path)
+    return _provisioning_started_reply(incoming, updated)
 
 
 def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
@@ -657,7 +818,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "awaiting-model-id":
         model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
         default_model = _default_model_id(cfg, model_preset) or CHUTES_DEFAULT_MODEL
-        label = MODEL_PROVIDER_LABELS.get(model_preset, model_preset)
+        label = _model_provider_label(cfg, model_preset)
         if model_preset == "chutes":
             examples = "\n".join(f"- `{model}`" for model in CHUTES_RECOMMENDED_MODELS)
             return (
@@ -689,6 +850,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             f"{chutes_note}"
         )
     if state == "awaiting-operator-approval":
+        org_provider_note = _org_provider_selection_note(cfg, session)
         notified_at = str(session.get("operator_notified_at") or "").strip()
         waiting_note = ""
         if notified_at:
@@ -700,7 +862,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                     waiting_note = " If this has been sitting for a while, ask the operator to check the onboarding queue and reply `/status` here any time."
             except ValueError:
                 waiting_note = ""
-        return (
+        prefix = f"{org_provider_note}\n\n" if org_provider_note else ""
+        return prefix + (
             "Thanks. I sent this onboarding request to the operator for approval.\n\n"
             "I’ll keep watch and continue here automatically once it is approved."
             + waiting_note
@@ -853,7 +1016,7 @@ def _status_or_cancel(
 ) -> tuple[dict[str, Any] | None, list[OutboundMessage] | None]:
     normalized = incoming.text.strip().lower()
     if normalized in STATUS_COMMANDS:
-        return session, [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+        return session, [_session_prompt_reply(cfg, incoming, session)]
     if normalized in CANCEL_COMMANDS:
         if onboarding_session_has_started_provisioning(session):
             request_id = str(session.get("linked_request_id") or "").strip()
@@ -926,7 +1089,7 @@ def _resume_verify_notion_session(
         completed_at="",
         last_prompt_at=utc_now_iso(),
     )
-    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+    return [_session_prompt_reply(cfg, incoming, updated)]
 
 
 def process_onboarding_message(
@@ -951,7 +1114,7 @@ def process_onboarding_message(
                 )
             except RateLimitError as exc:
                 return [OutboundMessage(incoming.chat_id, f"Slow down a bit. Try again in about {exc.retry_after_seconds}s.")]
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session), incoming.reply_to_message_id)]
+            return [_session_prompt_reply(cfg, incoming, session, incoming.reply_to_message_id)]
 
         is_remote_ssh_key, remote_ssh_pubkey = _extract_remote_ssh_pubkey(text)
         if is_remote_ssh_key:
@@ -978,7 +1141,7 @@ def process_onboarding_message(
                 sender_username=incoming.sender_username,
                 sender_display_name=incoming.sender_display_name or text,
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-unix-user":
             candidate = text.lower()
@@ -997,7 +1160,7 @@ def process_onboarding_message(
                 sender_username=incoming.sender_username,
                 sender_display_name=incoming.sender_display_name,
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-purpose":
             updated = save_onboarding_session(
@@ -1006,7 +1169,7 @@ def process_onboarding_message(
                 state="awaiting-unix-user",
                 answers={"purpose": text},
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-bot-platform":
             bot_platform = _parse_platform_choice(text)
@@ -1028,7 +1191,7 @@ def process_onboarding_message(
                 state="awaiting-bot-name",
                 answers={"bot_platform": bot_platform},
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-bot-name":
             updated = save_onboarding_session(
@@ -1037,12 +1200,31 @@ def process_onboarding_message(
                 state="awaiting-model-preset",
                 answers={"preferred_bot_name": text},
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-model-preset":
             model_preset = _parse_model_preset(cfg, text)
             if not model_preset:
                 return [OutboundMessage(incoming.chat_id, "Choose one of these providers:\n" + _model_options(cfg))]
+            if model_preset == ORG_PROVIDED_PRESET:
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    state="awaiting-operator-approval",
+                    answers={
+                        "model_preset": model_preset,
+                        "model_id": _default_model_id(cfg, model_preset),
+                        "reasoning_effort": _org_provider_reasoning_effort(cfg),
+                    },
+                )
+                if not updated.get("operator_notified_at"):
+                    _notify_operator(conn, cfg, updated)
+                    updated = save_onboarding_session(
+                        conn,
+                        session_id=str(session["session_id"]),
+                        operator_notified_at=utc_now_iso(),
+                    )
+                return [_session_prompt_reply(cfg, incoming, updated)]
             next_state = "awaiting-thinking-level"
             answers_update: dict[str, Any] = {"model_preset": model_preset}
             if model_preset == "chutes":
@@ -1053,26 +1235,32 @@ def process_onboarding_message(
                 state=next_state,
                 answers=answers_update,
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-model-id":
             answers = session.get("answers", {})
             model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
             model_id, reason = _parse_model_id(cfg, model_preset, text)
             if not model_id:
-                return [OutboundMessage(incoming.chat_id, reason or session_prompt(cfg, session))]
+                return [
+                    OutboundMessage(
+                        incoming.chat_id,
+                        reason or session_prompt(cfg, session),
+                        telegram_parse_mode=session_prompt_telegram_parse_mode(session),
+                    )
+                ]
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
                 state="awaiting-thinking-level",
                 answers={"model_id": model_id},
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-thinking-level":
             reasoning_effort = _parse_reasoning_effort(text)
             if not reasoning_effort:
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+                return [_session_prompt_reply(cfg, incoming, session)]
             updated = save_onboarding_session(
                 conn,
                 session_id=str(session["session_id"]),
@@ -1086,10 +1274,10 @@ def process_onboarding_message(
                     session_id=str(session["session_id"]),
                     operator_notified_at=utc_now_iso(),
                 )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-operator-approval":
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+            return [_session_prompt_reply(cfg, incoming, session)]
 
         if state == "awaiting-bot-token":
             bot_platform = _bot_platform_name(session)
@@ -1128,6 +1316,11 @@ def process_onboarding_message(
                 save_kwargs["telegram_bot_id"] = bot_identity.bot_id
                 save_kwargs["telegram_bot_username"] = bot_identity.username
             updated = save_onboarding_session(conn, **save_kwargs)
+            if str(answers.get("model_preset") or "").strip().lower() == ORG_PROVIDED_PRESET:
+                try:
+                    return [_begin_org_provider_provisioning(conn, cfg, incoming, updated)]
+                except Exception as exc:  # noqa: BLE001
+                    return [OutboundMessage(incoming.chat_id, str(exc).strip() or "That organization provider credential could not be staged.")]
             if provider_setup.auth_flow == "codex-device":
                 try:
                     auth_state = start_codex_device_authorization()
@@ -1139,7 +1332,7 @@ def process_onboarding_message(
                         answers={"provider_browser_auth": _codex_browser_auth_error_state(str(exc))},
                         provision_error=str(exc).strip() or "failed to mint OpenAI Codex sign-in code",
                     )
-                    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                    return [_session_prompt_reply(cfg, incoming, updated)]
                 updated = save_onboarding_session(
                     conn,
                     session_id=str(session["session_id"]),
@@ -1159,7 +1352,7 @@ def process_onboarding_message(
                     )
                 except Exception as exc:  # noqa: BLE001
                     return [OutboundMessage(incoming.chat_id, f"I couldn't start the Claude authorization flow: {exc}")]
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-provider-credential":
             provider_setup = _provider_setup(session)
@@ -1182,7 +1375,7 @@ def process_onboarding_message(
                         answers={"provider_browser_auth": _codex_browser_auth_error_state(str(exc))},
                         provision_error=str(exc).strip() or "failed to mint OpenAI Codex sign-in code",
                     )
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                return [_session_prompt_reply(cfg, incoming, updated)]
             try:
                 if provider_setup.provider_id == "anthropic":
                     if lower in {"oauth", "/oauth", "browser"}:
@@ -1192,7 +1385,7 @@ def process_onboarding_message(
                             state="awaiting-provider-browser-auth",
                             answers={"provider_browser_auth": start_anthropic_pkce_authorization()},
                         )
-                        return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                        return [_session_prompt_reply(cfg, incoming, updated)]
                     return [
                         OutboundMessage(
                             incoming.chat_id,
@@ -1255,9 +1448,9 @@ def process_onboarding_message(
                         answers={"provider_browser_auth": _codex_browser_auth_error_state(str(exc))},
                         provision_error=str(exc).strip() or "failed to mint OpenAI Codex sign-in code",
                     )
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                return [_session_prompt_reply(cfg, incoming, updated)]
             if provider_setup.provider_id != "anthropic":
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+                return [_session_prompt_reply(cfg, incoming, session)]
             try:
                 if lower in {"restart", "/restart"}:
                     updated = save_onboarding_session(
@@ -1266,7 +1459,7 @@ def process_onboarding_message(
                         answers={"provider_browser_auth": start_anthropic_pkce_authorization()},
                         provision_error="",
                     )
-                    return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                    return [_session_prompt_reply(cfg, incoming, updated)]
                 stripped = text.strip()
                 if stripped.startswith("sk-ant-api-") or stripped.startswith("sk-ant-oat-"):
                     return [
@@ -1369,11 +1562,11 @@ def process_onboarding_message(
                         "notion_claim_expires_at": "",
                     },
                 )
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-notion-email":
             if lower in NOTION_READY_COMMANDS:
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+                return [_session_prompt_reply(cfg, incoming, session)]
             if lower == "skip":
                 updated = save_onboarding_session(
                     conn,
@@ -1424,7 +1617,7 @@ def process_onboarding_message(
                     "notion_claim_expires_at": str(claim.get("expires_at") or ""),
                 },
             )
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+            return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-notion-verification":
             if lower == "skip":
@@ -1501,7 +1694,7 @@ def process_onboarding_message(
                         "notion_claim_expires_at": "",
                     },
                 )
-                return [OutboundMessage(incoming.chat_id, session_prompt(cfg, updated))]
+                return [_session_prompt_reply(cfg, incoming, updated)]
             if lower == "status":
                 claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
                 claim = get_notion_identity_claim(conn, claim_id=claim_id) if claim_id else None
@@ -1525,6 +1718,6 @@ def process_onboarding_message(
                             + session_prompt(cfg, updated),
                         )
                     ]
-            return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+            return [_session_prompt_reply(cfg, incoming, session)]
 
-        return [OutboundMessage(incoming.chat_id, session_prompt(cfg, session))]
+        return [_session_prompt_reply(cfg, incoming, session)]

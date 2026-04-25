@@ -125,6 +125,10 @@ def stored_completion_followup_text(session: dict[str, Any]) -> str:
     return str(_completion_delivery(session).get("followup_text") or "").strip()
 
 
+def stored_completion_followup_telegram_parse_mode(session: dict[str, Any]) -> str:
+    return str(_completion_delivery(session).get("followup_telegram_parse_mode") or "").strip()
+
+
 def _shared_tailnet_host() -> str:
     return shared_tailnet_host(
         tailscale_serve_enabled=(config_env_value("ENABLE_TAILSCALE_SERVE", "0").strip() == "1"),
@@ -167,6 +171,18 @@ def _remote_ssh_target(access: dict[str, Any]) -> tuple[str, str]:
 
 def _remote_wrapper_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+
+
+def _telegram_followup_html(lines: list[str], *, remote_setup_command: str = "") -> str:
+    html_lines: list[str] = []
+    remote_setup_command = remote_setup_command.strip()
+    remote_run_line = f"- Run: {remote_setup_command}" if remote_setup_command else ""
+    for line in lines:
+        if remote_run_line and line == remote_run_line:
+            html_lines.append(f"- Run: <code>{html_escape(remote_setup_command, quote=False)}</code>")
+        else:
+            html_lines.append(html_escape(line, quote=False))
+    return "\n".join(html_lines)
 
 
 def completion_message_bundle(
@@ -216,12 +232,17 @@ def completion_message_bundle(
         notion_followup_line,
         "If you pasted any API keys or bot tokens during setup, scroll up and edit or delete those messages. Curator cannot remove your own messages for you.",
     ]
+    remote_setup_command = ""
     remote_setup_url = _remote_client_setup_url(cfg)
     if remote_setup_url:
         remote_user, remote_host = _remote_ssh_target(access)
         if remote_user and remote_host:
             org_name = config_env_value("ALMANAC_ORG_NAME", "").strip()
             org_arg = f" --org {shlex.quote(org_name)}" if org_name else ""
+            remote_setup_command = (
+                f"curl -fsSL {remote_setup_url} | bash -s -- "
+                f"--host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}"
+            )
             wrapper_org = _remote_wrapper_slug(org_name) or _remote_wrapper_slug(remote_host)
             wrapper_user = _remote_wrapper_slug(remote_user)
             wrapper_name = (
@@ -231,9 +252,10 @@ def completion_message_bundle(
             )
             followup_lines.append("")
             followup_lines.append("Optional remote agent CLI from your own machine:")
-            followup_lines.append(
-                f"- Run: `curl -fsSL {remote_setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`"
-            )
+            if str(bot_platform or "").strip().lower() == "discord":
+                followup_lines.extend(["Run:", "```bash", remote_setup_command, "```"])
+            else:
+                followup_lines.append(f"- Run: {remote_setup_command}")
             followup_lines.append(
                 "- That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
                 "`/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
@@ -256,6 +278,12 @@ def completion_message_bundle(
     password = str(access.get("password") or "")
     platform = str(bot_platform or "").strip().lower()
     ack_line = "After you record it safely, click the button below. I’ll remove the password from this message and then send the rest of your links."
+    followup_telegram_parse_mode = "HTML" if platform == "telegram" else ""
+    followup_text = (
+        _telegram_followup_html(followup_lines, remote_setup_command=remote_setup_command)
+        if followup_telegram_parse_mode
+        else "\n".join(followup_lines)
+    )
 
     telegram_parse_mode = ""
     if platform == "discord":
@@ -280,7 +308,8 @@ def completion_message_bundle(
     return {
         "full_text": "\n".join(full_lines),
         "scrubbed_text": "\n".join(scrubbed_lines),
-        "followup_text": "\n".join(followup_lines),
+        "followup_text": followup_text,
+        "followup_telegram_parse_mode": followup_telegram_parse_mode,
         "telegram_reply_markup": completion_ack_telegram_markup(session_id),
         "telegram_parse_mode": telegram_parse_mode,
         "discord_components": completion_ack_discord_components(session_id),
@@ -377,3 +406,19 @@ def completion_followup_text_for_session(
     if bundle is None:
         return ""
     return str(bundle.get("followup_text") or "").strip()
+
+
+def completion_followup_telegram_parse_mode_for_session(
+    conn,
+    cfg: Config,
+    session: dict[str, Any],
+) -> str:
+    if stored_completion_followup_text(session):
+        return stored_completion_followup_telegram_parse_mode(session)
+    stored = stored_completion_followup_telegram_parse_mode(session)
+    if stored:
+        return stored
+    bundle = completion_bundle_for_session(conn, cfg, session)
+    if bundle is None:
+        return ""
+    return str(bundle.get("followup_telegram_parse_mode") or "").strip()

@@ -280,7 +280,12 @@ happens only after operator approval.
 
 The user-facing provider list is intentionally small and practical:
 
-- **Chutes**: first in the list. Curator asks for the API key, model id, and
+- **Org-provided**: appears first when deploy config includes
+  `ALMANAC_ORG_PROVIDER_ENABLED=1` plus an org provider credential. Users do
+  not provide a model or provider credential; Curator shows the org provider
+  and default model, then explains how to change models later.
+- **Chutes**: first in the list when no org default is configured. Curator asks
+  for the API key, model id, and
   thinking level. Hermes is configured as a custom OpenAI-compatible provider
   using `https://llm.chutes.ai/v1`.
 - **Claude Opus**: uses Claude Code OAuth. Curator gives the user the Claude

@@ -289,6 +289,10 @@ Users normally begin in a Discord or Telegram DM with Curator. The flow:
 
 Provider lanes currently include:
 
+- Org-provided via `ALMANAC_ORG_PROVIDER_ENABLED=1`,
+  `ALMANAC_ORG_PROVIDER_PRESET`, `ALMANAC_ORG_PROVIDER_MODEL_ID`, and
+  `ALMANAC_ORG_PROVIDER_SECRET`. When present, it is the first onboarding
+  option and auto-stages the org credential after the user's bot token.
 - Chutes via OpenAI-compatible endpoint `https://llm.chutes.ai/v1`.
 - Claude Opus via Claude Code OAuth, not Anthropic API keys.
 - OpenAI Codex via Codex sign-in/device flow.

@@ -81,6 +81,12 @@ TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}"
 ALMANAC_MODEL_PRESET_OPUS="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}"
 ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:model-router}"
+ALMANAC_ORG_PROVIDER_ENABLED="${ALMANAC_ORG_PROVIDER_ENABLED:-}"
+ALMANAC_ORG_PROVIDER_PRESET="${ALMANAC_ORG_PROVIDER_PRESET:-}"
+ALMANAC_ORG_PROVIDER_MODEL_ID="${ALMANAC_ORG_PROVIDER_MODEL_ID:-}"
+ALMANAC_ORG_PROVIDER_REASONING_EFFORT="${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}"
+ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
+ALMANAC_ORG_PROVIDER_SECRET="${ALMANAC_ORG_PROVIDER_SECRET:-}"
 ALMANAC_CURATOR_MODEL_PRESET="${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
 ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
 CHUTES_MCP_URL="${CHUTES_MCP_URL:-}"
@@ -1503,6 +1509,12 @@ emit_runtime_config() {
     write_kv ALMANAC_MODEL_PRESET_CODEX "${ALMANAC_MODEL_PRESET_CODEX:-openai:codex}"
     write_kv ALMANAC_MODEL_PRESET_OPUS "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus}"
     write_kv ALMANAC_MODEL_PRESET_CHUTES "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:model-router}"
+    write_kv ALMANAC_ORG_PROVIDER_ENABLED "${ALMANAC_ORG_PROVIDER_ENABLED:-0}"
+    write_kv ALMANAC_ORG_PROVIDER_PRESET "${ALMANAC_ORG_PROVIDER_PRESET:-}"
+    write_kv ALMANAC_ORG_PROVIDER_MODEL_ID "${ALMANAC_ORG_PROVIDER_MODEL_ID:-}"
+    write_kv ALMANAC_ORG_PROVIDER_REASONING_EFFORT "${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}"
+    write_kv ALMANAC_ORG_PROVIDER_SECRET_PROVIDER "${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
+    write_kv ALMANAC_ORG_PROVIDER_SECRET "${ALMANAC_ORG_PROVIDER_SECRET:-}"
     write_kv ALMANAC_CURATOR_MODEL_PRESET "${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
     write_kv ALMANAC_CURATOR_CHANNELS "${ALMANAC_CURATOR_CHANNELS:-tui-only}"
     write_kv ALMANAC_HERMES_AGENT_REF "${ALMANAC_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}"
@@ -2782,6 +2794,190 @@ prepare_operator_upstream_deploy_key_before_sudo() {
   prompt_and_verify_upstream_deploy_key_access
 }
 
+normalize_org_provider_preset() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  value="${value//[ _-]/}"
+  case "$value" in
+    1|chute|chutes|chutesai)
+      printf '%s' "chutes"
+      ;;
+    2|codex|openai|openaicodex)
+      printf '%s' "codex"
+      ;;
+    3|opus|claude|anthropic|claudeopus)
+      printf '%s' "opus"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+normalize_org_reasoning_effort() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  value="${value//[ _-]/}"
+  case "$value" in
+    ""|default|recommended|normal|standard|medium|med)
+      printf '%s' "medium"
+      ;;
+    xhigh|extra|extrahigh|veryhigh|max|maximum)
+      printf '%s' "xhigh"
+      ;;
+    high|low|minimal|none)
+      printf '%s' "$value"
+      ;;
+    off|disabled|disable|no|false)
+      printf '%s' "none"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+org_provider_default_model_id() {
+  local preset="$1"
+  local configured=""
+  case "$preset" in
+    codex)
+      configured="${ALMANAC_MODEL_PRESET_CODEX#*:}"
+      [[ -n "$configured" && "$configured" != "$ALMANAC_MODEL_PRESET_CODEX" && "$configured" != "codex" ]] || configured="gpt-5.4"
+      ;;
+    opus)
+      configured="${ALMANAC_MODEL_PRESET_OPUS#*:}"
+      [[ -n "$configured" && "$configured" != "$ALMANAC_MODEL_PRESET_OPUS" && "$configured" != "claude-opus" && "$configured" != "opus" ]] || configured="claude-opus-4-6"
+      ;;
+    chutes|*)
+      configured="${ALMANAC_MODEL_PRESET_CHUTES#*:}"
+      [[ -n "$configured" && "$configured" != "$ALMANAC_MODEL_PRESET_CHUTES" && "$configured" != "auto-failover" ]] || configured="model-router"
+      ;;
+  esac
+  printf '%s' "$configured"
+}
+
+mint_org_codex_secret() {
+  PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+import json
+import sys
+import time
+
+from almanac_onboarding_provider_auth import poll_codex_device_authorization, start_codex_device_authorization
+
+state = start_codex_device_authorization()
+print("OpenAI Codex sign-in for the organization-provided default:", file=sys.stderr)
+print(f"1. Open {state.get('verification_url')}", file=sys.stderr)
+print(f"2. Enter this code: {state.get('user_code')}", file=sys.stderr)
+print("Waiting for approval...", file=sys.stderr)
+
+while True:
+    time.sleep(max(3, int(state.get("poll_interval") or 5)))
+    token_payload, state = poll_codex_device_authorization(state)
+    if token_payload is not None:
+        print(json.dumps(token_payload, sort_keys=True))
+        raise SystemExit(0)
+    status = str(state.get("status") or "pending")
+    if status in {"error", "expired"}:
+        print(state.get("error_message") or f"Codex authorization ended with {status}.", file=sys.stderr)
+        raise SystemExit(1)
+PY
+}
+
+mint_org_opus_secret() {
+  PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+import sys
+
+from almanac_onboarding_provider_auth import complete_anthropic_pkce_authorization, start_anthropic_pkce_authorization
+
+state = start_anthropic_pkce_authorization()
+print("Claude Code OAuth for the organization-provided default:", file=sys.stderr)
+print("Open this link with the Claude account and plan to share with onboarded lanes:", file=sys.stderr)
+print(state.get("auth_url") or "", file=sys.stderr)
+callback = input("Paste the Claude callback code string here: ").strip()
+secret, _updated_state = complete_anthropic_pkce_authorization(state, callback)
+print(secret)
+PY
+}
+
+collect_org_provider_answers() {
+  local default_enabled="${ALMANAC_ORG_PROVIDER_ENABLED:-1}"
+  local provider_answer="" provider_preset="" default_model="" reasoning_answer=""
+  local existing_secret_provider="${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
+  local reuse_secret="0"
+
+  if [[ ! -t 0 && "${ALMANAC_ORG_PROVIDER_PROMPT_NONINTERACTIVE:-0}" != "1" ]]; then
+    if [[ "${ALMANAC_ORG_PROVIDER_ENABLED:-0}" == "1" && -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; then
+      return 0
+    fi
+    ALMANAC_ORG_PROVIDER_ENABLED="0"
+    return 0
+  fi
+
+  ALMANAC_ORG_PROVIDER_ENABLED="$(ask_yes_no "Provide an organization-wide inference provider/default model for onboarded users" "$default_enabled")"
+  if [[ "$ALMANAC_ORG_PROVIDER_ENABLED" != "1" ]]; then
+    ALMANAC_ORG_PROVIDER_PRESET=""
+    ALMANAC_ORG_PROVIDER_MODEL_ID=""
+    ALMANAC_ORG_PROVIDER_REASONING_EFFORT="medium"
+    ALMANAC_ORG_PROVIDER_SECRET_PROVIDER=""
+    ALMANAC_ORG_PROVIDER_SECRET=""
+    return 0
+  fi
+
+  cat <<EOF
+Organization-wide inference provider:
+  1) chutes - Chutes API key + default model id
+  2) codex  - OpenAI Codex sign-in link + default model id
+  3) opus   - Claude Opus OAuth link + default model id
+EOF
+  while true; do
+    provider_answer="$(ask "Org inference provider" "${ALMANAC_ORG_PROVIDER_PRESET:-chutes}")"
+    if provider_preset="$(normalize_org_provider_preset "$provider_answer")"; then
+      break
+    fi
+    echo "Choose chutes, codex, or opus."
+  done
+
+  ALMANAC_ORG_PROVIDER_PRESET="$provider_preset"
+  default_model="${ALMANAC_ORG_PROVIDER_MODEL_ID:-$(org_provider_default_model_id "$provider_preset")}"
+  ALMANAC_ORG_PROVIDER_MODEL_ID="$(ask "Org default model id" "$default_model")"
+
+  while true; do
+    reasoning_answer="$(ask "Org default reasoning effort (xhigh/high/medium/low/minimal/none)" "${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}")"
+    if ALMANAC_ORG_PROVIDER_REASONING_EFFORT="$(normalize_org_reasoning_effort "$reasoning_answer")"; then
+      break
+    fi
+    echo "Choose xhigh, high, medium, low, minimal, or none."
+  done
+
+  if [[ -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" && "$existing_secret_provider" == "$provider_preset" ]]; then
+    reuse_secret="$(ask_yes_no "Reuse existing org-provided $provider_preset credential" "1")"
+  fi
+  if [[ "$reuse_secret" == "1" ]]; then
+    ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
+    return 0
+  fi
+
+  ALMANAC_ORG_PROVIDER_SECRET=""
+  case "$provider_preset" in
+    chutes)
+      while [[ -z "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; do
+        ALMANAC_ORG_PROVIDER_SECRET="$(ask_secret_keep_default "Chutes API key for org-provided agents (ENTER keeps current)" "")"
+        if [[ -z "$ALMANAC_ORG_PROVIDER_SECRET" ]]; then
+          echo "A Chutes API key is required for org-provided Chutes."
+        fi
+      done
+      ;;
+    codex)
+      ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_codex_secret)"
+      ;;
+    opus)
+      ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_opus_secret)"
+      ;;
+  esac
+  ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
+}
+
 collect_backup_git_answers() {
   local default_owner_repo="" owner_repo="" repo_page="" default_remote=""
 
@@ -2971,6 +3167,7 @@ collect_install_answers() {
   ALMANAC_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ALMANAC_ORG_PRIMARY_PROJECT:-}")")"
   ALMANAC_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
   ALMANAC_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ALMANAC_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
+  collect_org_provider_answers
   ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
   VAULT_DIR="$ALMANAC_PRIV_DIR/vault"
   STATE_DIR="$ALMANAC_PRIV_DIR/state"

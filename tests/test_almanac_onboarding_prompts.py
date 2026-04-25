@@ -805,6 +805,422 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             os.environ.update(old_env)
 
 
+def test_org_provided_model_choice_skips_user_model_and_credential_prompts() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_org_provider_option_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_org_provider_option_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+                "ALMANAC_ORG_PROVIDER_ENABLED": "1",
+                "ALMANAC_ORG_PROVIDER_PRESET": "chutes",
+                "ALMANAC_ORG_PROVIDER_MODEL_ID": "moonshotai/Kimi-K2.6-TEE",
+                "ALMANAC_ORG_PROVIDER_REASONING_EFFORT": "xhigh",
+                "ALMANAC_ORG_PROVIDER_SECRET_PROVIDER": "chutes",
+                "ALMANAC_ORG_PROVIDER_SECRET": "org-chutes-key",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            expect("org-provided" in cfg.model_presets, str(cfg.model_presets))
+            conn = control.connect_db(cfg)
+
+            def send(text: str):
+                return onboarding.process_onboarding_message(
+                    cfg,
+                    onboarding.IncomingMessage(
+                        platform="telegram",
+                        chat_id="123",
+                        sender_id="123",
+                        text=text,
+                        sender_username="sirouk",
+                        sender_display_name="Chris",
+                    ),
+                    validate_bot_token=lambda raw: None,
+                )
+
+            send("/start")
+            send("Practice the system")
+            send("orgtest")
+            model_prompt = send("Joof")[0].text
+            expect("1. Org-provided (Chutes)" in model_prompt, model_prompt)
+            expect("moonshotai/Kimi-K2.6-TEE" in model_prompt, model_prompt)
+            expect(model_prompt.index("Org-provided") < model_prompt.index("Chutes (`chutes`)"), model_prompt)
+
+            approval_prompt = send("org")[0].text
+            expect("Using organization-provided Chutes" in approval_prompt, approval_prompt)
+            expect("moonshotai/Kimi-K2.6-TEE" in approval_prompt, approval_prompt)
+            expect("almanac-agent-hermes setup model" in approval_prompt, approval_prompt)
+            expect("does not switch Chutes" in approval_prompt, approval_prompt)
+            expect("operator for approval" in approval_prompt, approval_prompt)
+
+            session = control.find_active_onboarding_session(conn, platform="telegram", sender_id="123")
+            answers = session.get("answers") or {}
+            expect(str(session.get("state") or "") == "awaiting-operator-approval", str(session))
+            expect(answers["model_preset"] == "org-provided", str(answers))
+            expect(answers["model_id"] == "moonshotai/Kimi-K2.6-TEE", str(answers))
+            expect(answers["reasoning_effort"] == "xhigh", str(answers))
+
+            review = onboarding._operator_review_message(cfg, session)  # noqa: SLF001
+            expect("Model provider: Org-provided (Chutes) (`org-provided`)" in review, review)
+            expect("Model id: moonshotai/Kimi-K2.6-TEE" in review, review)
+            print("PASS test_org_provided_model_choice_skips_user_model_and_credential_prompts")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_org_provided_secret_auto_stages_after_bot_token() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_org_provider_secret_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_org_provider_secret_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        org_codex_secret = json.dumps(
+            {
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "last_refresh": "2026-04-25T00:00:00Z",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+            },
+            sort_keys=True,
+        )
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+                "ALMANAC_ORG_PROVIDER_ENABLED": "1",
+                "ALMANAC_ORG_PROVIDER_PRESET": "codex",
+                "ALMANAC_ORG_PROVIDER_MODEL_ID": "gpt-5.4",
+                "ALMANAC_ORG_PROVIDER_SECRET_PROVIDER": "codex",
+                "ALMANAC_ORG_PROVIDER_SECRET": org_codex_secret,
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="456",
+                sender_id="456",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-bot-token",
+                answers={
+                    "bot_platform": "discord",
+                    "preferred_bot_name": "Jeef",
+                    "unix_user": "orgcodex",
+                    "model_preset": "org-provided",
+                    "model_id": "gpt-5.4",
+                    "reasoning_effort": "medium",
+                },
+            )
+
+            captured: dict[str, object] = {}
+            original_write_secret = onboarding.write_onboarding_secret
+            original_write_bot_token = onboarding.write_onboarding_platform_token_secret
+            original_begin = onboarding.begin_onboarding_provisioning
+            original_start_codex = onboarding.start_codex_device_authorization
+            try:
+                onboarding.write_onboarding_platform_token_secret = lambda cfg, session_id, platform, token: "/tmp/bot-token"
+                onboarding.write_onboarding_secret = lambda cfg, session_id, secret_name, secret: captured.update({"secret_name": secret_name, "secret": secret}) or "/tmp/org-provider.secret"
+                onboarding.begin_onboarding_provisioning = (
+                    lambda conn, cfg, updated, *, provider_secret_path: captured.update(
+                        {
+                            "provider_secret_path": provider_secret_path,
+                            "provider_setup": (updated.get("answers") or {}).get("provider_setup"),
+                        }
+                    )
+                    or {
+                        **updated,
+                        "answers": {
+                            **(updated.get("answers") or {}),
+                            "unix_user": "orgcodex",
+                            "bot_platform": "discord",
+                            "bot_username": "Jeef",
+                        },
+                    }
+                )
+                onboarding.start_codex_device_authorization = lambda: (_ for _ in ()).throw(AssertionError("org-provided should not start user Codex auth"))
+
+                replies = onboarding.process_onboarding_message(
+                    cfg,
+                    onboarding.IncomingMessage(
+                        platform="discord",
+                        chat_id="456",
+                        sender_id="456",
+                        text="bot-token",
+                        sender_username="sirouk",
+                        sender_display_name="Chris",
+                    ),
+                    validate_bot_token=lambda raw: onboarding.BotIdentity(bot_id="999", username="Jeef", display_name="Jeef"),
+                )
+            finally:
+                onboarding.write_onboarding_secret = original_write_secret
+                onboarding.write_onboarding_platform_token_secret = original_write_bot_token
+                onboarding.begin_onboarding_provisioning = original_begin
+                onboarding.start_codex_device_authorization = original_start_codex
+
+            expect(captured["secret_name"] == "openai-codex-oauth", str(captured))
+            expect(captured["secret"] == org_codex_secret, str(captured))
+            provider_setup = captured["provider_setup"]
+            expect(isinstance(provider_setup, dict), str(captured))
+            expect(provider_setup["provider_id"] == "openai-codex", str(provider_setup))
+            expect(provider_setup["model_id"] == "gpt-5.4", str(provider_setup))
+            expect("Good. I have what I need." in replies[0].text, replies[0].text)
+            print("PASS test_org_provided_secret_auto_stages_after_bot_token")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_telegram_chutes_model_prompt_uses_copyable_code_entities() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_telegram_model_copy_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_telegram_model_copy_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            desired_unix_user = "almanac-tg-model"
+            try:
+                pwd.getpwnam(desired_unix_user)
+            except KeyError:
+                pass
+            else:
+                desired_unix_user = "almanac-tg-model-01"
+
+            def send(text: str):
+                return onboarding.process_onboarding_message(
+                    cfg,
+                    onboarding.IncomingMessage(
+                        platform="telegram",
+                        chat_id="123",
+                        sender_id="123",
+                        text=text,
+                        sender_username="sirouk",
+                        sender_display_name="Chris",
+                    ),
+                    validate_bot_token=lambda raw: None,
+                )
+
+            send("/start")
+            send("Build calmly")
+            send(desired_unix_user)
+            send("Joof")
+            model_id_reply = send("1")[0]
+            expect(model_id_reply.telegram_parse_mode == "Markdown", str(model_id_reply))
+            expect("- `model-router`" in model_id_reply.text, model_id_reply.text)
+            expect("- `moonshotai/Kimi-K2.6-TEE`" in model_id_reply.text, model_id_reply.text)
+            expect("- `zai-org/GLM-5.1-TEE`" in model_id_reply.text, model_id_reply.text)
+
+            status_reply = send("/status")[0]
+            expect(status_reply.telegram_parse_mode == "Markdown", str(status_reply))
+            expect("`model-router`" in status_reply.text, status_reply.text)
+
+            invalid_reply = send("two words")[0]
+            expect(invalid_reply.telegram_parse_mode == "Markdown", str(invalid_reply))
+            expect("`moonshotai/Kimi-K2.6-TEE`" in invalid_reply.text, invalid_reply.text)
+
+            session = control.find_active_onboarding_session(conn, platform="telegram", sender_id="123")
+            expect(onboarding.session_prompt_telegram_parse_mode(session) == "Markdown", str(session))
+            print("PASS test_telegram_chutes_model_prompt_uses_copyable_code_entities")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_auto_provision_notice_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_auto_provision_notice_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+                "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="100",
+                sender_id="100",
+                sender_username="sirouk",
+                sender_display_name="Chris",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-provider-credential",
+                answers={
+                    "full_name": "Chris",
+                    "unix_user": "tg-auto-provision",
+                    "bot_platform": "telegram",
+                    "model_preset": "chutes",
+                    "model_id": "model-router",
+                    "reasoning_effort": "medium",
+                },
+                approved_by_actor="@operator",
+            )
+
+            updated = onboarding.begin_onboarding_provisioning(
+                conn,
+                cfg,
+                session,
+                provider_secret_path=str(root / "secret"),
+            )
+            request_id = str(updated.get("linked_request_id") or "")
+            expect(request_id.startswith("req_"), str(updated))
+
+            request_row = conn.execute(
+                "SELECT status FROM bootstrap_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            expect(request_row is not None and request_row["status"] == "approved", str(dict(request_row) if request_row else {}))
+
+            rows = conn.execute(
+                "SELECT message, extra_json FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id"
+            ).fetchall()
+            messages = [str(row["message"] or "") for row in rows]
+            expect(
+                not any("is requesting enrollment" in message and "tap Approve / Deny" in message for message in messages),
+                str(messages),
+            )
+            expect(any("Approved enrollment request" in message for message in messages), str(messages))
+            expect(
+                not any(f"almanac:request:approve:{request_id}" in str(row["extra_json"] or "") for row in rows),
+                str([dict(row) for row in rows]),
+            )
+            print("PASS test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_discord_prompt_and_operator_review_reflect_primary_control_channel()
     test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
@@ -814,7 +1230,11 @@ def main() -> int:
     test_anthropic_opus_prompt_and_browser_auth_flow_require_oauth()
     test_anthropic_callback_exchange_returns_claude_code_credentials_payload()
     test_onboarding_model_picker_is_chutes_first_and_collects_reasoning()
-    print("PASS all 8 onboarding prompt regression tests")
+    test_org_provided_model_choice_skips_user_model_and_credential_prompts()
+    test_org_provided_secret_auto_stages_after_bot_token()
+    test_telegram_chutes_model_prompt_uses_copyable_code_entities()
+    test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval()
+    print("PASS all 12 onboarding prompt regression tests")
     return 0
 
 

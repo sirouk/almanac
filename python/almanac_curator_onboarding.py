@@ -27,7 +27,11 @@ from almanac_control import (
     utc_now_iso,
     upsert_setting,
 )
-from almanac_onboarding_completion import completion_followup_text_for_session, completion_scrubbed_text_for_session
+from almanac_onboarding_completion import (
+    completion_followup_telegram_parse_mode_for_session,
+    completion_followup_text_for_session,
+    completion_scrubbed_text_for_session,
+)
 from almanac_onboarding_flow import (
     BotIdentity,
     IncomingMessage,
@@ -337,6 +341,7 @@ def _handle_user_completion_callback(
             }
         )
         followup_text = completion_followup_text_for_session(conn, cfg, session)
+        followup_parse_mode = completion_followup_telegram_parse_mode_for_session(conn, cfg, session)
         if followup_text and not bool(completion_delivery.get("followup_sent")):
             try:
                 send_text(
@@ -344,6 +349,7 @@ def _handle_user_completion_callback(
                     chat_id=chat_id,
                     text=followup_text,
                     reply_to_message_id=message_id,
+                    parse_mode=followup_parse_mode,
                 )
                 completion_delivery["followup_sent"] = True
             except Exception:
@@ -428,7 +434,16 @@ def _handle_operator_callback(
                 else:
                     visible_reply = result_text
             elif scope == "request" and target_id.startswith("req_"):
-                if action == "approve":
+                row = conn.execute(
+                    "SELECT status FROM bootstrap_requests WHERE request_id = ?",
+                    (target_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"unknown bootstrap request: {target_id}")
+                status = str(row["status"] or "").strip()
+                if status != "pending":
+                    result_text = f"Enrollment request {target_id} is already {status or 'not pending'}."
+                elif action == "approve":
                     approve_request(conn, request_id=target_id, surface="curator-channel", actor=actor, cfg=cfg)
                     result_text = f"Approved {target_id}."
                 elif action == "deny":

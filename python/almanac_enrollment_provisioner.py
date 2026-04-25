@@ -555,6 +555,7 @@ def _send_completion_bundle(conn, cfg: Config, session: dict[str, Any]) -> None:
                     "message_id": message_id,
                     "scrubbed_text": str(completion_bundle.get("scrubbed_text") or ""),
                     "followup_text": str(completion_bundle.get("followup_text") or ""),
+                    "followup_telegram_parse_mode": str(completion_bundle.get("followup_telegram_parse_mode") or ""),
                     "password_scrubbed": False,
                     "followup_sent": False,
                 }

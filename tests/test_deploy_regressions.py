@@ -88,6 +88,12 @@ def render_runtime_config(
     org_primary_project: str = "",
     org_timezone: str = "Etc/UTC",
     org_quiet_hours: str = "",
+    org_provider_enabled: str = "0",
+    org_provider_preset: str = "",
+    org_provider_model_id: str = "",
+    org_provider_reasoning_effort: str = "medium",
+    org_provider_secret_provider: str = "",
+    org_provider_secret: str = "",
 ) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
@@ -127,6 +133,12 @@ ALMANAC_ORG_MISSION={shlex.quote(org_mission)}
 ALMANAC_ORG_PRIMARY_PROJECT={shlex.quote(org_primary_project)}
 ALMANAC_ORG_TIMEZONE={shlex.quote(org_timezone)}
 ALMANAC_ORG_QUIET_HOURS={shlex.quote(org_quiet_hours)}
+ALMANAC_ORG_PROVIDER_ENABLED={shlex.quote(org_provider_enabled)}
+ALMANAC_ORG_PROVIDER_PRESET={shlex.quote(org_provider_preset)}
+ALMANAC_ORG_PROVIDER_MODEL_ID={shlex.quote(org_provider_model_id)}
+ALMANAC_ORG_PROVIDER_REASONING_EFFORT={shlex.quote(org_provider_reasoning_effort)}
+ALMANAC_ORG_PROVIDER_SECRET_PROVIDER={shlex.quote(org_provider_secret_provider)}
+ALMANAC_ORG_PROVIDER_SECRET={shlex.quote(org_provider_secret)}
 ENABLE_NEXTCLOUD=0
 ENABLE_TAILSCALE_SERVE={shlex.quote(enable_tailscale_serve)}
 TAILSCALE_SERVE_PORT={shlex.quote(tailscale_serve_port)}
@@ -569,6 +581,70 @@ def test_emit_runtime_config_persists_org_interview_fields() -> None:
     expect(source_value(config, "ALMANAC_ORG_TIMEZONE") == "America/New_York", config)
     expect(source_value(config, "ALMANAC_ORG_QUIET_HOURS") == "22:00-08:00 weekdays", config)
     print("PASS test_emit_runtime_config_persists_org_interview_fields")
+
+
+def test_emit_runtime_config_persists_org_provider_fields() -> None:
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        org_provider_enabled="1",
+        org_provider_preset="chutes",
+        org_provider_model_id="moonshotai/Kimi-K2.6-TEE",
+        org_provider_reasoning_effort="xhigh",
+        org_provider_secret_provider="chutes",
+        org_provider_secret="cpk_test_secret",
+    )
+    expect(source_value(config, "ALMANAC_ORG_PROVIDER_ENABLED") == "1", config)
+    expect(source_value(config, "ALMANAC_ORG_PROVIDER_PRESET") == "chutes", config)
+    expect(source_value(config, "ALMANAC_ORG_PROVIDER_MODEL_ID") == "moonshotai/Kimi-K2.6-TEE", config)
+    expect(source_value(config, "ALMANAC_ORG_PROVIDER_REASONING_EFFORT") == "xhigh", config)
+    expect(source_value(config, "ALMANAC_ORG_PROVIDER_SECRET_PROVIDER") == "chutes", config)
+    expect(source_value(config, "ALMANAC_ORG_PROVIDER_SECRET") == "cpk_test_secret", config)
+    print("PASS test_emit_runtime_config_persists_org_provider_fields")
+
+
+def test_collect_org_provider_answers_defaults_yes_and_collects_chutes() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "ask() {", "json_field() {")
+    snippet = extract(text, "normalize_org_provider_preset() {", "collect_backup_git_answers() {")
+    script = f"""
+{helpers}
+{snippet}
+BOOTSTRAP_DIR={shlex.quote(str(REPO))}
+ALMANAC_MODEL_PRESET_CODEX="openai:codex"
+ALMANAC_MODEL_PRESET_OPUS="anthropic:claude-opus"
+ALMANAC_MODEL_PRESET_CHUTES="chutes:model-router"
+ALMANAC_ORG_PROVIDER_ENABLED=""
+ALMANAC_ORG_PROVIDER_PRESET=""
+ALMANAC_ORG_PROVIDER_MODEL_ID=""
+ALMANAC_ORG_PROVIDER_REASONING_EFFORT="medium"
+ALMANAC_ORG_PROVIDER_SECRET_PROVIDER=""
+ALMANAC_ORG_PROVIDER_SECRET=""
+ALMANAC_ORG_PROVIDER_PROMPT_NONINTERACTIVE=1
+collect_org_provider_answers
+printf 'enabled=%s\\n' "$ALMANAC_ORG_PROVIDER_ENABLED"
+printf 'preset=%s\\n' "$ALMANAC_ORG_PROVIDER_PRESET"
+printf 'model=%s\\n' "$ALMANAC_ORG_PROVIDER_MODEL_ID"
+printf 'reasoning=%s\\n' "$ALMANAC_ORG_PROVIDER_REASONING_EFFORT"
+printf 'secret_provider=%s\\n' "$ALMANAC_ORG_PROVIDER_SECRET_PROVIDER"
+printf 'secret=%s\\n' "$ALMANAC_ORG_PROVIDER_SECRET"
+"""
+    result = subprocess.run(
+        ["bash", "-lc", script],
+        input="\n\nmoonshotai/Kimi-K2.6-TEE\nxhigh\ncpk_test_secret\n",
+        text=True,
+        capture_output=True,
+        cwd=str(REPO),
+        check=False,
+    )
+    expect(result.returncode == 0, f"collect_org_provider_answers failed: {result.stderr}\n{result.stdout}")
+    expect("enabled=1" in result.stdout, result.stdout)
+    expect("preset=chutes" in result.stdout, result.stdout)
+    expect("model=moonshotai/Kimi-K2.6-TEE" in result.stdout, result.stdout)
+    expect("reasoning=xhigh" in result.stdout, result.stdout)
+    expect("secret_provider=chutes" in result.stdout, result.stdout)
+    expect("secret=cpk_test_secret" in result.stdout, result.stdout)
+    print("PASS test_collect_org_provider_answers_defaults_yes_and_collects_chutes")
 
 
 def test_org_interview_validators_accept_known_good_values() -> None:
@@ -1990,6 +2066,8 @@ def main() -> int:
         test_live_agent_tool_smoke_parses_explicit_selectors,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
+        test_emit_runtime_config_persists_org_provider_fields,
+        test_collect_org_provider_answers_defaults_yes_and_collects_chutes,
         test_org_interview_validators_accept_known_good_values,
         test_org_interview_validators_reject_bad_values,
         test_describe_operator_channel_summary_avoids_tui_only_duplication,

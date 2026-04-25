@@ -342,6 +342,10 @@ class Config:
     upstream_deploy_key_enabled: bool
     upstream_deploy_key_path: str
     upstream_known_hosts_file: str
+    org_provider_enabled: bool
+    org_provider_preset: str
+    org_provider_model_id: str
+    org_provider_reasoning_effort: str
     model_presets: dict[str, str]
     agent_dashboard_backend_port_base: int
     agent_dashboard_proxy_port_base: int
@@ -371,6 +375,36 @@ class Config:
             "opus": env.get("ALMANAC_MODEL_PRESET_OPUS", "anthropic:claude-opus"),
             "chutes": env.get("ALMANAC_MODEL_PRESET_CHUTES", "chutes:model-router"),
         }
+        org_provider_enabled = bool_env("ALMANAC_ORG_PROVIDER_ENABLED", default=False, env=env)
+        org_provider_preset = env.get("ALMANAC_ORG_PROVIDER_PRESET", "").strip().lower()
+        org_provider_secret = env.get("ALMANAC_ORG_PROVIDER_SECRET", "").strip()
+        org_provider_reasoning_effort = env.get("ALMANAC_ORG_PROVIDER_REASONING_EFFORT", "medium").strip().lower() or "medium"
+        org_provider_model_id = env.get("ALMANAC_ORG_PROVIDER_MODEL_ID", "").strip()
+
+        def default_model_id_for_preset(preset: str) -> str:
+            target = str(model_presets.get(preset) or "").strip()
+            configured = target.split(":", 1)[1].strip() if ":" in target else target
+            if preset == "codex" and configured.lower() in {"", "codex", "openai:codex"}:
+                return "gpt-5.4"
+            if preset == "opus" and configured.lower() in {"", "opus", "claude-opus", "anthropic:claude-opus"}:
+                return "claude-opus-4-6"
+            if preset == "chutes" and configured.lower() in {"", "auto-failover"}:
+                return "model-router"
+            return configured
+
+        if org_provider_enabled and org_provider_preset in model_presets and org_provider_secret:
+            org_provider_model_id = org_provider_model_id or default_model_id_for_preset(org_provider_preset)
+            if org_provider_preset == "codex":
+                model_presets["org-provided"] = f"openai-codex:{org_provider_model_id or 'gpt-5.4'}"
+            elif org_provider_preset == "opus":
+                model_presets["org-provided"] = f"anthropic:{org_provider_model_id or 'claude-opus-4-6'}"
+            else:
+                model_presets["org-provided"] = f"chutes:{org_provider_model_id or 'model-router'}"
+        else:
+            org_provider_enabled = False
+            org_provider_preset = ""
+            org_provider_model_id = ""
+            org_provider_reasoning_effort = "medium"
         curator_channels = {
             value.strip().lower()
             for value in env.get("ALMANAC_CURATOR_CHANNELS", "tui-only").split(",")
@@ -457,6 +491,10 @@ class Config:
             ),
             upstream_deploy_key_path=env.get("ALMANAC_UPSTREAM_DEPLOY_KEY_PATH", ""),
             upstream_known_hosts_file=env.get("ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE", ""),
+            org_provider_enabled=org_provider_enabled,
+            org_provider_preset=org_provider_preset,
+            org_provider_model_id=org_provider_model_id,
+            org_provider_reasoning_effort=org_provider_reasoning_effort,
             model_presets=model_presets,
             agent_dashboard_backend_port_base=int(env.get("ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE", "19000")),
             agent_dashboard_proxy_port_base=int(env.get("ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE", "29000")),
@@ -5402,6 +5440,7 @@ def request_bootstrap(
     auto_provision: bool = False,
     requested_model_preset: str = "",
     requested_channels: list[str] | None = None,
+    notify_operator: bool = True,
 ) -> dict[str, Any]:
     tailnet_identity = tailnet_identity or {}
     # When Tailscale Serve forwards the request, the raw source_ip is always
@@ -5600,14 +5639,15 @@ def request_bootstrap(
     )
     if cfg.operator_notify_platform == "telegram" and cfg.curator_telegram_onboarding_enabled:
         message += " or tap Approve / Deny below."
-    queue_notification(
-        conn,
-        target_kind="operator",
-        target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
-        channel_kind=cfg.operator_notify_platform or "tui-only",
-        message=message,
-        extra=operator_telegram_action_extra(cfg, scope="request", target_id=request_id),
-    )
+    if notify_operator:
+        queue_notification(
+            conn,
+            target_kind="operator",
+            target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+            channel_kind=cfg.operator_notify_platform or "tui-only",
+            message=message,
+            extra=operator_telegram_action_extra(cfg, scope="request", target_id=request_id),
+        )
 
     response = {
         "request_id": request_id,

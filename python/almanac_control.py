@@ -6777,10 +6777,42 @@ def _notion_property_people_identities(payload: dict[str, Any], property_name: s
     return candidates
 
 
+def _notion_payload_people_property_names(payload: dict[str, Any]) -> list[str]:
+    """Return every property name on the payload whose value carries a
+    people-shaped assignment (a ``people`` list). Excludes the
+    provenance-only "Changed By" column. Treats column names as opaque so
+    a workspace using DRI / Lead / Reviewer / Approver gets the same
+    ownership-channel protections as a workspace using Owner / Assignee.
+    """
+    properties = (payload or {}).get("properties") if isinstance(payload, dict) else None
+    if not isinstance(properties, dict):
+        return []
+    names: list[str] = []
+    for property_name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        if str(property_name or "").strip() == "Changed By":
+            continue
+        people = prop.get("people")
+        if isinstance(people, list):
+            names.append(str(property_name))
+    return names
+
+
+def _notion_payload_people_identities(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return (identity, source) pairs across every people-shaped column on
+    the payload — the broad form of _notion_property_people_identities that
+    iterates dynamic column names instead of a fixed Owner/Assignee tuple.
+    """
+    candidates: list[tuple[str, str]] = []
+    for property_name in _notion_payload_people_property_names(payload):
+        candidates.extend(_notion_property_people_identities(payload, property_name))
+    return candidates
+
+
 def _notion_principal_identities(payload: dict[str, Any]) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
-    for property_name in ("Owner", "Assignee"):
-        candidates.extend(_notion_property_people_identities(payload, property_name))
+    candidates.extend(_notion_payload_people_identities(payload))
     for field_name in ("created_by", "last_edited_by"):
         raw_value = payload.get(field_name)
         for value in _notion_candidate_values(raw_value):
@@ -6798,9 +6830,12 @@ def _notion_principal_identities(payload: dict[str, Any]) -> list[tuple[str, str
 
 def _notion_owner_identity(payload: dict[str, Any]) -> tuple[str, str]:
     """Return (owner_identity, resolution_source) following the spec precedence:
-    explicit Owner property -> created_by -> ('', 'needs-approval').
+    first people-typed column (in declaration order, opaque to column name)
+    -> created_by -> ('', 'needs-approval'). The first explicit assignment
+    wins regardless of whether the workspace named the column Owner, DRI,
+    Lead, etc. — see _notion_payload_people_identities.
     """
-    for value, source in _notion_property_people_identities(payload, "Owner"):
+    for value, source in _notion_payload_people_identities(payload):
         return value, source
     created_by = payload.get("created_by") or {}
     for value in _notion_candidate_values(created_by):
@@ -6870,11 +6905,12 @@ def _page_access_matches_identity(
         normalized = _normalize_email(value) if "@" in value else value.strip().lower()
         if normalized in match_values:
             return True, source
-    # Do not let local broker history override an explicit people owner/assignee
-    # assignment that points at somebody else.
-    for property_name in ("Owner", "Assignee"):
-        if _notion_property_people_identities(payload, property_name):
-            return False, "ownership-mismatch"
+    # Do not let local broker history override an explicit people-typed
+    # assignment that points at somebody else. Treat every people-typed
+    # column as an ownership channel, not just Owner/Assignee — a workspace
+    # may have named the column DRI, Lead, Reviewer, Approver, etc.
+    if _notion_payload_people_identities(payload):
+        return False, "ownership-mismatch"
     last_edited_by = payload.get("last_edited_by") if isinstance(payload, dict) else {}
     # Local broker history is only meant to bridge over non-human integration
     # edits so a page does not fall out of scope immediately after Almanac
@@ -7436,6 +7472,35 @@ def _walk_notion_parents_to_root(
         elif parent_type == "database_id":
             next_id = extract_notion_space_id(str(parent.get("database_id") or "").strip())
             next_kind = "database"
+        elif parent_type == "data_source_id":
+            # Notion 2026 API exposes a row's parent as data_source_id when
+            # the row was created via the data-source endpoint. The data
+            # source itself sits under a database; resolve the database id
+            # by retrieving the data source and following its parent.
+            data_source_id = extract_notion_space_id(str(parent.get("data_source_id") or "").strip())
+            if not data_source_id:
+                return None
+            try:
+                ds_payload = retrieve_notion_data_source(
+                    data_source_id=data_source_id,
+                    token=settings["token"],
+                    api_version=settings["api_version"],
+                    **notion_kwargs,
+                )
+            except Exception:
+                return None
+            ds_parent = ds_payload.get("parent") if isinstance(ds_payload, dict) else None
+            if not isinstance(ds_parent, dict):
+                return None
+            ds_parent_type = str(ds_parent.get("type") or "").strip()
+            if ds_parent_type == "database_id":
+                next_id = extract_notion_space_id(str(ds_parent.get("database_id") or "").strip())
+                next_kind = "database"
+            elif ds_parent_type == "page_id":
+                next_id = extract_notion_space_id(str(ds_parent.get("page_id") or "").strip())
+                next_kind = "page"
+            else:
+                return None
         else:
             return None
         if not next_id:
@@ -9244,7 +9309,7 @@ def _build_notion_stub(
             "Shared Notion digest:",
             "- Current SSOT shape: page-scoped. Almanac cannot build a structured database digest from this target yet.",
             "- Current rail map: use ssot.read for live scoped page lookups and ssot.write for permitted brokered updates on in-scope user work.",
-            "- Best fit for repeated brokered writes is still an owner/assignee-backed database row when one exists. Plain child pages can be more fragile under strict scope checks.",
+            "- Best fit for repeated brokered writes is still a database row whose people-typed column(s) name the verified caller (any column name — Owner, Assignee, DRI, Lead, Reviewer, ...). Plain child pages can be more fragile under strict scope checks.",
             "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing or the rail disappearing.",
         ]
         if verification_status != "verified":
@@ -10445,16 +10510,14 @@ def _apply_ssot_write(
                     owner_identity=parent_owner_identity,
                     owner_source="page-parent-ownership-mismatch",
                 )
-            explicit_owner_fields = (
-                _notion_property_people_identities(payload, "Owner")
-                or _notion_property_people_identities(payload, "Assignee")
-            )
-            if explicit_owner_fields:
+            explicit_owner_channels = _notion_payload_people_property_names(payload)
+            if explicit_owner_channels:
                 approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
                 if not approved and not bypass_scope:
                     payload_owner_identity, payload_owner_source = _notion_owner_identity(payload)
+                    channels = ", ".join(explicit_owner_channels) or "people-typed columns"
                     reason = (
-                        "page child insert assigns Owner or Assignee outside the verified caller; "
+                        f"page child insert assigns {channels} outside the verified caller; "
                         "user approval is required"
                     )
                     raise SSOTApprovalRequired(
@@ -10714,10 +10777,7 @@ def preflight_ssot_write(
                     conn=conn,
                     allow_prior_agent_touch=True,
                 )
-                explicit_owner_fields = (
-                    _notion_property_people_identities(payload, "Owner")
-                    or _notion_property_people_identities(payload, "Assignee")
-                )
+                explicit_owner_channels = _notion_payload_people_property_names(payload)
                 if not parent_approved:
                     return {
                         **base,
@@ -10728,9 +10788,10 @@ def preflight_ssot_write(
                         "recommended_action": "ask-user-approval",
                         "reason": "target parent page is outside the verified caller's immediate write lane",
                     }
-                if explicit_owner_fields:
+                if explicit_owner_channels:
                     approved, owner_source = _insert_payload_targets_verified_identity(payload, identity)
                     if not approved:
+                        channels = ", ".join(explicit_owner_channels) or "people-typed columns"
                         return {
                             **base,
                             "would_queue": True,
@@ -10739,7 +10800,7 @@ def preflight_ssot_write(
                             "parent_access_source": parent_access_source,
                             "owner_source": "page-child-owner-scope",
                             "recommended_action": "ask-user-approval",
-                            "reason": "page child insert assigns Owner or Assignee outside the verified caller",
+                            "reason": f"page child insert assigns {channels} outside the verified caller",
                         }
                     return {
                         **base,
@@ -11343,9 +11404,10 @@ def build_managed_memory_payload(
         "or status views in a shared Notion database or data source.\n"
         "Freshness depends on whether public webhook ingress is wired:\n"
         "- with ALMANAC_NOTION_WEBHOOK_PUBLIC_URL set and the webhook registered\n"
-        "  in Notion, edits propagate to the index in minutes;\n"
-        "- without it, the index only refreshes on the 4-hour Curator sweep,\n"
-        "  so notion.search may be up to four hours behind live Notion edits.\n"
+        "  in Notion, edits propagate to the index within seconds;\n"
+        "- without it, the index only refreshes on the 1-hour Curator full sweep\n"
+        "  (configurable via ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS),\n"
+        "  so notion.search may be up to that interval behind live Notion edits.\n"
         "Fetch/query are live Notion API reads and never lag.\n"
         "This is a shared read rail, not the governed ssot.write approval path.\n"
         "Budget guidance: one search, then zero-to-three fetches before summarizing.\n"

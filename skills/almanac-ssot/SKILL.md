@@ -41,8 +41,11 @@ Decision tree:
 - For long new pages, create the page first with a compact title/intro/source
   block, then append the body in small chunks of roughly 10-20 Notion blocks.
   Do not keep retrying one huge insert if it times out.
-- For `insert`, assign `Owner` or `Assignee` to the verified caller in the
-  payload or the broker rejects the write before it lands.
+- For `insert`, assign the verified caller in any people-typed column the
+  database exposes (`Owner`, `Assignee`, `DRI`, `Lead`, `Reviewer`, or
+  whatever the workspace named it). Property names are treated as opaque
+  ownership channels: assigning a different user in any of them triggers
+  the broker's approval requirement.
 - Set `read_after:true` only when the user asks you to verify the live state
   immediately after an applied write.
 - If `ssot.write` returns `final_state:"applied"` or `applied:true`, tell the
@@ -59,10 +62,12 @@ Decision tree:
 - allow read / insert / update
 - do not archive
 - do not delete
-- shared reads are filtered to the current user's owned / assigned records
+- shared reads are filtered to records where the verified caller appears in
+  any people-typed column on the database (regardless of column name)
 - shared writes require a verified Notion identity before they can apply
 - when the shared database exposes `Changed By`, Almanac stamps the verified
-  human there automatically on every shared write
+  human there automatically on every shared write (`Changed By` is provenance
+  only, never an ownership channel)
 - Curator's self-serve verification claims live in a shared workspace database,
   so treat the claim metadata there as operator-visible workspace scaffolding,
   not as a secret channel
@@ -72,7 +77,9 @@ Decision tree:
 
 ## Ownership Resolution
 
-1. explicit `Owner` or `Assignee`
+1. the first people-typed column on the page that lists a principal — opaque
+   to the column name (`Owner`, `Assignee`, `DRI`, `Lead`, `Reviewer`, etc.);
+   the `Changed By` provenance column is excluded
 2. `created_by`
 3. for plain pages, the user's own last human edit or this same agent's prior brokered write history
 4. otherwise ask for approval
@@ -91,7 +98,7 @@ Decision tree:
   fanout cycle
 - prefer webhook-driven refreshes when the operator has configured and verified the public Notion webhook
 - with the verified webhook live, treat shared Notion changes as minutes-scale after Almanac batches and de-duplicates the event
-- without the verified webhook, tolerate delayed updates by using the 4-hour Curator full-sweep fallback
+- without the verified webhook, tolerate delayed updates by using the 1-hour Curator full-sweep fallback (configurable via ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS)
 - expect Almanac to batch and de-duplicate webhook-driven refresh work
 - treat managed-memory SSOT summaries as ambient orientation and `ssot.read`
   as the depth rail when the user needs specifics
@@ -106,8 +113,9 @@ Decision tree:
   personal Notion workspace and that MCP lane is live, hand that work to
   `almanac-notion-mcp`; do not present that lane as the default shared Almanac
   workspace-search path
-- when the task is structured shared organizational state with filters such as
-  owner, status, due date, or assignee, prefer scoped structured reads over
+- when the task maps to a structured column on the database (any people-typed
+  ownership column by any name, status/state/priority, due/last-edited dates,
+  or any other filterable field), prefer scoped structured reads over
   page-by-page exploration
 - if an answer needs both the shared SSOT and the user's own Notion MCP lane,
   name both sources instead of collapsing them together silently

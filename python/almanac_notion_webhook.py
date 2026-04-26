@@ -32,6 +32,12 @@ _BATCHER_KICK_DEBOUNCE_SECONDS = 1.0
 
 def _spawn_batcher_now() -> None:
     try:
+        # `start_new_session=True` puts the child in its own session+process
+        # group, so it survives webhook restarts and doesn't hold onto the
+        # parent's ttys. systemctl --no-block returns immediately, so the
+        # child exits quickly; Python's subprocess auto-reaper handles the
+        # zombie via the discarded Popen object's destructor. close_fds
+        # prevents the child from inheriting webhook fds.
         subprocess.Popen(
             [
                 "systemctl",
@@ -44,6 +50,7 @@ def _spawn_batcher_now() -> None:
             stderr=subprocess.DEVNULL,
             env=os.environ.copy(),
             close_fds=True,
+            start_new_session=True,
         )
     except Exception:
         # Timer fallback still fires every minute; never let kick failures

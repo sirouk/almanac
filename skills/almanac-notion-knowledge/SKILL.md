@@ -71,8 +71,8 @@ live Notion reads.
 ## Staleness Model
 
 - `search` is qmd-backed and near-real-time only when public Notion webhook ingress is configured and verified
-- with the verified webhook live, edits normally reach indexed search on the minutes-scale after Almanac batches and de-duplicates the event
-- without the verified webhook, `search` relies on the 4-hour Curator full sweep and may be up to four hours behind live Notion edits
+- with the verified webhook live, edits normally reach indexed search within seconds after Almanac batches and de-duplicates the event (sub-second debounced kick + 1 minute timer fallback)
+- without the verified webhook, `search` relies on the 1-hour Curator full sweep (configurable via ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS) and may be up to that interval behind live Notion edits
 - `fetch` and `query` are live Notion reads
 - if a user says they just changed a page, prefer `fetch`
 - if a user asks about newly attached files, prefer `fetch` first for live attachment refs; indexed search covers extractable Notion-hosted PDFs and text-like attachments after the webhook or sweep reindexes the page

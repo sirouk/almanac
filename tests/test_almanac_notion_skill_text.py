@@ -59,7 +59,8 @@ def test_notion_knowledge_skill_teaches_shared_three_tool_split() -> None:
     expect("attachment" in body.lower(), body)
     expect("search is qmd-backed" in body, body)
     expect("verified webhook" in body, body)
-    expect("4-hour Curator full sweep" in body, body)
+    expect("Curator full sweep" in body, body)
+    expect("ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS" in body, body)
     expect("fetch` and `query` are live Notion reads" in body, body)
     expect("--rerank" in body, body)
     expect("## Human CLI Fallback" in body, body)
@@ -98,7 +99,14 @@ def test_ssot_skill_marks_broker_as_non_workspace_search_lane() -> None:
     expect('"operation":"insert"' in body, body)
     expect('"operation":"append"' in body, body)
     expect('"operation":"update"' in body, body)
-    expect("Owner` or `Assignee`" in body, body)
+    # Conceptual: any people-typed column is an ownership channel; Owner/Assignee
+    # are listed as examples but never the only ones the validator checks.
+    expect("any people-typed column" in body, body)
+    expect("`Owner`" in body and "`Assignee`" in body and "`DRI`" in body, body)
+    # The "opaque ownership channels" phrasing may wrap across lines in the
+    # markdown source — collapse whitespace before asserting.
+    body_collapsed = " ".join(body.split())
+    expect("opaque ownership channels" in body_collapsed, body)
     expect('"read_after":true' not in body, body)
     expect("read_after:true" in body, body)
     expect("final_state" in body, body)
@@ -107,10 +115,12 @@ def test_ssot_skill_marks_broker_as_non_workspace_search_lane() -> None:
     expect("python3 - <<'PY'" in body, body)
     expect("not as a broad" in body and "documentation search tool" in body, body)
     expect("default shared Almanac" in body and "workspace-search path" in body, body)
-    expect("owner, status, due date, or assignee" in body, body)
+    body_collapsed = " ".join(body.split())
+    expect("any people-typed ownership column by any name" in body_collapsed, body)
     expect("name both sources" in body, body)
     expect("verified webhook" in body, body)
-    expect("4-hour Curator full-sweep fallback" in body, body)
+    expect("Curator full-sweep fallback" in body, body)
+    expect("ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS" in body, body)
     print("PASS test_ssot_skill_marks_broker_as_non_workspace_search_lane")
 
 

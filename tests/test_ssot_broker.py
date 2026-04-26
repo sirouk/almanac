@@ -109,7 +109,9 @@ def test_connect_db_enables_sqlite_wal_and_busy_timeout() -> None:
             busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
             synchronous = conn.execute("PRAGMA synchronous").fetchone()[0]
             expect(str(journal_mode).lower() == "wal", f"expected WAL journal mode, got {journal_mode!r}")
-            expect(int(busy_timeout) == 5000, f"expected busy_timeout=5000, got {busy_timeout!r}")
+            # busy_timeout was bumped from 5000 to 15000 ms to absorb full-sweep
+            # write windows under the new sub-second webhook -> batcher kick.
+            expect(int(busy_timeout) == 15000, f"expected busy_timeout=15000, got {busy_timeout!r}")
             expect(int(synchronous) == 1, f"expected synchronous=NORMAL (1), got {synchronous!r}")
             print("PASS test_connect_db_enables_sqlite_wal_and_busy_timeout")
         finally:

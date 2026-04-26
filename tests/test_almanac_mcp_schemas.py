@@ -197,7 +197,11 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "ssot.status": ("Prefer over ssot.pending when the pending_id is already known",),
         "notion.search": ("prefer notion.search-and-fetch when you also need the body",),
         "notion.fetch": ("Prefer over notion.search when the user already gave a URL or id",),
-        "notion.query": ("Prefer for owner/status/due/assignee filters",),
+        "notion.query": (
+            "Prefer when the user's question maps to structured columns",
+            "people-typed ownership channels by any name",
+            "rather than a fixed keyword list",
+        ),
         "notion.search-and-fetch": ("One-shot replacement", "search_limit", "fetch_limit"),
         "vault.search": ("Prefer vault.search-and-fetch when you need the body",),
         "vault.fetch": ("return plain structured text", "Prefer over raw qmd.get"),

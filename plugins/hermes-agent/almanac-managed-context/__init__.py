@@ -393,7 +393,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         (
             "notion.query — live structured query. The plugin injects token automatically; omit token. "
             "Optional target_id (database or data source id/URL) — omit for the configured shared SSOT database. "
-            "query follows the Notion API (filter/sorts/page_size). Prefer for owner/status/due/assignee filters."
+            "query follows the Notion API (filter/sorts/page_size). Prefer when the user's question maps to a structured column on the database (any people-typed column for ownership, status/state/priority, due/last-edited dates, etc.) — pick the column the user's framing implies rather than a fixed keyword list."
         ),
     ),
 )

@@ -780,6 +780,15 @@ def test_incremental_reindex_removes_trashed_page_docs() -> None:
             os.environ.update(old_env)
 
 
+def _people_property(name: str, *user_ids: str) -> dict[str, object]:
+    return {
+        name: {
+            "type": "people",
+            "people": [{"object": "user", "id": uid} for uid in user_ids],
+        }
+    }
+
+
 def test_today_plate_discovers_child_task_databases_and_filters_owner_items() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_today_plate_discovery_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -792,8 +801,9 @@ def test_today_plate_discovers_child_task_databases_and_filters_owner_items() ->
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
             root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-            task_db_id = "11111111-1111-1111-1111-111111111111"
+            owner_db_id = "11111111-1111-1111-1111-111111111111"
             unrelated_db_id = "22222222-2222-2222-2222-222222222222"
+            dri_db_id = "33333333-3333-3333-3333-333333333333"
             user_notion_id = "user-notion-id-xxxx"
             insert_agent(mod, conn, agent_id="agent-jeef", unix_user="sirouk", display_name="Jeef")
             agent_row = conn.execute(
@@ -809,65 +819,109 @@ def test_today_plate_discovers_child_task_databases_and_filters_owner_items() ->
 
             mod.list_notion_block_children_all = lambda **kwargs: (
                 [
-                    {"type": "child_database", "id": task_db_id},
+                    {"type": "child_database", "id": owner_db_id},
                     {"type": "child_database", "id": unrelated_db_id},
+                    {"type": "child_database", "id": dri_db_id},
                 ]
                 if extract_id(kwargs.get("block_id", "")) == root_page_id
                 else []
             )
 
             def fake_load_schema(*, target_id, settings, notion_kwargs):
-                if extract_id(target_id) == task_db_id:
-                    db_payload = {
-                        "id": task_db_id,
-                        "url": "https://www.notion.so/tasks",
-                        "title": [{"plain_text": "Tasks for the team"}],
-                    }
-                    ds_payload = {
-                        "properties": {
-                            "Name": {"type": "title"},
-                            "Owner": {"type": "people"},
-                        }
-                    }
-                    return db_payload, ds_payload
+                if extract_id(target_id) == owner_db_id:
+                    return (
+                        {
+                            "id": owner_db_id,
+                            "url": "https://www.notion.so/tasks",
+                            "title": [{"plain_text": "Tasks for the team"}],
+                        },
+                        {"properties": {"Name": {"type": "title"}, "Owner": {"type": "people"}}},
+                    )
                 if extract_id(target_id) == unrelated_db_id:
-                    db_payload = {
-                        "id": unrelated_db_id,
-                        "url": "https://www.notion.so/notes",
-                        "title": [{"plain_text": "Reference notes"}],
-                    }
-                    ds_payload = {"properties": {"Name": {"type": "title"}}}
-                    return db_payload, ds_payload
+                    return (
+                        {
+                            "id": unrelated_db_id,
+                            "url": "https://www.notion.so/notes",
+                            "title": [{"plain_text": "Reference notes"}],
+                        },
+                        {"properties": {"Name": {"type": "title"}}},
+                    )
+                if extract_id(target_id) == dri_db_id:
+                    return (
+                        {
+                            "id": dri_db_id,
+                            "url": "https://www.notion.so/initiatives",
+                            "title": [{"plain_text": "Initiatives"}],
+                        },
+                        {
+                            "properties": {
+                                "Name": {"type": "title"},
+                                # Conceptually identical to Owner but with a workspace-specific label
+                                "DRI": {"type": "people"},
+                                "Reviewer": {"type": "people"},
+                                # Provenance, must be ignored as an ownership channel
+                                "Changed By": {"type": "people"},
+                            }
+                        },
+                    )
                 raise RuntimeError(f"unexpected target {target_id}")
 
             mod._load_notion_collection_schema = fake_load_schema
 
+            queried_ids: list[str] = []
+            queried_filters: list[object] = []
+
             def fake_query(*, database_id, token, api_version, payload, **kwargs):
-                if extract_id(database_id) != task_db_id:
-                    raise AssertionError("only the task DB should be queried")
-                expected_filter = {
-                    "property": "Owner",
-                    "people": {"contains": user_notion_id},
-                }
-                assert (payload or {}).get("filter") == expected_filter, payload
-                return {
-                    "result": {
-                        "results": [
-                            {
-                                "id": "row-1",
-                                "url": "https://www.notion.so/row-1",
-                                "last_edited_time": "2026-04-25T19:00:00+00:00",
-                                "properties": _title_property("Wire up daily plate"),
-                            },
-                            {
-                                "id": "row-2",
-                                "url": "https://www.notion.so/row-2",
-                                "last_edited_time": "2026-04-24T08:00:00+00:00",
-                                "properties": _title_property("Brief Joof on rollout"),
-                            },
-                        ]
+                normalized = extract_id(database_id)
+                queried_ids.append(normalized)
+                queried_filters.append((payload or {}).get("filter"))
+                if normalized == owner_db_id:
+                    return {
+                        "result": {
+                            "results": [
+                                {
+                                    "id": "row-owner-1",
+                                    "url": "https://www.notion.so/row-owner-1",
+                                    "last_edited_time": "2026-04-25T19:00:00+00:00",
+                                    "properties": {
+                                        **_title_property("Wire up daily plate"),
+                                        **_people_property("Owner", user_notion_id),
+                                    },
+                                },
+                                {
+                                    "id": "row-owner-2",
+                                    "url": "https://www.notion.so/row-owner-2",
+                                    "last_edited_time": "2026-04-24T08:00:00+00:00",
+                                    "properties": {
+                                        **_title_property("Brief Joof on rollout"),
+                                        **_people_property("Owner", user_notion_id),
+                                    },
+                                },
+                            ]
+                        }
                     }
-                }
+                if normalized == dri_db_id:
+                    return {
+                        "result": {
+                            "results": [
+                                {
+                                    "id": "row-dri-1",
+                                    "url": "https://www.notion.so/row-dri-1",
+                                    "last_edited_time": "2026-04-25T20:00:00+00:00",
+                                    "properties": {
+                                        **_title_property("North-star initiative"),
+                                        # The user appears under the workspace-specific
+                                        # "DRI" channel and "Reviewer", and "Changed By"
+                                        # is provenance only and must NOT count as a role.
+                                        **_people_property("DRI", user_notion_id),
+                                        **_people_property("Reviewer", user_notion_id, "other-user"),
+                                        **_people_property("Changed By", user_notion_id),
+                                    },
+                                },
+                            ]
+                        }
+                    }
+                raise AssertionError(f"unexpected DB queried: {database_id}")
 
             mod.query_notion_collection_all = fake_query
 
@@ -887,16 +941,52 @@ def test_today_plate_discovers_child_task_databases_and_filters_owner_items() ->
                 identity=identity,
                 notion_stub_cache=stub_cache,
             )
-            expect("Discovered 1 task database(s)" in plate_text, plate_text)
+
+            # Both ownership-channel databases discovered; the no-people-property one ignored.
             expect("Tasks for the team" in plate_text, plate_text)
+            expect("Initiatives" in plate_text, plate_text)
             expect("Reference notes" not in plate_text, plate_text)
-            expect("Wire up daily plate" in plate_text, plate_text)
-            expect("Brief Joof on rollout" in plate_text, plate_text)
+            # Headline language is conceptual ("ownership surfaces"), not keyword-matched.
+            expect("Ownership surfaces discovered" in plate_text, plate_text)
+            expect("opaque ownership channels" in plate_text, plate_text)
+            # Per-DB ownership-channel labels are surfaced verbatim, including
+            # the workspace-specific "DRI" / "Reviewer" pair.
+            expect("Tasks for the team (Owner)" in plate_text, plate_text)
+            expect("Initiatives (DRI, Reviewer)" in plate_text, plate_text)
+            # Per-row role tag uses the workspace's actual property names —
+            # "Owner" for the Owner DB row, "DRI, Reviewer" for the Initiatives row,
+            # and the provenance "Changed By" must NOT show up as a role.
+            expect("Wire up daily plate — as Owner" in plate_text, plate_text)
+            expect("North-star initiative — as DRI, Reviewer" in plate_text, plate_text)
+            expect("Changed By" not in plate_text, plate_text)
             expect("Verification: confirmed" in plate_text, plate_text)
-            expect("[Tasks for the team]" in plate_text, plate_text)
-            expect("Per-database breakdown" in plate_text, plate_text)
+            expect("Per-surface breakdown" in plate_text, plate_text)
+
+            # Notion was queried with an OR filter spanning every people-typed
+            # property on the data source — verbatim names, no special-casing of
+            # Owner/Assignee.
+            owner_filter = queried_filters[queried_ids.index(owner_db_id)]
+            dri_filter = queried_filters[queried_ids.index(dri_db_id)]
+            expect(
+                owner_filter == {"property": "Owner", "people": {"contains": user_notion_id}},
+                str(owner_filter),
+            )
+            expect(
+                dri_filter
+                == {
+                    "or": [
+                        {"property": "DRI", "people": {"contains": user_notion_id}},
+                        {"property": "Reviewer", "people": {"contains": user_notion_id}},
+                    ]
+                },
+                str(dri_filter),
+            )
+
             stored_ids = stub_cache.get(f"today-plate-ids:agent-jeef")
-            expect(set(stored_ids or []) == {"row-1", "row-2"}, str(stored_ids))
+            expect(
+                set(stored_ids or []) == {"row-owner-1", "row-owner-2", "row-dri-1"},
+                str(stored_ids),
+            )
             print("PASS test_today_plate_discovers_child_task_databases_and_filters_owner_items")
         finally:
             os.environ.clear()
@@ -943,8 +1033,11 @@ def test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message() -> 
                 identity={"verification_status": "verified", "notion_user_id": "user-x"},
                 notion_stub_cache={},
             )
-            expect("no child database with Owner/Assignee people properties was discovered" in plate, plate)
+            expect("No structured ownership surfaces discovered" in plate, plate)
+            expect("people-typed property" in plate, plate)
             expect("knowledge.search-and-fetch" in plate, plate)
+            # And critically: do NOT bake in keyword instructions.
+            expect("'task'" not in plate and "'todo'" not in plate, plate)
             print("PASS test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message")
         finally:
             os.environ.clear()

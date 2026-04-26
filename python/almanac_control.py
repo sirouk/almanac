@@ -7477,14 +7477,26 @@ def _load_notion_collection_schema(
 
 
 def _configured_people_properties(schema_payload: dict[str, Any]) -> list[str]:
+    """Return every people-typed property name in the schema, in the order
+    Notion declared them. The "Changed By" provenance column is excluded —
+    it tracks writers, not ownership/assignment, and is handled separately
+    by ``_configured_changed_by_property``. Property names are treated as
+    opaque ownership channels (Owner, Assignee, Reviewer, DRI, Lead, ...);
+    callers should use these names for filtering and surfacing without
+    hard-coding any specific label.
+    """
     properties = schema_payload.get("properties")
     if not isinstance(properties, dict):
         return []
     names: list[str] = []
-    for property_name in ("Owner", "Assignee"):
-        prop = properties.get(property_name)
-        if isinstance(prop, dict) and str(prop.get("type") or "").strip() == "people":
-            names.append(property_name)
+    for property_name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("type") or "").strip() != "people":
+            continue
+        if str(property_name or "").strip() == "Changed By":
+            continue
+        names.append(str(property_name))
     return names
 
 
@@ -7546,7 +7558,8 @@ def _identity_people_filter(database_payload: dict[str, Any], identity: dict[str
     property_names = _configured_people_properties(database_payload)
     if not property_names:
         raise PermissionError(
-            "shared Notion SSOT must expose Owner and/or Assignee people properties for user-scoped reads"
+            "shared Notion SSOT must expose at least one people-typed property "
+            "(any name — Owner, Assignee, Reviewer, DRI, Lead, etc.) so user-scoped reads can filter by membership"
         )
     filters = [
         {"property": property_name, "people": {"contains": notion_user_id}}
@@ -7659,6 +7672,61 @@ def _notion_named_property_text(payload: dict[str, Any], preferred_names: tuple[
     return ""
 
 
+def _people_property_iter(payload: dict[str, Any]):
+    """Yield (property_name, prop_dict) for every people-typed property on
+    the payload, excluding the provenance-only 'Changed By' column.
+    Property names are treated as opaque ownership channels — the caller
+    decides the semantics, not this helper.
+    """
+    properties = payload.get("properties")
+    if not isinstance(properties, dict):
+        return
+    for property_name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("type") or "").strip() != "people":
+            continue
+        if str(property_name or "").strip() == "Changed By":
+            continue
+        yield str(property_name), prop
+
+
+def _notion_all_people_names(payload: dict[str, Any]) -> list[str]:
+    """Return distinct people names across every ownership-channel property
+    on the payload. Used when surfacing 'who is involved' without privileging
+    any specific label like Owner/Assignee.
+    """
+    seen: set[str] = set()
+    names: list[str] = []
+    for property_name, _prop in _people_property_iter(payload):
+        for name in _notion_people_names(payload, property_name):
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(name)
+    return names
+
+
+def _notion_user_role_properties(payload: dict[str, Any], notion_user_id: str) -> list[str]:
+    """Return the list of people-typed property names that contain
+    ``notion_user_id`` on this payload — i.e. every ownership channel the
+    user appears in for this row. Empty when the user is unset.
+    """
+    if not notion_user_id:
+        return []
+    matched: list[str] = []
+    for property_name, prop in _people_property_iter(payload):
+        people = prop.get("people")
+        if not isinstance(people, list):
+            continue
+        for person in people:
+            if isinstance(person, dict) and str(person.get("id") or "").strip() == notion_user_id:
+                matched.append(property_name)
+                break
+    return matched
+
+
 def _notion_people_names(payload: dict[str, Any], property_name: str) -> list[str]:
     properties = payload.get("properties")
     prop = properties.get(property_name) if isinstance(properties, dict) else None
@@ -7737,7 +7805,7 @@ def _notion_team_summary(items: list[dict[str, Any]]) -> list[str]:
     due_soon = 0
     recent_updates = 0
     for item in items:
-        owners = _notion_people_names(item, "Owner") or _notion_people_names(item, "Assignee")
+        owners = _notion_all_people_names(item)
         owner_label = owners[0] if owners else "Unassigned"
         owner_counts[owner_label] = owner_counts.get(owner_label, 0) + 1
         if _notion_due_within_days(_notion_date_property(item), 7):
@@ -8360,7 +8428,7 @@ def _index_notion_page_payload(
         )
     page_title = _notion_title_from_page(page_payload) or str(page_payload.get("url") or page_id)
     page_url = normalize_notion_space_url(str(page_payload.get("url") or "").strip())
-    owners = _notion_people_names(page_payload, "Owner") or _notion_people_names(page_payload, "Assignee")
+    owners = _notion_all_people_names(page_payload)
     last_edited_time = str(page_payload.get("last_edited_time") or "").strip()
     markdown_payload = retrieve_notion_page_markdown(
         page_id=page_id,
@@ -9260,6 +9328,11 @@ def _today_plate_work_line(item: dict[str, Any], *, is_new: bool = False) -> str
     priority = _notion_named_property_text(item, ("Priority", "Urgency", "Importance"))
     due_rank, due_label = _notion_due_bucket(_notion_date_property(item))
     parts = [title]
+    roles = item.get("__almanac_user_roles__")
+    if isinstance(roles, list):
+        cleaned = [str(role).strip() for role in roles if str(role or "").strip()]
+        if cleaned:
+            parts.append(f"as {', '.join(cleaned)}")
     if status:
         parts.append(f"status {status}")
     if priority:
@@ -9289,10 +9362,11 @@ def _discover_child_task_databases(
     max_databases: int = 8,
     max_depth: int = 2,
 ) -> list[dict[str, Any]]:
-    """Walk the SSOT root page tree and return child databases that expose at
-    least one ``Owner`` or ``Assignee`` people-typed property in their data
-    source. Cached in ``notion_stub_cache`` so repeated calls within a single
-    managed-memory build don't re-issue the same Notion API requests.
+    """Walk the SSOT root page tree and return child databases that expose
+    at least one people-typed property — any label the workspace uses
+    (Owner, Assignee, Reviewer, DRI, Lead, ...) qualifies as an ownership
+    channel. Cached in ``notion_stub_cache`` so repeated calls within a
+    single managed-memory build don't re-issue the same Notion API requests.
     """
     normalized_root = extract_notion_space_id(str(root_page_id or ""))
     if not normalized_root:
@@ -9373,9 +9447,11 @@ def _query_owner_items_in_database(
     notion_kwargs: dict[str, Any],
     page_size: int = 50,
 ) -> list[dict[str, Any]]:
-    """Return rows in ``database_id`` where any people-typed Owner/Assignee
-    property contains ``notion_user_id``. Empty list when the user is not
-    verified or the database has no people-typed work properties.
+    """Return rows in ``database_id`` where any people-typed property on
+    the row contains ``notion_user_id``. Property names are treated as
+    opaque ownership channels — Owner, Assignee, Reviewer, DRI, Lead, or
+    any other label the workspace uses. Empty list when the user is not
+    verified or the database has no people-typed properties.
     """
     if not notion_user_id:
         return []
@@ -9443,28 +9519,33 @@ def _build_today_plate(
             )
         except Exception:
             task_dbs = []
-        lines.append("- Real-time awareness path: Notion webhook -> ssot batcher (sub-second nudge + 1 min timer) -> qmd reindex; new pages and database rows under the SSOT root reach the index within seconds of the change.")
+        lines.append("- Real-time awareness path: Notion changes propagate via webhook -> ssot batcher (sub-second nudge + 1 min timer) -> qmd reindex; new pages, database rows, edits, and deletions under the SSOT root reach the qmd notion-shared index within seconds.")
         if not task_dbs:
-            lines.append("- Structured work plate is built from page-scoped SSOT via the live qmd notion-shared index; no child database with Owner/Assignee people properties was discovered under the root.")
+            lines.append("- No structured ownership surfaces discovered: no child database under the SSOT root exposes a people-typed property the current user could appear in.")
             if pending_lines:
                 lines.extend(pending_lines)
-            lines.append("- When the user asks about tasks, owned work, or recent SSOT activity: query knowledge.search-and-fetch (or notion-shared via qmd) for terms like 'task', 'todo', 'assigned', and the user's name; verify via ssot.read or notion.query before acting on shared state.")
-            lines.append("- For brokered shared-page updates use ssot.write; ssot.read returns the latest live page contents.")
+            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: read the qmd notion-shared collection via knowledge.search-and-fetch using the user's own framing — names, projects, intent — and reason from what comes back rather than matching specific keywords. Reach for ssot.read or notion.query for live verification before changing shared state.")
+            lines.append("- For brokered writes to the SSOT page or its descendants use ssot.write; ssot.read returns the latest live page contents.")
             return "\n".join(lines)
         db_titles = [str(db.get("title") or "").strip() for db in task_dbs]
+        per_db_channels: list[str] = []
+        for db in task_dbs[:6]:
+            channels = ", ".join(db.get("people_properties") or []) or "—"
+            per_db_channels.append(f"{db.get('title') or 'Unnamed'} ({channels})")
         lines.append(
-            f"- Discovered {len(task_dbs)} task database(s) under the SSOT root: {', '.join(db_titles[:6])}"
-            + ("..." if len(task_dbs) > 6 else "")
-            + "."
+            f"- Ownership surfaces discovered under the SSOT root ({len(task_dbs)} database(s)): "
+            + "; ".join(per_db_channels[:6])
+            + ("; ..." if len(task_dbs) > 6 else "")
+            + ". Property names are treated as opaque ownership channels — any people-typed column qualifies."
         )
         if identity is None or verification_status != "verified" or not notion_user_id:
             if claimed_email:
-                lines.append(f"- Verification: pending for {claimed_email}; per-user owner/assignee filtering across these databases requires verified Notion identity.")
+                lines.append(f"- Verification: pending for {claimed_email}; per-user filtering across these databases needs Notion identity verification.")
             else:
-                lines.append("- Verification: not started; per-user owner/assignee filtering across these databases requires verified Notion identity.")
+                lines.append("- Verification: not started; per-user filtering across these databases needs Notion identity verification.")
             if pending_lines:
                 lines.extend(pending_lines)
-            lines.append("- Use notion.query against each discovered task database (filter Owner/Assignee = the verified user) once verification completes.")
+            lines.append("- Use notion.query against each discovered surface (filter the people-typed column for the verified user) once verification completes; until then, fall back to knowledge.search-and-fetch on the notion-shared collection for ambient context.")
             return "\n".join(lines)
         aggregated_items: list[dict[str, Any]] = []
         per_db_counts: list[tuple[str, str, int]] = []
@@ -9480,6 +9561,10 @@ def _build_today_plate(
             )
             for item in items:
                 item.setdefault("__almanac_source_db_title__", db_title)
+                item.setdefault(
+                    "__almanac_user_roles__",
+                    _notion_user_role_properties(item, notion_user_id),
+                )
             aggregated_items.extend(items)
             per_db_counts.append((db_title, db_url, len(items)))
         current_item_ids = [_today_plate_item_id(item) for item in aggregated_items if _today_plate_item_id(item)]
@@ -9494,7 +9579,7 @@ def _build_today_plate(
         recently_updated = sum(1 for item in aggregated_items if _notion_recently_updated(item, days=7))
         lines.append(f"- Verification: confirmed for {verified_email or 'the current user'}.")
         lines.append(
-            f"- Scoped work across {len(per_db_counts)} task database(s): {len(aggregated_items)} owned/assigned record(s). "
+            f"- Scoped involvement across {len(per_db_counts)} surface(s): {len(aggregated_items)} record(s) where the user appears in any people-typed column. "
             f"Due today/overdue: {due_now}. Due within 7 days: {due_soon}. Updated in 7 days: {recently_updated}. "
             f"Pending write approvals: {pending_count}."
         )
@@ -9502,21 +9587,21 @@ def _build_today_plate(
             lines.extend(pending_lines)
         non_empty = [(t, u, c) for (t, u, c) in per_db_counts if c > 0]
         if non_empty:
-            lines.append("- Per-database breakdown:")
+            lines.append("- Per-surface breakdown:")
             for title, _url, count in non_empty:
-                lines.append(f"  - {title}: {count} owned/assigned")
+                lines.append(f"  - {title}: {count} record(s) involving the user")
         if aggregated_items:
-            lines.append("- Top work candidates:")
+            lines.append("- Top involvement candidates (sorted by due / recency, role tags show which ownership channel matched):")
             for item in sorted(aggregated_items, key=_today_plate_sort_key)[:5]:
                 item_id = _today_plate_item_id(item)
                 is_new = bool(has_previous_plate and item_id and item_id not in previous_ids)
                 db_title = str(item.get("__almanac_source_db_title__") or "").strip()
                 prefix = f"[{db_title}] " if db_title else ""
                 lines.append(f"  - {prefix}{_today_plate_work_line(item, is_new=is_new)}")
-            lines.append("- Agent posture: orient from this plate, then use notion.query/ssot.read for live details before changing shared state.")
+            lines.append("- Agent posture: when the user asks about their work, focus, recent activity, or what's on their plate, lead with this structured snapshot. For broader or unstructured questions, supplement with knowledge.search-and-fetch on the notion-shared collection using the user's own framing. Verify with notion.query / ssot.read before acting on shared state.")
         else:
-            lines.append("- Work candidates: none currently scoped to this user across discovered task databases.")
-            lines.append("- Agent posture: ask the user what to prioritize, or use knowledge.search-and-fetch when they expect newer Notion content.")
+            lines.append("- No record currently lists the verified user in any people-typed column across the discovered surfaces.")
+            lines.append("- Agent posture: ask the user what they want to focus on, or use knowledge.search-and-fetch on the notion-shared collection to find content that mentions or references them — the index reflects Notion within seconds.")
         return "\n".join(lines)
 
     verification_status = str((identity or {}).get("verification_status") or "").strip()
@@ -9524,12 +9609,12 @@ def _build_today_plate(
     claimed_email = _normalize_email(str((identity or {}).get("claimed_notion_email") or ""))
     if identity is None or verification_status != "verified":
         if claimed_email:
-            lines.append(f"- Verification: pending for {claimed_email}; scoped owner/assignee work cannot be trusted until verified.")
+            lines.append(f"- Verification: pending for {claimed_email}; per-user filtering on this database's people-typed columns cannot be trusted until verified.")
         else:
-            lines.append("- Verification: not started; scoped owner/assignee work is unavailable until the user verifies their Notion identity.")
+            lines.append("- Verification: not started; per-user filtering on this database's people-typed columns is unavailable until the user verifies their Notion identity.")
         if pending_lines:
             lines.extend(pending_lines)
-        lines.append("- Next action: help the user verify Notion or ask for the specific project/task they want to focus on.")
+        lines.append("- Next action: help the user verify Notion or ask what they want to focus on, then reach for knowledge.search-and-fetch on the notion-shared collection if they need ambient context in the meantime.")
         return "\n".join(lines)
 
     notion_kwargs: dict[str, Any] = {}
@@ -9568,7 +9653,7 @@ def _build_today_plate(
     recently_updated = sum(1 for item in user_items if _notion_recently_updated(item, days=7))
     lines.append(f"- Verification: confirmed for {verified_email or 'the current user'}.")
     lines.append(
-        f"- Scoped work: {len(user_items)} owned/assigned record(s). Due today/overdue: {due_now}. Due within 7 days: {due_soon}. Updated in 7 days: {recently_updated}. Pending write approvals: {pending_count}."
+        f"- Scoped involvement: {len(user_items)} record(s) where the user appears in any people-typed column. Due today/overdue: {due_now}. Due within 7 days: {due_soon}. Updated in 7 days: {recently_updated}. Pending write approvals: {pending_count}."
     )
     if pending_lines:
         lines.extend(pending_lines)
@@ -11116,7 +11201,7 @@ def build_managed_memory_payload(
       [managed:notion-ref]     how to search/fetch/query shared Notion knowledge
       [managed:vault-topology] compact summary of subscribed vaults + briefs
       [managed:notion-stub]    Curator-produced shared Notion digest + verification state
-      [managed:today-plate]    compact user-scoped owned/assigned work snapshot
+      [managed:today-plate]    compact user-scoped involvement snapshot across any people-typed column on discovered task surfaces
     """
     agent = conn.execute(
         "SELECT agent_id, role, unix_user, display_name, hermes_home FROM agents WHERE agent_id = ?",
@@ -11196,7 +11281,7 @@ def build_managed_memory_payload(
         "- Use almanac-first-contact for Almanac setup or diagnostic checks.\n"
         "- All vaults remain retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions only shape managed-memory awareness and Curator push behavior.\n"
         "- Curator publishes a shared Notion digest into managed memory so the agent has ambient SSOT orientation without live cross-user reads.\n"
-        "- Curator publishes [managed:today-plate] as the compact owned/assigned work snapshot for the current user; use it for orientation, then verify live details before changing shared state.\n"
+        "- Curator publishes [managed:today-plate] as the user's compact involvement snapshot — every record across discovered task surfaces where the user appears in any people-typed column, regardless of what the workspace named that column. Use it as the structured starting point when the user asks about their work, focus, recent involvement, or what's on their plate; then verify live details before changing shared state.\n"
         "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local managed-memory stubs and recent events.\n"
         "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
         "- The almanac-managed-context plugin also injects [local:model-runtime] from Hermes's actual current-turn model argument, so model self-identification uses the live runtime instead of stale session prompts, saved memory, onboarding records, or config defaults after setup or model switches.\n"

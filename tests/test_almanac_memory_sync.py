@@ -951,7 +951,10 @@ def test_managed_notion_stub_stays_scoped_to_verified_user() -> None:
             plate = mod._build_today_plate(conn, agent_row=agent_row, identity=identity, notion_stub_cache=notion_stub_cache)
             expect("Today plate:" in plate, plate)
             expect("Verification: confirmed for chris@example.com" in plate, plate)
-            expect("Scoped work: 1 owned/assigned record(s)." in plate, plate)
+            expect(
+                "Scoped involvement: 1 record(s) where the user appears in any people-typed column." in plate,
+                plate,
+            )
             expect("Due today/overdue: 1" in plate, plate)
             expect("Own Task" in plate, plate)
             expect("status In Progress" in plate, plate)

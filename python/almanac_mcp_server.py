@@ -80,7 +80,7 @@ TOOLS = {
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
-    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering. Use for scoped shared-database reads (org rows owned/assigned to the caller). For broad knowledge lookup by phrase, call notion.search or notion.search-and-fetch instead.",
+    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering — returns rows where the caller appears in any of the database's people-typed columns (regardless of column name). Use this when the question is about the caller's structured involvement in the shared SSOT database. For broad knowledge lookup by phrase or for content under page-scoped SSOTs and child databases, call notion.search-and-fetch instead.",
     "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided. Use when the user asks about their queue in general; for a specific pending_id, call ssot.status instead.",
     "ssot.preflight": "Check whether a Notion SSOT write would apply, queue for user approval, or fail before attempting the write. Use quietly when writeability is uncertain.",
     "ssot.write": "Apply a Notion SSOT write (insert/update/append) through the central broker. Out-of-scope writes queue for user approval; applied page inserts promote page_url/url as a receipt. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status.",

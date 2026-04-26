@@ -780,6 +780,177 @@ def test_incremental_reindex_removes_trashed_page_docs() -> None:
             os.environ.update(old_env)
 
 
+def test_today_plate_discovers_child_task_databases_and_filters_owner_items() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_today_plate_discovery_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            task_db_id = "11111111-1111-1111-1111-111111111111"
+            unrelated_db_id = "22222222-2222-2222-2222-222222222222"
+            user_notion_id = "user-notion-id-xxxx"
+            insert_agent(mod, conn, agent_id="agent-jeef", unix_user="sirouk", display_name="Jeef")
+            agent_row = conn.execute(
+                "SELECT * FROM agents WHERE agent_id = ?",
+                ("agent-jeef",),
+            ).fetchone()
+            identity = {
+                "verification_status": "verified",
+                "notion_user_email": "chris@example.com",
+                "notion_user_id": user_notion_id,
+                "claimed_notion_email": "chris@example.com",
+            }
+
+            mod.list_notion_block_children_all = lambda **kwargs: (
+                [
+                    {"type": "child_database", "id": task_db_id},
+                    {"type": "child_database", "id": unrelated_db_id},
+                ]
+                if extract_id(kwargs.get("block_id", "")) == root_page_id
+                else []
+            )
+
+            def fake_load_schema(*, target_id, settings, notion_kwargs):
+                if extract_id(target_id) == task_db_id:
+                    db_payload = {
+                        "id": task_db_id,
+                        "url": "https://www.notion.so/tasks",
+                        "title": [{"plain_text": "Tasks for the team"}],
+                    }
+                    ds_payload = {
+                        "properties": {
+                            "Name": {"type": "title"},
+                            "Owner": {"type": "people"},
+                        }
+                    }
+                    return db_payload, ds_payload
+                if extract_id(target_id) == unrelated_db_id:
+                    db_payload = {
+                        "id": unrelated_db_id,
+                        "url": "https://www.notion.so/notes",
+                        "title": [{"plain_text": "Reference notes"}],
+                    }
+                    ds_payload = {"properties": {"Name": {"type": "title"}}}
+                    return db_payload, ds_payload
+                raise RuntimeError(f"unexpected target {target_id}")
+
+            mod._load_notion_collection_schema = fake_load_schema
+
+            def fake_query(*, database_id, token, api_version, payload, **kwargs):
+                if extract_id(database_id) != task_db_id:
+                    raise AssertionError("only the task DB should be queried")
+                expected_filter = {
+                    "property": "Owner",
+                    "people": {"contains": user_notion_id},
+                }
+                assert (payload or {}).get("filter") == expected_filter, payload
+                return {
+                    "result": {
+                        "results": [
+                            {
+                                "id": "row-1",
+                                "url": "https://www.notion.so/row-1",
+                                "last_edited_time": "2026-04-25T19:00:00+00:00",
+                                "properties": _title_property("Wire up daily plate"),
+                            },
+                            {
+                                "id": "row-2",
+                                "url": "https://www.notion.so/row-2",
+                                "last_edited_time": "2026-04-24T08:00:00+00:00",
+                                "properties": _title_property("Brief Joof on rollout"),
+                            },
+                        ]
+                    }
+                }
+
+            mod.query_notion_collection_all = fake_query
+
+            settings = {
+                "token": "secret_test",
+                "api_version": "2026-03-11",
+                "space_id": root_page_id,
+                "space_kind": "page",
+                "space_url": f"https://www.notion.so/{root_page_id.replace('-', '')}",
+            }
+            mod._require_shared_notion_settings = lambda: settings
+
+            stub_cache: dict[str, object] = {}
+            plate_text = mod._build_today_plate(
+                conn,
+                agent_row=agent_row,
+                identity=identity,
+                notion_stub_cache=stub_cache,
+            )
+            expect("Discovered 1 task database(s)" in plate_text, plate_text)
+            expect("Tasks for the team" in plate_text, plate_text)
+            expect("Reference notes" not in plate_text, plate_text)
+            expect("Wire up daily plate" in plate_text, plate_text)
+            expect("Brief Joof on rollout" in plate_text, plate_text)
+            expect("Verification: confirmed" in plate_text, plate_text)
+            expect("[Tasks for the team]" in plate_text, plate_text)
+            expect("Per-database breakdown" in plate_text, plate_text)
+            stored_ids = stub_cache.get(f"today-plate-ids:agent-jeef")
+            expect(set(stored_ids or []) == {"row-1", "row-2"}, str(stored_ids))
+            print("PASS test_today_plate_discovers_child_task_databases_and_filters_owner_items")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def extract_id(target: str) -> str:
+    text = str(target or "").strip()
+    if "-" in text and len(text) >= 32:
+        return text
+    if len(text) == 32:
+        return f"{text[0:8]}-{text[8:12]}-{text[12:16]}-{text[16:20]}-{text[20:]}"
+    return text
+
+
+def test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_today_plate_no_task_db_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            insert_agent(mod, conn, agent_id="agent-jeef", unix_user="sirouk")
+            agent_row = conn.execute(
+                "SELECT * FROM agents WHERE agent_id = ?",
+                ("agent-jeef",),
+            ).fetchone()
+            mod._require_shared_notion_settings = lambda: {
+                "token": "secret_test",
+                "api_version": "2026-03-11",
+                "space_id": root_page_id,
+                "space_kind": "page",
+                "space_url": f"https://www.notion.so/{root_page_id.replace('-', '')}",
+            }
+            mod.list_notion_block_children_all = lambda **kwargs: []
+            plate = mod._build_today_plate(
+                conn,
+                agent_row=agent_row,
+                identity={"verification_status": "verified", "notion_user_id": "user-x"},
+                notion_stub_cache={},
+            )
+            expect("no child database with Owner/Assignee people properties was discovered" in plate, plate)
+            expect("knowledge.search-and-fetch" in plate, plate)
+            print("PASS test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs()
     test_notion_search_fetch_and_query_use_shared_index_and_live_reads()
@@ -787,7 +958,9 @@ def main() -> int:
     test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload()
     test_incremental_reindex_parent_walks_brand_new_page_under_known_root()
     test_incremental_reindex_removes_trashed_page_docs()
-    print("PASS all 6 shared notion knowledge regression tests")
+    test_today_plate_discovers_child_task_databases_and_filters_owner_items()
+    test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message()
+    print("PASS all 8 shared notion knowledge regression tests")
     return 0
 
 

@@ -9280,6 +9280,129 @@ def _today_plate_sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
     return (due_rank, recently_updated_rank, due_label, title)
 
 
+def _discover_child_task_databases(
+    *,
+    settings: dict[str, str],
+    root_page_id: str,
+    notion_kwargs: dict[str, Any],
+    notion_stub_cache: dict[str, Any] | None = None,
+    max_databases: int = 8,
+    max_depth: int = 2,
+) -> list[dict[str, Any]]:
+    """Walk the SSOT root page tree and return child databases that expose at
+    least one ``Owner`` or ``Assignee`` people-typed property in their data
+    source. Cached in ``notion_stub_cache`` so repeated calls within a single
+    managed-memory build don't re-issue the same Notion API requests.
+    """
+    normalized_root = extract_notion_space_id(str(root_page_id or ""))
+    if not normalized_root:
+        return []
+    cache_key = f"task-databases:{normalized_root}"
+    if isinstance(notion_stub_cache, dict) and cache_key in notion_stub_cache:
+        return list(notion_stub_cache[cache_key])
+    discovered: list[dict[str, Any]] = []
+    visited_pages: set[str] = set()
+    visited_databases: set[str] = set()
+
+    def _walk(block_id: str, depth: int) -> None:
+        if len(discovered) >= max_databases or depth > max_depth:
+            return
+        normalized_block = extract_notion_space_id(block_id)
+        if not normalized_block or normalized_block in visited_pages:
+            return
+        visited_pages.add(normalized_block)
+        try:
+            children = list_notion_block_children_all(
+                block_id=normalized_block,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                **notion_kwargs,
+            )
+        except Exception:
+            return
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            child_type = str(child.get("type") or "").strip()
+            child_id = extract_notion_space_id(str(child.get("id") or "").strip())
+            if not child_id:
+                continue
+            if child_type == "child_database":
+                if child_id in visited_databases or len(discovered) >= max_databases:
+                    continue
+                visited_databases.add(child_id)
+                try:
+                    db_payload, ds_payload = _load_notion_collection_schema(
+                        target_id=child_id,
+                        settings=settings,
+                        notion_kwargs=notion_kwargs,
+                    )
+                except Exception:
+                    continue
+                if bool(db_payload.get("in_trash")) or bool(db_payload.get("archived")):
+                    continue
+                schema = ds_payload or db_payload
+                if not _configured_people_properties(schema):
+                    continue
+                title = _notion_database_title(db_payload) or "Unnamed database"
+                url = normalize_notion_space_url(str(db_payload.get("url") or "").strip())
+                discovered.append(
+                    {
+                        "id": child_id,
+                        "title": title,
+                        "url": url,
+                        "schema": schema,
+                        "people_properties": _configured_people_properties(schema),
+                    }
+                )
+            elif child_type == "child_page" and depth < max_depth:
+                _walk(child_id, depth + 1)
+
+    _walk(normalized_root, 0)
+    if isinstance(notion_stub_cache, dict):
+        notion_stub_cache[cache_key] = list(discovered)
+    return discovered
+
+
+def _query_owner_items_in_database(
+    *,
+    settings: dict[str, str],
+    database_id: str,
+    schema_payload: dict[str, Any],
+    notion_user_id: str,
+    notion_kwargs: dict[str, Any],
+    page_size: int = 50,
+) -> list[dict[str, Any]]:
+    """Return rows in ``database_id`` where any people-typed Owner/Assignee
+    property contains ``notion_user_id``. Empty list when the user is not
+    verified or the database has no people-typed work properties.
+    """
+    if not notion_user_id:
+        return []
+    people_props = _configured_people_properties(schema_payload)
+    if not people_props:
+        return []
+    filter_clauses = [
+        {"property": prop_name, "people": {"contains": notion_user_id}}
+        for prop_name in people_props
+    ]
+    notion_filter: dict[str, Any] = (
+        filter_clauses[0] if len(filter_clauses) == 1 else {"or": filter_clauses}
+    )
+    try:
+        result = query_notion_collection_all(
+            database_id=database_id,
+            token=settings["token"],
+            api_version=settings["api_version"],
+            payload={"filter": notion_filter, "page_size": page_size},
+            **notion_kwargs,
+        )
+    except Exception:
+        return []
+    rows = ((result or {}).get("result") or {}).get("results") or []
+    return [row for row in rows if isinstance(row, dict)]
+
+
 def _build_today_plate(
     conn: sqlite3.Connection,
     *,
@@ -9306,12 +9429,94 @@ def _build_today_plate(
         return "\n".join(lines)
 
     if settings["space_kind"] != "database":
-        lines.append("- Structured work plate is built from page-scoped SSOT via the live qmd notion-shared index, not a single owner/assignee database.")
-        lines.append("- Real-time awareness path: Notion webhook -> ssot batcher (1 min) -> qmd reindex; child pages and database rows under the SSOT root reach the index within ~1 minute of the change.")
+        verification_status = str((identity or {}).get("verification_status") or "").strip()
+        verified_email = str((identity or {}).get("notion_user_email") or (identity or {}).get("claimed_notion_email") or "").strip()
+        claimed_email = _normalize_email(str((identity or {}).get("claimed_notion_email") or ""))
+        notion_user_id = str((identity or {}).get("notion_user_id") or "").strip()
+        notion_kwargs: dict[str, Any] = {}
+        try:
+            task_dbs = _discover_child_task_databases(
+                settings=settings,
+                root_page_id=str(settings.get("space_id") or ""),
+                notion_kwargs=notion_kwargs,
+                notion_stub_cache=notion_stub_cache,
+            )
+        except Exception:
+            task_dbs = []
+        lines.append("- Real-time awareness path: Notion webhook -> ssot batcher (sub-second nudge + 1 min timer) -> qmd reindex; new pages and database rows under the SSOT root reach the index within seconds of the change.")
+        if not task_dbs:
+            lines.append("- Structured work plate is built from page-scoped SSOT via the live qmd notion-shared index; no child database with Owner/Assignee people properties was discovered under the root.")
+            if pending_lines:
+                lines.extend(pending_lines)
+            lines.append("- When the user asks about tasks, owned work, or recent SSOT activity: query knowledge.search-and-fetch (or notion-shared via qmd) for terms like 'task', 'todo', 'assigned', and the user's name; verify via ssot.read or notion.query before acting on shared state.")
+            lines.append("- For brokered shared-page updates use ssot.write; ssot.read returns the latest live page contents.")
+            return "\n".join(lines)
+        db_titles = [str(db.get("title") or "").strip() for db in task_dbs]
+        lines.append(
+            f"- Discovered {len(task_dbs)} task database(s) under the SSOT root: {', '.join(db_titles[:6])}"
+            + ("..." if len(task_dbs) > 6 else "")
+            + "."
+        )
+        if identity is None or verification_status != "verified" or not notion_user_id:
+            if claimed_email:
+                lines.append(f"- Verification: pending for {claimed_email}; per-user owner/assignee filtering across these databases requires verified Notion identity.")
+            else:
+                lines.append("- Verification: not started; per-user owner/assignee filtering across these databases requires verified Notion identity.")
+            if pending_lines:
+                lines.extend(pending_lines)
+            lines.append("- Use notion.query against each discovered task database (filter Owner/Assignee = the verified user) once verification completes.")
+            return "\n".join(lines)
+        aggregated_items: list[dict[str, Any]] = []
+        per_db_counts: list[tuple[str, str, int]] = []
+        for db in task_dbs[:6]:
+            db_title = str(db.get("title") or "").strip() or "Unnamed database"
+            db_url = str(db.get("url") or "").strip()
+            items = _query_owner_items_in_database(
+                settings=settings,
+                database_id=str(db.get("id") or ""),
+                schema_payload=db.get("schema") or {},
+                notion_user_id=notion_user_id,
+                notion_kwargs=notion_kwargs,
+            )
+            for item in items:
+                item.setdefault("__almanac_source_db_title__", db_title)
+            aggregated_items.extend(items)
+            per_db_counts.append((db_title, db_url, len(items)))
+        current_item_ids = [_today_plate_item_id(item) for item in aggregated_items if _today_plate_item_id(item)]
+        if isinstance(notion_stub_cache, dict):
+            notion_stub_cache[f"today-plate-ids:{agent_id}"] = current_item_ids
+        previous_ids: set[str] = set()
+        has_previous_plate = previous_item_ids is not None
+        if isinstance(previous_item_ids, (list, tuple, set)):
+            previous_ids = {str(part or "").strip() for part in previous_item_ids if str(part or "").strip()}
+        due_now = sum(1 for item in aggregated_items if _notion_due_bucket(_notion_date_property(item))[0] in {0, 1})
+        due_soon = sum(1 for item in aggregated_items if _notion_due_bucket(_notion_date_property(item))[0] <= 2)
+        recently_updated = sum(1 for item in aggregated_items if _notion_recently_updated(item, days=7))
+        lines.append(f"- Verification: confirmed for {verified_email or 'the current user'}.")
+        lines.append(
+            f"- Scoped work across {len(per_db_counts)} task database(s): {len(aggregated_items)} owned/assigned record(s). "
+            f"Due today/overdue: {due_now}. Due within 7 days: {due_soon}. Updated in 7 days: {recently_updated}. "
+            f"Pending write approvals: {pending_count}."
+        )
         if pending_lines:
             lines.extend(pending_lines)
-        lines.append("- When the user asks about tasks, owned work, recent SSOT activity, or what's on their plate: query knowledge.search-and-fetch (or notion-shared via qmd) for terms like 'task', 'todo', 'assigned', and the user's name; verify via ssot.read or notion.query before acting on shared state.")
-        lines.append("- For brokered shared-page updates use ssot.write; ssot.read returns the latest live page contents.")
+        non_empty = [(t, u, c) for (t, u, c) in per_db_counts if c > 0]
+        if non_empty:
+            lines.append("- Per-database breakdown:")
+            for title, _url, count in non_empty:
+                lines.append(f"  - {title}: {count} owned/assigned")
+        if aggregated_items:
+            lines.append("- Top work candidates:")
+            for item in sorted(aggregated_items, key=_today_plate_sort_key)[:5]:
+                item_id = _today_plate_item_id(item)
+                is_new = bool(has_previous_plate and item_id and item_id not in previous_ids)
+                db_title = str(item.get("__almanac_source_db_title__") or "").strip()
+                prefix = f"[{db_title}] " if db_title else ""
+                lines.append(f"  - {prefix}{_today_plate_work_line(item, is_new=is_new)}")
+            lines.append("- Agent posture: orient from this plate, then use notion.query/ssot.read for live details before changing shared state.")
+        else:
+            lines.append("- Work candidates: none currently scoped to this user across discovered task databases.")
+            lines.append("- Agent posture: ask the user what to prioritize, or use knowledge.search-and-fetch when they expect newer Notion content.")
         return "\n".join(lines)
 
     verification_status = str((identity or {}).get("verification_status") or "").strip()

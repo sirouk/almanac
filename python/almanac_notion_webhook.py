@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -20,6 +23,45 @@ from almanac_control import (
     utc_now,
     utc_now_iso,
 )
+
+
+_BATCHER_KICK_LOCK = threading.Lock()
+_BATCHER_KICK_LAST = 0.0
+_BATCHER_KICK_MIN_INTERVAL_SECONDS = 0.5
+
+
+def _kick_ssot_batcher() -> None:
+    """Fire-and-forget nudge to the SSOT batcher so events are processed
+    sub-second instead of waiting for the 1-minute timer tick. Throttled
+    to one kick per ``_BATCHER_KICK_MIN_INTERVAL_SECONDS`` to absorb bursts
+    of correlated webhook events.
+    """
+    import time
+
+    global _BATCHER_KICK_LAST
+    with _BATCHER_KICK_LOCK:
+        now = time.monotonic()
+        if now - _BATCHER_KICK_LAST < _BATCHER_KICK_MIN_INTERVAL_SECONDS:
+            return
+        _BATCHER_KICK_LAST = now
+    try:
+        subprocess.Popen(
+            [
+                "systemctl",
+                "--user",
+                "--no-block",
+                "start",
+                "almanac-ssot-batcher.service",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=os.environ.copy(),
+            close_fds=True,
+        )
+    except Exception:
+        # Timer fallback still fires every minute; never let kick failures
+        # surface to Notion.
+        pass
 
 NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY = "notion_webhook_verification_token"
 NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY = "notion_webhook_verification_token_armed_until"
@@ -292,6 +334,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Notion expects webhook deliveries to acknowledge with HTTP 200.
         self._send_json({"status": "accepted", "event_id": event_id}, status=HTTPStatus.OK)
+        _kick_ssot_batcher()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return

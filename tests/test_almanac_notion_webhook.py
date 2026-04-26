@@ -226,12 +226,45 @@ def test_signed_verification_token_post_is_accepted() -> None:
             os.environ.update(old_env)
 
 
+def test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl() -> None:
+    mod = load_module(WEBHOOK_PY, "almanac_notion_webhook_kick_test")
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append(list(args))
+
+    real_popen = mod.subprocess.Popen
+    real_last = mod._BATCHER_KICK_LAST
+    real_interval = mod._BATCHER_KICK_MIN_INTERVAL_SECONDS
+    mod.subprocess.Popen = FakePopen
+    mod._BATCHER_KICK_LAST = 0.0
+    mod._BATCHER_KICK_MIN_INTERVAL_SECONDS = 5.0
+    try:
+        mod._kick_ssot_batcher()
+        mod._kick_ssot_batcher()
+        mod._kick_ssot_batcher()
+    finally:
+        mod.subprocess.Popen = real_popen
+        mod._BATCHER_KICK_LAST = real_last
+        mod._BATCHER_KICK_MIN_INTERVAL_SECONDS = real_interval
+
+    expect(len(spawned) == 1, f"expected 1 spawn after throttle, got {len(spawned)}")
+    args = spawned[0]
+    expect(
+        args[:5] == ["systemctl", "--user", "--no-block", "start", "almanac-ssot-batcher.service"],
+        str(args),
+    )
+    print("PASS test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl")
+
+
 def main() -> int:
     test_webhook_module_exposes_setting_key_constant()
     test_handle_verification_token_post_refuses_overwrite_until_reset()
     test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm()
     test_signed_verification_token_post_is_accepted()
-    print("PASS all 4 Almanac notion webhook regression tests")
+    test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl()
+    print("PASS all 5 Almanac notion webhook regression tests")
     return 0
 
 

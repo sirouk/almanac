@@ -226,7 +226,9 @@ def test_signed_verification_token_post_is_accepted() -> None:
             os.environ.update(old_env)
 
 
-def test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl() -> None:
+def test_kick_ssot_batcher_debounces_bursts_and_invokes_systemctl() -> None:
+    import time
+
     mod = load_module(WEBHOOK_PY, "almanac_notion_webhook_kick_test")
     spawned: list[list[str]] = []
 
@@ -235,27 +237,27 @@ def test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl() -> None:
             spawned.append(list(args))
 
     real_popen = mod.subprocess.Popen
-    real_last = mod._BATCHER_KICK_LAST
-    real_interval = mod._BATCHER_KICK_MIN_INTERVAL_SECONDS
+    real_debounce = mod._BATCHER_KICK_DEBOUNCE_SECONDS
     mod.subprocess.Popen = FakePopen
-    mod._BATCHER_KICK_LAST = 0.0
-    mod._BATCHER_KICK_MIN_INTERVAL_SECONDS = 5.0
+    mod._BATCHER_KICK_DEBOUNCE_SECONDS = 0.1
     try:
+        # A burst of three rapid kicks should debounce to a single spawn
+        # once the quiet window elapses.
         mod._kick_ssot_batcher()
         mod._kick_ssot_batcher()
         mod._kick_ssot_batcher()
+        time.sleep(0.3)
     finally:
         mod.subprocess.Popen = real_popen
-        mod._BATCHER_KICK_LAST = real_last
-        mod._BATCHER_KICK_MIN_INTERVAL_SECONDS = real_interval
+        mod._BATCHER_KICK_DEBOUNCE_SECONDS = real_debounce
 
-    expect(len(spawned) == 1, f"expected 1 spawn after throttle, got {len(spawned)}")
+    expect(len(spawned) == 1, f"expected 1 debounced spawn, got {len(spawned)}")
     args = spawned[0]
     expect(
         args[:5] == ["systemctl", "--user", "--no-block", "start", "almanac-ssot-batcher.service"],
         str(args),
     )
-    print("PASS test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl")
+    print("PASS test_kick_ssot_batcher_debounces_bursts_and_invokes_systemctl")
 
 
 def main() -> int:
@@ -263,7 +265,7 @@ def main() -> int:
     test_handle_verification_token_post_refuses_overwrite_until_reset()
     test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm()
     test_signed_verification_token_post_is_accepted()
-    test_kick_ssot_batcher_throttles_bursts_and_invokes_systemctl()
+    test_kick_ssot_batcher_debounces_bursts_and_invokes_systemctl()
     print("PASS all 5 Almanac notion webhook regression tests")
     return 0
 

@@ -26,24 +26,11 @@ from almanac_control import (
 
 
 _BATCHER_KICK_LOCK = threading.Lock()
-_BATCHER_KICK_LAST = 0.0
-_BATCHER_KICK_MIN_INTERVAL_SECONDS = 0.5
+_BATCHER_KICK_TIMER: threading.Timer | None = None
+_BATCHER_KICK_DEBOUNCE_SECONDS = 1.0
 
 
-def _kick_ssot_batcher() -> None:
-    """Fire-and-forget nudge to the SSOT batcher so events are processed
-    sub-second instead of waiting for the 1-minute timer tick. Throttled
-    to one kick per ``_BATCHER_KICK_MIN_INTERVAL_SECONDS`` to absorb bursts
-    of correlated webhook events.
-    """
-    import time
-
-    global _BATCHER_KICK_LAST
-    with _BATCHER_KICK_LOCK:
-        now = time.monotonic()
-        if now - _BATCHER_KICK_LAST < _BATCHER_KICK_MIN_INTERVAL_SECONDS:
-            return
-        _BATCHER_KICK_LAST = now
+def _spawn_batcher_now() -> None:
     try:
         subprocess.Popen(
             [
@@ -62,6 +49,28 @@ def _kick_ssot_batcher() -> None:
         # Timer fallback still fires every minute; never let kick failures
         # surface to Notion.
         pass
+
+
+def _kick_ssot_batcher() -> None:
+    """Debounced nudge to the SSOT batcher so events are processed within
+    seconds instead of waiting for the 1-minute timer tick. Each call
+    resets a ``_BATCHER_KICK_DEBOUNCE_SECONDS`` countdown; only the final
+    kick after a quiet window actually spawns systemctl, which absorbs
+    bursts of correlated Notion events (database.created + parent
+    page.content_updated + child page.created often arrive within ~200ms)
+    while still letting unrelated events nudge the worker quickly.
+    """
+    global _BATCHER_KICK_TIMER
+    with _BATCHER_KICK_LOCK:
+        if _BATCHER_KICK_TIMER is not None:
+            try:
+                _BATCHER_KICK_TIMER.cancel()
+            except Exception:
+                pass
+        timer = threading.Timer(_BATCHER_KICK_DEBOUNCE_SECONDS, _spawn_batcher_now)
+        timer.daemon = True
+        _BATCHER_KICK_TIMER = timer
+        timer.start()
 
 NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY = "notion_webhook_verification_token"
 NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY = "notion_webhook_verification_token_armed_until"

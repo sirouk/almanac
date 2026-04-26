@@ -522,11 +522,11 @@ def ensure_runtime_paths(cfg: Config) -> None:
 
 def connect_db(cfg: Config) -> sqlite3.Connection:
     ensure_runtime_paths(cfg)
-    conn = sqlite3.connect(cfg.db_path, timeout=5.0)
+    conn = sqlite3.connect(cfg.db_path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA busy_timeout = 15000")
     conn.execute("PRAGMA synchronous = NORMAL")
     ensure_schema(conn, cfg)
     _migrate_onboarding_bot_tokens(conn, cfg)

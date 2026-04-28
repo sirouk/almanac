@@ -527,6 +527,12 @@ serve, what that human owns, who the other people are, and where the agent must
 ask instead of act. Markdown files can support context, but they should not
 silently define accountability or approval.
 
+During onboarding, Curator can offer safe profile-person choices from unapplied
+roster entries when the applied profile privacy policy allows it. That
+user-selected link is stored separately from the bot name and Unix account name,
+shown to the operator as unverified, and used only to orient the agent through
+managed memory and the `SOUL.md` overlay after normal approval.
+
 Profiles can also carry practical non-secret identity and source pointers such
 as Discord handles, GitHub usernames, person-specific repos, and shared repo
 maps. Numeric Discord ids are optional when available; handles are easier to

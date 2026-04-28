@@ -297,6 +297,197 @@ def desired_unix_user_available(unix_user: str) -> tuple[bool, str]:
         return True, ""
 
 
+def _as_strings(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _profile_match_norm(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+
+def _profile_match_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _profile_handle_key(value: str) -> str:
+    return _profile_match_key(str(value or "").lstrip("@"))
+
+
+def _profile_match_privacy_allows_list(profile: dict[str, Any]) -> bool:
+    policies = profile.get("policies") if isinstance(profile.get("policies"), dict) else {}
+    privacy = policies.get("privacy") if isinstance(policies.get("privacy"), dict) else {}
+    visibility = str(privacy.get("default_people_visibility") or "").strip().lower()
+    return visibility in {"org_visible", "group_visible", "team_visible", "household_visible"}
+
+
+def _profile_person_matchable(person: dict[str, Any]) -> bool:
+    metadata = person.get("metadata") if isinstance(person.get("metadata"), dict) else {}
+    return metadata.get("onboarding_matchable") is not False
+
+
+def _profile_person_label(profile: dict[str, Any], person: dict[str, Any]) -> str:
+    roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
+    teams = profile.get("teams") if isinstance(profile.get("teams"), list) else []
+    role_id = str(person.get("role") or "").strip()
+    role = roles.get(role_id) if isinstance(roles.get(role_id), dict) else {}
+    title = str(person.get("title") or "").strip()
+    role_label = title or str(role.get("description") or role_id).strip()
+    primary_team = str(person.get("primary_team") or "").strip()
+    team_name = ""
+    for team in teams:
+        if isinstance(team, dict) and str(team.get("id") or "").strip() == primary_team:
+            team_name = str(team.get("name") or "").strip()
+            break
+    label = str(person.get("display_name") or person.get("id") or "").strip()
+    details = [part for part in (role_label, team_name) if part]
+    if details:
+        label += " - " + ", ".join(details[:2])
+    return label[:180]
+
+
+def _profile_person_match_score(person: dict[str, Any], incoming: IncomingMessage, full_name: str) -> int:
+    identity = person.get("identity_hints") if isinstance(person.get("identity_hints"), dict) else {}
+    contact = person.get("contact") if isinstance(person.get("contact"), dict) else {}
+    github = person.get("github") if isinstance(person.get("github"), dict) else {}
+    agent = person.get("agent") if isinstance(person.get("agent"), dict) else {}
+
+    score = 0
+    platform = incoming.platform.strip().lower()
+    sender_id = incoming.sender_id.strip()
+    if platform == "discord" and sender_id and str(identity.get("discord_user_id") or "").strip() == sender_id:
+        score = max(score, 100)
+    if platform == "telegram" and sender_id and str(identity.get("telegram_user_id") or "").strip() == sender_id:
+        score = max(score, 100)
+
+    username_key = _profile_handle_key(incoming.sender_username)
+    if username_key:
+        handle_values = [
+            str(identity.get("discord_handle") or ""),
+            str(contact.get("discord_handle") or ""),
+            str(identity.get("github_username") or ""),
+            str(github.get("username") or ""),
+        ]
+        if username_key in {_profile_handle_key(value) for value in handle_values if value}:
+            score = max(score, 80)
+
+    name_values = [
+        str(person.get("display_name") or ""),
+        str(person.get("preferred_name") or ""),
+        str(agent.get("name") or ""),
+        *_as_strings(identity.get("aliases")),
+    ]
+    probe_values = [
+        full_name,
+        incoming.sender_display_name,
+        incoming.sender_username,
+    ]
+    name_keys = {_profile_match_key(value) for value in name_values if value}
+    probe_keys = {_profile_match_key(value) for value in probe_values if value}
+    if name_keys and probe_keys and name_keys & probe_keys:
+        score = max(score, 70)
+
+    name_words = set()
+    for value in name_values:
+        name_words.update(_profile_match_norm(value).split())
+    probe_words = set()
+    for value in probe_values:
+        probe_words.update(_profile_match_norm(value).split())
+    if name_words and probe_words and name_words & probe_words:
+        score = max(score, 35)
+    return score
+
+
+def _active_profile_links(conn) -> tuple[set[str], set[str]]:
+    rows = conn.execute(
+        """
+        SELECT a.unix_user, COALESCE(i.org_profile_person_id, '') AS org_profile_person_id
+        FROM agents a
+        LEFT JOIN agent_identity i
+          ON i.unix_user = a.unix_user
+        WHERE a.role = 'user' AND a.status = 'active'
+        """
+    ).fetchall()
+    active_unix_users = {str(row["unix_user"] or "").strip().lower() for row in rows if str(row["unix_user"] or "").strip()}
+    linked_person_ids = {
+        str(row["org_profile_person_id"] or "").strip()
+        for row in rows
+        if str(row["org_profile_person_id"] or "").strip()
+    }
+    return active_unix_users, linked_person_ids
+
+
+def _org_profile_match_candidates(conn, cfg: Config, incoming: IncomingMessage, full_name: str) -> list[dict[str, Any]]:
+    try:
+        from almanac_org_profile import load_applied_profile
+    except Exception:
+        return []
+    profile = load_applied_profile(cfg)
+    if not profile or not _profile_match_privacy_allows_list(profile):
+        return []
+    people = profile.get("people") if isinstance(profile.get("people"), list) else []
+    active_unix_users, linked_person_ids = _active_profile_links(conn)
+    candidates: list[dict[str, Any]] = []
+    for person in people:
+        if not isinstance(person, dict) or not _profile_person_matchable(person):
+            continue
+        person_id = str(person.get("id") or "").strip()
+        if not person_id or person_id in linked_person_ids:
+            continue
+        unix_user = str(person.get("unix_user") or "").strip().lower()
+        if unix_user and unix_user in active_unix_users:
+            continue
+        score = _profile_person_match_score(person, incoming, full_name)
+        candidates.append(
+            {
+                "id": person_id,
+                "label": _profile_person_label(profile, person),
+                "suggested_unix_user": unix_user,
+                "score": score,
+            }
+        )
+    candidates.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("label") or "").casefold()))
+    return candidates[:10]
+
+
+def _maybe_stage_profile_match_prompt(conn, cfg: Config, incoming: IncomingMessage, session: dict[str, Any]) -> dict[str, Any]:
+    if str(session.get("state") or "") != "awaiting-purpose":
+        return session
+    answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+    if str(answers.get("org_profile_match_status") or "").strip():
+        return session
+    full_name = str(answers.get("full_name") or incoming.sender_display_name or "").strip()
+    if not full_name:
+        return session
+    candidates = _org_profile_match_candidates(conn, cfg, incoming, full_name)
+    if not candidates:
+        return session
+    safe_candidates = [
+        {
+            "id": str(candidate.get("id") or ""),
+            "label": str(candidate.get("label") or ""),
+            "suggested_unix_user": str(candidate.get("suggested_unix_user") or ""),
+            "score": int(candidate.get("score") or 0),
+        }
+        for candidate in candidates
+    ]
+    return save_onboarding_session(
+        conn,
+        session_id=str(session["session_id"]),
+        state="awaiting-profile-match",
+        answers={
+            "org_profile_candidates": safe_candidates,
+            "org_profile_match_status": "prompted",
+        },
+        chat_id=incoming.chat_id,
+        sender_username=incoming.sender_username,
+        sender_display_name=incoming.sender_display_name or full_name,
+    )
+
+
 def _operator_target(cfg: Config) -> tuple[str, str]:
     return (
         cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
@@ -491,6 +682,16 @@ def _operator_review_message(cfg: Config, session: dict[str, Any]) -> str:
         f"Approve: ./bin/almanac-ctl onboarding approve {session_id}",
         f"Deny: ./bin/almanac-ctl onboarding deny {session_id} --reason 'optional reason'",
     ]
+    org_person_id = str(answers.get("org_profile_person_id") or "").strip()
+    if org_person_id:
+        lines.insert(
+            5,
+            (
+                "Profile match: "
+                f"{answers.get('org_profile_person_label') or org_person_id} "
+                f"(`{org_person_id}`, user-selected, unverified)"
+            ),
+        )
     if cfg.operator_notify_platform == "telegram":
         lines.extend(
             [
@@ -921,12 +1122,40 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             "Hi, I’m Almanac’s Curator. I’ll help get your private agent lane set up and keep the handoff tidy.\n\n"
             "First up: what should I call you?"
         )
+    if state == "awaiting-profile-match":
+        candidates = answers.get("org_profile_candidates") if isinstance(answers, dict) else []
+        lines = [
+            "I found prepared operating-profile entries that are not linked to a live agent yet.",
+            "",
+            "If one of these is you, reply with its number. Reply `none` to continue without linking a profile entry.",
+            "",
+        ]
+        for index, candidate in enumerate(candidates if isinstance(candidates, list) else [], start=1):
+            if isinstance(candidate, dict) and candidate.get("label"):
+                lines.append(f"{index}. {candidate.get('label')}")
+        lines.extend(
+            [
+                "",
+                "This only orients your agent from the operator-authored profile. It is not identity verification, and it does not grant permissions by itself.",
+            ]
+        )
+        return "\n".join(lines)
     if state == "awaiting-unix-user":
+        suggested_unix_user = str(answers.get("org_profile_suggested_unix_user") or "").strip().lower()
+        suggestion = ""
+        if suggested_unix_user:
+            available, _reason = desired_unix_user_available(suggested_unix_user)
+            if available:
+                suggestion = (
+                    f"\n\nThe selected profile entry suggests `{suggested_unix_user}`. "
+                    "Reply `default` to use it, or type any available username you prefer."
+                )
         return (
             "Now let’s pick your host username.\n"
             "Almanac runs on a shared host. Each enrolled user gets a private Unix account, home directory, Hermes state, and code workspace.\n\n"
             "What Unix username should I create for you?\n"
             "Use lowercase letters, digits, `_`, or `-`; start with a letter or `_`."
+            f"{suggestion}"
         )
     if state == "awaiting-purpose":
         return (
@@ -1318,6 +1547,7 @@ def process_onboarding_message(
                 )
             except RateLimitError as exc:
                 return [OutboundMessage(incoming.chat_id, f"Slow down a bit. Try again in about {exc.retry_after_seconds}s.")]
+            session = _maybe_stage_profile_match_prompt(conn, cfg, incoming, session)
             return [_session_prompt_reply(cfg, incoming, session, incoming.reply_to_message_id)]
 
         is_remote_ssh_key, remote_ssh_pubkey = _extract_remote_ssh_pubkey(text)
@@ -1347,10 +1577,62 @@ def process_onboarding_message(
                 sender_username=incoming.sender_username,
                 sender_display_name=incoming.sender_display_name or text,
             )
+            updated = _maybe_stage_profile_match_prompt(conn, cfg, incoming, updated)
+            return [_session_prompt_reply(cfg, incoming, updated)]
+
+        if state == "awaiting-profile-match":
+            answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+            candidates = answers.get("org_profile_candidates") if isinstance(answers.get("org_profile_candidates"), list) else []
+            if lower in {"none", "no", "skip", "not me", "notme"}:
+                updated = save_onboarding_session(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    state="awaiting-purpose",
+                    answers={
+                        "org_profile_match_status": "skipped",
+                        "org_profile_person_id": "",
+                        "org_profile_person_label": "",
+                        "org_profile_suggested_unix_user": "",
+                    },
+                )
+                return [_session_prompt_reply(cfg, incoming, updated)]
+            selected: dict[str, Any] | None = None
+            if lower.isdigit():
+                index = int(lower) - 1
+                if 0 <= index < len(candidates) and isinstance(candidates[index], dict):
+                    selected = candidates[index]
+            if selected is None:
+                for candidate in candidates:
+                    if isinstance(candidate, dict) and str(candidate.get("id") or "").strip().lower() == lower:
+                        selected = candidate
+                        break
+            if selected is None:
+                return [
+                    OutboundMessage(
+                        incoming.chat_id,
+                        "Reply with one of the listed numbers, or `none` to continue without linking a profile entry.",
+                    )
+                ]
+            updated = save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-purpose",
+                answers={
+                    "org_profile_match_status": "user_selected_unverified",
+                    "org_profile_person_id": str(selected.get("id") or ""),
+                    "org_profile_person_label": str(selected.get("label") or ""),
+                    "org_profile_suggested_unix_user": str(selected.get("suggested_unix_user") or ""),
+                },
+            )
             return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-unix-user":
-            candidate = text.lower()
+            answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+            suggested_unix_user = str(answers.get("org_profile_suggested_unix_user") or "").strip().lower()
+            if lower in {"default", "suggested", "use default", "use suggested"} and suggested_unix_user:
+                candidate = suggested_unix_user
+            else:
+                candidate = text.lower()
             ok, reason = desired_unix_user_available(candidate)
             if not ok:
                 return [OutboundMessage(incoming.chat_id, reason)]

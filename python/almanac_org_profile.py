@@ -887,8 +887,31 @@ def agent_context_for_person(profile: dict[str, Any], person: dict[str, Any], *,
     }
 
 
-def _match_person_for_agent(profile: dict[str, Any], *, agent_id: str = "", unix_user: str = "", display_name: str = "") -> dict[str, Any] | None:
+def _row_value(row: dict[str, Any] | sqlite3.Row, key: str, default: str = "") -> str:
+    if hasattr(row, "keys"):
+        try:
+            if key in row.keys():
+                return str(row[key] or "").strip()
+        except (KeyError, TypeError):
+            return default
+        return default
+    return str(row.get(key, default) or "").strip()
+
+
+def _match_person_for_agent(
+    profile: dict[str, Any],
+    *,
+    agent_id: str = "",
+    unix_user: str = "",
+    display_name: str = "",
+    org_profile_person_id: str = "",
+) -> dict[str, Any] | None:
     people = _as_list(profile.get("people"))
+    normalized_person_id = org_profile_person_id.strip()
+    if normalized_person_id:
+        for person in people:
+            if isinstance(person, dict) and str(person.get("id") or "").strip() == normalized_person_id:
+                return person
     normalized_unix = unix_user.strip().lower()
     normalized_display = display_name.strip().lower()
     for person in people:
@@ -919,10 +942,17 @@ def load_applied_profile(cfg: Any) -> dict[str, Any]:
 
 
 def build_agent_context_for_row(profile: dict[str, Any], row: dict[str, Any] | sqlite3.Row) -> dict[str, Any] | None:
-    agent_id = str(row["agent_id"] if "agent_id" in row.keys() else row.get("agent_id", "")).strip() if hasattr(row, "keys") else str(row.get("agent_id", "")).strip()
-    unix_user = str(row["unix_user"] if "unix_user" in row.keys() else row.get("unix_user", "")).strip() if hasattr(row, "keys") else str(row.get("unix_user", "")).strip()
-    display_name = str(row["display_name"] if "display_name" in row.keys() else row.get("display_name", "")).strip() if hasattr(row, "keys") else str(row.get("display_name", "")).strip()
-    person = _match_person_for_agent(profile, agent_id=agent_id, unix_user=unix_user, display_name=display_name)
+    agent_id = _row_value(row, "agent_id")
+    unix_user = _row_value(row, "unix_user")
+    display_name = _row_value(row, "display_name")
+    org_profile_person_id = _row_value(row, "org_profile_person_id")
+    person = _match_person_for_agent(
+        profile,
+        agent_id=agent_id,
+        unix_user=unix_user,
+        display_name=display_name,
+        org_profile_person_id=org_profile_person_id,
+    )
     if person is None:
         return None
     return agent_context_for_person(profile, person, agent_id=agent_id)
@@ -1046,11 +1076,23 @@ def _managed_team_map_section(context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build_managed_sections_for_agent(cfg: Any, *, agent_id: str, unix_user: str, display_name: str) -> dict[str, Any]:
+def build_managed_sections_for_agent(
+    cfg: Any,
+    *,
+    agent_id: str,
+    unix_user: str,
+    display_name: str,
+    org_profile_person_id: str = "",
+) -> dict[str, Any]:
     profile = load_applied_profile(cfg)
     if not profile:
         return {}
-    row = {"agent_id": agent_id, "unix_user": unix_user, "display_name": display_name}
+    row = {
+        "agent_id": agent_id,
+        "unix_user": unix_user,
+        "display_name": display_name,
+        "org_profile_person_id": org_profile_person_id,
+    }
     context = build_agent_context_for_row(profile, row)
     if not context:
         return {}
@@ -1390,10 +1432,18 @@ def _replace_profile_rows(conn: sqlite3.Connection, profile: dict[str, Any], *, 
 def _active_agent_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT agent_id, role, unix_user, display_name, hermes_home
-        FROM agents
-        WHERE role = 'user' AND status = 'active'
-        ORDER BY agent_id
+        SELECT
+          a.agent_id,
+          a.role,
+          a.unix_user,
+          a.display_name,
+          a.hermes_home,
+          COALESCE(i.org_profile_person_id, '') AS org_profile_person_id
+        FROM agents a
+        LEFT JOIN agent_identity i
+          ON i.unix_user = a.unix_user
+        WHERE a.role = 'user' AND a.status = 'active'
+        ORDER BY a.agent_id
         """
     ).fetchall()
 

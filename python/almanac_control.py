@@ -631,6 +631,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         CREATE TABLE IF NOT EXISTS agent_identity (
           unix_user TEXT PRIMARY KEY,
           agent_id TEXT NOT NULL UNIQUE,
+          org_profile_person_id TEXT NOT NULL DEFAULT '',
           human_display_name TEXT NOT NULL DEFAULT '',
           agent_name TEXT NOT NULL DEFAULT '',
           claimed_notion_email TEXT NOT NULL DEFAULT '',
@@ -892,6 +893,13 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_agent_identity_org_profile_person
+        ON agent_identity (org_profile_person_id)
+        WHERE org_profile_person_id != ''
+        """
+    )
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_ssot_access_audit_agent_created
         ON ssot_access_audit (agent_id, created_at)
         """
@@ -967,6 +975,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "bootstrap_requests", "cancelled_by_surface", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "cancelled_by_actor", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "cancelled_reason", "TEXT")
+    _ensure_column(conn, "agent_identity", "org_profile_person_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "onboarding_sessions", "approved_at", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "approved_by_actor", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "denied_at", "TEXT")
@@ -1355,6 +1364,7 @@ def upsert_agent_identity(
     *,
     agent_id: str,
     unix_user: str,
+    org_profile_person_id: str | None = None,
     human_display_name: str | None = None,
     agent_name: str | None = None,
     claimed_notion_email: str | None = None,
@@ -1373,6 +1383,11 @@ def upsert_agent_identity(
     row = {
         "agent_id": _clean_text(agent_id),
         "unix_user": _clean_text(unix_user),
+        "org_profile_person_id": _clean_text(
+            existing.get("org_profile_person_id")
+            if org_profile_person_id is None
+            else org_profile_person_id
+        ),
         "human_display_name": _clean_text(
             existing.get("human_display_name")
             if human_display_name is None
@@ -1413,12 +1428,13 @@ def upsert_agent_identity(
         conn.execute(
             """
             INSERT INTO agent_identity (
-              unix_user, agent_id, human_display_name, agent_name, claimed_notion_email,
+              unix_user, agent_id, org_profile_person_id, human_display_name, agent_name, claimed_notion_email,
               notion_user_id, notion_user_email, verification_status, write_mode,
               verified_at, suspended_at, verification_source, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(unix_user) DO UPDATE SET
               agent_id = excluded.agent_id,
+              org_profile_person_id = excluded.org_profile_person_id,
               human_display_name = excluded.human_display_name,
               agent_name = excluded.agent_name,
               claimed_notion_email = excluded.claimed_notion_email,
@@ -1435,6 +1451,7 @@ def upsert_agent_identity(
             (
                 row["unix_user"],
                 row["agent_id"],
+                row["org_profile_person_id"],
                 row["human_display_name"],
                 row["agent_name"],
                 row["claimed_notion_email"],
@@ -1522,6 +1539,7 @@ def suspend_agent_identity(
         conn,
         agent_id=str(identity["agent_id"]),
         unix_user=str(identity["unix_user"]),
+        org_profile_person_id=str(identity.get("org_profile_person_id") or ""),
         human_display_name=str(identity.get("human_display_name") or ""),
         agent_name=str(identity.get("agent_name") or ""),
         claimed_notion_email=str(identity.get("claimed_notion_email") or ""),
@@ -1549,6 +1567,7 @@ def unsuspend_agent_identity(
         conn,
         agent_id=str(identity["agent_id"]),
         unix_user=str(identity["unix_user"]),
+        org_profile_person_id=str(identity.get("org_profile_person_id") or ""),
         human_display_name=str(identity.get("human_display_name") or ""),
         agent_name=str(identity.get("agent_name") or ""),
         claimed_notion_email=str(identity.get("claimed_notion_email") or ""),
@@ -12081,6 +12100,7 @@ def build_managed_memory_payload(
             agent_id=agent_id,
             unix_user=agent_unix_user,
             display_name=display_name,
+            org_profile_person_id=str((identity or {}).get("org_profile_person_id") or ""),
         )
     except Exception:
         org_profile_sections = {}

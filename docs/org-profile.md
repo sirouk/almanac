@@ -36,12 +36,11 @@ Shipped today:
 - Applied profiles also feed `[managed:org-profile]`,
   `[managed:user-responsibilities]`, and `[managed:team-map]`, plus a managed
   `SOUL.md` overlay for matched agents after their refresh runs.
-
-Not shipped yet:
-
-- similarity matching of onboarding users to profile people
-- rich roster matching beyond exact `unix_user` and simple display/alias/name
-  matches
+- During chat onboarding, Curator can offer safe, non-secret profile-person
+  choices for unapplied roster entries when the applied profile privacy policy
+  allows it. The user-selected link is stored separately from bot and Unix
+  names, shown to the operator as unverified, and used only to orient the
+  agent after normal approval/provisioning.
 
 The commands and receipts below are the shipped operator contract. The current
 pipeline is intentionally conservative: schema and semantic errors block
@@ -324,9 +323,14 @@ authoritative.
 
 ### Enrollment Defaults
 
-During onboarding, Almanac uses the applied profile to match a newly enrolled
-human to a person entry by exact `unix_user`, then simple display/alias/agent
-name matches. A match can prefill:
+During onboarding, Almanac can ask a newly enrolled human to select one of the
+applied profile people that is not already linked to an active agent. Curator
+shows only short labels such as name, role/title, and group/team when the
+profile privacy policy permits roster visibility. The selected
+`org_profile_person_id` orients managed memory and the `SOUL.md` overlay even
+when the user chooses an unrelated bot name or Unix account name. Existing
+agents can also match by exact `unix_user`, then simple display/alias/agent
+name matches. A match can prefill or orient:
 
 - display name
 - preferred agent name
@@ -335,8 +339,9 @@ name matches. A match can prefill:
 - provider defaults
 - Notion identity claim email
 
-Hints are not verification by themselves. Notion identity still goes through
-the existing claim/verification path.
+Hints and user-selected profile links are not verification by themselves.
+Operator approval still controls provisioning, and Notion identity still goes
+through the existing claim/verification path.
 
 ## Authority Rules
 

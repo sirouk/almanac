@@ -14,6 +14,7 @@ PYTHON_DIR = REPO / "python"
 CONTROL_PY = PYTHON_DIR / "almanac_control.py"
 ONBOARDING_PY = PYTHON_DIR / "almanac_onboarding_flow.py"
 PROVIDER_AUTH_PY = PYTHON_DIR / "almanac_onboarding_provider_auth.py"
+ORG_PROFILE_PY = PYTHON_DIR / "almanac_org_profile.py"
 
 
 def load_module(path: Path, name: str):
@@ -304,6 +305,164 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
             expect("What should it be called?" in replies[0].text, replies[0].text)
             expect("telegram" in replies[0].text.lower(), replies[0].text)
             print("PASS test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_onboarding_offers_safe_org_profile_match_without_forcing_names() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_profile_match_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_profile_match_test")
+    org_profile = load_module(ORG_PROFILE_PY, "almanac_org_profile_onboarding_profile_match_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_CURATOR_CHANNELS": "discord",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            profile = {
+                "version": 1,
+                "organization": {
+                    "id": "example-context",
+                    "name": "Example Context",
+                    "profile_kind": "organization",
+                    "mission": "Keep a shared operating profile coherent.",
+                },
+                "roles": {"operator": {"description": "Profile operator"}},
+                "people": [
+                    {
+                        "id": "alex-rivera",
+                        "display_name": "Alex Rivera",
+                        "role": "operator",
+                        "unix_user": "almanac-profile-alex",
+                        "agent": {"name": "Atlas", "purpose": "Help Alex operate."},
+                    },
+                    {
+                        "id": "blair-stone",
+                        "display_name": "Blair Stone",
+                        "role": "operator",
+                        "unix_user": "almanac-profile-blair",
+                        "agent": {"name": "Comet", "purpose": "Help Blair operate."},
+                    },
+                ],
+                "policies": {
+                    "privacy": {
+                        "default_people_visibility": "org_visible",
+                        "sensitive_fields": ["identity_hints"],
+                    }
+                },
+            }
+            with control.connect_db(cfg) as conn:
+                applied = org_profile.apply_profile(
+                    conn,
+                    cfg,
+                    profile=profile,
+                    source_path=root / "org-profile.yaml",
+                    actor="test",
+                )
+                expect(applied["applied"], str(applied))
+
+            def fake_validate(_token: str):
+                raise AssertionError("bot token validation should not run in profile-match test")
+
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="dm-1",
+                    sender_id="user-1",
+                    text="/start",
+                    sender_username="blair",
+                    sender_display_name="Blair Stone",
+                ),
+                validate_bot_token=fake_validate,
+            )
+            expect("prepared operating-profile entries" in replies[0].text, replies[0].text)
+            expect("Blair Stone" in replies[0].text, replies[0].text)
+            expect("not identity verification" in replies[0].text, replies[0].text)
+
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="dm-1",
+                    sender_id="user-1",
+                    text="1",
+                    sender_username="blair",
+                    sender_display_name="Blair Stone",
+                ),
+                validate_bot_token=fake_validate,
+            )
+            expect("A little context helps me shape the agent properly." in replies[0].text, replies[0].text)
+            with control.connect_db(cfg) as conn:
+                session = control.find_active_onboarding_session(conn, platform="discord", sender_id="user-1")
+            expect(session is not None, "expected active session")
+            answers = session.get("answers") or {}
+            expect(answers.get("org_profile_person_id") == "blair-stone", str(answers))
+            expect(answers.get("org_profile_match_status") == "user_selected_unverified", str(answers))
+
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="dm-1",
+                    sender_id="user-1",
+                    text="Keep launches tidy",
+                    sender_username="blair",
+                    sender_display_name="Blair Stone",
+                ),
+                validate_bot_token=fake_validate,
+            )
+            expect("Reply `default`" in replies[0].text, replies[0].text)
+            expect("almanac-profile-blair" in replies[0].text, replies[0].text)
+
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="dm-1",
+                    sender_id="user-1",
+                    text="default",
+                    sender_username="blair",
+                    sender_display_name="Blair Stone",
+                ),
+                validate_bot_token=fake_validate,
+            )
+            expect("Now name your discord bot." in replies[0].text, replies[0].text)
+            with control.connect_db(cfg) as conn:
+                session = control.find_active_onboarding_session(conn, platform="discord", sender_id="user-1")
+            expect((session.get("answers") or {}).get("unix_user") == "almanac-profile-blair", str(session))
+            print("PASS test_onboarding_offers_safe_org_profile_match_without_forcing_names")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -1232,6 +1391,7 @@ def main() -> int:
                 os.environ.pop(key, None)
         test_discord_prompt_and_operator_review_reflect_primary_control_channel()
         test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
+        test_onboarding_offers_safe_org_profile_match_without_forcing_names()
         test_onboarding_uses_resolved_sender_display_name_without_reasking()
         test_shared_team_key_prompt_offers_default_reply_for_chutes()
         test_shared_team_key_default_reply_uses_configured_secret()
@@ -1242,7 +1402,7 @@ def main() -> int:
         test_org_provided_secret_auto_stages_after_bot_token()
         test_telegram_chutes_model_prompt_uses_copyable_code_entities()
         test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval()
-        print("PASS all 12 onboarding prompt regression tests")
+        print("PASS all 13 onboarding prompt regression tests")
         return 0
     finally:
         os.environ.clear()

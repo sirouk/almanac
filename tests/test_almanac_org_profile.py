@@ -247,10 +247,82 @@ def test_human_owner_modules_and_seed_checksums_are_distributed() -> None:
     print("PASS test_human_owner_modules_and_seed_checksums_are_distributed")
 
 
+def test_explicit_identity_profile_link_orients_arbitrary_agent_names() -> None:
+    control = load_module(REPO / "python" / "almanac_control.py", "almanac_control_org_profile_identity_test")
+    org_profile = load_module(REPO / "python" / "almanac_org_profile.py", "almanac_org_profile_identity_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = {
+            "ALMANAC_USER": "almanac",
+            "ALMANAC_HOME": str(root / "home-almanac"),
+            "ALMANAC_REPO_DIR": str(REPO),
+            "ALMANAC_PRIV_DIR": str(root / "priv"),
+            "STATE_DIR": str(root / "state"),
+            "RUNTIME_DIR": str(root / "state" / "runtime"),
+            "VAULT_DIR": str(root / "vault"),
+            "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+            "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+            "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+            "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+            "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+            "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+            "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+            "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+            "ALMANAC_MCP_HOST": "127.0.0.1",
+            "ALMANAC_MCP_PORT": "8282",
+        }
+        write_config(config_path, values)
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            now = control.utc_now_iso()
+            hermes_home = root / "home-random" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True)
+            insert_agent(
+                conn,
+                agent_id="agent-random",
+                unix_user="randomlane",
+                display_name="My Own Bot Name",
+                hermes_home=hermes_home,
+                now=now,
+            )
+            control.upsert_agent_identity(
+                conn,
+                agent_id="agent-random",
+                unix_user="randomlane",
+                org_profile_person_id="alex-rivera",
+                human_display_name="A user-provided name",
+                agent_name="My Own Bot Name",
+            )
+
+            source_path = REPO / "config" / "org-profile.ultimate.example.yaml"
+            profile = org_profile.load_profile(source_path)
+            applied = org_profile.apply_profile(conn, cfg, profile=profile, source_path=source_path, actor="test")
+            expect(applied["applied"], applied)
+            expect(applied["matched_agents"][0]["person_id"] == "alex-rivera", applied)
+
+            payload = control.build_managed_memory_payload(conn, cfg, agent_id="agent-random")
+            expect(payload["org_profile_agent_context"]["person_id"] == "alex-rivera", payload["org_profile_agent_context"])
+            paths = control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
+            expect(paths["changed"], paths)
+            identity = json.loads((hermes_home / "state" / "almanac-identity-context.json").read_text(encoding="utf-8"))
+            expect(identity["person_id"] == "alex-rivera", identity)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    print("PASS test_explicit_identity_profile_link_orients_arbitrary_agent_names")
+
+
 def main() -> int:
     test_ultimate_example_profile_applies_to_state_vault_and_agent_memory()
     test_human_owner_modules_and_seed_checksums_are_distributed()
-    print("PASS all 2 org-profile tests")
+    test_explicit_identity_profile_link_orients_arbitrary_agent_names()
+    print("PASS all 3 org-profile tests")
     return 0
 
 

@@ -106,8 +106,8 @@ Expected behavior:
 - [ ] Keep org, family, solo, and project profile data in private state.
 - [ ] Accept context as a blurb, single file, folder, or repo.
 - [ ] Ingest that context before user onboarding begins.
-- [ ] Use profile matching to resolve onboarding users to known people.
-- [ ] Load matched person and context modules into the user's agent during
+- [x] Use profile matching to resolve onboarding users to known people.
+- [x] Load matched person and context modules into the user's agent during
       birth.
 - [ ] Generate private resource manifests from the profile ingestion document.
 - [ ] Keep public docs limited to generic behavior and fictional examples.

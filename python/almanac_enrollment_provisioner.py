@@ -1519,6 +1519,7 @@ def _configure_user_telegram_gateway(conn, cfg: Config, session: dict) -> None:
         conn,
         agent_id=agent_id,
         unix_user=unix_user,
+        org_profile_person_id=str(answers.get("org_profile_person_id") or ""),
         human_display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
         agent_name=_session_bot_label(session),
     )
@@ -1668,6 +1669,7 @@ def _configure_user_discord_gateway(conn, cfg: Config, session: dict) -> None:
         conn,
         agent_id=agent_id,
         unix_user=unix_user,
+        org_profile_person_id=str(answers.get("org_profile_person_id") or ""),
         human_display_name=str(answers.get("full_name") or session.get("sender_display_name") or unix_user),
         agent_name=_session_bot_label(session),
     )

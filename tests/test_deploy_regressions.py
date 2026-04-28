@@ -1839,6 +1839,7 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     refresh_helper = (REPO / "bin" / "refresh-agent-install.sh").read_text(encoding="utf-8")
     helper = extract(text, "realign_active_enrolled_agents_root() {", "chown_managed_paths() {")
     chown_helper = extract(text, "chown_managed_paths() {", "enrollment_snapshot_json() {")
+    org_profile_apply = extract(text, "apply_org_profile_if_present_root() {", "seed_private_repo() {")
     install = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     enrollment_align = extract(text, "run_enrollment_align() {", "run_enrollment_reset() {")
@@ -1944,6 +1945,10 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     expect(
         "chown_managed_paths" in upgrade,
         "run_root_upgrade should use the scoped ownership helper instead of blanket chowning private state",
+    )
+    expect(
+        "run_service_user_cmd" in org_profile_apply and "run_root_env_cmd" not in org_profile_apply,
+        "org-profile apply should run as the service user so generated vault/state files remain rootless-service writable",
     )
     expect(
         'find "$ALMANAC_PRIV_DIR" -ignore_readdir_race' in chown_helper

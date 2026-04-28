@@ -1907,7 +1907,7 @@ apply_org_profile_if_present_root() {
 
   echo
   echo "Applying private operating profile..."
-  run_root_env_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" org-profile apply --file "$profile_path" --yes --actor "deploy"
+  run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" org-profile apply --file "$profile_path" --yes --actor "deploy"
 }
 
 seed_private_repo() {

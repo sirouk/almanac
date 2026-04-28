@@ -1,0 +1,12 @@
+# managed: almanac-default-vault
+name: Projects
+description: Organization project workspaces, decision records, execution notes, and durable context for the initiatives the organization actively handles.
+owner: organization
+default_subscribed: true
+category: workspace
+tags:
+  - projects
+  - execution
+  - roadmap
+  - shared
+brief_template: Shared project surface for durable plans, decisions, execution notes, and cross-team context.

@@ -1,0 +1,6 @@
+[Unit]
+Description=Almanac qmd index refresh
+
+[Service]
+Type=oneshot
+ExecStart=%h/almanac/bin/qmd-refresh.sh

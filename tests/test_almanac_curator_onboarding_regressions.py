@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+PYTHON_DIR = REPO / "python"
+CONTROL_PY = PYTHON_DIR / "almanac_control.py"
+CURATOR_ONBOARDING_PY = PYTHON_DIR / "almanac_curator_onboarding.py"
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def expect(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def write_config(path: Path, values: dict[str, str]) -> None:
+    lines = [f"{key}={json.dumps(value)}" for key, value in values.items()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def base_config_values(root: Path) -> dict[str, str]:
+    return {
+        "ALMANAC_USER": "almanac",
+        "ALMANAC_HOME": str(root / "home-almanac"),
+        "ALMANAC_REPO_DIR": str(REPO),
+        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "STATE_DIR": str(root / "state"),
+        "RUNTIME_DIR": str(root / "state" / "runtime"),
+        "VAULT_DIR": str(root / "vault"),
+        "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+        "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+        "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ALMANAC_MCP_HOST": "127.0.0.1",
+        "ALMANAC_MCP_PORT": "8282",
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+        "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+    }
+
+
+def insert_agent(mod, conn, *, agent_id: str, unix_user: str, hermes_home: Path) -> None:
+    now = mod.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO agents (
+          agent_id, role, unix_user, display_name, status, hermes_home, manifest_path,
+          archived_state_path, model_preset, model_string, channels_json,
+          allowed_mcps_json, home_channel_json, operator_notify_channel_json,
+          created_at, last_enrolled_at
+        ) VALUES (?, 'user', ?, ?, 'active', ?, ?, NULL, 'codex', 'openai:codex', '["tui-only","telegram"]', '[]', '{}', '{}', ?, ?)
+        """,
+        (agent_id, unix_user, unix_user, str(hermes_home), str(hermes_home / "manifest.json"), now, now),
+    )
+    conn.commit()
+
+
+def test_telegram_operator_approve_callback_replaces_message_and_clears_buttons() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_curator_onboarding_callback_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "almanac_curator_onboarding_callback_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="100",
+                sender_id="100",
+                sender_username="alex",
+                sender_display_name="Alex",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-operator-approval",
+                answers={"full_name": "Alex"},
+            )
+
+            replacements: list[str] = []
+            answers: list[str] = []
+            outbound: list[str] = []
+
+            curator.notify_session_state = lambda cfg, updated: None
+            curator._replace_operator_callback_message = (
+                lambda bot_token, callback_query, text: replacements.append(text)
+            )
+            curator._clear_operator_callback_buttons = lambda bot_token, callback_query: outbound.append("cleared")
+            curator.telegram_answer_callback_query = (
+                lambda **kwargs: answers.append(str(kwargs.get("text") or ""))
+            )
+            curator.send_text = lambda bot_token, chat_id, text, **kwargs: outbound.append(text)
+
+            curator._handle_operator_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cb_1",
+                    "data": f"almanac:onboarding:approve:{session['session_id']}",
+                    "message": {
+                        "chat": {"id": "42", "type": "private"},
+                        "message_id": 7,
+                        "text": "Review this onboarding request.",
+                    },
+                    "from": {"id": "42", "username": "alexuser"},
+                },
+            )
+
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]))
+            expect(refreshed is not None, "expected refreshed onboarding session")
+            expect(str(refreshed.get("state") or "") == "awaiting-bot-token", str(refreshed))
+            expect(len(replacements) == 1, str(replacements))
+            expect("Approved" in replacements[0], replacements[0])
+            expect("@alexuser" in replacements[0], replacements[0])
+            expect(outbound == [], str(outbound))
+            expect(len(answers) == 1 and "Approved" in answers[0], str(answers))
+            print("PASS test_telegram_operator_approve_callback_replaces_message_and_clears_buttons")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_stale_telegram_request_callback_clears_buttons_with_status() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_curator_stale_request_callback_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "almanac_curator_stale_request_callback_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            request = control.request_bootstrap(
+                conn,
+                cfg,
+                requester_identity="Alex",
+                unix_user="dkstale",
+                source_ip="telegram:100",
+                auto_provision=True,
+            )
+            request_id = str(request["request_id"])
+            control.approve_request(
+                conn,
+                request_id=request_id,
+                surface="curator-channel",
+                actor="@operator",
+                cfg=cfg,
+            )
+
+            replacements: list[str] = []
+            answers: list[str] = []
+            outbound: list[str] = []
+
+            curator._replace_operator_callback_message = (
+                lambda bot_token, callback_query, text: replacements.append(text)
+            )
+            curator._clear_operator_callback_buttons = lambda bot_token, callback_query: outbound.append("cleared")
+            curator.telegram_answer_callback_query = (
+                lambda **kwargs: answers.append(str(kwargs.get("text") or ""))
+            )
+            curator.send_text = lambda bot_token, chat_id, text, **kwargs: outbound.append(text)
+
+            curator._handle_operator_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cb_2",
+                    "data": f"almanac:request:approve:{request_id}",
+                    "message": {
+                        "chat": {"id": "42", "type": "private"},
+                        "message_id": 8,
+                        "text": "Pending request with stale buttons.",
+                    },
+                    "from": {"id": "42", "username": "alexuser"},
+                },
+            )
+
+            expect(len(replacements) == 1, str(replacements))
+            expect("already approved" in replacements[0], replacements[0])
+            expect("@alexuser" in replacements[0], replacements[0])
+            expect(outbound == [], str(outbound))
+            expect(len(answers) == 1 and "already approved" in answers[0], str(answers))
+            print("PASS test_stale_telegram_request_callback_clears_buttons_with_status")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_telegram_backup_callback_reopens_completed_lane_backup_setup() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_curator_backup_callback_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "almanac_curator_backup_callback_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True, exist_ok=True)
+            insert_agent(control, conn, agent_id="agent-alex", unix_user="alex", hermes_home=hermes_home)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="100",
+                sender_id="100",
+                sender_username="alex",
+                sender_display_name="Alex",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-alex",
+                answers={"unix_user": "alex", "bot_platform": "telegram"},
+            )
+
+            answers: list[str] = []
+            outbound: list[str] = []
+            curator.telegram_answer_callback_query = (
+                lambda **kwargs: answers.append(str(kwargs.get("text") or ""))
+            )
+            curator.send_text = lambda bot_token, chat_id, text, **kwargs: outbound.append(text)
+
+            handled = curator._handle_user_backup_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cb_backup",
+                    "data": f"almanac:onboarding-complete:setup-backup:{session['session_id']}",
+                    "message": {
+                        "chat": {"id": "100", "type": "private"},
+                        "message_id": 9,
+                    },
+                    "from": {"id": "100", "username": "alex", "first_name": "Alex"},
+                },
+            )
+
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            expect(handled is True, "expected backup callback to be handled")
+            expect(refreshed["state"] == "awaiting-agent-backup-repo", str(refreshed))
+            expect(outbound and "private backup repo" in outbound[0], str(outbound))
+            expect(answers == ["Backup setup opened."], str(answers))
+            print("PASS test_telegram_backup_callback_reopens_completed_lane_backup_setup")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def main() -> int:
+    test_telegram_operator_approve_callback_replaces_message_and_clears_buttons()
+    test_stale_telegram_request_callback_clears_buttons_with_status()
+    test_telegram_backup_callback_reopens_completed_lane_backup_setup()
+    print("PASS all 3 curator onboarding regression tests")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

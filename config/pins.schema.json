@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/example/almanac/config/pins.schema.json",
+  "title": "Almanac dependency pins",
+  "description": "Single source of truth for every external dependency the Almanac deployment hard-installs. Each entry's kind selects the resolver + applier pair.",
+  "type": "object",
+  "required": ["version", "components"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump only when a backwards-incompatible field is added."
+    },
+    "upgrade_notifications": {
+      "type": "object",
+      "description": "Operator digest throttling for upstream component update checks.",
+      "properties": {
+        "notify_limit_per_release": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum operator notifications for the same resolved release/version before silence."
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/component" }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "required": ["kind", "description"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git-commit",
+            "git-tag",
+            "container-image",
+            "npm",
+            "nvm-version",
+            "uv-python",
+            "installer-url",
+            "release-asset"
+          ]
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "inherits_from": {
+          "type": "string",
+          "description": "When set, the resolved ref defaults to whatever the named component pins. Used by hermes-docs to inherit hermes-agent."
+        },
+        "install_policy": {
+          "type": "string",
+          "enum": ["managed", "auto", "external"],
+          "description": "managed: deploy bootstraps + upgrades. auto: install if missing, leave existing alone. external: not installed by deploy at all."
+        },
+        "repo":     { "type": "string", "format": "uri" },
+        "ref":      { "type": "string", "minLength": 1 },
+        "ref_kind": { "type": "string", "enum": ["commit", "tag", "branch"] },
+        "branch":   { "type": "string", "minLength": 1 },
+        "tag":      { "type": "string", "minLength": 1 },
+        "subdir":   { "type": "string" },
+        "extras":   { "type": "array", "items": { "type": "string" } },
+        "image":    { "type": "string" },
+        "package":  { "type": "string" },
+        "version":  {
+          "anyOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "null" }
+          ]
+        },
+        "preferred": { "type": "array", "items": { "type": "string" } },
+        "minimum":  { "type": "string" },
+        "url":      { "type": "string", "format": "uri" },
+        "installer_url_template": { "type": "string", "format": "uri-template" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "git-commit" } }, "required": ["kind"] },
+          "then": { "required": ["repo", "ref"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "git-tag" } }, "required": ["kind"] },
+          "then": { "required": ["repo", "tag"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "container-image" } }, "required": ["kind"] },
+          "then": { "required": ["image", "tag"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "npm" } }, "required": ["kind"] },
+          "then": { "required": ["package", "version"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "nvm-version" } }, "required": ["kind"] },
+          "then": { "required": ["version"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "uv-python" } }, "required": ["kind"] },
+          "then": { "required": ["preferred", "minimum"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "installer-url" } }, "required": ["kind"] },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "release-asset" } }, "required": ["kind"] },
+          "then": { "required": ["repo"] }
+        }
+      ]
+    }
+  }
+}

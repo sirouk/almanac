@@ -1,0 +1,11 @@
+[Unit]
+Description=Almanac qmd MCP daemon
+After=network.target
+
+[Service]
+ExecStart=%h/almanac/bin/qmd-daemon.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

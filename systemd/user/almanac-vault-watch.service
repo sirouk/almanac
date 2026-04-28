@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch the Almanac vault and keep qmd in sync
+After=network.target
+
+[Service]
+ExecStart=%h/almanac/bin/vault-watch.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

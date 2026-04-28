@@ -1,0 +1,14 @@
+[Unit]
+Description=Almanac Nextcloud stack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=0
+ExecStart=%h/almanac/bin/nextcloud-up.sh
+ExecStop=%h/almanac/bin/nextcloud-down.sh
+
+[Install]
+WantedBy=default.target

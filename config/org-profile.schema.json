@@ -1,0 +1,566 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://almanac.local/schema/org-profile.schema.json",
+  "title": "Almanac operator context profile",
+  "description": "Versioned operator-authored profile that tells Almanac who the humans are, what they are responsible for, how groups relate, and how agents should orient themselves without confusing awareness for authority. The operating context can be an organization, household, family, solo operator, project collective, community, or hybrid.",
+  "type": "object",
+  "required": ["version", "organization", "roles", "people"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump only when the authoritative profile format changes incompatibly."
+    },
+    "organization": {
+      "$ref": "#/$defs/organization",
+      "description": "Top-level operating context. The field name is kept for compatibility; it does not imply the operator is a company."
+    },
+    "roles": {
+      "type": "object",
+      "description": "Role definitions keyed by role id. People reference these ids.",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/idString" },
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    },
+    "people": {
+      "type": "array",
+      "description": "Humans who may use Almanac or appear in agent orientation.",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/person" }
+    },
+    "teams": {
+      "type": "array",
+      "description": "Teams, circles, households, departments, pods, or working groups.",
+      "items": { "$ref": "#/$defs/team" },
+      "default": []
+    },
+    "relationships": {
+      "type": "array",
+      "description": "Typed relationships among people, teams, roles, surfaces, systems, and responsibilities.",
+      "items": { "$ref": "#/$defs/relationship" },
+      "default": []
+    },
+    "agent_lineage": {
+      "$ref": "#/$defs/agentLineage",
+      "description": "Reusable agent baseline, module layering contract, prototype lineage, and ingestion/distribution expectations."
+    },
+    "work_surfaces": {
+      "$ref": "#/$defs/workSurfaces",
+      "description": "Canonical places where shared, personal, household, project, or organizational work and knowledge live."
+    },
+    "policies": {
+      "$ref": "#/$defs/policies",
+      "description": "Cross-agent behavior, privacy, escalation, and decision policies."
+    },
+    "references": {
+      "type": "array",
+      "description": "Supporting docs or knowledge assets. These provide context, not authority, unless referenced by structured fields.",
+      "items": { "$ref": "#/$defs/reference" },
+      "default": []
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Operator-defined non-authoritative annotations for local automation.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "idString": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" },
+      "default": []
+    },
+    "idList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/idString" },
+      "default": []
+    },
+    "organization": {
+      "type": "object",
+      "required": ["id", "name", "mission"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "profile_kind": {
+          "type": "string",
+          "enum": ["organization", "household", "family", "solo_operator", "project_collective", "community", "hybrid"],
+          "default": "organization",
+          "description": "The real-world shape this profile represents."
+        },
+        "scope": {
+          "type": "string",
+          "description": "Short human-readable description of what Almanac is being aligned around."
+        },
+        "mission": { "$ref": "#/$defs/nonEmptyString" },
+        "primary_project": { "type": "string" },
+        "timezone": { "type": "string", "default": "Etc/UTC" },
+        "quiet_hours": { "type": "string", "description": "Human-readable quiet-hours policy, e.g. 22:00-08:00 local." },
+        "operating_modes": {
+          "type": "array",
+          "description": "Optional examples or active modes such as solo operator, household/family, organization/team, or project collective.",
+          "items": {
+            "type": "object",
+            "required": ["id", "description"],
+            "properties": {
+              "id": { "$ref": "#/$defs/idString" },
+              "description": { "$ref": "#/$defs/nonEmptyString" },
+              "applies_to": { "$ref": "#/$defs/idList" },
+              "default_boundaries": { "$ref": "#/$defs/stringList" }
+            },
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "operating_principles": { "$ref": "#/$defs/stringList" },
+        "glossary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["term", "definition"],
+            "properties": {
+              "term": { "$ref": "#/$defs/nonEmptyString" },
+              "definition": { "$ref": "#/$defs/nonEmptyString" }
+            },
+            "additionalProperties": false
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "role": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": { "$ref": "#/$defs/nonEmptyString" },
+        "responsibilities": { "$ref": "#/$defs/stringList" },
+        "decision_authority": { "$ref": "#/$defs/stringList" },
+        "agent_posture": {
+          "type": "string",
+          "description": "Default guidance for agents serving humans with this role."
+        },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "person": {
+      "type": "object",
+      "required": ["id", "display_name", "role", "agent"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "display_name": { "$ref": "#/$defs/nonEmptyString" },
+        "preferred_name": { "type": "string" },
+        "role": { "$ref": "#/$defs/idString" },
+        "title": { "type": "string" },
+        "teams": { "$ref": "#/$defs/idList" },
+        "primary_team": { "$ref": "#/$defs/idString" },
+        "unix_user": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]*[$]?$",
+          "description": "Optional Almanac Unix account username when already known."
+        },
+        "timezone": { "type": "string" },
+        "quiet_hours": { "type": "string" },
+        "contact": { "$ref": "#/$defs/contact" },
+        "identity_hints": { "$ref": "#/$defs/identityHints" },
+        "public_context": { "$ref": "#/$defs/publicContext" },
+        "github": { "$ref": "#/$defs/githubProfile" },
+        "human_accountability": { "$ref": "#/$defs/humanAccountability" },
+        "responsibilities": { "$ref": "#/$defs/stringList" },
+        "decision_authority": { "$ref": "#/$defs/stringList" },
+        "agent": { "$ref": "#/$defs/agentDelegation" },
+        "notes": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "contact": {
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "notion_email": { "type": "string", "format": "email" },
+        "discord_user_id": { "type": "string" },
+        "discord_handle": {
+          "type": "string",
+          "description": "Human-readable Discord handle/username. Easier for operators to collect than a numeric Discord user id; still only a matching hint until verified."
+        },
+        "telegram_user_id": { "type": "string" },
+        "slack_user_id": { "type": "string" },
+        "preferred_channels": { "$ref": "#/$defs/stringList" }
+      },
+      "additionalProperties": false
+    },
+    "identityHints": {
+      "type": "object",
+      "description": "Hints for matching onboarded users to this profile. Hints are not proof of identity by themselves.",
+      "properties": {
+        "notion_user_id": { "type": "string" },
+        "notion_email": { "type": "string", "format": "email" },
+        "discord_user_id": { "type": "string" },
+        "discord_handle": { "type": "string" },
+        "telegram_user_id": { "type": "string" },
+        "github_username": { "type": "string" },
+        "aliases": { "$ref": "#/$defs/stringList" }
+      },
+      "additionalProperties": false
+    },
+    "publicContext": {
+      "type": "object",
+      "description": "Non-secret public or semi-public orientation for how this person appears outside the private profile.",
+      "properties": {
+        "external_title": { "type": "string" },
+        "public_bio": { "type": "string" },
+        "social_posture": { "type": "string" },
+        "comfortable_with_public_posting": { "type": "string", "enum": ["yes", "no", "ask", "unknown"], "default": "unknown" },
+        "social_profiles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/socialProfile" },
+          "default": []
+        },
+        "source_refs": { "$ref": "#/$defs/idList" }
+      },
+      "additionalProperties": false
+    },
+    "socialProfile": {
+      "type": "object",
+      "required": ["platform", "handle"],
+      "properties": {
+        "platform": { "$ref": "#/$defs/idString" },
+        "handle": { "$ref": "#/$defs/nonEmptyString" },
+        "url": { "type": "string" },
+        "verified": { "type": "boolean", "default": false },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "githubProfile": {
+      "type": "object",
+      "description": "GitHub identity and repo context useful for code, review, source-pointer, or public-credibility workflows. Credentials and deploy keys do not belong here.",
+      "properties": {
+        "username": { "type": "string" },
+        "profile_url": { "type": "string" },
+        "primary_repos": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/repoRef" },
+          "default": []
+        },
+        "accessible_repos": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/repoRef" },
+          "default": []
+        },
+        "source_refs": { "$ref": "#/$defs/idList" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "repoRef": {
+      "type": "object",
+      "description": "Non-secret repository reference. Store credentials, tokens, and deploy keys elsewhere.",
+      "required": ["id", "purpose"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "owner_repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "url": { "type": "string" },
+        "local_path": { "type": "string" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "maintainer", "contributor", "reviewer", "read_only", "source_reference", "unknown"],
+          "default": "unknown"
+        },
+        "permission": {
+          "type": "string",
+          "enum": ["admin", "maintain", "write", "triage", "read", "none", "unknown"],
+          "default": "unknown"
+        },
+        "default_branch": { "type": "string" },
+        "source_refs": { "$ref": "#/$defs/idList" },
+        "sensitivity": { "type": "string", "enum": ["public", "internal", "restricted"], "default": "internal" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "humanAccountability": {
+      "type": "object",
+      "description": "Clarifies that the human owns outcomes and decisions; the agent is only a delegate.",
+      "properties": {
+        "accountable_for": { "$ref": "#/$defs/stringList" },
+        "final_decision_for": { "$ref": "#/$defs/stringList" },
+        "approval_required_for": { "$ref": "#/$defs/stringList" },
+        "escalate_to": { "$ref": "#/$defs/idList" }
+      },
+      "additionalProperties": false
+    },
+    "agentDelegation": {
+      "type": "object",
+      "required": ["name", "purpose"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "serves": { "$ref": "#/$defs/idString" },
+        "operating_mode": {
+          "type": "string",
+          "enum": ["personal_delegate", "team_delegate", "operator_delegate", "curator"],
+          "default": "personal_delegate"
+        },
+        "may_do": { "$ref": "#/$defs/stringList" },
+        "should_proactively_watch": { "$ref": "#/$defs/stringList" },
+        "must_ask_before": { "$ref": "#/$defs/stringList" },
+        "must_not_do": { "$ref": "#/$defs/stringList" },
+        "handoff_rules": { "$ref": "#/$defs/stringList" },
+        "success_criteria": { "$ref": "#/$defs/stringList" },
+        "onboarding_questions": { "$ref": "#/$defs/stringList" },
+        "default_surfaces": { "$ref": "#/$defs/stringList" }
+      },
+      "additionalProperties": false
+    },
+    "team": {
+      "type": "object",
+      "required": ["id", "name", "members"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "parent": { "$ref": "#/$defs/idString" },
+        "lead": { "$ref": "#/$defs/idString" },
+        "members": { "$ref": "#/$defs/idList" },
+        "responsibilities": { "$ref": "#/$defs/stringList" },
+        "decision_authority": { "$ref": "#/$defs/stringList" },
+        "communication": { "$ref": "#/$defs/stringList" },
+        "knowledge_refs": { "$ref": "#/$defs/idList" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["subject", "relation", "object"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/nonEmptyString" },
+        "relation": { "$ref": "#/$defs/idString" },
+        "object": { "$ref": "#/$defs/nonEmptyString" },
+        "scope": { "type": "string" },
+        "notes": { "type": "string" },
+        "source": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "agentLineage": {
+      "type": "object",
+      "required": ["purpose"],
+      "properties": {
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "prototype_agent": { "$ref": "#/$defs/idString" },
+        "baseline": { "$ref": "#/$defs/agentBaseline" },
+        "department_modules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentModule" },
+          "default": []
+        },
+        "function_modules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentModule" },
+          "default": []
+        },
+        "human_owner_modules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentModule" },
+          "default": []
+        },
+        "agent_modules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentModule" },
+          "default": []
+        },
+        "seed_sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lineageSeedSource" },
+          "default": []
+        },
+        "output_contract": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "default": []
+        },
+        "open_question_contract": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "default": []
+        },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "agentBaseline": {
+      "type": "object",
+      "properties": {
+        "doctrine": { "$ref": "#/$defs/stringList" },
+        "product_facts": { "$ref": "#/$defs/stringList" },
+        "fact_caveats": { "$ref": "#/$defs/stringList" },
+        "source_of_truth_discipline": { "$ref": "#/$defs/stringList" },
+        "security_rules": { "$ref": "#/$defs/stringList" },
+        "communication_style": { "$ref": "#/$defs/stringList" },
+        "tool_use_expectations": { "$ref": "#/$defs/stringList" }
+      },
+      "additionalProperties": false
+    },
+    "agentModule": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "type": "string" },
+        "applies_to": { "$ref": "#/$defs/idList" },
+        "serves": { "$ref": "#/$defs/idString" },
+        "human_liaison": { "$ref": "#/$defs/idString" },
+        "primary_function": { "type": "string" },
+        "source_refs": { "$ref": "#/$defs/idList" },
+        "doctrine": { "$ref": "#/$defs/stringList" },
+        "workflows": { "$ref": "#/$defs/stringList" },
+        "skills": { "$ref": "#/$defs/stringList" },
+        "boundaries": { "$ref": "#/$defs/stringList" },
+        "onboarding_questions": { "$ref": "#/$defs/stringList" },
+        "open_questions": { "$ref": "#/$defs/stringList" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "lineageSeedSource": {
+      "type": "object",
+      "required": ["id", "path", "purpose"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "canonical_initial_seed": { "type": "boolean", "default": false },
+        "expected_sha256": { "type": "string" },
+        "revalidation_required": { "type": "boolean", "default": true },
+        "sensitivity": { "type": "string", "enum": ["public", "internal", "restricted"], "default": "internal" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "workSurfaces": {
+      "type": "object",
+      "properties": {
+        "notion": {
+          "type": "object",
+          "properties": {
+            "shared_space": { "type": "string" },
+            "root_page_hint": { "type": "string" },
+            "default_visibility": {
+              "type": "string",
+              "enum": ["org_shared", "group_shared", "household_shared", "private_to_user", "solo_private", "unspecified"]
+            },
+            "onboarding_pages": { "type": "string", "enum": ["private_to_user", "org_shared", "group_shared", "household_shared", "disabled"] },
+            "write_policy": { "type": "string" },
+            "identity_match_fields": { "$ref": "#/$defs/stringList" }
+          },
+          "additionalProperties": false
+        },
+        "vault": {
+          "type": "object",
+          "properties": {
+            "shared_knowledge_roots": { "$ref": "#/$defs/stringList" },
+            "generated_org_profile_path": { "type": "string" },
+            "sensitive_roots": { "$ref": "#/$defs/stringList" },
+            "skill_roots": { "$ref": "#/$defs/stringList" },
+            "plugin_roots": { "$ref": "#/$defs/stringList" }
+          },
+          "additionalProperties": false
+        },
+        "chat": {
+          "type": "object",
+          "properties": {
+            "primary_platforms": { "$ref": "#/$defs/stringList" },
+            "operator_channels": { "$ref": "#/$defs/stringList" },
+            "team_channels": { "$ref": "#/$defs/stringList" }
+          },
+          "additionalProperties": false
+        },
+        "code": {
+          "type": "object",
+          "properties": {
+            "repo_roots": { "$ref": "#/$defs/stringList" },
+            "repositories": {
+              "type": "array",
+              "description": "Shared repo references that agents may use for source orientation, code review, docs, or deployment planning.",
+              "items": { "$ref": "#/$defs/repoRef" },
+              "default": []
+            },
+            "production_change_policy": { "type": "string" },
+            "review_policy": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "policies": {
+      "type": "object",
+      "properties": {
+        "agent_behavior": {
+          "type": "object",
+          "properties": {
+            "global_may_do": { "$ref": "#/$defs/stringList" },
+            "global_must_ask_before": { "$ref": "#/$defs/stringList" },
+            "global_must_not_do": { "$ref": "#/$defs/stringList" },
+            "proactive_limits": { "$ref": "#/$defs/stringList" }
+          },
+          "additionalProperties": false
+        },
+        "privacy": {
+          "type": "object",
+          "properties": {
+            "default_people_visibility": {
+              "type": "string",
+              "enum": ["org_visible", "group_visible", "team_visible", "household_visible", "operator_only", "private"]
+            },
+            "sensitive_fields": { "$ref": "#/$defs/stringList" },
+            "distribution_notes": { "$ref": "#/$defs/stringList" }
+          },
+          "additionalProperties": false
+        },
+        "escalation": {
+          "type": "object",
+          "properties": {
+            "default_contacts": { "$ref": "#/$defs/idList" },
+            "emergency_stop_terms": { "$ref": "#/$defs/stringList" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "reference": {
+      "type": "object",
+      "required": ["id", "title", "path"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "type": "string", "enum": ["markdown", "notion", "repo", "url", "other"], "default": "markdown" },
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "audience": { "type": "string", "enum": ["all_agents", "team_only", "operator_only"], "default": "all_agents" },
+        "sensitivity": { "type": "string", "enum": ["public", "internal", "restricted"], "default": "internal" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

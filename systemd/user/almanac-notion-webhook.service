@@ -1,0 +1,11 @@
+[Unit]
+Description=Almanac Notion webhook receiver
+After=network.target
+
+[Service]
+ExecStart=%h/almanac/bin/almanac-notion-webhook.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

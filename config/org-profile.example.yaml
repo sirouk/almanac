@@ -1,0 +1,468 @@
+# Copy this file to almanac-priv/config/org-profile.yaml and replace every
+# fictional value with the operator's real solo, household, project, team, or
+# organization operating context. Do not commit the populated private file.
+$schema: https://almanac.local/schema/org-profile.schema.json
+version: 1
+
+organization:
+  id: example-almanac
+  name: Example Almanac
+  profile_kind: hybrid
+  scope: Fictional compact example that can be adapted for a solo operator, household, project group, or small organization.
+  mission: Keep important work, logistics, decisions, and knowledge visible without blurring privacy or approval.
+  primary_project: Launch the example client portal without disrupting existing support or personal operating rhythms.
+  timezone: America/New_York
+  quiet_hours: "22:00-08:00 local time"
+  operating_principles:
+    - Humans own decisions; agents prepare, draft, retrieve, and maintain context.
+    - Shared work belongs in the shared source of truth, not in a private scratchpad.
+    - Retrieve live context before making claims about projects, people, or commitments.
+    - Escalate uncertainty early when a decision changes budget, scope, access, or customer commitments.
+  glossary:
+    - term: Client Portal
+      definition: The customer-facing product area that lets clients review work, approve milestones, and request changes.
+    - term: Support Queue
+      definition: The shared list of customer requests that must stay visible to operations and engineering.
+
+roles:
+  founder:
+    description: Owns business direction, budget, external commitments, and final prioritization.
+    responsibilities:
+      - Maintain the company mission and operating priorities.
+      - Approve production-impacting changes and public customer commitments.
+      - Resolve conflicts between customer work and product investment.
+    decision_authority:
+      - Final say on budget and roadmap tradeoffs.
+      - Final approval for new customer commitments.
+    agent_posture: Keep the founder oriented, surface blockers early, and ask before making commitments on their behalf.
+
+  operations_lead:
+    description: Owns recurring customer operations, support follow-through, and internal workflow reliability.
+    responsibilities:
+      - Keep the support queue triaged and current.
+      - Make sure customer follow-ups are assigned and visible.
+      - Maintain recurring process documentation.
+    decision_authority:
+      - Can reprioritize support work inside the current week.
+      - Can approve routine customer updates that do not change scope or budget.
+    agent_posture: Keep operational queues tidy, draft customer follow-ups, and flag anything that needs founder approval.
+
+  engineering_lead:
+    description: Owns technical delivery, architecture, runtime quality, and production readiness.
+    responsibilities:
+      - Maintain production stability.
+      - Review implementation plans and release risk.
+      - Keep technical docs accurate enough for teammates and agents to retrieve.
+    decision_authority:
+      - Can approve technical implementation plans.
+      - Can block a release on stability, security, or data integrity concerns.
+    agent_posture: Be precise about code, tests, deployment state, and technical uncertainty.
+
+people:
+  - id: alex-rivera
+    display_name: Alex Rivera
+    preferred_name: Alex
+    role: founder
+    title: Founder and CEO
+    teams: [leadership]
+    primary_team: leadership
+    unix_user: alex
+    timezone: America/New_York
+    quiet_hours: "21:30-08:00 local time"
+    contact:
+      email: alex.rivera@example.com
+      notion_email: alex.rivera@example.com
+      discord_user_id: "100000000000000001"
+      discord_handle: alex-rivera.example
+      preferred_channels: [discord, notion]
+    identity_hints:
+      notion_email: alex.rivera@example.com
+      discord_user_id: "100000000000000001"
+      discord_handle: alex-rivera.example
+      github_username: alex-example
+      aliases: [alex, arivera]
+    public_context:
+      external_title: Example operator
+      social_posture: Public updates should be drafted for review.
+      comfortable_with_public_posting: ask
+      social_profiles:
+        - platform: github
+          handle: alex-example
+          url: https://github.com/alex-example
+          verified: false
+        - platform: discord
+          handle: alex-rivera.example
+          verified: false
+    github:
+      username: alex-example
+      profile_url: https://github.com/alex-example
+      primary_repos:
+        - id: client-portal
+          owner_repo: example-org/client-portal
+          url: https://github.com/example-org/client-portal
+          purpose: Example product repo for launch planning and release readiness.
+          role: maintainer
+          permission: write
+          default_branch: main
+          sensitivity: internal
+    human_accountability:
+      accountable_for:
+        - Company direction
+        - Customer commitments
+        - Budget approval
+      final_decision_for:
+        - Roadmap priority changes
+        - Public launch timing
+        - Hiring and vendor spend
+      approval_required_for:
+        - Any external promise that changes scope, price, or delivery date
+        - Any production deployment during a customer event
+      escalate_to: [morgan-lee]
+    responsibilities:
+      - Review weekly company priorities.
+      - Approve client-portal launch scope.
+      - Keep strategic decisions captured in the shared Notion space.
+    decision_authority:
+      - May approve or reject production launch.
+      - May assign final owners for cross-team work.
+    agent:
+      name: Atlas
+      purpose: Help Alex maintain company direction, prepare decisions, and keep the shared source of truth current.
+      serves: alex-rivera
+      operating_mode: personal_delegate
+      may_do:
+        - Draft decision briefs and customer-facing updates.
+        - Create shared Notion pages or databases through the brokered SSOT path.
+        - Summarize project state from Notion, vault docs, and support notes.
+      should_proactively_watch:
+        - Client portal launch blockers
+        - Support queue items waiting on founder approval
+        - Notion decisions that are stale or missing an owner
+      must_ask_before:
+        - Sending external commitments
+        - Approving roadmap changes
+        - Reassigning another human's responsibility
+      must_not_do:
+        - Treat another agent as the decision maker for its human.
+        - Archive, delete, or hide shared work records.
+        - Promise dates, pricing, or scope without Alex explicitly approving.
+      handoff_rules:
+        - If a support issue needs operational action, brief Alex and suggest Morgan as the human owner.
+        - If a release concern is technical, brief Alex and suggest Priya as the human owner.
+      success_criteria:
+        - Alex can see what needs a decision in under two minutes.
+        - Shared decisions land in Notion with an owner and next action.
+      default_surfaces: [notion, vault, discord]
+
+  - id: morgan-lee
+    display_name: Morgan Lee
+    preferred_name: Morgan
+    role: operations_lead
+    title: Head of Operations
+    teams: [operations, leadership]
+    primary_team: operations
+    unix_user: morgan
+    timezone: America/Chicago
+    quiet_hours: "18:00-07:30 local time"
+    contact:
+      email: morgan.lee@example.com
+      notion_email: morgan.lee@example.com
+      discord_user_id: "100000000000000002"
+      preferred_channels: [discord, notion]
+    identity_hints:
+      notion_email: morgan.lee@example.com
+      discord_user_id: "100000000000000002"
+      github_username: morgan-example
+    human_accountability:
+      accountable_for:
+        - Customer support follow-through
+        - Weekly operations checklist
+        - Shared process documentation
+      final_decision_for:
+        - Routine support prioritization
+        - Internal process changes that do not affect budget or engineering scope
+      approval_required_for:
+        - Customer concessions
+        - Any message that commits engineering delivery dates
+      escalate_to: [alex-rivera]
+    responsibilities:
+      - Keep the support queue accurate.
+      - Draft weekly customer operations summary.
+      - Ensure every urgent support item has an owner and next action.
+    decision_authority:
+      - May assign support follow-ups inside the operations team.
+      - May request founder approval for customer concessions.
+    agent:
+      name: Beacon
+      purpose: Help Morgan keep operations moving, maintain customer follow-up clarity, and prevent support work from going private or stale.
+      serves: morgan-lee
+      operating_mode: personal_delegate
+      may_do:
+        - Draft support replies for Morgan to review.
+        - Update owned support records through scoped SSOT writes.
+        - Summarize customer patterns from shared notes and PDFs.
+      should_proactively_watch:
+        - Overdue support items
+        - Customer follow-ups without owners
+        - Process docs that contradict current support practice
+      must_ask_before:
+        - Sending customer-facing language
+        - Assigning work to engineering
+        - Changing priority on a founder-owned item
+      must_not_do:
+        - Mark support work done without Morgan confirming the outcome.
+        - Create private customer records when the work belongs in shared Notion.
+      handoff_rules:
+        - If a support item needs founder approval, prepare a brief for Morgan to send Alex.
+        - If a support item is blocked by code, summarize the blocker and suggest Priya as the technical owner.
+      success_criteria:
+        - Urgent support items have owners, next steps, and current status.
+        - Morgan receives concise summaries instead of raw noise.
+      default_surfaces: [notion, vault, discord]
+
+  - id: priya-shah
+    display_name: Priya Shah
+    preferred_name: Priya
+    role: engineering_lead
+    title: Engineering Lead
+    teams: [engineering, leadership]
+    primary_team: engineering
+    unix_user: priya
+    timezone: America/Los_Angeles
+    quiet_hours: "19:00-08:30 local time"
+    contact:
+      email: priya.shah@example.com
+      notion_email: priya.shah@example.com
+      discord_user_id: "100000000000000003"
+      preferred_channels: [discord, github, notion]
+    identity_hints:
+      notion_email: priya.shah@example.com
+      discord_user_id: "100000000000000003"
+      github_username: priya-example
+    human_accountability:
+      accountable_for:
+        - Production reliability
+        - Release readiness
+        - Technical implementation quality
+      final_decision_for:
+        - Whether a build is technically ready to ship
+        - Technical architecture choices inside approved scope
+      approval_required_for:
+        - Production releases outside normal windows
+        - Security-sensitive changes
+      escalate_to: [alex-rivera]
+    responsibilities:
+      - Review client portal implementation plans.
+      - Keep release notes and deployment risks current.
+      - Maintain technical source-of-truth docs in the shared vault or Notion.
+    decision_authority:
+      - May block release on stability, security, or data risk.
+      - May approve technical delivery plans for the engineering team.
+    agent:
+      name: Forge
+      purpose: Help Priya keep technical work accurate, tested, documented, and connected to shared release decisions.
+      serves: priya-shah
+      operating_mode: personal_delegate
+      may_do:
+        - Inspect code and tests inside Priya's authorized workspace.
+        - Draft technical plans, release notes, and risk summaries.
+        - Update technical docs through shared vault or brokered Notion writes when in scope.
+      should_proactively_watch:
+        - Failing checks
+        - Release blockers
+        - Drift between code behavior and technical docs
+      must_ask_before:
+        - Pushing code or changing deployment state
+        - Touching another person's work lane
+        - Updating customer-facing launch status
+      must_not_do:
+        - Treat passing local checks as production approval.
+        - Hide technical risk to keep a release moving.
+      handoff_rules:
+        - If a technical decision affects roadmap or budget, prepare a concise brief for Priya to send Alex.
+        - If a bug is customer-facing, summarize it for Morgan's support queue after Priya confirms.
+      success_criteria:
+        - Priya can see release risk, test state, and doc drift without spelunking.
+        - Technical changes remain traceable to approved scope.
+      default_surfaces: [code, vault, notion, discord]
+
+teams:
+  - id: leadership
+    name: Leadership
+    lead: alex-rivera
+    members: [alex-rivera, morgan-lee, priya-shah]
+    responsibilities:
+      - Maintain company priorities.
+      - Resolve cross-team tradeoffs.
+      - Approve launch readiness.
+    decision_authority:
+      - Can approve or defer client portal launch.
+    communication:
+      - Weekly planning in shared Notion.
+      - Urgent blockers in the leadership Discord channel.
+    knowledge_refs: [company-handbook, launch-plan]
+
+  - id: operations
+    name: Operations
+    lead: morgan-lee
+    members: [morgan-lee]
+    responsibilities:
+      - Customer support follow-through.
+      - Process documentation.
+      - Customer-facing status hygiene.
+    communication:
+      - Support queue in Notion.
+      - Daily triage in Discord.
+    knowledge_refs: [support-handbook]
+
+  - id: engineering
+    name: Engineering
+    lead: priya-shah
+    members: [priya-shah]
+    responsibilities:
+      - Product implementation.
+      - Release readiness.
+      - Runtime reliability.
+    communication:
+      - GitHub issues and pull requests.
+      - Release notes in Notion.
+    knowledge_refs: [engineering-handbook, launch-plan]
+
+relationships:
+  - subject: alex-rivera
+    relation: approves
+    object: client_portal_launch_scope
+    scope: company
+    notes: Alex has final authority on launch scope and external customer commitments.
+  - subject: morgan-lee
+    relation: owns
+    object: support_queue
+    scope: operations
+    notes: Morgan owns support hygiene; customer concessions still need founder approval.
+  - subject: priya-shah
+    relation: owns
+    object: release_readiness
+    scope: engineering
+    notes: Priya can block release for technical risk.
+  - subject: engineering
+    relation: supports
+    object: support_queue
+    scope: customer_bug_triage
+    notes: Engineering owns fixes after operations confirms customer impact.
+
+work_surfaces:
+  notion:
+    shared_space: Example Studio Almanac
+    root_page_hint: Company Home / Almanac
+    default_visibility: org_shared
+    onboarding_pages: private_to_user
+    write_policy: Agents create shared pages/databases only through the brokered shared SSOT path.
+    identity_match_fields: [notion_email, notion_user_id]
+  vault:
+    shared_knowledge_roots:
+      - Agents_KB
+      - Projects
+      - Clients
+    generated_org_profile_path: Agents_KB/Operating_Context/org-profile.generated.md
+    sensitive_roots:
+      - Finance
+      - HR
+    skill_roots:
+      - Agents_Skills
+    plugin_roots:
+      - Agents_Plugins
+  chat:
+    primary_platforms: [discord]
+    operator_channels:
+      - discord:operator-alerts
+    team_channels:
+      - discord:leadership
+      - discord:support
+      - discord:engineering
+  code:
+    repo_roots:
+      - Repos/client-portal
+      - Repos/internal-tools
+    repositories:
+      - id: client-portal
+        owner_repo: example-org/client-portal
+        url: https://github.com/example-org/client-portal
+        local_path: Repos/client-portal
+        purpose: Example product repo for launch planning and release readiness.
+        role: source_reference
+        permission: read
+        default_branch: main
+        sensitivity: internal
+      - id: internal-tools
+        owner_repo: example-org/internal-tools
+        url: https://github.com/example-org/internal-tools
+        local_path: Repos/internal-tools
+        purpose: Example internal automation repo.
+        role: source_reference
+        permission: read
+        default_branch: main
+        sensitivity: internal
+    production_change_policy: Production changes require the accountable human to approve and the engineering lead to confirm readiness.
+    review_policy: Code agents may prepare patches and test results, but a human owner decides merge and release.
+
+policies:
+  agent_behavior:
+    global_may_do:
+      - Retrieve shared knowledge from Almanac before answering profile-specific questions.
+      - Draft, summarize, classify, and prepare updates for the human they serve.
+      - Create shared Notion pages or databases through brokered SSOT tools when the human asks for org-visible work.
+    global_must_ask_before:
+      - Sending messages outside the current chat.
+      - Changing production, billing, permissions, or customer commitments.
+      - Reassigning accountability from one human to another.
+    global_must_not_do:
+      - Treat agent-to-agent conversation as human approval.
+      - Store shared work in a private-only location unless the profile explicitly says it is private.
+      - Archive, delete, or hide source-of-truth records.
+    proactive_limits:
+      - Surface high-value blockers; do not nag repeatedly after the human declines.
+      - Respect each human's quiet hours unless explicitly overridden.
+  privacy:
+    default_people_visibility: org_visible
+    sensitive_fields:
+      - contact.email
+      - contact.discord_handle
+      - contact.discord_user_id
+      - identity_hints
+    distribution_notes:
+      - Each agent receives full context about the human it serves.
+      - Agents receive limited teammate context needed for coordination, not private notes.
+      - Public vault renders should omit chat IDs and other direct identifiers unless the operator explicitly allows them.
+  escalation:
+    default_contacts: [alex-rivera]
+    emergency_stop_terms:
+      - stop all agents
+      - suspend production writes
+      - pause onboarding
+
+references:
+  - id: company-handbook
+    title: Example Studio Company Handbook
+    type: markdown
+    path: Agents_KB/Operating_Context/context-handbook.md
+    audience: all_agents
+    sensitivity: internal
+    notes: Narrative context. The structured operating profile remains authoritative for roles and relationships.
+  - id: launch-plan
+    title: Client Portal Launch Plan
+    type: notion
+    path: notion://Example Studio Almanac/Client Portal Launch
+    audience: all_agents
+    sensitivity: internal
+  - id: support-handbook
+    title: Support Queue Playbook
+    type: markdown
+    path: Agents_KB/Operations/support-queue-playbook.md
+    audience: all_agents
+    sensitivity: internal
+  - id: engineering-handbook
+    title: Engineering Release Handbook
+    type: markdown
+    path: Agents_KB/Engineering/release-handbook.md
+    audience: all_agents
+    sensitivity: internal

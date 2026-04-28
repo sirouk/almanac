@@ -1,0 +1,43 @@
+version: 1
+providers:
+  chutes:
+    display_name: Chutes
+    target: chutes:moonshotai/Kimi-K2.6-TEE
+    default_model: moonshotai/Kimi-K2.6-TEE
+    recommended_models:
+      - moonshotai/Kimi-K2.6-TEE
+      - zai-org/GLM-5.1-TEE
+      - model-router
+    legacy_default_targets:
+      - chutes:auto-failover
+      - chutes:model-router
+    legacy_default_models:
+      - auto-failover
+      - model-router
+    description: OpenAI-compatible Chutes provider default and onboarding suggestions.
+  opus:
+    display_name: Claude Opus
+    target: anthropic:claude-opus-4-7
+    default_model: claude-opus-4-7
+    recommended_models:
+      - claude-opus-4-7
+    legacy_default_targets:
+      - anthropic:claude-opus
+      - anthropic:opus
+    legacy_default_models:
+      - claude-opus
+      - opus
+    description: Claude Code OAuth provider default for Opus lanes.
+  codex:
+    display_name: OpenAI Codex
+    target: openai-codex:gpt-5.5
+    default_model: gpt-5.5
+    recommended_models:
+      - gpt-5.5
+    legacy_default_targets:
+      - openai:codex
+      - openai-codex:codex
+    legacy_default_models:
+      - codex
+      - openai:codex
+    description: OpenAI Codex sign-in provider default for code-heavy lanes.

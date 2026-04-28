@@ -1,0 +1,105 @@
+{
+  "$schema": "./pins.schema.json",
+  "version": 1,
+  "upgrade_notifications": {
+    "notify_limit_per_release": 1
+  },
+  "components": {
+    "hermes-agent": {
+      "kind": "git-commit",
+      "repo": "https://github.com/NousResearch/hermes-agent.git",
+      "ref": "98d75dea5a86aec599b1e081f8bbe9170bd3f964",
+      "ref_kind": "commit",
+      "branch": "main",
+      "extras": [
+        "cli",
+        "mcp",
+        "messaging",
+        "cron",
+        "web"
+      ],
+      "description": "Shared Python runtime each enrolled user agent runs. The single Hermes venv at state/runtime/hermes-venv/ is built from this exact commit; every per-user hermes-home points at it via PATH + HERMES_HOME."
+    },
+    "hermes-docs": {
+      "kind": "git-commit",
+      "repo": "https://github.com/NousResearch/hermes-agent.git",
+      "ref": "98d75dea5a86aec599b1e081f8bbe9170bd3f964",
+      "ref_kind": "commit",
+      "branch": "main",
+      "subdir": "website/docs",
+      "inherits_from": "hermes-agent",
+      "description": "Hermes user docs are synced into the vault, defaulting to Agents_KB/hermes-agent-docs/ as agent operating knowledge. Defaults to the same ref as hermes-agent so docs and runtime can't drift; override only when intentionally previewing newer docs or using a different vault layout."
+    },
+    "code-server": {
+      "kind": "container-image",
+      "image": "docker.io/codercom/code-server",
+      "tag": "4.116.0",
+      "description": "Per-agent in-vault IDE container that the agent dashboard launches for code-server-backed sessions."
+    },
+    "nvm": {
+      "kind": "git-tag",
+      "repo": "https://github.com/nvm-sh/nvm",
+      "tag": "v0.40.3",
+      "installer_url_template": "https://raw.githubusercontent.com/nvm-sh/nvm/{tag}/install.sh",
+      "description": "Node Version Manager installer. Pinned tag is fetched from raw.githubusercontent.com and piped to bash during userland bootstrap."
+    },
+    "node": {
+      "kind": "nvm-version",
+      "version": "22",
+      "description": "Node.js runtime managed by nvm. Currently a major-only pin; nvm picks the latest patch within v22.x at install time."
+    },
+    "python": {
+      "kind": "uv-python",
+      "preferred": [
+        "3.12",
+        "3.11"
+      ],
+      "minimum": "3.11",
+      "description": "Python interpreter for the shared Hermes venv. Resolved via uv python install; falls back through preferred[] in order, then to system python3 (>= minimum)."
+    },
+    "qmd": {
+      "kind": "npm",
+      "package": "@tobilu/qmd",
+      "version": "2.1.0",
+      "description": "qmd retrieval CLI + MCP server. Explicit semver pin keeps recall/index semantics stable across host bootstraps and upgrades."
+    },
+    "nextcloud": {
+      "kind": "container-image",
+      "image": "docker.io/library/nextcloud",
+      "tag": "31-apache",
+      "description": "Nextcloud web UI for browsing the shared vault and uploading PDFs. Tag floats within 31.x to receive minor + security patches."
+    },
+    "postgres": {
+      "kind": "container-image",
+      "image": "docker.io/library/postgres",
+      "tag": "16-alpine",
+      "description": "Postgres database backing Nextcloud."
+    },
+    "redis": {
+      "kind": "container-image",
+      "image": "docker.io/library/redis",
+      "tag": "7-alpine",
+      "description": "Redis cache backing Nextcloud."
+    },
+    "uv": {
+      "kind": "installer-url",
+      "url": "https://astral.sh/uv/install.sh",
+      "version": "latest",
+      "description": "Python package + venv manager. Currently floats on the astral.sh install script; Phase 3 will pin via UV_VERSION env."
+    },
+    "tailscale": {
+      "kind": "installer-url",
+      "url": "https://tailscale.com/install.sh",
+      "version": "latest",
+      "install_policy": "auto",
+      "description": "Tailscale VPN. Floating on the official install script is acceptable here because Tailscale's package channel is the authoritative source of truth and the OS package manager handles upgrades."
+    },
+    "quarto": {
+      "kind": "release-asset",
+      "repo": "https://github.com/quarto-dev/quarto-cli",
+      "version": null,
+      "install_policy": "external",
+      "description": "Quarto static-site renderer. Optional + externally installed; the deploy does not bootstrap quarto. If present, render-quarto.sh uses whatever version is on PATH."
+    }
+  }
+}

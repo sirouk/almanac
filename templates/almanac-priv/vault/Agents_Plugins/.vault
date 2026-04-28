@@ -1,0 +1,13 @@
+# managed: almanac-default-vault
+name: Agents_Plugins
+description: Shared agent plugin packages, runtime extensions, and integration notes for Hermes-based agents operated through Almanac.
+owner: organization
+default_subscribed: true
+category: plugins
+tags:
+  - plugins
+  - agents
+  - hermes
+  - integrations
+  - runtime
+brief_template: Shared agent plugin inventory for Hermes agent extensions, rollout notes, and operator guidance.

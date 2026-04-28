@@ -1,0 +1,12 @@
+# managed: almanac-default-vault
+name: Agents_KB
+description: Shared agent knowledge base for runtime documentation, operating references, and agent-facing context that should stay aligned with Almanac-managed tools.
+owner: organization
+default_subscribed: true
+category: knowledge
+tags:
+  - agents
+  - knowledge-base
+  - docs
+  - operations
+brief_template: Agent knowledge base for pinned runtime docs, operating references, and shared agent-facing context.

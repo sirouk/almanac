@@ -1,0 +1,19 @@
+/config/almanac.env
+/config/install.answers.env
+/.almanac-operator.env
+/almanac-priv/
+__pycache__/
+*.pyc
+.env
+.env.*
+
+# Ralphie local run artifacts
+logs/
+consensus/
+completion_log/
+.ralphie/
+HUMAN_INSTRUCTIONS.md
+research/HUMAN_FEEDBACK.md
+coverage/
+.nyc_output/
+htmlcov/

@@ -285,6 +285,25 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
             if str(ref_id) not in ref_ids:
                 warnings.append(f"teams.{team_id}.knowledge_refs references unknown reference: {ref_id}")
 
+    def resolve_profile_path(raw_path: str) -> Path:
+        raw_path = raw_path.strip()
+        if cfg is not None:
+            replacements = {
+                "<vault>": str(Path(cfg.vault_dir)),
+                "<priv>": str(Path(cfg.private_dir)),
+                "<private>": str(Path(cfg.private_dir)),
+                "<repo>": str(REPO_ROOT),
+            }
+            for marker, replacement in replacements.items():
+                if raw_path == marker:
+                    return Path(replacement)
+                if raw_path.startswith(marker + "/"):
+                    return Path(replacement) / raw_path[len(marker) + 1 :]
+        candidate = Path(raw_path)
+        if not candidate.is_absolute() and cfg is not None:
+            candidate = Path(cfg.vault_dir) / raw_path
+        return candidate
+
     for reference in references:
         if not isinstance(reference, dict):
             continue
@@ -292,11 +311,33 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
         ref_type = str(reference.get("type") or "markdown").strip()
         raw_path = str(reference.get("path") or "").strip()
         if ref_type in {"markdown", "repo"} and raw_path and cfg is not None:
-            candidate = Path(raw_path)
-            if not candidate.is_absolute():
-                candidate = Path(cfg.vault_dir) / raw_path
+            candidate = resolve_profile_path(raw_path)
             if not candidate.exists():
                 warnings.append(f"references.{ref_id}.path is not currently accessible: {raw_path}")
+
+    lineage = _lineage(profile)
+    for source in _as_list(lineage.get("seed_sources")):
+        if not isinstance(source, dict):
+            continue
+        source_id = str(source.get("id") or "").strip()
+        raw_path = str(source.get("path") or "").strip()
+        expected_sha256 = str(source.get("expected_sha256") or "").strip()
+        if not raw_path or cfg is None:
+            continue
+        candidate = resolve_profile_path(raw_path)
+        if not candidate.exists():
+            warnings.append(f"agent_lineage.seed_sources.{source_id}.path is not currently accessible: {raw_path}")
+            continue
+        if expected_sha256:
+            try:
+                actual_sha256 = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            except OSError as exc:
+                warnings.append(f"agent_lineage.seed_sources.{source_id}.path could not be checksummed: {exc}")
+                continue
+            if actual_sha256 != expected_sha256:
+                errors.append(
+                    f"agent_lineage.seed_sources.{source_id}.expected_sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+                )
 
     return errors, warnings
 
@@ -364,6 +405,15 @@ def _work_surfaces(profile: dict[str, Any]) -> dict[str, Any]:
     return surfaces if isinstance(surfaces, dict) else {}
 
 
+def _lineage_modules(lineage: dict[str, Any]) -> list[Any]:
+    return (
+        _as_list(lineage.get("department_modules"))
+        + _as_list(lineage.get("function_modules"))
+        + _as_list(lineage.get("human_owner_modules"))
+        + _as_list(lineage.get("agent_modules"))
+    )
+
+
 def preview_payload(profile: dict[str, Any], *, cfg: Any | None = None, source_path: Path | None = None) -> dict[str, Any]:
     validation = validate_profile(profile, cfg)
     org = _organization(profile)
@@ -399,7 +449,18 @@ def preview_payload(profile: dict[str, Any], *, cfg: Any | None = None, source_p
             "baseline_sections": sorted(baseline.keys()),
             "department_modules": [item.get("id", "") for item in _as_list(lineage.get("department_modules")) if isinstance(item, dict)],
             "function_modules": [item.get("id", "") for item in _as_list(lineage.get("function_modules")) if isinstance(item, dict)],
+            "human_owner_modules": [item.get("id", "") for item in _as_list(lineage.get("human_owner_modules")) if isinstance(item, dict)],
             "agent_modules": [item.get("id", "") for item in _as_list(lineage.get("agent_modules")) if isinstance(item, dict)],
+            "seed_sources": [
+                {
+                    "id": item.get("id", ""),
+                    "path": item.get("path", ""),
+                    "canonical_initial_seed": bool(item.get("canonical_initial_seed", False)),
+                    "expected_sha256": item.get("expected_sha256", ""),
+                }
+                for item in _as_list(lineage.get("seed_sources"))
+                if isinstance(item, dict)
+            ],
         },
         "people": [
             {
@@ -495,8 +556,16 @@ def format_preview(payload: dict[str, Any]) -> str:
             lines.append(f"  Department modules: {', '.join(lineage.get('department_modules') or [])}")
         if lineage.get("function_modules"):
             lines.append(f"  Function modules: {', '.join(lineage.get('function_modules') or [])}")
+        if lineage.get("human_owner_modules"):
+            lines.append(f"  Human owner modules: {', '.join(lineage.get('human_owner_modules') or [])}")
         if lineage.get("agent_modules"):
             lines.append(f"  Agent modules: {', '.join(lineage.get('agent_modules') or [])}")
+        if lineage.get("seed_sources"):
+            lines.append("  Seed sources:")
+            for source in lineage.get("seed_sources") or []:
+                marker = " canonical" if source.get("canonical_initial_seed") else ""
+                checksum = " sha256:set" if source.get("expected_sha256") else ""
+                lines.append(f"    - {source.get('id')}: {source.get('path')}{marker}{checksum}")
     lines.extend(["", "References"])
     for reference in payload.get("references") or []:
         lines.append(
@@ -597,11 +666,7 @@ def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = 
                 continue
             title = key.replace("_", " ").title()
             lines.extend(["", f"### {title}", "", _text_list(values)])
-        modules = (
-            _as_list(lineage.get("department_modules"))
-            + _as_list(lineage.get("function_modules"))
-            + _as_list(lineage.get("agent_modules"))
-        )
+        modules = _lineage_modules(lineage)
         if modules:
             lines.extend(["", "### Modules", ""])
             for module in modules:
@@ -715,7 +780,7 @@ def _module_matches_person(module: dict[str, Any], person: dict[str, Any]) -> bo
 
 def _agent_modules_for_person(profile: dict[str, Any], person: dict[str, Any]) -> list[dict[str, Any]]:
     lineage = _lineage(profile)
-    modules = _as_list(lineage.get("department_modules")) + _as_list(lineage.get("function_modules")) + _as_list(lineage.get("agent_modules"))
+    modules = _lineage_modules(lineage)
     return [module for module in modules if isinstance(module, dict) and _module_matches_person(module, person)]
 
 

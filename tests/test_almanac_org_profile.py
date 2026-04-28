@@ -8,6 +8,7 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -152,9 +153,104 @@ def test_ultimate_example_profile_applies_to_state_vault_and_agent_memory() -> N
     print("PASS test_ultimate_example_profile_applies_to_state_vault_and_agent_memory")
 
 
+def test_human_owner_modules_and_seed_checksums_are_distributed() -> None:
+    org_profile = load_module(REPO / "python" / "almanac_org_profile.py", "almanac_org_profile_modules_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_dir = root / "vault"
+        seed_path = vault_dir / "Seeds" / "source.md"
+        seed_path.parent.mkdir(parents=True)
+        seed_path.write_text("# Source\n\nNon-secret source packet.\n", encoding="utf-8")
+        checksum = org_profile.hashlib.sha256(seed_path.read_bytes()).hexdigest()
+        cfg = SimpleNamespace(vault_dir=vault_dir, private_dir=root / "priv", state_dir=root / "state")
+        profile = {
+            "version": 1,
+            "organization": {
+                "id": "example-context",
+                "name": "Example Context",
+                "profile_kind": "project_collective",
+                "mission": "Keep the project operating profile coherent.",
+            },
+            "roles": {
+                "operator": {
+                    "description": "Owns the profile.",
+                }
+            },
+            "people": [
+                {
+                    "id": "alex",
+                    "display_name": "Alex",
+                    "role": "operator",
+                    "unix_user": "alex",
+                    "agent": {
+                        "name": "Atlas",
+                        "purpose": "Help Alex operate the profile.",
+                        "serves": "alex",
+                    },
+                }
+            ],
+            "agent_lineage": {
+                "purpose": "Compose agents from baseline, function layers, owner modules, and explicit onboarding preferences.",
+                "prototype_agent": "atlas-prototype",
+                "baseline": {
+                    "doctrine": ["Use the structured profile as the authority."],
+                },
+                "department_modules": [
+                    {"id": "operator", "name": "Operator module", "applies_to": ["operator"]},
+                ],
+                "function_modules": [
+                    {"id": "profile-ingestion", "name": "Profile ingestion module", "applies_to": ["alex"]},
+                ],
+                "human_owner_modules": [
+                    {"id": "alex-owner", "name": "Alex owner module", "serves": "alex"},
+                ],
+                "agent_modules": [
+                    {"id": "atlas-agent", "name": "Atlas agent module", "serves": "alex"},
+                ],
+                "seed_sources": [
+                    {
+                        "id": "source-packet",
+                        "path": "Seeds/source.md",
+                        "purpose": "Canonical non-secret seed packet.",
+                        "canonical_initial_seed": True,
+                        "expected_sha256": checksum,
+                    }
+                ],
+            },
+        }
+        validation = org_profile.validate_profile(profile, cfg)
+        expect(validation["valid"], validation)
+        preview = org_profile.preview_payload(profile, cfg=cfg, source_path=root / "org-profile.yaml")
+        expect(preview["lineage"]["human_owner_modules"] == ["alex-owner"], preview["lineage"])
+        preview_text = org_profile.format_preview(preview)
+        expect("Human owner modules: alex-owner" in preview_text, preview_text)
+        expect("source-packet: Seeds/source.md canonical sha256:set" in preview_text, preview_text)
+        context = org_profile.agent_context_for_person(profile, profile["people"][0], agent_id="agent-alex")
+        expect(
+            [module["id"] for module in context["modules"]] == [
+                "operator",
+                "profile-ingestion",
+                "alex-owner",
+                "atlas-agent",
+            ],
+            context["modules"],
+        )
+        render = org_profile.render_vault_profile(profile)
+        expect("alex-owner: Alex owner module" in render, render)
+
+        bad_profile = json.loads(json.dumps(profile))
+        bad_profile["agent_lineage"]["seed_sources"][0]["expected_sha256"] = "0" * 64
+        bad_validation = org_profile.validate_profile(bad_profile, cfg)
+        expect(not bad_validation["valid"], bad_validation)
+        expect(any("expected_sha256 mismatch" in error for error in bad_validation["errors"]), bad_validation)
+
+    print("PASS test_human_owner_modules_and_seed_checksums_are_distributed")
+
+
 def main() -> int:
     test_ultimate_example_profile_applies_to_state_vault_and_agent_memory()
-    print("PASS all 1 org-profile tests")
+    test_human_owner_modules_and_seed_checksums_are_distributed()
+    print("PASS all 2 org-profile tests")
     return 0
 
 

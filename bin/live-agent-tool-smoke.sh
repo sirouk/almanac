@@ -251,6 +251,32 @@ def provider_auth_failure_seen() -> bool:
     haystack = (output_text + "\n" + log_text).lower()
     return any(marker in haystack for marker in markers)
 
+
+def provider_unavailable_seen() -> bool:
+    markers = (
+        "error code: 503",
+        "http 503",
+        "no instances available",
+        "temporarily unavailable",
+        "service unavailable",
+        "provider unavailable",
+    )
+    output_text = read_text(output_path)
+    log_text = read_text(agent_log_path)
+    if session_id and log_text:
+        relevant_lines = [
+            line
+            for line in log_text.splitlines()
+            if session_id in line
+            or "error code: 503" in line.lower()
+            or "http 503" in line.lower()
+            or "no instances available" in line.lower()
+            or "service unavailable" in line.lower()
+        ]
+        log_text = "\n".join(relevant_lines[-80:])
+    haystack = (output_text + "\n" + log_text).lower()
+    return any(marker in haystack for marker in markers)
+
 tool_token_event = False
 if telemetry_path.exists():
     deadline = time.time() + 5.0
@@ -339,6 +365,18 @@ if errors:
             )
         )
         raise SystemExit(0)
+    if not tool_token_event and not functions and provider_unavailable_seen():
+        print(
+            json.dumps(
+                {
+                    "skipped": "provider_unavailable",
+                    "session_id": session_id,
+                    "reason": "model provider was unavailable before any tool call",
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(0)
     raise SystemExit("\n".join(errors))
 
 print(json.dumps({"session_id": session_id, "functions": functions}, sort_keys=True))
@@ -347,6 +385,11 @@ PY
 
 if [[ "$validation_result" == *'"skipped": "provider_auth_failed"'* ]]; then
   echo "Live agent tool smoke skipped for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: model provider credentials were rejected before any tool call; ask the user to reauthorize their provider credential."
+  echo "$validation_result"
+  exit 0
+fi
+if [[ "$validation_result" == *'"skipped": "provider_unavailable"'* ]]; then
+  echo "Live agent tool smoke skipped for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: model provider was unavailable before any tool call; rerun when the provider has capacity."
   echo "$validation_result"
   exit 0
 fi

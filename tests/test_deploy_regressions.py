@@ -568,6 +568,8 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("missing or invalid mcp-session-id" in body, body)
     expect("session attempted raw curl/MCP debugging" in body, body)
     expect("provider_auth_failed" in body, body)
+    expect("provider_unavailable" in body, body)
+    expect("no instances available" in body, body)
     expect("authentication_error" in body, body)
     expect("Live agent tool smoke skipped" in body, body)
     expect("almanac-bootstrap-token" in body, body)

@@ -883,6 +883,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
     )
     _migrate_notion_identity_claims_remove_legacy_nonce(conn)
+    _ensure_column(conn, "agent_identity", "org_profile_person_id", "TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_identity_claimed_email_active
@@ -975,7 +976,6 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "bootstrap_requests", "cancelled_by_surface", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "cancelled_by_actor", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "cancelled_reason", "TEXT")
-    _ensure_column(conn, "agent_identity", "org_profile_person_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "onboarding_sessions", "approved_at", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "approved_by_actor", "TEXT")
     _ensure_column(conn, "onboarding_sessions", "denied_at", "TEXT")

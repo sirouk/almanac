@@ -49,6 +49,36 @@
       "$ref": "#/$defs/workSurfaces",
       "description": "Canonical places where shared, personal, household, project, or organizational work and knowledge live."
     },
+    "authority": {
+      "$ref": "#/$defs/authorityPolicy",
+      "description": "Global authority, approval, impersonation, and broker-boundary rules that agents inherit."
+    },
+    "identity_verification": {
+      "$ref": "#/$defs/identityVerification",
+      "description": "Safe profile-person matching and verification policy for onboarding and later identity repair."
+    },
+    "distribution": {
+      "$ref": "#/$defs/distributionPlan",
+      "description": "How the private profile expands into control-plane rows, vault renders, managed memory, SOUL overlays, and agent-local state."
+    },
+    "workflows": {
+      "type": "array",
+      "description": "Operator-defined recurring or ad hoc workflows that agents should understand and help run inside their authority.",
+      "items": { "$ref": "#/$defs/workflow" },
+      "default": []
+    },
+    "automations": {
+      "type": "array",
+      "description": "Automation lanes, schedules, wake policies, approval gates, delivery targets, and failure behavior.",
+      "items": { "$ref": "#/$defs/automation" },
+      "default": []
+    },
+    "benchmarks": {
+      "type": "array",
+      "description": "Evaluation prompts and scorecards used to test whether agents are oriented, bounded, and useful after profile application.",
+      "items": { "$ref": "#/$defs/benchmark" },
+      "default": []
+    },
     "policies": {
       "$ref": "#/$defs/policies",
       "description": "Cross-agent behavior, privacy, escalation, and decision policies."
@@ -509,6 +539,167 @@
           },
           "additionalProperties": false
         }
+      },
+      "additionalProperties": false
+    },
+    "authorityPolicy": {
+      "type": "object",
+      "properties": {
+        "decision_source_order": {
+          "$ref": "#/$defs/stringList",
+          "description": "Highest-to-lowest order agents should use when deciding whether a person, policy, or source authorizes action."
+        },
+        "global_may_prepare": { "$ref": "#/$defs/stringList" },
+        "global_may_execute": { "$ref": "#/$defs/stringList" },
+        "global_requires_approval": { "$ref": "#/$defs/stringList" },
+        "global_forbidden": { "$ref": "#/$defs/stringList" },
+        "broker_supremacy": { "type": "string" },
+        "impersonation_policy": { "type": "string" },
+        "destructive_action_policy": { "type": "string" },
+        "external_commitment_policy": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "identityVerification": {
+      "type": "object",
+      "properties": {
+        "matching_policy": { "type": "string" },
+        "operator_review_required": { "type": "boolean", "default": true },
+        "safe_roster_prompt": { "type": "boolean", "default": true },
+        "allowed_match_visibility": {
+          "type": "string",
+          "enum": ["none", "unclaimed_people_only", "team_visible", "all_profile_people"],
+          "default": "unclaimed_people_only"
+        },
+        "onboarding_prompt_policy": { "type": "string" },
+        "verification_methods": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/verificationMethod" },
+          "default": []
+        },
+        "notes": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "verificationMethod": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "type": "string" },
+        "fields": { "$ref": "#/$defs/stringList" },
+        "required_for": { "$ref": "#/$defs/stringList" },
+        "status": { "type": "string", "enum": ["planned", "active", "manual", "disabled"], "default": "planned" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "distributionPlan": {
+      "type": "object",
+      "properties": {
+        "profile_authority": { "type": "string" },
+        "agent_context_slices": { "$ref": "#/$defs/stringList" },
+        "managed_memory_sections": { "$ref": "#/$defs/stringList" },
+        "vault_render_policy": { "type": "string" },
+        "privacy_modes": { "$ref": "#/$defs/stringList" },
+        "generated_outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/generatedOutput" },
+          "default": []
+        },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "generatedOutput": {
+      "type": "object",
+      "required": ["id", "target"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "target": { "$ref": "#/$defs/nonEmptyString" },
+        "path": { "type": "string" },
+        "audience": { "type": "string", "enum": ["all_agents", "matched_agent", "team_only", "operator_only"], "default": "operator_only" },
+        "sensitivity": { "type": "string", "enum": ["public", "internal", "restricted"], "default": "internal" },
+        "refresh_policy": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["id", "name", "purpose"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "type": "string", "enum": ["planned", "active", "paused", "retired"], "default": "planned" },
+        "owner": { "$ref": "#/$defs/idString" },
+        "agent": { "type": "string" },
+        "teams": { "$ref": "#/$defs/idList" },
+        "roles": { "$ref": "#/$defs/idList" },
+        "applies_to": { "$ref": "#/$defs/idList" },
+        "surfaces": { "$ref": "#/$defs/stringList" },
+        "triggers": { "$ref": "#/$defs/stringList" },
+        "inputs": { "$ref": "#/$defs/stringList" },
+        "steps": { "$ref": "#/$defs/stringList" },
+        "outputs": { "$ref": "#/$defs/stringList" },
+        "approval_required_for": { "$ref": "#/$defs/stringList" },
+        "success_criteria": { "$ref": "#/$defs/stringList" },
+        "failure_policy": { "type": "string" },
+        "cadence": { "type": "string" },
+        "source_refs": { "$ref": "#/$defs/idList" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "automation": {
+      "type": "object",
+      "required": ["id", "name", "purpose"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "enabled": { "type": "boolean", "default": false },
+        "trigger_kind": {
+          "type": "string",
+          "enum": ["manual", "schedule", "timer", "cron", "event", "webhook", "onboarding", "profile_apply", "health_change"],
+          "default": "manual"
+        },
+        "schedule": { "type": "string" },
+        "event_sources": { "$ref": "#/$defs/stringList" },
+        "owner": { "$ref": "#/$defs/idString" },
+        "agent": { "type": "string" },
+        "applies_to": { "$ref": "#/$defs/idList" },
+        "source_refs": { "$ref": "#/$defs/idList" },
+        "wake_policy": { "type": "string" },
+        "delivery": { "type": "string" },
+        "approval_policy": { "type": "string" },
+        "failure_policy": { "type": "string" },
+        "rollback": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "benchmark": {
+      "type": "object",
+      "required": ["id", "name", "purpose"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "target_agents": { "$ref": "#/$defs/idList" },
+        "applies_to": { "$ref": "#/$defs/idList" },
+        "scenario": { "type": "string" },
+        "prompt": { "type": "string" },
+        "expected_behaviors": { "$ref": "#/$defs/stringList" },
+        "forbidden_behaviors": { "$ref": "#/$defs/stringList" },
+        "scoring": { "$ref": "#/$defs/stringList" },
+        "cadence": { "type": "string" },
+        "source_refs": { "$ref": "#/$defs/idList" },
+        "metadata": { "type": "object", "additionalProperties": true }
       },
       "additionalProperties": false
     },

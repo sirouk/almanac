@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 needs_root=0
+skip_config_reexec=0
 domain_arg=""
 action_arg=""
 for arg in "$@"; do
@@ -26,9 +27,11 @@ elif [[ "$domain_arg" == "agent" && "$action_arg" == "deenroll" ]]; then
   needs_root=1
 elif [[ "$domain_arg" == "retrieval" && "$action_arg" == "replay" ]]; then
   needs_root=1
+elif [[ "$domain_arg" == "org-profile" && "$action_arg" == "build" ]]; then
+  skip_config_reexec=1
 fi
 
-if [[ "$needs_root" != "1" && ${EUID:-$(id -u)} -ne 0 && -n "${CONFIG_FILE:-}" && ! -r "$CONFIG_FILE" ]]; then
+if [[ "$skip_config_reexec" != "1" && "$needs_root" != "1" && ${EUID:-$(id -u)} -ne 0 && -n "${CONFIG_FILE:-}" && ! -r "$CONFIG_FILE" ]]; then
   exec sudo env \
     ALMANAC_CONFIG_FILE="$CONFIG_FILE" \
     PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \

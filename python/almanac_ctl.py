@@ -224,6 +224,12 @@ def parse_args() -> argparse.Namespace:
     for action in ("validate", "preview", "doctor"):
         command = org_profile_sub.add_parser(action)
         command.add_argument("--file", default="", help="Profile YAML path. Defaults to almanac-priv/config/org-profile.yaml.")
+    org_build = org_profile_sub.add_parser("build")
+    org_build.add_argument("--file", default="", help="Profile YAML path. Defaults to almanac-priv/config/org-profile.yaml.")
+    org_build.add_argument("--from-scratch", action="store_true", help="Ignore any existing file and start from a starter profile.")
+    org_build.add_argument("--apply", action="store_true", help="Apply the saved profile after validation succeeds.")
+    org_build.add_argument("--seed-starter", action="store_true", help="Write a starter profile without prompting.")
+    org_build.add_argument("--preview", action="store_true", help="Preview/validate and exit without editing.")
     org_apply = org_profile_sub.add_parser("apply")
     org_apply.add_argument("--file", default="", help="Profile YAML path. Defaults to almanac-priv/config/org-profile.yaml.")
     org_apply.add_argument("--yes", action="store_true", help="Apply without an interactive confirmation prompt.")
@@ -924,6 +930,29 @@ def org_profile_doctor(conn, cfg: Config, raw_path: str) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             raise SystemExit(f"org-profile doctor could not load {source_path}: {exc}") from exc
     return doctor_profile(conn, cfg, profile=profile)
+
+
+def org_profile_build(cfg: Config | None, args: argparse.Namespace) -> None:
+    if args.file:
+        source_path = Path(args.file).expanduser().resolve()
+    elif cfg is not None:
+        source_path = _org_profile_source_path(cfg, "")
+    else:
+        source_path = Path(__file__).resolve().parents[1] / "almanac-priv" / "config" / "org-profile.yaml"
+    command = [
+        str(Path(__file__).resolve().parents[1] / "bin" / "org-profile-builder.sh"),
+        "--file",
+        str(source_path),
+    ]
+    if args.from_scratch:
+        command.append("--from-scratch")
+    if args.apply:
+        command.append("--apply")
+    if args.seed_starter:
+        command.append("--seed-starter")
+    if args.preview:
+        command.append("--preview")
+    raise SystemExit(subprocess.run(command, check=False).returncode)
 
 
 def user_purge_enrollment(
@@ -1867,6 +1896,16 @@ def run_retrieval_replay(conn, cfg: Config, args: argparse.Namespace) -> dict[st
 
 def main() -> None:
     args = parse_args()
+    if args.domain == "org-profile" and args.action == "build":
+        cfg = None
+        if not args.file:
+            try:
+                cfg = Config.from_env()
+            except Exception:
+                cfg = None
+        org_profile_build(cfg, args)
+        return
+
     cfg = Config.from_env()
 
     if args.domain == "user" and args.action == "prepare":
@@ -1900,7 +1939,6 @@ def main() -> None:
     if args.domain == "org-profile" and args.action == "preview":
         dump_output(args, org_profile_preview(cfg, args.file, as_json=bool(args.json)))
         return
-
     with connect_db(cfg) as conn:
         if args.domain == "org-profile" and args.action == "apply":
             dump_output(args, org_profile_apply(conn, cfg, args.file, actor=args.actor, yes=args.yes))

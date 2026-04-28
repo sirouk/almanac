@@ -26,9 +26,12 @@ Shipped today:
   module, starter stubs, source references, revalidation rules, privacy policy,
   automation boundaries, and distribution expectations.
 - `./bin/almanac-ctl org-profile validate`
+- `./bin/almanac-ctl org-profile build`
 - `./bin/almanac-ctl org-profile preview`
 - `./bin/almanac-ctl org-profile apply`
 - `./bin/almanac-ctl org-profile doctor`
+- `./bin/org-profile-builder.sh` provides the same interactive builder path
+  directly for install flows and operator shells.
 - Almanac already seeds per-agent `SOUL.md` and
   `state/almanac-identity-context.json` from onboarding/session data.
 - The `almanac-managed-context` plugin can read the local identity state when
@@ -151,11 +154,19 @@ relationships, responsibilities, identity hints, work surfaces, and policies.
 The operator flow is:
 
 ```bash
+./bin/almanac-ctl org-profile build
 ./bin/almanac-ctl org-profile validate
 ./bin/almanac-ctl org-profile preview
 ./bin/almanac-ctl org-profile apply --yes
 ./bin/almanac-ctl org-profile doctor
 ```
+
+`build` launches the interactive shell builder for the private profile. It can
+start from a starter profile, edit an existing file section by section, accept
+multi-line answers in the terminal, validate the result, and save only under
+the private `almanac-priv/config/org-profile.yaml` path unless `--file` points
+elsewhere. During `./deploy.sh install`, Almanac asks whether to launch this
+builder once the private path is known.
 
 `validate` reads `almanac-priv/config/org-profile.yaml`, validates it
 against `config/org-profile.schema.json`, and fails closed on invalid input.
@@ -262,6 +273,8 @@ Store normalized profile rows and the source revision:
 - relationships
 - identity hints
 - work-surface defaults
+- authority, identity-verification, distribution, workflow, automation, and
+  benchmark contracts
 
 The control database is the exact lookup layer for policy checks. It does not
 depend on re-parsing generated Markdown.
@@ -300,6 +313,7 @@ identity for the installed `almanac-managed-context` plugin:
 Managed memory receives compact, refreshable operational slices:
 
 - `[managed:org-profile]`: context mission, operating principles, work surfaces
+  and relevant operational rails
 - `[managed:user-responsibilities]`: the current user's responsibilities,
   authority, and agent boundaries
 - `[managed:team-map]`: teams and teammate coordination context
@@ -397,6 +411,11 @@ Updated
 
 Apply is idempotent. Reapplying the same file should produce the same
 revision and no unnecessary file churn.
+
+`./deploy.sh install` and `./deploy.sh upgrade` also attempt to apply the
+private profile when it exists, after the control plane is available. This
+keeps production installs aligned with the structured profile without requiring
+operators to remember a separate apply step.
 
 ## Failure Model
 

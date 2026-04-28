@@ -318,11 +318,39 @@ def test_explicit_identity_profile_link_orients_arbitrary_agent_names() -> None:
     print("PASS test_explicit_identity_profile_link_orients_arbitrary_agent_names")
 
 
+def test_builder_starter_profile_covers_operational_rails() -> None:
+    org_profile = load_module(REPO / "python" / "almanac_org_profile.py", "almanac_org_profile_builder_profile_test")
+    builder = load_module(REPO / "python" / "almanac_org_profile_builder.py", "almanac_org_profile_builder_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "org-profile.yaml"
+        profile = builder.profile_starter()
+        validation = org_profile.validate_profile(profile)
+        expect(validation["valid"], validation)
+        expect(profile["authority"]["global_requires_approval"], profile["authority"])
+        expect(profile["identity_verification"]["safe_roster_prompt"] is True, profile["identity_verification"])
+        expect(profile["distribution"]["managed_memory_sections"] == ["org-profile", "user-responsibilities", "team-map"], profile["distribution"])
+        expect(profile["workflows"][0]["id"] == "profile-ingestion", profile["workflows"])
+        expect(profile["automations"][0]["id"] == "profile-doctor", profile["automations"])
+        expect(profile["benchmarks"][0]["id"] == "orientation-baseline", profile["benchmarks"])
+
+        builder.write_profile(path, profile)
+        expect(path.is_file(), path)
+        expect((path.stat().st_mode & 0o777) == 0o600, oct(path.stat().st_mode))
+        loaded = org_profile.load_profile(path)
+        context = org_profile.agent_context_for_person(loaded, loaded["people"][0], agent_id="agent-example")
+        expect(context["workflows"][0]["id"] == "profile-ingestion", context)
+        expect(context["automations"][0]["id"] == "profile-doctor", context)
+        expect(context["benchmarks"][0]["id"] == "orientation-baseline", context)
+
+    print("PASS test_builder_starter_profile_covers_operational_rails")
+
+
 def main() -> int:
     test_ultimate_example_profile_applies_to_state_vault_and_agent_memory()
     test_human_owner_modules_and_seed_checksums_are_distributed()
     test_explicit_identity_profile_link_orients_arbitrary_agent_names()
-    print("PASS all 3 org-profile tests")
+    test_builder_starter_profile_covers_operational_rails()
+    print("PASS all 4 org-profile tests")
     return 0
 
 

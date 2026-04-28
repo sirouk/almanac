@@ -88,6 +88,7 @@ From the repo root:
 ./deploy.sh enrollment-reset
 ./deploy.sh rotate-nextcloud-secrets
 ./bin/almanac-ctl upgrade check
+./bin/almanac-ctl org-profile build
 ./bin/almanac-ctl org-profile validate
 ./bin/almanac-ctl org-profile preview
 ./bin/almanac-ctl org-profile apply --yes

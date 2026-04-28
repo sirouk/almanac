@@ -339,6 +339,32 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
                     f"agent_lineage.seed_sources.{source_id}.expected_sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
                 )
 
+    def check_operational_items(section: str, *, owner_is_person: bool = True) -> None:
+        items = profile.get(section) if isinstance(profile.get(section), list) else []
+        item_ids = _list_ids(items)
+        duplicates = sorted({item_id for item_id in item_ids if item_ids.count(item_id) > 1})
+        if duplicates:
+            errors.append(f"duplicate {section} ids: {', '.join(duplicates)}")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            owner = str(item.get("owner") or "").strip()
+            if owner and owner_is_person and owner not in people_by_id:
+                warnings.append(f"{section}.{item_id}.owner references unknown person: {owner}")
+            for ref_id in item.get("source_refs") or []:
+                if str(ref_id) not in ref_ids:
+                    warnings.append(f"{section}.{item_id}.source_refs references unknown reference: {ref_id}")
+            for role_id in item.get("roles") or []:
+                if str(role_id) not in roles:
+                    warnings.append(f"{section}.{item_id}.roles references unknown role: {role_id}")
+            for team_id in item.get("teams") or []:
+                if str(team_id) not in teams_by_id:
+                    warnings.append(f"{section}.{item_id}.teams references unknown team: {team_id}")
+
+    for section in ("workflows", "automations", "benchmarks"):
+        check_operational_items(section)
+
     return errors, warnings
 
 
@@ -420,6 +446,9 @@ def preview_payload(profile: dict[str, Any], *, cfg: Any | None = None, source_p
     people = _as_list(profile.get("people"))
     teams = _as_list(profile.get("teams"))
     references = _as_list(profile.get("references"))
+    workflows = _as_list(profile.get("workflows"))
+    automations = _as_list(profile.get("automations"))
+    benchmarks = _as_list(profile.get("benchmarks"))
     lineage = _lineage(profile)
     baseline = lineage.get("baseline") if isinstance(lineage.get("baseline"), dict) else {}
     return {
@@ -442,6 +471,9 @@ def preview_payload(profile: dict[str, Any], *, cfg: Any | None = None, source_p
             "teams": len(teams),
             "relationships": len(_as_list(profile.get("relationships"))),
             "references": len(references),
+            "workflows": len(workflows),
+            "automations": len(automations),
+            "benchmarks": len(benchmarks),
         },
         "lineage": {
             "purpose": lineage.get("purpose", ""),
@@ -496,6 +528,38 @@ def preview_payload(profile: dict[str, Any], *, cfg: Any | None = None, source_p
             for reference in references
             if isinstance(reference, dict)
         ],
+        "operational_rails": {
+            "workflows": [
+                {
+                    "id": item.get("id", ""),
+                    "name": item.get("name", ""),
+                    "owner": item.get("owner", ""),
+                    "status": item.get("status", "planned"),
+                }
+                for item in workflows
+                if isinstance(item, dict)
+            ],
+            "automations": [
+                {
+                    "id": item.get("id", ""),
+                    "name": item.get("name", ""),
+                    "owner": item.get("owner", ""),
+                    "enabled": bool(item.get("enabled", False)),
+                    "trigger_kind": item.get("trigger_kind", "manual"),
+                }
+                for item in automations
+                if isinstance(item, dict)
+            ],
+            "benchmarks": [
+                {
+                    "id": item.get("id", ""),
+                    "name": item.get("name", ""),
+                    "cadence": item.get("cadence", ""),
+                }
+                for item in benchmarks
+                if isinstance(item, dict)
+            ],
+        },
         "distribution": {
             "control_database": "org_profile_* tables and settings.org_profile_revision",
             "state": "state/org-profile/applied.json plus per-agent context slices",
@@ -573,6 +637,28 @@ def format_preview(payload: dict[str, Any]) -> str:
             f"{reference.get('id')} ({reference.get('type') or 'other'}, "
             f"{reference.get('sensitivity') or 'internal'}): {reference.get('path')}"
         )
+    rails = payload.get("operational_rails") if isinstance(payload.get("operational_rails"), dict) else {}
+    if any(rails.get(key) for key in ("workflows", "automations", "benchmarks")):
+        lines.extend(["", "Operational Rails"])
+        for workflow in rails.get("workflows") or []:
+            lines.append(
+                "  "
+                f"workflow {workflow.get('id')}: {workflow.get('name') or '-'} "
+                f"owner={workflow.get('owner') or '-'} status={workflow.get('status') or '-'}"
+            )
+        for automation in rails.get("automations") or []:
+            enabled = "enabled" if automation.get("enabled") else "disabled"
+            lines.append(
+                "  "
+                f"automation {automation.get('id')}: {automation.get('name') or '-'} "
+                f"{enabled} trigger={automation.get('trigger_kind') or '-'}"
+            )
+        for benchmark in rails.get("benchmarks") or []:
+            lines.append(
+                "  "
+                f"benchmark {benchmark.get('id')}: {benchmark.get('name') or '-'} "
+                f"cadence={benchmark.get('cadence') or '-'}"
+            )
     lines.extend(["", "Distribution"])
     for key, value in (payload.get("distribution") or {}).items():
         lines.append(f"  {key}: {value}")
@@ -673,6 +759,45 @@ def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = 
                 if not isinstance(module, dict):
                     continue
                 lines.append(f"- {module.get('id')}: {module.get('name') or module.get('purpose') or ''}".rstrip())
+    authority = _dict(profile.get("authority"))
+    if authority:
+        lines.extend(["", "## Authority And Boundaries", ""])
+        for heading, key in (
+            ("Decision Source Order", "decision_source_order"),
+            ("May Prepare", "global_may_prepare"),
+            ("May Execute", "global_may_execute"),
+            ("Requires Approval", "global_requires_approval"),
+            ("Forbidden", "global_forbidden"),
+        ):
+            values = _strings(authority.get(key))
+            if values:
+                lines.extend([f"### {heading}", "", _text_list(values), ""])
+        for key in ("broker_supremacy", "impersonation_policy", "destructive_action_policy", "external_commitment_policy"):
+            if authority.get(key):
+                lines.append(f"- {key.replace('_', ' ').title()}: {_first_line(authority.get(key), limit=320)}")
+        if lines[-1] != "":
+            lines.append("")
+    operational_sections = (
+        ("Workflows", _as_list(profile.get("workflows"))),
+        ("Automations", _as_list(profile.get("automations"))),
+        ("Benchmarks", _as_list(profile.get("benchmarks"))),
+    )
+    if any(items for _, items in operational_sections):
+        lines.extend(["## Operational Rails", ""])
+        for heading, items in operational_sections:
+            if not items:
+                continue
+            lines.extend([f"### {heading}", ""])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                suffix = ""
+                if item.get("owner"):
+                    suffix = f" owner={item.get('owner')}"
+                elif item.get("enabled") is not None:
+                    suffix = f" enabled={bool(item.get('enabled'))}"
+                lines.append(f"- {item.get('id')}: {item.get('name') or item.get('purpose') or ''}{suffix}".rstrip())
+            lines.append("")
     lines.extend(["", "## People And Agents", ""])
     for person in _as_list(profile.get("people")):
         if not isinstance(person, dict):
@@ -778,6 +903,48 @@ def _module_matches_person(module: dict[str, Any], person: dict[str, Any]) -> bo
     return False
 
 
+def _operational_item_matches_person(item: dict[str, Any], person: dict[str, Any], *, agent_id: str = "") -> bool:
+    person_id = str(person.get("id") or "").strip()
+    role = str(person.get("role") or "").strip()
+    teams = {str(value) for value in _as_list(person.get("teams"))}
+    primary_team = str(person.get("primary_team") or "").strip()
+    agent = person.get("agent") if isinstance(person.get("agent"), dict) else {}
+    agent_name = str(agent.get("name") or "").strip().lower()
+    markers = {
+        person_id,
+        role,
+        primary_team,
+        *(value for value in teams if value),
+        "all",
+        "all_agents",
+        "everyone",
+    }
+    for key in ("owner", "serves", "human_owner"):
+        if str(item.get(key) or "").strip() == person_id:
+            return True
+    for key in ("applies_to", "people", "persons", "teams", "roles", "target_agents"):
+        values = {str(value).strip() for value in _as_list(item.get(key)) if str(value).strip()}
+        if values and bool(values & markers):
+            return True
+        if agent_id and agent_id in values:
+            return True
+        if agent_name and agent_name in {value.lower() for value in values}:
+            return True
+    item_agent = str(item.get("agent") or "").strip().lower()
+    if item_agent and (item_agent == agent_name or (agent_id and item_agent == agent_id.lower())):
+        return True
+    targeted_keys = ("owner", "serves", "human_owner", "applies_to", "people", "persons", "teams", "roles", "target_agents", "agent")
+    return not any(item.get(key) for key in targeted_keys)
+
+
+def _operational_items_for_person(profile: dict[str, Any], person: dict[str, Any], section: str, *, agent_id: str = "") -> list[dict[str, Any]]:
+    return [
+        item
+        for item in _as_list(profile.get(section))
+        if isinstance(item, dict) and _operational_item_matches_person(item, person, agent_id=agent_id)
+    ]
+
+
 def _agent_modules_for_person(profile: dict[str, Any], person: dict[str, Any]) -> list[dict[str, Any]]:
     lineage = _lineage(profile)
     modules = _lineage_modules(lineage)
@@ -881,6 +1048,12 @@ def agent_context_for_person(profile: dict[str, Any], person: dict[str, Any], *,
             "tool_use_expectations": _strings(baseline.get("tool_use_expectations")),
         },
         "modules": _agent_modules_for_person(profile, person),
+        "authority": _dict(profile.get("authority")),
+        "identity_verification": _dict(profile.get("identity_verification")),
+        "distribution": _dict(profile.get("distribution")),
+        "workflows": _operational_items_for_person(profile, person, "workflows", agent_id=agent_id),
+        "automations": _operational_items_for_person(profile, person, "automations", agent_id=agent_id),
+        "benchmarks": _operational_items_for_person(profile, person, "benchmarks", agent_id=agent_id),
         "teams_summary": _team_summaries(profile, person),
         "global_agent_policy": policies.get("agent_behavior", {}) if isinstance(policies.get("agent_behavior"), dict) else {},
         "work_surfaces": _work_surfaces(profile),
@@ -990,6 +1163,28 @@ def _managed_org_profile_section(context: dict[str, Any]) -> str:
         for module in modules[:8]:
             if isinstance(module, dict):
                 lines.append(f"- {module.get('id')}: {module.get('name') or module.get('purpose') or ''}".rstrip())
+    authority = context.get("authority") if isinstance(context.get("authority"), dict) else {}
+    for heading, key in (
+        ("Global approval required", "global_requires_approval"),
+        ("Global forbidden", "global_forbidden"),
+    ):
+        values = _strings(authority.get(key))[:6]
+        if values:
+            lines.append(f"{heading}:")
+            lines.extend(f"- {value}" for value in values)
+    if authority.get("broker_supremacy"):
+        lines.append(f"Broker boundary: {_first_line(authority.get('broker_supremacy'), limit=220)}")
+    for heading, key in (
+        ("Relevant workflows", "workflows"),
+        ("Relevant automations", "automations"),
+        ("Relevant benchmarks", "benchmarks"),
+    ):
+        items = context.get(key) if isinstance(context.get(key), list) else []
+        if items:
+            lines.append(f"{heading}:")
+            for item in items[:6]:
+                if isinstance(item, dict):
+                    lines.append(f"- {item.get('id')}: {item.get('name') or item.get('purpose') or ''}".rstrip())
     return "\n".join(lines)
 
 
@@ -1124,6 +1319,12 @@ def _identity_overlay(context: dict[str, Any]) -> dict[str, Any]:
         "public_context": context.get("public_context", {}),
         "github": context.get("github", {}),
         "agent_delegation": agent,
+        "authority": context.get("authority", {}),
+        "identity_verification": context.get("identity_verification", {}),
+        "distribution": context.get("distribution", {}),
+        "workflows": context.get("workflows", []),
+        "automations": context.get("automations", []),
+        "benchmarks": context.get("benchmarks", []),
         "org_name": org.get("name", ""),
         "org_profile_kind": org.get("profile_kind", ""),
         "org_scope": org.get("scope", ""),
@@ -1169,6 +1370,17 @@ def render_soul_overlay(context: dict[str, Any]) -> str:
         if values:
             lines.extend(["", f"{heading}:"])
             lines.extend(f"- {item}" for item in values)
+    for heading, key in (
+        ("Relevant workflows", "workflows"),
+        ("Relevant automations", "automations"),
+        ("Relevant benchmarks", "benchmarks"),
+    ):
+        items = context.get(key) if isinstance(context.get(key), list) else []
+        if items:
+            lines.extend(["", f"{heading}:"])
+            for item in items[:6]:
+                if isinstance(item, dict):
+                    lines.append(f"- {item.get('id')}: {item.get('name') or item.get('purpose') or ''}".rstrip())
     baseline = context.get("baseline") if isinstance(context.get("baseline"), dict) else {}
     doctrine = _strings(baseline.get("doctrine"))[:8]
     if doctrine:

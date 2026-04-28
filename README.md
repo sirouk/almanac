@@ -486,8 +486,9 @@ agent lineage through a structured operating profile. The command and private
 file still use the compatibility name `org-profile`, but the profile can model
 a solo operator, family/household, project collective, organization, or hybrid.
 The shipped repo includes the schema, a compact fictional example, a full
-fictional ultimate ingestion example, and an `almanac-ctl org-profile` validate,
-preview, apply, and doctor workflow. Almanac still seeds `SOUL.md` and
+fictional ultimate ingestion example, an interactive private profile builder,
+and an `almanac-ctl org-profile` build, validate, preview, apply, and doctor
+workflow. Almanac still seeds `SOUL.md` and
 `state/almanac-identity-context.json` from onboarding/session data, then
 overlays applied profile slices when a profile match exists.
 
@@ -523,9 +524,10 @@ docs/org-profile.md
 
 The profile pipeline feeds agent `SOUL.md`, identity state, managed memory,
 control-plane rows, and a sanitized vault render so agents understand who they
-serve, what that human owns, who the other people are, and where the agent must
-ask instead of act. Markdown files can support context, but they should not
-silently define accountability or approval.
+serve, what that human owns, who the other people are, which workflows,
+automations, and benchmarks matter, and where the agent must ask instead of
+act. Markdown files can support context, but they should not silently define
+accountability or approval.
 
 During onboarding, Curator can offer safe profile-person choices from unapplied
 roster entries when the applied profile privacy policy allows it. That
@@ -542,11 +544,16 @@ profile, while deploy keys, tokens, and credentials stay in private state.
 Typical operator flow:
 
 ```bash
+./bin/almanac-ctl org-profile build
 ./bin/almanac-ctl org-profile validate
 ./bin/almanac-ctl org-profile preview
 ./bin/almanac-ctl org-profile apply --yes
 ./bin/almanac-ctl org-profile doctor
 ```
+
+`./deploy.sh install` asks whether to launch the interactive builder once the
+private path is known, and install/upgrade apply the private profile when it is
+present so production agents stay aligned with the operator-owned contract.
 
 ## qmd Retrieval
 

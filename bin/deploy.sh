@@ -69,6 +69,7 @@ ALMANAC_ORG_MISSION="${ALMANAC_ORG_MISSION:-}"
 ALMANAC_ORG_PRIMARY_PROJECT="${ALMANAC_ORG_PRIMARY_PROJECT:-}"
 ALMANAC_ORG_TIMEZONE="${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
 ALMANAC_ORG_QUIET_HOURS="${ALMANAC_ORG_QUIET_HOURS:-}"
+ALMANAC_ORG_PROFILE_BUILDER_ENABLED="${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-}"
 ALMANAC_BOOTSTRAP_WINDOW_SECONDS="${ALMANAC_BOOTSTRAP_WINDOW_SECONDS:-3600}"
 ALMANAC_BOOTSTRAP_PER_IP_LIMIT="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
 ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
@@ -1858,12 +1859,55 @@ write_answers_file() {
     write_kv ALMANAC_INSTALL_PODMAN "${ALMANAC_INSTALL_PODMAN:-auto}"
     write_kv ALMANAC_INSTALL_TAILSCALE "${ALMANAC_INSTALL_TAILSCALE:-auto}"
     write_kv ALMANAC_INSTALL_PUBLIC_GIT "${ALMANAC_INSTALL_PUBLIC_GIT:-0}"
+    write_kv ALMANAC_ORG_PROFILE_BUILDER_ENABLED "${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-0}"
     write_kv WIPE_NEXTCLOUD_STATE "${WIPE_NEXTCLOUD_STATE:-0}"
     write_kv REMOVE_PUBLIC_REPO "${REMOVE_PUBLIC_REPO:-1}"
     write_kv REMOVE_USER_TOOLING "${REMOVE_USER_TOOLING:-1}"
     write_kv REMOVE_SERVICE_USER "${REMOVE_SERVICE_USER:-0}"
   } >"$target"
   chmod 600 "$target"
+}
+
+maybe_run_org_profile_builder() {
+  local repo_dir="${1:-$BOOTSTRAP_DIR}"
+  local profile_path="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/org-profile.yaml"
+
+  if [[ "${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "Skipping interactive operating profile builder because stdin is not a terminal."
+    return 0
+  fi
+  if [[ ! -x "$repo_dir/bin/org-profile-builder.sh" ]]; then
+    echo "Operating profile builder is missing at $repo_dir/bin/org-profile-builder.sh" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$profile_path")"
+  echo
+  echo "Launching private operating profile builder..."
+  "$repo_dir/bin/org-profile-builder.sh" --file "$profile_path"
+  chmod 600 "$profile_path" >/dev/null 2>&1 || true
+  if [[ ${EUID:-$(id -u)} -eq 0 && -n "${ALMANAC_USER:-}" ]]; then
+    chown "$ALMANAC_USER:$ALMANAC_USER" "$profile_path" >/dev/null 2>&1 || true
+  fi
+}
+
+apply_org_profile_if_present_root() {
+  local profile_path="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/org-profile.yaml"
+
+  if [[ ! -f "$profile_path" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$ALMANAC_REPO_DIR/bin/almanac-ctl" ]]; then
+    echo "Skipping operating profile apply because almanac-ctl is not installed yet."
+    return 0
+  fi
+
+  echo
+  echo "Applying private operating profile..."
+  run_root_env_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" org-profile apply --file "$profile_path" --yes --actor "deploy"
 }
 
 seed_private_repo() {
@@ -3563,6 +3607,14 @@ collect_install_answers() {
   RUNTIME_DIR="$STATE_DIR/runtime"
   PUBLISHED_DIR="$ALMANAC_PRIV_DIR/published"
   ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+  local default_org_profile_builder="0"
+  if [[ ! -f "$ALMANAC_PRIV_CONFIG_DIR/org-profile.yaml" ]]; then
+    default_org_profile_builder="1"
+  fi
+  if [[ ! -t 0 ]]; then
+    default_org_profile_builder="0"
+  fi
+  ALMANAC_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
   QMD_INDEX_NAME="almanac"
   QMD_COLLECTION_NAME="vault"
   QMD_RUN_EMBED="1"
@@ -4250,6 +4302,7 @@ run_root_install() {
   sync_public_repo
   seed_private_repo "$ALMANAC_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
+  maybe_run_org_profile_builder "$ALMANAC_REPO_DIR"
   chown_managed_paths
   ensure_upstream_git_deploy_key_material_root
   env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
@@ -4273,6 +4326,7 @@ run_root_install() {
   configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
+  apply_org_profile_if_present_root
   realign_active_enrolled_agents_root "$gateway_restart_policy"
 
   local uid=""
@@ -4403,6 +4457,7 @@ run_root_upgrade() {
   configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
+  apply_org_profile_if_present_root
   realign_active_enrolled_agents_root "$gateway_restart_policy"
 
   restart_shared_user_services_root
@@ -6368,6 +6423,7 @@ run_install_flow() {
   if [[ "$MODE" == "write-config" ]]; then
     seed_private_repo "$ALMANAC_PRIV_DIR"
     write_runtime_config "$CONFIG_TARGET"
+    maybe_run_org_profile_builder "$BOOTSTRAP_DIR"
     echo
     echo "Wrote config to: $CONFIG_TARGET"
     echo "Private repo scaffold: $ALMANAC_PRIV_DIR"

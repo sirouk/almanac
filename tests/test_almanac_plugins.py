@@ -909,6 +909,7 @@ def _write_minimal_managed_state(hermes_home: Path) -> None:
                 "vault-ref": "Vault root: /srv/almanac/vault",
                 "qmd-ref": "qmd MCP (deep retrieval): https://kor.example/mcp",
                 "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.",
+                "today-plate": "Today plate:\n- Work candidates:\n  - Example Unicorn launch — status In Progress",
             },
             indent=2,
             sort_keys=True,
@@ -1149,6 +1150,20 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             )
             expect(generic_lookup_turn is None, f"expected no Almanac injection for generic lookup, got {generic_lookup_turn!r}")
 
+            plate_turn = hook(
+                session_id="session-recipes-plate",
+                user_message="what's on my plate today?",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(plate_turn, dict) and plate_turn.get("context"), f"expected managed plate context, got {plate_turn!r}")
+            expect("[managed:today-plate]" in plate_turn["context"], plate_turn["context"])
+            expect("Example Unicorn launch" in plate_turn["context"], plate_turn["context"])
+            expect("- notion.query:" not in plate_turn["context"], plate_turn["context"])
+
             first_turn = hook(
                 session_id="session-recipes-4",
                 user_message="hello there",
@@ -1307,6 +1322,63 @@ def test_almanac_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             os.environ.update(old_env)
 
 
+def test_almanac_managed_context_budgets_live_notion_queries_per_turn() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp) / "hermes-home"
+        token_path = hermes_home / "secrets" / "almanac-bootstrap-token"
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("tok_live_test\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["ALMANAC_CONTEXT_TELEMETRY"] = "0"
+        try:
+            module = load_module(PLUGIN_INIT, "almanac_managed_context_plugin_query_budget_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_tool_call"][0]
+
+            for idx in range(3):
+                args = {"target_id": "db-1", "query": {"filter": {}}}
+                result = hook(
+                    tool_name="mcp_almanac_mcp_notion_query",
+                    args=args,
+                    session_id="session-budget",
+                    task_id="task-budget",
+                    tool_call_id=f"query-{idx}",
+                )
+                expect(result is None, result)
+                expect(args["token"] == "tok_live_test", args)
+
+            blocked_args = {"target_id": "db-2", "query": {"filter": {}}}
+            blocked = hook(
+                tool_name="mcp_almanac_mcp_notion_query",
+                args=blocked_args,
+                session_id="session-budget",
+                task_id="task-budget",
+                tool_call_id="query-4",
+            )
+            expect(isinstance(blocked, dict) and blocked.get("action") == "block", blocked)
+            expect("structured-query budget is exhausted" in blocked.get("message", ""), blocked)
+            expect("fan out live queries" in blocked.get("message", ""), blocked)
+            expect("token" not in blocked_args, blocked_args)
+
+            next_turn_args = {"target_id": "db-3", "query": {"filter": {}}}
+            next_result = hook(
+                tool_name="mcp_almanac_mcp_notion_query",
+                args=next_turn_args,
+                session_id="session-budget",
+                task_id="task-budget-next",
+                tool_call_id="query-next",
+            )
+            expect(next_result is None, next_result)
+            expect(next_turn_args["token"] == "tok_live_test", next_turn_args)
+            print("PASS test_almanac_managed_context_budgets_live_notion_queries_per_turn")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_almanac_managed_context_emits_telemetry_and_respects_opt_out() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hermes_home = Path(tmp) / "hermes-home"
@@ -1424,6 +1496,7 @@ def main() -> int:
     test_almanac_managed_context_answers_resource_request_without_secrets()
     test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers()
     test_almanac_managed_context_pre_tool_call_injects_bootstrap_token()
+    test_almanac_managed_context_budgets_live_notion_queries_per_turn()
     test_almanac_managed_context_emits_telemetry_and_respects_opt_out()
     test_almanac_managed_context_recipe_tools_match_mcp_surface()
     print("PASS all 13 Almanac plugin tests")

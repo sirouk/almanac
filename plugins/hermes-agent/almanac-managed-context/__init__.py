@@ -113,6 +113,7 @@ _RELEVANT_TERMS = (
     "files",
     "knowledge",
     "latest",
+    "focus",
     "model",
     "models",
     "meeting",
@@ -122,6 +123,7 @@ _RELEVANT_TERMS = (
     "next",
     "owner",
     "owners",
+    "plate",
     "plan",
     "planning",
     "plans",
@@ -191,7 +193,10 @@ _FOLLOWUP_TERMS = (
 _HISTORY_RELEVANCE_LOOKBACK = 8
 _SESSION_REVISIONS: dict[str, str] = {}
 _SESSION_RUNTIME_REVISIONS: dict[str, str] = {}
+_SESSION_TOOL_BUDGETS: dict[str, dict[str, object]] = {}
 _TOKEN_CACHE: dict[str, object] = {}
+_TOOL_BUDGET_WINDOW_SECONDS = 10 * 60
+_NOTION_QUERY_MAX_PER_TASK = 3
 _TOKEN_TOOL_SUFFIXES = {
     "catalog_vaults": "catalog.vaults",
     "vaults_refresh": "vaults.refresh",
@@ -407,19 +412,18 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     (
         "notion.query",
         (
-            "what's due",
-            "what is due",
-            "assigned to me",
-            "my assignments",
-            "my tasks",
-            "tasks in progress",
+            "query notion database",
+            "query the notion database",
+            "notion rows where",
+            "database rows where",
             "rows where",
             "status is in progress",
         ),
         (
             "notion.query — live structured query. The plugin injects token automatically; omit token. "
-            "Optional target_id (database or data source id/URL) — omit for the configured shared SSOT database. "
-            "query follows the Notion API (filter/sorts/page_size). Prefer when the user's question maps to a structured column on the database (any people-typed column for ownership, status/state/priority, due/last-edited dates, etc.) — pick the column the user's framing implies rather than a fixed keyword list."
+            "Use for an exact database/data-source target or an explicitly requested live refresh, not as the first move for broad plate/task questions. "
+            "Optional target_id (database or data source id/URL) — omit only for the configured shared SSOT database. "
+            "query follows the Notion API (filter/sorts/page_size). Prefer one targeted query; do not fan out across discovered databases in a chat turn."
         ),
     ),
 )
@@ -471,6 +475,39 @@ def _bootstrap_token() -> str:
 
 def _tool_needs_agent_token(tool_name: str) -> bool:
     return str(tool_name or "").strip() in _TOKEN_TOOL_NAMES
+
+
+def _maybe_block_tool_budget(*, tool_name: str, session_id: str, task_id: str) -> dict[str, str] | None:
+    canonical = str(tool_name or "").strip()
+    if canonical not in {"notion.query", "mcp_almanac_mcp_notion_query"}:
+        return None
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return None
+
+    now = datetime.now(timezone.utc).timestamp()
+    key = f"{session_id or '__global__'}:{task_key}:{canonical}"
+    bucket = _SESSION_TOOL_BUDGETS.get(key) or {}
+    started_at = float(bucket.get("started_at") or 0.0)
+    count = int(bucket.get("count") or 0)
+    if not started_at or now - started_at > _TOOL_BUDGET_WINDOW_SECONDS:
+        started_at = now
+        count = 0
+    count += 1
+    _SESSION_TOOL_BUDGETS[key] = {"started_at": started_at, "count": count}
+    if count <= _NOTION_QUERY_MAX_PER_TASK:
+        return None
+    return {
+        "action": "block",
+        "message": (
+            "Almanac blocked another notion.query in this turn because the live "
+            "structured-query budget is exhausted. For broad work-plate/task "
+            "questions, answer from [managed:today-plate] and, if needed, one "
+            "bounded knowledge.search-and-fetch over notion-shared. Do not fan "
+            "out live queries across discovered databases unless the user asks "
+            "for a deep live refresh."
+        ),
+    }
 
 
 def _state_path() -> Path:
@@ -1500,6 +1537,9 @@ def _pre_tool_call(
             "action": "block",
             "message": "Almanac MCP call was blocked because tool arguments were not an object.",
         }
+    budget_block = _maybe_block_tool_budget(tool_name=tool_name, session_id=session_id, task_id=task_id)
+    if budget_block is not None:
+        return budget_block
 
     canonical_tool_name = str(tool_name or "").strip()
     if canonical_tool_name in {

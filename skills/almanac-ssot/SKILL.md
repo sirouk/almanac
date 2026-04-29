@@ -38,7 +38,17 @@ Common calls:
 
 Decision tree:
 
-- For live scoped organizational state, call `ssot.read` once before answering.
+- For "what's on my plate", "what should I focus on today", or similar
+  orientation questions, answer from `[managed:today-plate]` first when it is
+  injected. It is the Curator-built compact snapshot of scoped work and exists
+  so the agent does not rediscover every Notion database live in chat.
+- If `[managed:today-plate]` is missing/thin and the user only needs
+  orientation, use one bounded `knowledge.search-and-fetch` over their own
+  phrasing before any live SSOT read.
+- For live scoped organizational state after the user is Notion-verified, call
+  `ssot.read` once before answering. If verification is not complete and the
+  read is refused, explain the verification gate and fall back to qmd-backed
+  shared Notion knowledge.
 - For shared pages, lists, task tables, or org-wide databases, call
   `ssot.write` with `operation:"create_page"` or
   `operation:"create_database"` so Almanac creates it under the shared root
@@ -114,8 +124,9 @@ Decision tree:
 - with the verified webhook live, treat shared Notion changes as minutes-scale after Almanac batches and de-duplicates the event
 - without the verified webhook, tolerate delayed updates by using the 1-hour Curator full-sweep fallback (configurable via ALMANAC_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS)
 - expect Almanac to batch and de-duplicate webhook-driven refresh work
-- treat plugin-managed SSOT summaries as ambient orientation and `ssot.read`
-  as the depth rail when the user needs specifics
+- treat plugin-managed SSOT summaries, especially `[managed:today-plate]`, as
+  the fast orientation rail and `ssot.read` as the bounded depth rail when the
+  user needs live specifics
 
 ## Guardrails
 
@@ -130,7 +141,8 @@ Decision tree:
 - when the task maps to a structured column on the database (any people-typed
   ownership column by any name, status/state/priority, due/last-edited dates,
   or any other filterable field), prefer scoped structured reads over
-  page-by-page exploration
+  page-by-page exploration, but do not fan out across many databases for a
+  generic plate check; Curator's managed snapshot is the multi-surface path
 - if an answer needs both the shared SSOT and the user's own Notion MCP lane,
   name both sources instead of collapsing them together silently
 - write only on behalf of the user who owns the agent

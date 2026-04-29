@@ -200,9 +200,9 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "notion.search": ("prefer notion.search-and-fetch when you also need the body",),
         "notion.fetch": ("Prefer over notion.search when the user already gave a URL or id",),
         "notion.query": (
-            "Prefer when the user's question maps to structured columns",
-            "people-typed ownership channels by any name",
-            "rather than a fixed keyword list",
+            "one shared Notion database/data source",
+            "exact database/data-source target",
+            "do not fan out live queries",
         ),
         "notion.search-and-fetch": ("One-shot replacement", "search_limit", "fetch_limit"),
         "vault.search": ("Prefer vault.search-and-fetch when you need the body",),

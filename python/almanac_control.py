@@ -10424,8 +10424,8 @@ def _build_today_plate(
             lines.append("- No structured ownership surfaces discovered: no child database under the SSOT root exposes a people-typed property the current user could appear in.")
             if pending_lines:
                 lines.extend(pending_lines)
-            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: read the qmd notion-shared collection via knowledge.search-and-fetch or notion.search-and-fetch using the user's own framing — names, projects, intent — and reason from what comes back rather than matching specific keywords.")
-            lines.append("- Live read routing: use notion.fetch for exact page URLs/ids and notion.query for live structured database targets. Use ssot.read only after Notion verification and only for scoped brokered targets; unverified page reads are refused by design.")
+            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: answer from this managed snapshot first. If it is thin, read the qmd notion-shared collection with one bounded knowledge.search-and-fetch or notion.search-and-fetch using the user's own framing — names, projects, intent — and reason from what comes back rather than matching specific keywords.")
+            lines.append("- Live read routing: use notion.fetch for exact page URLs/ids and notion.query only for one exact live structured database target. Do not fan out notion.query across discovered databases during a generic plate check. Use ssot.read only after Notion verification and only for scoped brokered targets; unverified page reads are refused by design.")
             lines.append("- For brokered writes to the SSOT page or its descendants use ssot.write; use ssot.preflight first when scope is uncertain.")
             return "\n".join(lines)
         db_titles = [str(db.get("title") or "").strip() for db in task_dbs]
@@ -10446,7 +10446,7 @@ def _build_today_plate(
                 lines.append("- Verification: not started; per-user filtering across these databases needs Notion identity verification.")
             if pending_lines:
                 lines.extend(pending_lines)
-            lines.append("- Use notion.query against each discovered surface (filter the people-typed column for the verified user) once verification completes; until then, fall back to knowledge.search-and-fetch on the notion-shared collection for ambient context.")
+            lines.append("- Until verification completes, do not live-query these databases for per-user filtering; fall back to this snapshot and one bounded knowledge.search-and-fetch on the notion-shared collection for ambient context.")
             return "\n".join(lines)
         aggregated_items: list[dict[str, Any]] = []
         per_db_counts: list[tuple[str, str, int]] = []
@@ -10499,7 +10499,7 @@ def _build_today_plate(
                 db_title = str(item.get("__almanac_source_db_title__") or "").strip()
                 prefix = f"[{db_title}] " if db_title else ""
                 lines.append(f"  - {prefix}{_today_plate_work_line(item, is_new=is_new)}")
-            lines.append("- Agent posture: when the user asks about their work, focus, recent activity, or what's on their plate, lead with this structured snapshot. For broader or unstructured questions, supplement with knowledge.search-and-fetch on the notion-shared collection using the user's own framing. Verify with notion.query / ssot.read before acting on shared state.")
+            lines.append("- Agent posture: when the user asks about their work, focus, recent activity, or what's on their plate, lead with this structured snapshot. For broader or unstructured questions, supplement with one bounded knowledge.search-and-fetch on the notion-shared collection using the user's own framing. Use notion.query / ssot.read only for a specific live target or before changing shared state.")
         else:
             lines.append("- No record currently lists the verified user in any people-typed column across the discovered surfaces.")
             lines.append("- Agent posture: ask the user what they want to focus on, or use knowledge.search-and-fetch on the notion-shared collection to find content that mentions or references them — the index reflects Notion within seconds.")
@@ -10538,7 +10538,7 @@ def _build_today_plate(
         lines.append(f"- Verification: confirmed for {verified_email or 'the current user'}, but Curator could not refresh scoped work right now ({exc}).")
         if pending_lines:
             lines.extend(pending_lines)
-        lines.append("- Next action: use notion.query/ssot.read for a live check if the user needs this now.")
+        lines.append("- Next action: use one targeted notion.query/ssot.read for a live check only if the user needs this now.")
         return "\n".join(lines)
 
     current_item_ids = [_today_plate_item_id(item) for item in user_items if _today_plate_item_id(item)]
@@ -10564,7 +10564,7 @@ def _build_today_plate(
             item_id = _today_plate_item_id(item)
             is_new = bool(has_previous_plate and item_id and item_id not in previous_ids)
             lines.append(f"  - {_today_plate_work_line(item, is_new=is_new)}")
-        lines.append("- Agent posture: orient from this plate, then use notion.query/ssot.read for live details before changing shared state.")
+        lines.append("- Agent posture: orient from this plate. Use notion.query/ssot.read only for a specific live target or before changing shared state.")
     else:
         lines.append("- Work candidates: none scoped to this user in the last Curator snapshot.")
         lines.append("- Agent posture: ask what the user wants to prioritize, or use notion.query if they expect newer Notion assignments.")
@@ -12541,7 +12541,7 @@ def build_managed_memory_payload(
         "- Use almanac-vaults for subscription, catalog, and curate-vaults work.\n"
         "- Use almanac-vault-reconciler for Almanac memory drift or repair.\n"
         "- Use almanac-ssot for organization-aware SSOT coordination in the shared Notion workspace.\n"
-        "- Use almanac-notion-knowledge for shared Notion knowledge search, exact page fetches, and live structured database queries.\n"
+        "- Use almanac-notion-knowledge for shared Notion knowledge search, exact page fetches, and targeted live structured database queries.\n"
         "- Use almanac-ssot-connect only for optional user-owned Notion MCP setup; it is not the default shared Almanac Notion knowledge rail.\n"
         "- Use almanac-notion-mcp only as an optional personal Notion helper after that user-owned Notion MCP is actually live; do not treat it as the default shared Almanac workspace-search lane.\n"
         "- For org-wide new Notion pages or databases, use the brokered ssot.write rail so creations are parented under the shared Almanac page and inherit org access; do not use personal Notion MCP for shared SSOT creation.\n"
@@ -12627,8 +12627,8 @@ def build_managed_memory_payload(
         "Use notion.fetch when you already know the exact page, database, or data\n"
         "source and need the live body or schema right now. Page fetches also\n"
         "return live attachment refs for Notion-hosted files on that page.\n"
-        "Use notion.query for live structured state such as assignments, due dates,\n"
-        "or status views in a shared Notion database or data source.\n"
+        "Use notion.query for one exact live structured database or data-source target, such as a requested status view or due-date filter.\n"
+        "For broad plate/focus/task orientation, answer from [managed:today-plate] first; if that is thin, use one bounded qmd-backed knowledge.search-and-fetch before any live query.\n"
         "Freshness depends on whether public webhook ingress is wired:\n"
         "- with ALMANAC_NOTION_WEBHOOK_PUBLIC_URL set and the webhook registered\n"
         "  in Notion, edits propagate to the index within seconds;\n"
@@ -12657,7 +12657,7 @@ def build_managed_memory_payload(
         "- no indexed matches\n"
         "- not indexed yet / backfill still catching up\n"
         "- exact page is better served by notion.fetch\n"
-        "- live structured state is better served by notion.query\n"
+        "- exact live structured state is better served by one targeted notion.query\n"
     )
     resource_ref = managed_resource_ref(
         access=access_state,
@@ -13188,7 +13188,7 @@ def _render_notion_landmarks(items: Sequence[dict[str, Any]]) -> str:
         lines.append(f"- {area}: {detail}.")
     if len(items) > 10:
         lines.append(f"- Plus {len(items) - 10} more indexed Notion area(s); search by exact topic, owner, or page title.")
-    lines.append("- Routing: docs/notes -> notion.search-and-fetch; exact page -> notion.fetch; live status/assignment rows -> notion.query.")
+    lines.append("- Routing: docs/notes -> notion.search-and-fetch; exact page -> notion.fetch; one exact live database target -> notion.query; broad plate/focus questions -> [managed:today-plate] first.")
     return "\n".join(lines)
 
 
@@ -13211,7 +13211,7 @@ def _build_recall_stubs(
         "- Treat these as awareness cards, not facts to answer from. Use MCP retrieval for the depth before citing or changing anything.",
         "- Default broad question path: knowledge.search-and-fetch with a specific natural-language query.",
         "- Vault/PDF/file path: vault.search-and-fetch; include vault-pdf-ingest for PDF-derived markdown.",
-        "- Shared Notion path: notion.search-and-fetch for documentation/notes; notion.query for live structured database state.",
+        "- Shared Notion path: notion.search-and-fetch for documentation/notes; notion.query only for one exact live structured database target.",
         f"- User-visible vault root for file references: {vault_root}",
     ]
 
@@ -13380,7 +13380,7 @@ def write_managed_memory_stubs(
         "notion-ref",
         "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.\n"
         "Use notion.search for indexed knowledge, notion.fetch for an exact live page,"
-        " and notion.query for live structured database state.",
+        " and notion.query only for one exact live structured database target.",
     )
     payload.setdefault(
         "notion-stub",

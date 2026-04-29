@@ -39,8 +39,14 @@ Call budget:
   `notion.search-and-fetch` once and answer from the fetched body.
 - If the user gives an exact page/database URL or id, skip search and call
   `notion.fetch` once.
-- If the user asks for assignments, status, due dates, or rows in a shared
-  database, call `notion.query` once.
+- If the user asks what's on their plate, what to focus on today, or what is
+  assigned to them, start from `[managed:today-plate]` when it is injected. If
+  that snapshot is missing or thin, make one bounded `knowledge.search-and-fetch`
+  or `notion.search-and-fetch` call against the user's own phrasing before
+  trying live database queries.
+- If the user gives an exact database/data-source target, or explicitly asks
+  for a live refresh of a structured database view, call `notion.query` once.
+  Do not fan out `notion.query` across discovered databases in a chat turn.
 - Only fall back to separate `notion.search` then up to 3 `notion.fetch` calls
   when you need more control than `notion.search-and-fetch` provides.
 
@@ -55,7 +61,9 @@ Use that split literally:
 
 - knowledge question -> `search`
 - "read this exact page" -> `fetch`
-- "what is assigned / due / in progress" -> `query`
+- "what's on my plate / what should I focus on today" -> managed
+  `[today-plate]`, then one qmd-backed `knowledge.search-and-fetch` if needed
+- "query this database for due / in progress rows" -> one targeted `query`
 - a page `fetch` also returns live attachment refs for files currently attached there
 
 This split exists because search is qmd-backed, while `fetch` and `query` are
@@ -65,6 +73,8 @@ live Notion reads.
 
 - start with one `search`
 - fetch at most 3 exact pages before summarizing
+- run at most 1 live `query` unless the user gave multiple exact database
+  targets
 - do not fetch every search hit
 - if the user gives an exact URL or page id, skip search and `fetch` directly
 

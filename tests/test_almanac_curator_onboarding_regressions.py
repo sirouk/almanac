@@ -353,7 +353,7 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
             curator._handle_operator_command(
                 cfg=cfg,
                 bot_token="test-token",
-                text="/retry-contact alex",
+                text="/retry_contact alex",
                 message={"chat": {"id": "42"}, "from": {"id": "42", "username": "operator"}},
             )
 
@@ -378,12 +378,50 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
             os.environ.update(old_env)
 
 
+def test_telegram_command_registration_includes_user_and_operator_commands() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_curator_command_registration_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "almanac_curator_command_registration_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            calls: list[dict[str, object]] = []
+            curator.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+            errors = curator.register_telegram_bot_commands(cfg, "telegram-token")
+
+            expect(errors == [], str(errors))
+            expect(len(calls) == 3, str(calls))
+            command_sets = {
+                str((call.get("scope") or {}).get("type")): {item["command"] for item in call["commands"]}
+                for call in calls
+            }
+            expect("setup_backup" in command_sets["default"], str(command_sets))
+            expect("verify_notion" in command_sets["default"], str(command_sets))
+            expect("ssh_key" in command_sets["default"], str(command_sets))
+            expect("retry_contact" not in command_sets["default"], str(command_sets))
+            expect("retry_contact" in command_sets["chat"], str(command_sets))
+            expect("approve" in command_sets["chat"], str(command_sets))
+            expect(calls[-1]["scope"]["chat_id"] == "42", str(calls[-1]))
+            print("PASS test_telegram_command_registration_includes_user_and_operator_commands")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_telegram_operator_approve_callback_replaces_message_and_clears_buttons()
     test_stale_telegram_request_callback_clears_buttons_with_status()
     test_telegram_backup_callback_reopens_completed_lane_backup_setup()
     test_telegram_operator_retry_contact_queues_discord_handoff()
-    print("PASS all 4 curator onboarding regression tests")
+    test_telegram_command_registration_includes_user_and_operator_commands()
+    print("PASS all 5 curator onboarding regression tests")
     return 0
 
 

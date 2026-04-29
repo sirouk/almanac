@@ -461,6 +461,11 @@ agent greeting.
 
 Telegram user-agent onboarding uses BotFather and the token printed for the
 new agent bot. Curator must reject Curator's own token.
+Telegram registered command menus must use underscore names because Telegram
+rejects hyphens in BotCommand entries. Keep aliases such as `/retry-contact`
+working when useful, but register menu commands as `/retry_contact`,
+`/setup_backup`, `/verify_notion`, and `/ssh_key`. Curator startup refreshes
+Telegram command menus, and Discord startup syncs app commands.
 
 ## Agent Gateway Defaults
 

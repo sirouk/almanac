@@ -343,7 +343,7 @@ async def main() -> None:
 
         parts = content.strip().split(maxsplit=2)
         command = parts[0].lower() if parts else ""
-        if command == "/retry-contact":
+        if command in {"/retry-contact", "/retry_contact"}:
             retry_parts = content.strip().split(maxsplit=1)
             if len(retry_parts) < 2 or not retry_parts[1].strip():
                 await message.channel.send("Use /retry-contact <unixusername|discordname>.")
@@ -386,6 +386,10 @@ async def main() -> None:
     async def start_command(interaction) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, "/start")
 
+    @tree.command(name="onboard", description="Start a private onboarding session with Curator.")
+    async def onboard_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        await _handle_dm_command(interaction, "/start")
+
     @tree.command(name="status", description="Show your current onboarding step.")
     async def status_command(interaction) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, "/status")
@@ -406,9 +410,18 @@ async def main() -> None:
     async def setup_backup_command(interaction) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, "/setup-backup")
 
+    @tree.command(name="backup", description="Set up the private Hermes-home backup for your lane.")
+    async def backup_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        await _handle_dm_command(interaction, "/setup-backup")
+
     @tree.command(name="ssh-key", description="Install your local remote-Hermes SSH public key for tailnet access.")
     @app_commands.describe(public_key="The ssh-ed25519/ssh-rsa public key printed by the remote Hermes helper")
     async def ssh_key_command(interaction, public_key: str) -> None:  # type: ignore[no-untyped-def]
+        await _handle_dm_command(interaction, f"/ssh-key {public_key.strip()}")
+
+    @tree.command(name="sshkey", description="Install your local remote-Hermes SSH public key for tailnet access.")
+    @app_commands.describe(public_key="The ssh-ed25519/ssh-rsa public key printed by the remote Hermes helper")
+    async def sshkey_command(interaction, public_key: str) -> None:  # type: ignore[no-untyped-def]
         await _handle_dm_command(interaction, f"/ssh-key {public_key.strip()}")
 
     @tree.command(name="approve", description="Approve an onboarding session, provisioning request, or pending SSOT write.")

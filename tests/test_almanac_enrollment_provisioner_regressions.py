@@ -165,8 +165,11 @@ def test_discord_completion_handoff_queues_root_dm_action() -> None:
     expect("_run_pending_discord_agent_dm_actions(conn, cfg)" in provisioner_text, "main loop should run Discord DM handoff actions")
     expect('action_kind="send-discord-agent-dm"' in curator_text, "Curator should queue the handoff after completion links")
     expect("ensure_discord_agent_dm_confirmation_code" in curator_text, "Curator should show the same visual confirmation code")
+    expect('@tree.command(name="onboard"' in curator_text, "Curator Discord should register /onboard")
+    expect('@tree.command(name="backup"' in curator_text, "Curator Discord should register /backup")
+    expect('@tree.command(name="sshkey"' in curator_text, "Curator Discord should register /sshkey")
     expect('@tree.command(name="retry-contact"' in curator_text, "Curator Discord should expose /retry-contact")
-    expect('command == "/retry-contact"' in curator_text, "Curator Discord should accept typed /retry-contact")
+    expect('command in {"/retry-contact", "/retry_contact"}' in curator_text, "Curator Discord should accept typed retry-contact aliases")
     print("PASS test_discord_completion_handoff_queues_root_dm_action")
 
 

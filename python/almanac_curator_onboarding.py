@@ -49,20 +49,76 @@ from almanac_telegram import (
     telegram_edit_message_reply_markup,
     telegram_get_me,
     telegram_get_updates,
+    telegram_set_my_commands,
     telegram_send_message,
 )
 
 
 OFFSET_SETTING_KEY = "curator_telegram_onboarding_update_offset"
 BOT_TOKEN_PATTERN = re.compile(r"^[0-9]{6,}:[A-Za-z0-9_-]{20,}$")
+TELEGRAM_USER_COMMANDS = [
+    {"command": "start", "description": "Start private onboarding"},
+    {"command": "onboard", "description": "Start private onboarding"},
+    {"command": "status", "description": "Show onboarding status"},
+    {"command": "cancel", "description": "Cancel current onboarding"},
+    {"command": "restart", "description": "Restart provider authorization"},
+    {"command": "verify_notion", "description": "Resume Notion verification"},
+    {"command": "setup_backup", "description": "Set up private backup"},
+    {"command": "backup", "description": "Set up private backup"},
+    {"command": "ssh_key", "description": "Install remote-Hermes SSH key"},
+    {"command": "sshkey", "description": "Install remote-Hermes SSH key"},
+]
+TELEGRAM_OPERATOR_COMMANDS = [
+    {"command": "approve", "description": "Approve onboarding/request/write"},
+    {"command": "deny", "description": "Deny onboarding/request/write"},
+    {"command": "retry_contact", "description": "Retry Discord agent-bot handoff"},
+]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Telegram onboarding worker for Almanac Curator.")
     parser.add_argument("--once", action="store_true", help="Poll once, then exit.")
+    parser.add_argument("--register-commands", action="store_true", help="Refresh Telegram bot command menus, then exit.")
     parser.add_argument("--poll-timeout", type=int, default=int(os.environ.get("ALMANAC_ONBOARDING_POLL_TIMEOUT_SECONDS", "20")))
     parser.add_argument("--idle-sleep", type=float, default=float(os.environ.get("ALMANAC_ONBOARDING_IDLE_SLEEP_SECONDS", "2")))
     return parser.parse_args()
+
+
+def _telegram_command_token(raw: str) -> str:
+    return str(raw or "").strip().split("@", 1)[0].lower()
+
+
+def register_telegram_bot_commands(cfg: Config, bot_token: str) -> list[str]:
+    errors: list[str] = []
+    registrations = [
+        (
+            "default",
+            TELEGRAM_USER_COMMANDS,
+            {"type": "default"},
+        ),
+        (
+            "private",
+            TELEGRAM_USER_COMMANDS,
+            {"type": "all_private_chats"},
+        ),
+    ]
+    if cfg.operator_notify_platform == "telegram" and str(cfg.operator_notify_channel_id or "").strip():
+        registrations.append(
+            (
+                "operator",
+                [*TELEGRAM_USER_COMMANDS, *TELEGRAM_OPERATOR_COMMANDS],
+                {
+                    "type": "chat",
+                    "chat_id": str(cfg.operator_notify_channel_id).strip(),
+                },
+            )
+        )
+    for label, commands, scope in registrations:
+        try:
+            telegram_set_my_commands(bot_token=bot_token, commands=commands, scope=scope)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{label}: {exc}")
+    return errors
 
 
 def send_text(
@@ -162,12 +218,12 @@ def _handle_operator_command(
     message: dict[str, Any],
 ) -> None:
     parts = text.strip().split(maxsplit=2)
-    command = parts[0].lower()
+    command = _telegram_command_token(parts[0] if parts else "")
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
-    if command == "/retry-contact":
+    if command in {"/retry-contact", "/retry_contact"}:
         retry_parts = text.strip().split(maxsplit=1)
         if len(retry_parts) < 2 or not retry_parts[1].strip():
-            send_text(bot_token, operator_chat_id, "Use /retry-contact <unixusername|discordname>.")
+            send_text(bot_token, operator_chat_id, "Use /retry_contact <unixusername|discordname>.")
             return
         actor = _format_actor_label(message)
         try:
@@ -185,11 +241,11 @@ def _handle_operator_command(
         return
 
     if command not in {"/approve", "/deny"} or len(parts) < 2:
-        if command.startswith("/approve") or command.startswith("/deny") or command.startswith("/retry-contact"):
+        if command.startswith("/approve") or command.startswith("/deny") or command.startswith("/retry"):
             send_text(
                 bot_token,
                 operator_chat_id,
-                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, /deny ssotw_xxx optional reason, or /retry-contact <unixusername|discordname>.",
+                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, /deny ssotw_xxx optional reason, or /retry_contact <unixusername|discordname>.",
             )
         return
     target_id = parts[1].strip()
@@ -831,6 +887,15 @@ def main() -> None:
     curator_bot_id = str(curator_profile.get("id") or "")
     if not curator_bot_id:
         raise SystemExit("Telegram getMe did not return a bot id.")
+    command_errors = register_telegram_bot_commands(cfg, bot_token)
+    if command_errors:
+        message = "Curator Telegram command registration failed: " + "; ".join(command_errors)
+        if args.register_commands:
+            raise SystemExit(message)
+        sys.stderr.write(message + "\n")
+        sys.stderr.flush()
+    if args.register_commands:
+        return
 
     while True:
         try:

@@ -140,6 +140,35 @@ def telegram_get_me(*, bot_token: str) -> dict[str, Any]:
     return _request_json(_telegram_url(bot_token, "getMe"), timeout=20)
 
 
+def telegram_set_my_commands(
+    *,
+    bot_token: str,
+    commands: list[dict[str, str]],
+    scope: dict[str, Any] | None = None,
+    language_code: str = "",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "commands": [
+            {
+                "command": str(item.get("command") or "").strip().lstrip("/"),
+                "description": str(item.get("description") or "").strip(),
+            }
+            for item in commands
+            if str(item.get("command") or "").strip() and str(item.get("description") or "").strip()
+        ]
+    }
+    if scope is not None:
+        payload["scope"] = scope
+    if language_code:
+        payload["language_code"] = language_code
+    return _request_json(
+        _telegram_url(bot_token, "setMyCommands"),
+        method="POST",
+        payload=payload,
+        timeout=20,
+    )
+
+
 def telegram_get_updates(
     *,
     bot_token: str,

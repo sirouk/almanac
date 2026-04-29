@@ -426,7 +426,7 @@ An enrolled user gets:
 - Discord completion handoff with a visual confirmation code: after Curator
   sends the dashboard and workspace links, the user-agent bot DMs the user
   directly with the same code. Operators can retry that outreach from the
-  configured operator channel with `/retry-contact <unixusername|discordname>`
+  configured operator channel with `/retry_contact <unixusername|discordname>`
   or from the host with `almanac-ctl onboarding retry-contact`.
 - Optional remote SSH control over Tailscale using a user-provided public key.
 
@@ -763,6 +763,11 @@ Useful operator commands:
 ./bin/almanac-ctl vault reload-defs
 ./bin/almanac-ctl upgrade check
 ```
+
+Telegram bot command menus use Telegram-compatible underscores for multiword
+commands, such as `/setup_backup`, `/verify_notion`, `/ssh_key`, and
+operator-only `/retry_contact`. The older typed hyphen aliases continue to
+work when sent as plain messages.
 
 For deliberate cleanup and re-testing of a user lane:
 

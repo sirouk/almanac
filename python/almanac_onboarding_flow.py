@@ -55,8 +55,8 @@ from almanac_telegram import telegram_send_message
 START_COMMANDS = {"/start", "/onboard", "start", "onboard"}
 STATUS_COMMANDS = {"/status", "status"}
 CANCEL_COMMANDS = {"/cancel", "cancel"}
-VERIFY_NOTION_COMMANDS = {"/verify-notion", "verify-notion", "verify notion"}
-SETUP_BACKUP_COMMANDS = {"/setup-backup", "setup-backup", "setup backup", "/backup", "backup"}
+VERIFY_NOTION_COMMANDS = {"/verify-notion", "/verify_notion", "verify-notion", "verify_notion", "verify notion"}
+SETUP_BACKUP_COMMANDS = {"/setup-backup", "/setup_backup", "setup-backup", "setup_backup", "setup backup", "/backup", "backup"}
 NOTION_READY_COMMANDS = {"ready"}
 UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
 GITHUB_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -825,7 +825,7 @@ def _extract_remote_ssh_pubkey(raw_text: str) -> tuple[bool, str]:
     if not text:
         return False, ""
     lowered = text.lower()
-    for prefix in ("/ssh-key", "/sshkey", "ssh-key", "sshkey"):
+    for prefix in ("/ssh-key", "/ssh_key", "/sshkey", "ssh-key", "ssh_key", "sshkey"):
         if lowered == prefix:
             return True, ""
         if lowered.startswith(prefix + " "):

@@ -468,6 +468,76 @@ def test_onboarding_offers_safe_org_profile_match_without_forcing_names() -> Non
             os.environ.update(old_env)
 
 
+def test_onboarding_respects_disabled_org_profile_roster_prompt() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_profile_disabled_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_profile_disabled_test")
+    org_profile = load_module(ORG_PROFILE_PY, "almanac_org_profile_disabled_match_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_CURATOR_CHANNELS": "discord",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            profile = {
+                "version": 1,
+                "organization": {"id": "example", "name": "Example", "profile_kind": "organization", "mission": "Operate."},
+                "roles": {"operator": {"description": "Operator"}},
+                "people": [
+                    {"id": "blair", "display_name": "Blair Stone", "role": "operator", "unix_user": "blair", "agent": {"name": "Comet"}}
+                ],
+                "identity_verification": {"safe_roster_prompt": False, "allowed_match_visibility": "unclaimed_people_only"},
+                "policies": {"privacy": {"default_people_visibility": "org_visible"}},
+            }
+            with control.connect_db(cfg) as conn:
+                org_profile.apply_profile(conn, cfg, profile=profile, source_path=root / "org-profile.yaml", actor="test")
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="dm-1",
+                    sender_id="user-1",
+                    text="/start",
+                    sender_username="blair",
+                    sender_display_name="Blair Stone",
+                ),
+                validate_bot_token=lambda _raw: None,
+            )
+            expect("prepared operating-profile entries" not in replies[0].text, replies[0].text)
+            expect("A little context helps me shape the agent properly." in replies[0].text, replies[0].text)
+            print("PASS test_onboarding_respects_disabled_org_profile_roster_prompt")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_onboarding_uses_resolved_sender_display_name_without_reasking() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1392,6 +1462,7 @@ def main() -> int:
         test_discord_prompt_and_operator_review_reflect_primary_control_channel()
         test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
         test_onboarding_offers_safe_org_profile_match_without_forcing_names()
+        test_onboarding_respects_disabled_org_profile_roster_prompt()
         test_onboarding_uses_resolved_sender_display_name_without_reasking()
         test_shared_team_key_prompt_offers_default_reply_for_chutes()
         test_shared_team_key_default_reply_uses_configured_secret()
@@ -1402,7 +1473,7 @@ def main() -> int:
         test_org_provided_secret_auto_stages_after_bot_token()
         test_telegram_chutes_model_prompt_uses_copyable_code_entities()
         test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval()
-        print("PASS all 13 onboarding prompt regression tests")
+        print("PASS all 14 onboarding prompt regression tests")
         return 0
     finally:
         os.environ.clear()

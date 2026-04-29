@@ -1023,7 +1023,20 @@ main() {
       ;;
     config)
       prepare_compose
-      compose config "$@"
+      if [[ "$#" -eq 0 ]]; then
+        compose config -q
+        echo "Docker Compose config is valid. Full config output is redacted by default; use --unsafe-print only for local debugging."
+      elif [[ "$1" == "-q" || "$1" == "--quiet" ]]; then
+        compose config -q
+      elif [[ "$1" == "--unsafe-print" ]]; then
+        shift
+        echo "WARNING: printing full Docker Compose config may expose generated passwords and tokens." >&2
+        compose config "$@"
+      else
+        echo "Refusing to print Docker Compose config because it may expose generated passwords and tokens." >&2
+        echo "Use './deploy.sh docker config -q' to validate, or '--unsafe-print' for explicit local debugging." >&2
+        return 2
+      fi
       ;;
     build)
       prepare_compose

@@ -226,6 +226,13 @@ if [[ -n "${VAULT_DIR:-}" && -d "$VAULT_DIR" ]]; then
   )
 fi
 
+CODE_SERVER_UID="$(stat -c '%u' "$WORKSPACE_HOME" 2>/dev/null || id -u)"
+CODE_SERVER_GID="$(stat -c '%g' "$WORKSPACE_HOME" 2>/dev/null || id -g)"
+if [[ "$CODE_SERVER_UID" == "0" && "${ALMANAC_AGENT_CODE_ALLOW_ROOT_CONTAINER:-0}" != "1" ]]; then
+  echo "Refusing to run code-server as root against read-write Almanac mounts. Fix workspace ownership or set ALMANAC_AGENT_CODE_ALLOW_ROOT_CONTAINER=1 for a deliberate local recovery run." >&2
+  exit 1
+fi
+
 run_code_server_container() {
   local runtime="$1"
   local run_args=()
@@ -238,7 +245,7 @@ run_code_server_container() {
   fi
 
   run_args+=(
-    --user 0:0
+    --user "$CODE_SERVER_UID:$CODE_SERVER_GID"
     -p "127.0.0.1:${CODE_PORT}:8080"
     -e PASSWORD="$PASSWORD"
     -e HOME=/home/coder

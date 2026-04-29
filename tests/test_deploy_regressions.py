@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 DEPLOY_SH = REPO / "bin" / "deploy.sh"
+HEALTH_SH = REPO / "bin" / "health.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
 CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
@@ -1015,6 +1016,7 @@ ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
 ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
 normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
 random_secret() {{ printf '%s' "generated-secret"; }}
+require_private_github_backup_remote() {{ return 0; }}
 detect_tailscale() {{
   TAILSCALE_DNS_NAME=""
   TAILSCALE_IPV4=""
@@ -2237,6 +2239,46 @@ def test_install_system_services_units_pass_systemd_analyze_verify() -> None:
     print("PASS test_install_system_services_units_pass_systemd_analyze_verify")
 
 
+def test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh() -> None:
+    text = DEPLOY_SH.read_text()
+    checkout = extract(text, "checkout_upstream_release() {", "write_operator_checkout_artifact() {")
+    expect("GIT_TERMINAL_PROMPT=0" in checkout, checkout)
+    expect("GIT_ASKPASS=/bin/false" in checkout, checkout)
+    expect("SSH_ASKPASS=/bin/false" in checkout, checkout)
+    expect("GCM_INTERACTIVE=Never" in checkout, checkout)
+    expect("Refusing SSH upstream without the Almanac upstream deploy-key lane enabled" in checkout, checkout)
+    print("PASS test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh")
+
+
+def test_upgrade_refuses_non_main_branch_without_explicit_override() -> None:
+    text = DEPLOY_SH.read_text()
+    guard = extract(text, "require_main_upstream_branch_for_upgrade() {", "write_operator_checkout_artifact() {")
+    upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    flow = extract(text, "run_upgrade_flow() {", "run_agent_payload() {")
+    expect('ALMANAC_ALLOW_NON_MAIN_UPGRADE:-0' in guard, guard)
+    expect("Refusing production upgrade from non-main upstream branch" in guard, guard)
+    expect("require_main_upstream_branch_for_upgrade" in upgrade, upgrade)
+    expect("require_main_upstream_branch_for_upgrade" in flow, flow)
+    print("PASS test_upgrade_refuses_non_main_branch_without_explicit_override")
+
+
+def test_install_answer_file_has_exit_trap_cleanup() -> None:
+    text = DEPLOY_SH.read_text()
+    install_flow = extract(text, "run_install_flow() {", "run_remove_flow() {")
+    remove_flow = extract(text, "run_remove_flow() {", 'if [[ -n "$PRIVILEGED_MODE" ]]; then')
+    expect("mktemp /tmp/almanac-install" in install_flow and "trap 'rm -f" in install_flow, install_flow)
+    expect("mktemp /tmp/almanac-remove" in remove_flow and "trap 'rm -f" in remove_flow, remove_flow)
+    print("PASS test_install_answer_file_has_exit_trap_cleanup")
+
+
+def test_health_checks_failed_systemd_units_and_stale_podman_transients() -> None:
+    text = HEALTH_SH.read_text()
+    expect("check_system_failed_units" in text and "systemctl --failed --no-legend --plain" in text, text)
+    expect("check_service_user_failed_units" in text and "systemctl --user --failed --no-legend --plain" in text, text)
+    expect("failed_units_are_stale_podman_healthchecks" in text and "systemctl --user reset-failed" in text, text)
+    print("PASS test_health_checks_failed_systemd_units_and_stale_podman_transients")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
@@ -2299,6 +2341,10 @@ def main() -> int:
         test_enrollment_reset_supports_full_forget_purge,
         test_enrollment_align_reseeds_agent_identity,
         test_root_install_and_upgrade_do_not_globally_export_runtime_secrets,
+        test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh,
+        test_upgrade_refuses_non_main_branch_without_explicit_override,
+        test_install_answer_file_has_exit_trap_cleanup,
+        test_health_checks_failed_systemd_units_and_stale_podman_transients,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,
         test_install_system_services_includes_independent_notion_claim_poller,

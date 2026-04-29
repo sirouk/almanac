@@ -21,6 +21,36 @@ BEGIN_SOUL_MARKER = "<!-- BEGIN ALMANAC ORG PROFILE -->"
 END_SOUL_MARKER = "<!-- END ALMANAC ORG PROFILE -->"
 DEFAULT_GENERATED_PROFILE_PATH = "Agents_KB/Operating_Context/org-profile.generated.md"
 STATE_SUBDIR = "org-profile"
+ORG_PROFILE_IDENTITY_KEYS = (
+    "org_profile_revision",
+    "person_id",
+    "human_display_name",
+    "preferred_name",
+    "role_id",
+    "title",
+    "teams",
+    "primary_team",
+    "responsibilities",
+    "decision_authority",
+    "human_accountability",
+    "contact",
+    "public_context",
+    "github",
+    "agent_delegation",
+    "authority",
+    "identity_verification",
+    "distribution",
+    "workflows",
+    "automations",
+    "benchmarks",
+    "org_name",
+    "org_profile_kind",
+    "org_scope",
+    "org_mission",
+    "org_primary_project",
+    "org_timezone",
+    "org_quiet_hours",
+)
 
 UPSTREAM_SOUL_FALLBACK = (
     "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
@@ -234,6 +264,35 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
     if duplicate_people:
         errors.append(f"duplicate people ids: {', '.join(duplicate_people)}")
     people_by_id = {str(person.get("id") or ""): person for person in people if isinstance(person, dict)}
+
+    unix_users: dict[str, list[str]] = {}
+    match_tokens: dict[str, list[str]] = {}
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        person_id = str(person.get("id") or "").strip() or "(missing-id)"
+        unix_user = str(person.get("unix_user") or "").strip().lower()
+        if unix_user:
+            unix_users.setdefault(unix_user, []).append(person_id)
+        agent = person.get("agent") if isinstance(person.get("agent"), dict) else {}
+        identity_hints = person.get("identity_hints") if isinstance(person.get("identity_hints"), dict) else {}
+        for raw_token in (
+            str(person.get("display_name") or ""),
+            str(person.get("preferred_name") or ""),
+            str(agent.get("name") or ""),
+            *[str(alias) for alias in _as_list(identity_hints.get("aliases"))],
+        ):
+            token = raw_token.strip().lower()
+            if token:
+                match_tokens.setdefault(token, []).append(person_id)
+    duplicate_unix = {key: ids for key, ids in unix_users.items() if len(set(ids)) > 1}
+    if duplicate_unix:
+        details = "; ".join(f"{key}: {', '.join(sorted(set(ids)))}" for key, ids in sorted(duplicate_unix.items()))
+        errors.append(f"duplicate people unix_user values: {details}")
+    duplicate_tokens = {key: ids for key, ids in match_tokens.items() if len(set(ids)) > 1}
+    if duplicate_tokens:
+        details = "; ".join(f"{key}: {', '.join(sorted(set(ids)))}" for key, ids in sorted(duplicate_tokens.items()))
+        errors.append(f"duplicate people/agent exact-match identity labels: {details}")
 
     team_ids = _list_ids(teams)
     duplicate_teams = sorted({team_id for team_id in team_ids if team_ids.count(team_id) > 1})
@@ -721,6 +780,36 @@ def _safe_join(values: object) -> str:
     return ", ".join(parts) if parts else "-"
 
 
+def _vault_generated_output(profile: dict[str, Any]) -> dict[str, Any]:
+    distribution = _dict(profile.get("distribution"))
+    for output in _as_list(distribution.get("generated_outputs")):
+        if not isinstance(output, dict):
+            continue
+        target = str(output.get("target") or "").strip().lower()
+        output_id = str(output.get("id") or "").strip().lower()
+        if target == "vault" or output_id == "vault-render":
+            return output
+    return {}
+
+
+def _privacy_default_people_visibility(profile: dict[str, Any]) -> str:
+    policies = _dict(profile.get("policies"))
+    privacy = _dict(policies.get("privacy"))
+    return str(privacy.get("default_people_visibility") or "operator_only").strip().lower()
+
+
+def _vault_render_allows_people_details(profile: dict[str, Any]) -> bool:
+    output = _vault_generated_output(profile)
+    audience = str(output.get("audience") or "operator_only").strip().lower()
+    sensitivity = str(output.get("sensitivity") or "restricted").strip().lower()
+    visibility = _privacy_default_people_visibility(profile)
+    return (
+        audience == "all_agents"
+        and sensitivity in {"public", "internal"}
+        and visibility in {"org_visible", "household_visible"}
+    )
+
+
 def _role(profile: dict[str, Any], role_id: str) -> dict[str, Any]:
     roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
     role = roles.get(role_id)
@@ -829,67 +918,87 @@ def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = 
                     suffix = f" enabled={bool(item.get('enabled'))}"
                 lines.append(f"- {item.get('id')}: {item.get('name') or item.get('purpose') or ''}{suffix}".rstrip())
             lines.append("")
+    people = [person for person in _as_list(profile.get("people")) if isinstance(person, dict)]
+    teams = [team for team in _as_list(profile.get("teams")) if isinstance(team, dict)]
+    include_people_details = _vault_render_allows_people_details(profile)
     lines.extend(["", "## People And Agents", ""])
-    for person in _as_list(profile.get("people")):
-        if not isinstance(person, dict):
-            continue
-        role = _role(profile, str(person.get("role") or ""))
-        agent = person.get("agent") if isinstance(person.get("agent"), dict) else {}
+    if not include_people_details:
         lines.extend(
             [
-                f"### {person.get('display_name') or person.get('id')}",
+                f"- People represented: {len(people)}",
+                "- Direct person, agent, GitHub, and responsibility details are kept in matched-agent/private context slices.",
+                f"- Privacy mode: {_privacy_default_people_visibility(profile)}",
                 "",
-                f"- Person id: {person.get('id')}",
-                f"- Role: {person.get('role')} - {_first_line(role.get('description'))}",
-                f"- Teams: {_safe_join(person.get('teams'))}",
-                f"- Agent: {agent.get('name') or '(unnamed)'}",
-                f"- Agent purpose: {agent.get('purpose') or '(unset)'}",
             ]
         )
-        public_context = _dict(person.get("public_context"))
-        github = _dict(person.get("github"))
-        if public_context.get("external_title"):
-            lines.append(f"- External title: {public_context.get('external_title')}")
-        if github.get("username"):
-            lines.append(f"- GitHub: {github.get('username')}")
-        visible_repos = [
-            repo
-            for repo in _as_list(github.get("primary_repos")) + _as_list(github.get("accessible_repos"))
-            if isinstance(repo, dict) and str(repo.get("sensitivity") or "internal") != "restricted"
-        ]
-        if visible_repos:
-            lines.extend(["", "GitHub / Repo Context:"])
-            for repo in visible_repos[:8]:
-                repo_name = repo.get("owner_repo") or repo.get("url") or repo.get("id")
-                lines.append(f"- {repo_name}: {repo.get('purpose') or '(no purpose set)'}")
-        responsibilities = _strings(person.get("responsibilities")) or _strings(role.get("responsibilities"))
-        authority = _strings(person.get("decision_authority")) or _strings(role.get("decision_authority"))
-        may_do = _strings(agent.get("may_do"))
-        must_ask = _strings(agent.get("must_ask_before"))
-        must_not = _strings(agent.get("must_not_do"))
-        for heading, values in (
-            ("Responsibilities", responsibilities),
-            ("Decision Authority", authority),
-            ("Agent May Do", may_do),
-            ("Agent Must Ask Before", must_ask),
-            ("Agent Must Not Do", must_not),
-        ):
-            if values:
-                lines.extend(["", f"{heading}:", _text_list(values)])
-        lines.append("")
+    else:
+        for person in people:
+            role = _role(profile, str(person.get("role") or ""))
+            agent = person.get("agent") if isinstance(person.get("agent"), dict) else {}
+            lines.extend(
+                [
+                    f"### {person.get('display_name') or person.get('id')}",
+                    "",
+                    f"- Person id: {person.get('id')}",
+                    f"- Role: {person.get('role')} - {_first_line(role.get('description'))}",
+                    f"- Teams: {_safe_join(person.get('teams'))}",
+                    f"- Agent: {agent.get('name') or '(unnamed)'}",
+                    f"- Agent purpose: {agent.get('purpose') or '(unset)'}",
+                ]
+            )
+            public_context = _dict(person.get("public_context"))
+            github = _dict(person.get("github"))
+            if public_context.get("external_title"):
+                lines.append(f"- External title: {public_context.get('external_title')}")
+            if github.get("username"):
+                lines.append(f"- GitHub: {github.get('username')}")
+            visible_repos = [
+                repo
+                for repo in _as_list(github.get("primary_repos")) + _as_list(github.get("accessible_repos"))
+                if isinstance(repo, dict) and str(repo.get("sensitivity") or "internal") != "restricted"
+            ]
+            if visible_repos:
+                lines.extend(["", "GitHub / Repo Context:"])
+                for repo in visible_repos[:8]:
+                    repo_name = repo.get("owner_repo") or repo.get("url") or repo.get("id")
+                    lines.append(f"- {repo_name}: {repo.get('purpose') or '(no purpose set)'}")
+            responsibilities = _strings(person.get("responsibilities")) or _strings(role.get("responsibilities"))
+            authority = _strings(person.get("decision_authority")) or _strings(role.get("decision_authority"))
+            may_do = _strings(agent.get("may_do"))
+            must_ask = _strings(agent.get("must_ask_before"))
+            must_not = _strings(agent.get("must_not_do"))
+            for heading, values in (
+                ("Responsibilities", responsibilities),
+                ("Decision Authority", authority),
+                ("Agent May Do", may_do),
+                ("Agent Must Ask Before", must_ask),
+                ("Agent Must Not Do", must_not),
+            ):
+                if values:
+                    lines.extend(["", f"{heading}:", _text_list(values)])
+            lines.append("")
     lines.extend(["## Teams", ""])
-    for team in _as_list(profile.get("teams")):
-        if not isinstance(team, dict):
-            continue
-        lines.extend(
-            [
-                f"### {team.get('name') or team.get('id')}",
-                "",
-                f"- Team id: {team.get('id')}",
-                f"- Lead: {team.get('lead') or '(unset)'}",
-                f"- Members: {_safe_join(team.get('members'))}",
-            ]
-        )
+    for team in teams:
+        if include_people_details:
+            lines.extend(
+                [
+                    f"### {team.get('name') or team.get('id')}",
+                    "",
+                    f"- Team id: {team.get('id')}",
+                    f"- Lead: {team.get('lead') or '(unset)'}",
+                    f"- Members: {_safe_join(team.get('members'))}",
+                ]
+            )
+        else:
+            member_count = len(_strings(team.get("members")))
+            lines.extend(
+                [
+                    f"### {team.get('name') or team.get('id')}",
+                    "",
+                    f"- Team id: {team.get('id')}",
+                    f"- Members represented: {member_count}",
+                ]
+            )
         responsibilities = _strings(team.get("responsibilities"))
         if responsibilities:
             lines.extend(["", "Responsibilities:", _text_list(responsibilities)])
@@ -1467,6 +1576,53 @@ def materialize_agent_context(hermes_home: Path, context: dict[str, Any]) -> dic
     return changed
 
 
+def _remove_soul_overlay(existing: str) -> str:
+    start = existing.find(BEGIN_SOUL_MARKER)
+    end = existing.find(END_SOUL_MARKER)
+    if start < 0 or end < start:
+        return existing
+    end += len(END_SOUL_MARKER)
+    return (existing[:start].rstrip() + "\n\n" + existing[end:].lstrip()).strip() + "\n"
+
+
+def clear_materialized_agent_context(hermes_home: Path) -> dict[str, Any]:
+    state_path = hermes_home / "state" / "almanac-org-profile-context.json"
+    identity_path = hermes_home / "state" / IDENTITY_STATE_FILENAME
+    soul_path = hermes_home / "SOUL.md"
+    changed: dict[str, Any] = {
+        "org_profile_context_path": str(state_path),
+        "identity_path": str(identity_path),
+        "soul_path": str(soul_path),
+    }
+
+    if state_path.exists():
+        try:
+            state_path.unlink()
+            changed["org_profile_context_removed"] = True
+        except OSError as exc:
+            changed["org_profile_error"] = str(exc)
+    existing_identity = _read_json_dict(identity_path)
+    if existing_identity:
+        identity = {key: value for key, value in existing_identity.items() if key not in ORG_PROFILE_IDENTITY_KEYS}
+        if identity != existing_identity:
+            changed["identity_changed"] = _atomic_write_text(
+                identity_path,
+                json.dumps(identity, indent=2, sort_keys=True) + "\n",
+                mode=0o600,
+            )
+    try:
+        existing_soul = soul_path.read_text(encoding="utf-8")
+    except OSError:
+        existing_soul = ""
+    if BEGIN_SOUL_MARKER in existing_soul and END_SOUL_MARKER in existing_soul:
+        changed["soul_changed"] = _atomic_write_text(soul_path, _remove_soul_overlay(existing_soul), mode=0o600)
+    changed["changed"] = any(
+        bool(changed.get(key))
+        for key in ("org_profile_context_removed", "identity_changed", "soul_changed")
+    )
+    return changed
+
+
 def _upstream_soul_text() -> str:
     try:
         from hermes_cli.default_soul import DEFAULT_SOUL_MD  # type: ignore
@@ -1729,14 +1885,26 @@ def apply_profile(
     vault_changed = _atomic_write_text(vault_path, render_vault_profile(profile, source_path=source_path), mode=0o644)
 
     matched_agents: list[dict[str, Any]] = []
-    unmatched_agents: list[str] = []
+    unmatched_agents: list[dict[str, Any]] = []
     context_root = agent_context_dir(cfg)
     context_root.mkdir(parents=True, exist_ok=True)
     for row in _active_agent_rows(conn):
         context = build_agent_context_for_row(profile, row)
         agent_id = str(row["agent_id"] or "").strip()
         if not context:
-            unmatched_agents.append(agent_id)
+            stale_path = context_root / f"{agent_id}.json"
+            stale_removed = False
+            if stale_path.exists():
+                stale_path.unlink()
+                stale_removed = True
+            unmatched_agents.append(
+                {
+                    "agent_id": agent_id,
+                    "unix_user": str(row["unix_user"] or ""),
+                    "context_path": str(stale_path),
+                    "stale_context_removed": stale_removed,
+                }
+            )
             continue
         context_body = json.dumps(context, indent=2, sort_keys=True) + "\n"
         path = context_root / f"{agent_id}.json"

@@ -35,6 +35,54 @@ warn_or_fail() {
   fi
 }
 
+summarize_failed_units() {
+  sed -E 's/[[:space:]]+/ /g' | head -5 | paste -sd '; ' -
+}
+
+failed_units_are_stale_podman_healthchecks() {
+  local output="${1:-}"
+  [[ -n "$output" ]] || return 1
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" == *"/usr/bin/podman healthcheck"* ]] || return 1
+  done <<<"$output"
+}
+
+check_system_failed_units() {
+  local output=""
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+  output="$(systemctl --failed --no-legend --plain 2>/dev/null || true)"
+  if [[ -z "$output" ]]; then
+    pass "no failed system units"
+  else
+    warn_or_fail "failed system units present: $(printf '%s\n' "$output" | summarize_failed_units)"
+  fi
+}
+
+check_service_user_failed_units() {
+  local output="" after_reset=""
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+  output="$(systemctl --user --failed --no-legend --plain 2>/dev/null || true)"
+  if [[ -z "$output" ]]; then
+    pass "no failed service-user units"
+    return 0
+  fi
+  if failed_units_are_stale_podman_healthchecks "$output"; then
+    systemctl --user reset-failed >/dev/null 2>&1 || true
+    after_reset="$(systemctl --user --failed --no-legend --plain 2>/dev/null || true)"
+    if [[ -z "$after_reset" ]]; then
+      pass "cleared stale Podman healthcheck transient failures"
+      return 0
+    fi
+    output="$after_reset"
+  fi
+  warn_or_fail "failed service-user units present: $(printf '%s\n' "$output" | summarize_failed_units)"
+}
+
 trim_secret_marker() {
   local value="${1:-}"
 
@@ -1791,6 +1839,11 @@ fi
 
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
   pass "backup remote configured: $BACKUP_GIT_REMOTE"
+  if require_private_github_backup_remote "$BACKUP_GIT_REMOTE"; then
+    pass "backup remote is not public"
+  else
+    warn_or_fail "backup remote visibility check failed or repo is public"
+  fi
   if backup_git_remote_uses_ssh "$BACKUP_GIT_REMOTE"; then
     if [[ -f "$BACKUP_GIT_DEPLOY_KEY_PATH" ]]; then
       pass "backup deploy key exists at $BACKUP_GIT_DEPLOY_KEY_PATH"
@@ -1869,6 +1922,7 @@ if set_user_systemd_bus_env; then
   else
     pass "Curator gateway service not required for configured channels"
   fi
+  check_service_user_failed_units
 else
   warn "systemd user bus unavailable; skipping service status checks"
 fi
@@ -1953,6 +2007,7 @@ fi
 
 check_system_unit_state almanac-enrollment-provision.timer required
 check_system_unit_state almanac-notion-claim-poll.timer required
+check_system_failed_units
 
 printf '\nSummary: %s ok, %s warn, %s fail\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 

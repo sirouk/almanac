@@ -322,10 +322,89 @@ def test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_paylo
         print("PASS test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_payload_is_invalid")
 
 
+def test_user_agent_refresh_rejects_wrong_agent_central_payload() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo_dir = root / "repo"
+        bin_dir = repo_dir / "bin"
+        python_dir = repo_dir / "python"
+        hermes_home = root / "hermes-home"
+        rpc_log = root / "rpc-log.json"
+
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        python_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SOURCE_SCRIPT, bin_dir / "user-agent-refresh.sh")
+        (bin_dir / "user-agent-refresh.sh").chmod(0o755)
+        shutil.copy2(CONTROL_PY, python_dir / "almanac_control.py")
+        shutil.copy2(MODEL_PROVIDERS_PY, python_dir / "almanac_model_providers.py")
+        shutil.copy2(NOTION_SSOT_PY, python_dir / "almanac_notion_ssot.py")
+        shutil.copy2(ORG_PROFILE_PY, python_dir / "almanac_org_profile.py")
+        shutil.copy2(RESOURCE_MAP_PY, python_dir / "almanac_resource_map.py")
+        write_fake_rpc_client(python_dir / "almanac_rpc_client.py")
+
+        agents_state_dir = root / "agents-state" / "agent-guide"
+        agents_state_dir.mkdir(parents=True, exist_ok=True)
+        (agents_state_dir / "managed-memory.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-other",
+                    "vault-ref": "wrong",
+                    "qmd-ref": "wrong",
+                    "vault_path_contract": "user-home-almanac-v1",
+                    "catalog": [],
+                    "subscriptions": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        token_file = hermes_home / "secrets" / "almanac-bootstrap-token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text("tok_guide\n", encoding="utf-8")
+        enrollment_state = hermes_home / "state" / "almanac-enrollment.json"
+        enrollment_state.parent.mkdir(parents=True, exist_ok=True)
+        enrollment_state.write_text(json.dumps({"status": "active"}) + "\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [str(bin_dir / "user-agent-refresh.sh")],
+            env={
+                **os.environ,
+                "HERMES_HOME": str(hermes_home),
+                "HOME": str(root / "home-guide"),
+                "ALMANAC_MCP_URL": "http://127.0.0.1:8282/mcp",
+                "ALMANAC_FAKE_RPC_LOG": str(rpc_log),
+                "ALMANAC_AGENT_ID": "agent-guide",
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "agents-state"),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, result.stderr)
+        expect("agent_id mismatch" in result.stderr, result.stderr)
+        rpc_calls = json.loads(rpc_log.read_text(encoding="utf-8"))
+        expect([call["tool"] for call in rpc_calls] == ["vaults.refresh", "agents.managed-memory", "agents.consume-notifications"], rpc_calls)
+        print("PASS test_user_agent_refresh_rejects_wrong_agent_central_payload")
+
+
+def test_central_managed_payload_is_acl_private_not_world_readable() -> None:
+    source = CONTROL_PY.read_text(encoding="utf-8")
+    grant_start = source.index("def _grant_managed_payload_read_access(")
+    grant_end = source.index("def publish_central_managed_memory(", grant_start)
+    grant_source = source[grant_start:grant_end]
+    expect("path.chmod(0o640)" in grant_source, "central managed payload should not be world-readable")
+    expect("path.chmod(0o644)" not in grant_source, "central managed payload must not use world-readable permissions")
+    expect("setfacl" in grant_source and "cfg.private_dir" in grant_source and "cfg.agents_state_dir" in grant_source, "enrolled user access should use narrow ACLs")
+    print("PASS test_central_managed_payload_is_acl_private_not_world_readable")
+
+
 def main() -> int:
     test_user_agent_refresh_materializes_managed_stubs_and_recent_events()
     test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_payload_is_invalid()
-    print("PASS all 2 user-agent refresh regression tests")
+    test_user_agent_refresh_rejects_wrong_agent_central_payload()
+    test_central_managed_payload_is_acl_private_not_world_readable()
+    print("PASS all 4 user-agent refresh regression tests")
     return 0
 
 

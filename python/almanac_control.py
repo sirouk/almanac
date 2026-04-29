@@ -901,6 +901,14 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     conn.execute(
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_identity_org_profile_person_active_unique
+        ON agent_identity (org_profile_person_id)
+        WHERE org_profile_person_id != ''
+          AND COALESCE(suspended_at, '') = ''
+        """
+    )
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_ssot_access_audit_agent_created
         ON ssot_access_audit (agent_id, created_at)
         """
@@ -1424,6 +1432,24 @@ def upsert_agent_identity(
         raise ValueError("write_mode must be one of " + ", ".join(AGENT_IDENTITY_WRITE_MODES))
     _validate_agent_identity_transition(existing, row, allow_unsuspend=allow_unsuspend)
     _validate_agent_identity_state(row)
+    if row["org_profile_person_id"] and not row["suspended_at"]:
+        duplicate = conn.execute(
+            """
+            SELECT unix_user, agent_id
+            FROM agent_identity
+            WHERE org_profile_person_id = ?
+              AND COALESCE(suspended_at, '') = ''
+              AND unix_user != ?
+            LIMIT 1
+            """,
+            (row["org_profile_person_id"], row["unix_user"]),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError(
+                "org_profile_person_id "
+                f"{row['org_profile_person_id']} is already linked to "
+                f"{duplicate['agent_id'] or duplicate['unix_user']}"
+            )
     try:
         conn.execute(
             """
@@ -1472,6 +1498,8 @@ def upsert_agent_identity(
             raise ValueError(
                 f"another active identity already claims {_normalize_email(row['claimed_notion_email'])}"
             ) from exc
+        if "idx_agent_identity_org_profile_person_active_unique" in str(exc):
+            raise ValueError(f"org_profile_person_id {row['org_profile_person_id']} is already linked") from exc
         raise
     conn.commit()
     return get_agent_identity(conn, agent_id=agent_id, unix_user=unix_user) or row
@@ -12655,6 +12683,13 @@ def write_managed_memory_stubs(
             org_profile_paths = materialize_agent_context(hermes_home, org_profile_context)
         except Exception as exc:  # noqa: BLE001
             org_profile_paths = {"org_profile_error": str(exc)}
+    else:
+        try:
+            from almanac_org_profile import clear_materialized_agent_context
+
+            org_profile_paths = clear_materialized_agent_context(hermes_home)
+        except Exception as exc:  # noqa: BLE001
+            org_profile_paths = {"org_profile_error": str(exc)}
 
     org_profile_changed = bool(org_profile_paths.get("changed")) if org_profile_paths else False
     return {
@@ -12671,6 +12706,38 @@ def write_managed_memory_stubs(
 
 def _central_managed_payload_path(cfg: Config, agent_id: str) -> Path:
     return cfg.agents_state_dir / agent_id / "managed-memory.json"
+
+
+def _grant_managed_payload_read_access(conn: sqlite3.Connection, cfg: Config, path: Path, agent_id: str) -> None:
+    row = conn.execute(
+        "SELECT unix_user FROM agents WHERE agent_id = ? AND role = 'user' AND status = 'active'",
+        (agent_id,),
+    ).fetchone()
+    unix_user = str(row["unix_user"] or "").strip() if row else ""
+    try:
+        path.chmod(0o640)
+    except PermissionError:
+        pass
+    if not unix_user or shutil.which("setfacl") is None:
+        return
+    dirs = []
+    for directory in (cfg.private_dir, cfg.state_dir, cfg.agents_state_dir, path.parent):
+        resolved = directory.resolve()
+        if resolved not in dirs:
+            dirs.append(resolved)
+    for directory in dirs:
+        subprocess.run(
+            ["setfacl", "-m", f"u:{unix_user}:x", str(directory)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    subprocess.run(
+        ["setfacl", "-m", f"u:{unix_user}:r", str(path)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def publish_central_managed_memory(
@@ -12703,11 +12770,7 @@ def publish_central_managed_memory(
     if changed:
         _atomic_write_text(out_path, json.dumps({**payload, "updated_at": utc_now_iso()}, indent=2, sort_keys=True) + "\n")
 
-    # world-readable so the enrollment user can read it without ACL fuss.
-    try:
-        out_path.chmod(0o644)
-    except PermissionError:
-        pass
+    _grant_managed_payload_read_access(conn, cfg, out_path, agent_id)
     return {
         "path": str(out_path),
         "changed": changed,

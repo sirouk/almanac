@@ -357,6 +357,7 @@ Usage:
   deploy.sh upgrade
   deploy.sh notion-ssot
   deploy.sh notion-migrate
+  deploy.sh notion-transfer
   deploy.sh enrollment-status
   deploy.sh enrollment-trace [--unix-user USER | --session-id onb_xxx | --request-id req_xxx]
   deploy.sh enrollment-align
@@ -378,6 +379,7 @@ Docker control center:
   deploy.sh docker ps
   deploy.sh docker notion-ssot
   deploy.sh docker notion-migrate
+  deploy.sh docker notion-transfer
   deploy.sh docker enrollment-status
   deploy.sh docker enrollment-trace --unix-user <user>
   deploy.sh docker enrollment-align
@@ -446,13 +448,13 @@ while [[ $# -gt 0 ]]; do
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
+    docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
       MODE="$1"
       shift
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    install|upgrade|notion-ssot|notion-migrate|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    install|upgrade|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       MODE="$1"
       shift
       ;;
@@ -896,17 +898,18 @@ Almanac deploy menu
   3) Write config only
   4) Notion SSOT setup / test
   5) Notion workspace migration
-  6) Enrollment status
-  7) Enrollment trace
-  8) Enrollment align / repair
-  9) Enrollment reset / cleanup
- 10) Curator setup / repair
- 11) Rotate Nextcloud secrets
- 12) Print agent payload
- 13) Health check
- 14) Remove / teardown
- 15) Docker control center
- 16) Exit
+  6) Notion page backup / restore
+  7) Enrollment status
+  8) Enrollment trace
+  9) Enrollment align / repair
+ 10) Enrollment reset / cleanup
+ 11) Curator setup / repair
+ 12) Rotate Nextcloud secrets
+ 13) Print agent payload
+ 14) Health check
+ 15) Remove / teardown
+ 16) Docker control center
+ 17) Exit
 EOF
 
   while true; do
@@ -917,18 +920,19 @@ EOF
       3) MODE="write-config"; return 0 ;;
       4) MODE="notion-ssot"; return 0 ;;
       5) MODE="notion-migrate"; return 0 ;;
-      6) MODE="enrollment-status"; return 0 ;;
-      7) MODE="enrollment-trace"; return 0 ;;
-      8) MODE="enrollment-align"; return 0 ;;
-      9) MODE="enrollment-reset"; return 0 ;;
-      10) MODE="curator-setup"; return 0 ;;
-      11) MODE="rotate-nextcloud-secrets"; return 0 ;;
-      12) MODE="agent-payload"; return 0 ;;
-      13) MODE="health"; return 0 ;;
-      14) MODE="remove"; return 0 ;;
-      15) MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"; return 0 ;;
-      16) exit 0 ;;
-      *) echo "Please choose 1 through 16." ;;
+      6) MODE="notion-transfer"; return 0 ;;
+      7) MODE="enrollment-status"; return 0 ;;
+      8) MODE="enrollment-trace"; return 0 ;;
+      9) MODE="enrollment-align"; return 0 ;;
+      10) MODE="enrollment-reset"; return 0 ;;
+      11) MODE="curator-setup"; return 0 ;;
+      12) MODE="rotate-nextcloud-secrets"; return 0 ;;
+      13) MODE="agent-payload"; return 0 ;;
+      14) MODE="health"; return 0 ;;
+      15) MODE="remove"; return 0 ;;
+      16) MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"; return 0 ;;
+      17) exit 0 ;;
+      *) echo "Please choose 1 through 17." ;;
     esac
   done
 }
@@ -950,6 +954,7 @@ Usage:
   deploy.sh docker health
   deploy.sh docker notion-ssot
   deploy.sh docker notion-migrate
+  deploy.sh docker notion-transfer
   deploy.sh docker enrollment-status
   deploy.sh docker enrollment-trace --unix-user <user>
   deploy.sh docker enrollment-align
@@ -987,14 +992,15 @@ Almanac Docker control center
   5) Show Docker ports
   6) Show Docker service state
   7) Notion workspace migration
-  8) Enrollment status
-  9) Enrollment align / repair
- 10) Curator setup
- 11) Rotate Nextcloud secrets
- 12) Show Docker logs
- 13) Stop Docker stack
- 14) Teardown Docker stack and named volumes
- 15) Exit
+  8) Notion page backup / restore
+  9) Enrollment status
+ 10) Enrollment align / repair
+ 11) Curator setup
+ 12) Rotate Nextcloud secrets
+ 13) Show Docker logs
+ 14) Stop Docker stack
+ 15) Teardown Docker stack and named volumes
+ 16) Exit
 EOF
 
   while true; do
@@ -1007,15 +1013,16 @@ EOF
       5) DOCKER_DEPLOY_COMMAND="ports"; return 0 ;;
       6) DOCKER_DEPLOY_COMMAND="ps"; return 0 ;;
       7) DOCKER_DEPLOY_COMMAND="notion-migrate"; return 0 ;;
-      8) DOCKER_DEPLOY_COMMAND="enrollment-status"; return 0 ;;
-      9) DOCKER_DEPLOY_COMMAND="enrollment-align"; return 0 ;;
-      10) DOCKER_DEPLOY_COMMAND="curator-setup"; return 0 ;;
-      11) DOCKER_DEPLOY_COMMAND="rotate-nextcloud-secrets"; return 0 ;;
-      12) DOCKER_DEPLOY_COMMAND="logs"; return 0 ;;
-      13) DOCKER_DEPLOY_COMMAND="down"; return 0 ;;
-      14) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
-      15) exit 0 ;;
-      *) echo "Please choose 1 through 15." ;;
+      8) DOCKER_DEPLOY_COMMAND="notion-transfer"; return 0 ;;
+      9) DOCKER_DEPLOY_COMMAND="enrollment-status"; return 0 ;;
+      10) DOCKER_DEPLOY_COMMAND="enrollment-align"; return 0 ;;
+      11) DOCKER_DEPLOY_COMMAND="curator-setup"; return 0 ;;
+      12) DOCKER_DEPLOY_COMMAND="rotate-nextcloud-secrets"; return 0 ;;
+      13) DOCKER_DEPLOY_COMMAND="logs"; return 0 ;;
+      14) DOCKER_DEPLOY_COMMAND="down"; return 0 ;;
+      15) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
+      16) exit 0 ;;
+      *) echo "Please choose 1 through 16." ;;
     esac
   done
 }
@@ -2591,12 +2598,12 @@ render_agent_install_payload_body() {
   echo "    - rely on almanac-managed-context to inject Almanac MCP auth, per-intent recipe cards, and telemetry before tool dispatch"
   echo "    - do not read HERMES_HOME secrets files and do not pass token in Almanac MCP tool calls; the plugin injects the bootstrap token automatically"
   echo "    - run almanac-first-contact immediately after MCP registration"
-  echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, fetch agents.managed-memory, and materialize the initial managed-memory stubs"
+  echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, fetch agents.managed-memory, and materialize the initial plugin-managed context state"
   echo "    - prefer the almanac-mcp recipe-card rails directly for vault catalog/subscription, shared Notion lookup, and SSOT reads/writes; shell wrappers are human fallback only"
-  echo "    - install exactly one 4h refresh timer/service for the user agent, and rely on Curator fanout -> activation trigger -> user-agent-refresh for immediate stub sync after vault/catalog changes"
+  echo "    - install exactly one 4h refresh timer/service for the user agent, and rely on Curator fanout -> activation trigger -> user-agent-refresh for immediate plugin-context sync after vault/catalog changes"
   echo "  memory_contract:"
-  echo "    - maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:notion-ref], [managed:vault-topology], [managed:recall-stubs], [managed:notion-stub], [managed:today-plate]"
-  echo "    - write or refresh those stubs now; MEMORY.md is a frozen snapshot at session start"
+  echo "    - maintain [managed:almanac-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:notion-ref], [managed:vault-topology], [managed:recall-stubs], [managed:notion-stub], and [managed:today-plate] in plugin-managed context state"
+  echo "    - do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md; MEMORY.md is user-owned long-lived memory, not the Almanac hot-swap rail"
   echo "    - make [managed:almanac-skill-ref] explicit: Almanac skills are active defaults, not passive extras"
   echo "    - make [managed:resource-ref] explicit: keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there"
   echo "    - make [managed:qmd-ref] explicit: qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval"
@@ -2609,12 +2616,12 @@ render_agent_install_payload_body() {
   fi
   echo "    - do not store note bodies, PDF bodies, or large dumps in built-in memory"
   echo "    - do not rely on background memory review or session-end flush"
-  echo "    - if cron lacks the native memory tool, patch only those nine entries in \$HERMES_HOME/memories/MEMORY.md and preserve unrelated entries plus Hermes § delimiters"
+  echo "    - if legacy [managed:*] entries exist in \$HERMES_HOME/memories/MEMORY.md, remove only those entries and preserve unrelated entries plus Hermes § delimiters"
   echo "  report_contract:"
   echo "    - recurring success output: exactly 1 short line"
   echo "    - recurring warn/fail output: at most 2 short lines"
   echo "    - recurring output should say only Almanac sync, qmd indexing, memory status, and drift/blocked state"
-  echo "    - preferred success form: 'Almanac health ok: sync current, qmd indexed, managed memory refreshed, drift=none.'"
+  echo "    - preferred success form: 'Almanac health ok: sync current, qmd indexed, managed context refreshed, drift=none.'"
   echo "  rails:"
   echo "    - prefer qmd/MCP over filesystem access; direct local qmd service or CLI is fallback only when MCP is unavailable"
   echo "    - prefer tool calls over bash mimicry; do not reach for scripts/curate-*.sh or python heredocs from a normal Hermes turn"
@@ -6785,6 +6792,235 @@ run_notion_migrate_flow() {
   return "$index_rc"
 }
 
+notion_transfer_prepare_context() {
+  ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$BOOTSTRAP_DIR}"
+  ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
+  STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
+  NOTION_TRANSFER_DIR="${ALMANAC_NOTION_TRANSFER_DIR:-$STATE_DIR/notion-transfer}"
+  NOTION_TRANSFER_TOOL="$BOOTSTRAP_DIR/bin/notion-transfer.py"
+  mkdir -p "$NOTION_TRANSFER_DIR/backups"
+  chmod 700 "$NOTION_TRANSFER_DIR" "$NOTION_TRANSFER_DIR/backups" >/dev/null 2>&1 || true
+}
+
+print_notion_transfer_runbook() {
+  cat <<'EOF'
+Notion page backup / restore guide
+
+This flow backs up one Notion page subtree and can restore it under a page in
+another Notion workspace. It is generic: the source can be any normal Notion
+page the source integration can read, and the destination can be any normal
+page the destination integration can create children under.
+
+Important access model:
+  - Notion integration tokens do not grant broad teamspace export access.
+  - Share the source root page/subtree with the source integration.
+  - Share the destination parent/root page with the destination integration.
+  - This creates a new child page under the destination parent. It does not
+    overwrite, delete, or merge into existing destination pages.
+
+Expected fidelity:
+  - Pages, nested pages, child databases, database rows, text-like blocks,
+    external media links, covers, icons, and common properties are restored.
+  - Uploaded Notion-hosted files are referenced as skipped placeholders unless
+    they were external URLs.
+  - Relations/rollups/formulas/people are not automatically rewired across
+    workspaces.
+  - Unsupported blocks are preserved as visible placeholder notes so missing
+    content is obvious.
+
+Secrets:
+  - Keep Notion tokens in private token files, for example
+    almanac-priv/state/notion-transfer/source.token and dest.token.
+  - The tool never accepts tokens on argv.
+EOF
+}
+
+choose_notion_transfer_action() {
+  local answer=""
+
+  cat >&2 <<'EOF'
+Notion page backup / restore
+
+  1) Read the backup / restore guide
+  2) Discover token access
+  3) Back up a source root page
+  4) Restore a backup to a destination parent page
+  5) Back up then restore
+  6) Exit
+EOF
+
+  while true; do
+    read -r -p "Choose Notion transfer action [1]: " answer
+    case "${answer:-1}" in
+      1) printf '%s\n' "read"; return 0 ;;
+      2) printf '%s\n' "discover"; return 0 ;;
+      3) printf '%s\n' "backup"; return 0 ;;
+      4) printf '%s\n' "restore"; return 0 ;;
+      5) printf '%s\n' "backup-restore"; return 0 ;;
+      6) printf '%s\n' "exit"; return 0 ;;
+      *) echo "Please choose 1 through 6." >&2 ;;
+    esac
+  done
+}
+
+notion_transfer_prompt_required() {
+  local prompt="$1"
+  local default="${2:-}"
+  local answer=""
+
+  while true; do
+    answer="$(ask "$prompt" "$default")"
+    if [[ -n "$answer" ]]; then
+      printf '%s\n' "$answer"
+      return 0
+    fi
+    echo "This value is required." >&2
+  done
+}
+
+notion_transfer_prompt_token_file() {
+  local prompt="$1"
+  local default="$2"
+  local answer=""
+
+  while true; do
+    answer="$(notion_transfer_prompt_required "$prompt" "$default")"
+    if [[ -r "$answer" ]]; then
+      printf '%s\n' "$answer"
+      return 0
+    fi
+    echo "Token file is not readable: $answer" >&2
+  done
+}
+
+latest_notion_transfer_backup_dir() {
+  if [[ ! -d "$NOTION_TRANSFER_DIR/backups" ]]; then
+    return 1
+  fi
+  find "$NOTION_TRANSFER_DIR/backups" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort | tail -n 1
+}
+
+notion_transfer_discover() {
+  local token_file="" label=""
+
+  token_file="$(notion_transfer_prompt_token_file "Notion token file" "$NOTION_TRANSFER_DIR/source.token")"
+  label="$(notion_transfer_prompt_required "Label for this token" "source")"
+  python3 "$NOTION_TRANSFER_TOOL" discover \
+    --token-file "$token_file" \
+    --label "$label"
+}
+
+notion_transfer_backup() {
+  local token_file="" source_root="" output_dir="" timestamp="" default_source_root=""
+
+  token_file="$(notion_transfer_prompt_token_file "Source Notion token file" "$NOTION_TRANSFER_DIR/source.token")"
+  default_source_root="${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-${ALMANAC_SSOT_NOTION_SPACE_URL:-}}"
+  source_root="$(notion_transfer_prompt_required "Source root page URL or ID to back up" "$default_source_root")"
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  output_dir="$(notion_transfer_prompt_required "Backup output directory" "$NOTION_TRANSFER_DIR/backups/$timestamp")"
+
+  python3 "$NOTION_TRANSFER_TOOL" backup \
+    --source-token-file "$token_file" \
+    --source-root "$source_root" \
+    --output-dir "$output_dir"
+  NOTION_TRANSFER_LAST_BACKUP_DIR="$output_dir"
+}
+
+notion_transfer_restore() {
+  local backup_dir="${1:-}" latest_backup="" token_file="" dest_parent="" title="" confirm=""
+
+  if [[ -z "$backup_dir" ]]; then
+    latest_backup="$(latest_notion_transfer_backup_dir || true)"
+    backup_dir="$(notion_transfer_prompt_required "Backup directory" "$latest_backup")"
+  fi
+  if [[ ! -f "$backup_dir/backup.json" ]]; then
+    echo "Backup directory does not contain backup.json: $backup_dir" >&2
+    return 1
+  fi
+
+  token_file="$(notion_transfer_prompt_token_file "Destination Notion token file" "$NOTION_TRANSFER_DIR/dest.token")"
+  dest_parent="$(notion_transfer_prompt_required "Destination parent/root page URL or ID" "${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}")"
+  title="$(ask "Title for the restored root page (ENTER keeps source title)" "")"
+
+  echo
+  echo "Running restore dry-run first. This verifies destination page access and reports the planned writes."
+  python3 "$NOTION_TRANSFER_TOOL" restore \
+    --dest-token-file "$token_file" \
+    --backup-dir "$backup_dir" \
+    --dest-parent "$dest_parent" \
+    --title "$title" \
+    --dry-run
+
+  echo
+  echo "The dry-run wrote: $backup_dir/restore-dry-run.json"
+  echo "No Notion pages have been created yet."
+  while true; do
+    read -r -p "Type RESTORE NOTION to create the destination copy, or press Ctrl-C to abort: " confirm
+    if [[ "$confirm" == "RESTORE NOTION" ]]; then
+      break
+    fi
+    echo "Please type RESTORE NOTION exactly, or press Ctrl-C to abort."
+  done
+
+  python3 "$NOTION_TRANSFER_TOOL" restore \
+    --dest-token-file "$token_file" \
+    --backup-dir "$backup_dir" \
+    --dest-parent "$dest_parent" \
+    --title "$title"
+  echo
+  echo "Restore result: $backup_dir/restore-result.json"
+}
+
+run_notion_transfer_flow() {
+  local action=""
+
+  notion_transfer_prepare_context
+  if [[ ! -x "$NOTION_TRANSFER_TOOL" && ! -f "$NOTION_TRANSFER_TOOL" ]]; then
+    echo "Notion transfer tool is missing: $NOTION_TRANSFER_TOOL" >&2
+    return 1
+  fi
+  if [[ ! -t 0 ]]; then
+    print_notion_transfer_runbook
+    echo
+    echo "Notion page backup / restore is intentionally interactive; rerun with a terminal." >&2
+    echo "Automation can call bin/notion-transfer.py directly with token files." >&2
+    return 1
+  fi
+
+  echo "Almanac deploy: Notion page backup / restore"
+  echo
+  echo "Private working directory:"
+  echo "  $NOTION_TRANSFER_DIR"
+  echo "Token file defaults:"
+  echo "  source: $NOTION_TRANSFER_DIR/source.token"
+  echo "  dest:   $NOTION_TRANSFER_DIR/dest.token"
+  echo
+
+  action="$(choose_notion_transfer_action)"
+  case "$action" in
+    read)
+      echo
+      print_notion_transfer_runbook
+      ;;
+    discover)
+      notion_transfer_discover
+      ;;
+    backup)
+      notion_transfer_backup
+      ;;
+    restore)
+      notion_transfer_restore
+      ;;
+    backup-restore)
+      notion_transfer_backup
+      notion_transfer_restore "$NOTION_TRANSFER_LAST_BACKUP_DIR"
+      ;;
+    exit)
+      return 0
+      ;;
+  esac
+}
+
 run_curator_setup_flow() {
   prepare_deployed_context
 
@@ -6951,6 +7187,7 @@ docker_command_from_mode() {
     docker-remove) printf '%s\n' "remove" ;;
     docker-notion-ssot) printf '%s\n' "notion-ssot" ;;
     docker-notion-migrate) printf '%s\n' "notion-migrate" ;;
+    docker-notion-transfer) printf '%s\n' "notion-transfer" ;;
     docker-enrollment-status) printf '%s\n' "enrollment-status" ;;
     docker-enrollment-trace) printf '%s\n' "enrollment-trace" ;;
     docker-enrollment-align) printf '%s\n' "enrollment-align" ;;
@@ -7029,7 +7266,7 @@ run_docker_deploy_flow() {
     reconfigure)
       run_docker_reconfigure_flow
       ;;
-    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|teardown|remove|notion-ssot|notion-migrate|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       run_almanac_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
       ;;
     *)
@@ -7133,7 +7370,7 @@ if [[ -z "$MODE" || "$MODE" == "menu" ]]; then
 fi
 
 case "$MODE" in
-  docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
+  docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
     run_docker_deploy_flow
     ;;
   install|write-config)
@@ -7147,6 +7384,9 @@ case "$MODE" in
     ;;
   notion-migrate)
     run_notion_migrate_flow
+    ;;
+  notion-transfer)
+    run_notion_transfer_flow
     ;;
   enrollment-status)
     run_enrollment_status

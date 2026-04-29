@@ -657,7 +657,9 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
     expect("inject Almanac MCP auth" in payload, payload)
     expect("do not read HERMES_HOME secrets files" in payload, payload)
     expect("do not pass token" in payload, payload)
-    expect("patch only those nine entries" in payload, payload)
+    expect("plugin-managed context state" in payload, payload)
+    expect("do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md" in payload, payload)
+    expect("remove only those entries" in payload, payload)
     print("PASS test_agent_install_payload_tracks_current_agent_contract")
 
 
@@ -1676,6 +1678,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("Almanac Docker control center" in text, "expected Docker submenu")
     expect('MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
     expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
+    expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")
     expect("docker-install|docker-upgrade|docker-reconfigure" in text, "expected Docker shortcut aliases")
     expect('local helper="$BOOTSTRAP_DIR/bin/almanac-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
     expect("run_docker_install_flow()" in text, "expected idempotent Docker install flow")
@@ -1719,6 +1722,23 @@ def test_deploy_sh_guides_notion_workspace_migration() -> None:
     expect("run_service_user_cmd \"$ctl_bin\" --json notion index-sync --full --actor \"$actor\"" in text, "expected baremetal migration index sync to run as the Almanac service user")
     expect("env ALMANAC_CONFIG_FILE=\"$CONFIG_TARGET\" \"$BOOTSTRAP_DIR/bin/almanac-ctl\" --json notion index-sync --full" not in migration, "migration must not run qmd-backed index sync as root from the deploy checkout")
     print("PASS test_deploy_sh_guides_notion_workspace_migration")
+
+
+def test_deploy_sh_guides_notion_page_transfer() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    transfer = extract(text, "notion_transfer_prepare_context() {", "run_curator_setup_flow() {")
+    expect("deploy.sh notion-transfer" in text, "expected direct Notion page transfer command in usage")
+    expect("deploy.sh docker notion-transfer" in text, "expected Docker Notion page transfer command in usage")
+    expect("Notion page backup / restore" in text, "expected main menu Notion page backup/restore entry")
+    expect("Back up then restore" in text, "expected transfer submenu to offer one-pass backup then restore")
+    expect("Source root page URL or ID to back up" in text, "expected transfer flow to ask for the source root page")
+    expect("Destination parent/root page URL or ID" in text, "expected transfer flow to ask for the destination root/parent page")
+    expect("source.token" in text and "dest.token" in text, "expected transfer flow to use private token file defaults")
+    expect("--source-token-file" in text and "--dest-token-file" in text, "expected transfer flow to pass token files, not tokens")
+    expect("--dry-run" in transfer, "expected transfer restore to dry-run before writing")
+    expect("Type RESTORE NOTION to create the destination copy" in transfer, "expected explicit typed restore acknowledgement")
+    expect("This creates a new child page under the destination parent" in text, "expected transfer guide to explain non-overwrite behavior")
+    print("PASS test_deploy_sh_guides_notion_page_transfer")
 
 
 def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
@@ -2384,6 +2404,7 @@ def main() -> int:
         test_write_answers_file_persists_host_dependency_choices,
         test_deploy_sh_exposes_docker_control_center,
         test_deploy_sh_guides_notion_workspace_migration,
+        test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_curator_gateway_defaults_reactions_on,

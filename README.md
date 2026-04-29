@@ -207,6 +207,7 @@ Common direct modes:
 ./deploy.sh curator-setup           # repair Curator only
 ./deploy.sh notion-ssot             # configure shared Notion
 ./deploy.sh notion-migrate          # guided migration to a new Notion workspace
+./deploy.sh notion-transfer         # back up or restore a Notion page subtree
 ./deploy.sh enrollment-status
 ./deploy.sh enrollment-align
 ./deploy.sh enrollment-reset
@@ -285,6 +286,7 @@ The Docker path keeps the same operator vocabulary for container-native work:
 ```bash
 ./deploy.sh docker notion-ssot
 ./deploy.sh docker notion-migrate
+./deploy.sh docker notion-transfer
 ./deploy.sh docker enrollment-status
 ./deploy.sh docker enrollment-trace --unix-user <user>
 ./deploy.sh docker enrollment-align
@@ -675,6 +677,18 @@ through creating the new internal integration and webhook subscription, archives
 old workspace-specific caches and pending writes, clears user Notion identity
 verification so users can re-verify, and runs a fresh `notion-shared` index
 sync.
+
+To copy a page subtree between Notion workspaces without changing Almanac's
+live SSOT configuration, use:
+
+```bash
+./deploy.sh notion-transfer
+```
+
+That guided flow asks for source and destination token files, a source root
+page URL/ID, and a destination parent/root page URL/ID. It writes backups under
+`almanac-priv/state/notion-transfer/` and always runs a restore dry-run before
+allowing writes.
 
 The shared Notion lane uses one operator-managed internal integration, not
 per-user OAuth. Almanac verifies each user's local Notion identity through a

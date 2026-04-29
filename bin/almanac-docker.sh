@@ -46,6 +46,8 @@ Commands:
               Run the shared Notion SSOT setup against Docker config
   notion-migrate
               Guide migration from one Notion workspace to another
+  notion-transfer
+              Back up or restore a Notion page subtree with token files
   enrollment-status
               Show Docker enrollment/provisioning state
   enrollment-trace
@@ -1089,6 +1091,9 @@ main() {
       ;;
     notion-migrate)
       docker_notion_migrate "$@"
+      ;;
+    notion-transfer)
+      docker_deploy_in_app notion-transfer "$@"
       ;;
     enrollment-status)
       docker_enrollment_status "$@"

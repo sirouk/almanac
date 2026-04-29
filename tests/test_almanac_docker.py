@@ -98,6 +98,7 @@ def test_docker_operator_commands_are_present() -> None:
         "health)",
         "notion-ssot)",
         "notion-migrate)",
+        "notion-transfer)",
         "enrollment-status)",
         "enrollment-trace)",
         "enrollment-align)",

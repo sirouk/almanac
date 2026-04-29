@@ -225,6 +225,96 @@ def test_user_purge_enrollment_removes_completed_state_and_files() -> None:
                     now,
                 ),
             )
+            control.upsert_agent_identity(
+                conn,
+                agent_id=agent_id,
+                unix_user="alex",
+                human_display_name="Alex",
+                claimed_notion_email="alex@example.com",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="alex@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=now,
+                verification_source="test",
+            )
+            conn.execute(
+                """
+                INSERT INTO notion_identity_claims (
+                  claim_id, session_id, agent_id, unix_user, claimed_notion_email,
+                  notion_page_id, notion_page_url, status, failure_reason,
+                  verified_notion_user_id, verified_notion_email, created_at,
+                  updated_at, expires_at, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "claim_test123",
+                    session_id,
+                    agent_id,
+                    "alex",
+                    "alex@example.com",
+                    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "https://www.notion.so/alex-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "verified",
+                    "",
+                    "11111111-1111-1111-1111-111111111111",
+                    "alex@example.com",
+                    now,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO notion_identity_overrides (
+                  unix_user, agent_id, notion_user_id, notion_user_email, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "alex",
+                    agent_id,
+                    "22222222-2222-2222-2222-222222222222",
+                    "alex.alias@example.com",
+                    "test override",
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO ssot_pending_writes (
+                  pending_id, agent_id, unix_user, notion_user_id, operation, target_id,
+                  payload_json, requested_by_actor, request_source, request_reason,
+                  owner_identity, owner_source, status, requested_at, expires_at,
+                  decision_surface, decided_by_actor, decided_at, decision_note,
+                  applied_at, apply_result_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "pw_test123",
+                    agent_id,
+                    "alex",
+                    "11111111-1111-1111-1111-111111111111",
+                    "update",
+                    "page_123",
+                    "{}",
+                    "agent-alex",
+                    "test",
+                    "",
+                    "alex@example.com",
+                    "test",
+                    "pending",
+                    now,
+                    now,
+                    "",
+                    "",
+                    None,
+                    "",
+                    None,
+                    "{}",
+                ),
+            )
             conn.execute(
                 """
                 INSERT INTO notification_outbox (
@@ -353,6 +443,22 @@ def test_user_purge_enrollment_removes_completed_state_and_files() -> None:
             expect(
                 conn.execute("SELECT COUNT(*) AS count FROM agent_vault_subscriptions").fetchone()["count"] == 0,
                 "agent_vault_subscriptions should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM agent_identity").fetchone()["count"] == 0,
+                "agent_identity should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM notion_identity_claims").fetchone()["count"] == 0,
+                "notion_identity_claims should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM notion_identity_overrides").fetchone()["count"] == 0,
+                "notion_identity_overrides should be empty",
+            )
+            expect(
+                conn.execute("SELECT COUNT(*) AS count FROM ssot_pending_writes").fetchone()["count"] == 0,
+                "ssot_pending_writes should be empty",
             )
             expect(
                 conn.execute("SELECT COUNT(*) AS count FROM rate_limits").fetchone()["count"] == 0,

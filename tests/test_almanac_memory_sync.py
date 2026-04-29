@@ -585,6 +585,66 @@ def test_curator_fanout_retries_failed_agent_without_dropping_work() -> None:
             os.environ.update(old_env)
 
 
+def test_curator_fanout_marks_stale_agent_targets_delivered() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_memory_sync_stale_target_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = {
+            "ALMANAC_USER": "almanac",
+            "ALMANAC_HOME": str(root / "home-almanac"),
+            "ALMANAC_REPO_DIR": str(root / "repo"),
+            "ALMANAC_PRIV_DIR": str(root / "priv"),
+            "STATE_DIR": str(root / "state"),
+            "RUNTIME_DIR": str(root / "state" / "runtime"),
+            "VAULT_DIR": str(root / "vault"),
+            "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+            "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+            "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+            "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+            "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+            "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+            "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+            "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+            "ALMANAC_MCP_HOST": "127.0.0.1",
+            "ALMANAC_MCP_PORT": "8282",
+        }
+        write_config(config_path, values)
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.queue_notification(
+                conn,
+                target_kind="curator",
+                target_id="agent-missing",
+                channel_kind="brief-fanout",
+                message="notion event refresh for agent-missing",
+            )
+
+            result = mod.consume_curator_brief_fanout(conn, cfg)
+            expect(result["failures"] == [], str(result))
+            expect(result["skipped_stale_agents"] == 1, str(result))
+            row = conn.execute(
+                """
+                SELECT delivered_at, delivery_error
+                FROM notification_outbox
+                WHERE target_kind = 'curator'
+                  AND channel_kind = 'brief-fanout'
+                  AND target_id = 'agent-missing'
+                """
+            ).fetchone()
+            expect(row is not None, "expected stale target notification row")
+            expect(str(row["delivered_at"] or "").strip(), str(dict(row)))
+            expect("stale or inactive agent target" in str(row["delivery_error"] or ""), str(dict(row)))
+            print("PASS test_curator_fanout_marks_stale_agent_targets_delivered")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_curator_fanout_reuses_shared_notions_snapshot_cache_per_batch() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_memory_sync_shared_cache_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1435,6 +1495,7 @@ def main() -> int:
     test_curator_fanout_writes_managed_payload_and_activation_trigger()
     test_curator_fanout_skips_refresh_signal_when_payload_cache_matches()
     test_curator_fanout_retries_failed_agent_without_dropping_work()
+    test_curator_fanout_marks_stale_agent_targets_delivered()
     test_curator_fanout_reuses_shared_notions_snapshot_cache_per_batch()
     test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit()
     test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift()
@@ -1443,7 +1504,7 @@ def main() -> int:
     test_managed_notion_stub_reports_pending_write_approvals()
     test_managed_notion_stub_reports_verified_page_scoped_write_access()
     test_managed_notion_stub_reports_verification_not_started()
-    print("PASS all 11 memory sync regression tests")
+    print("PASS all 12 memory sync regression tests")
     return 0
 
 

@@ -1059,6 +1059,10 @@ def user_purge_enrollment(
             "agent_vault_subscriptions": 0,
             "notification_outbox": 0,
             "refresh_jobs": 0,
+            "agent_identity": 0,
+            "notion_identity_claims": 0,
+            "notion_identity_overrides": 0,
+            "ssot_pending_writes": 0,
             "bootstrap_tokens": 0,
             "bootstrap_requests": 0,
             "onboarding_sessions": 0,
@@ -1094,6 +1098,41 @@ def user_purge_enrollment(
                 tuple(refresh_job_names),
             )
         delete_counts["refresh_jobs"] = conn.total_changes - before
+
+        identity_clauses = ["unix_user = ?"]
+        identity_params: list[str] = [unix_user]
+        if agent_ids:
+            placeholders = ",".join("?" for _ in agent_ids)
+            identity_clauses.append(f"agent_id IN ({placeholders})")
+            identity_params.extend(agent_ids)
+
+        before = conn.total_changes
+        conn.execute(
+            "DELETE FROM agent_identity WHERE " + " OR ".join(identity_clauses),
+            tuple(identity_params),
+        )
+        delete_counts["agent_identity"] = conn.total_changes - before
+
+        before = conn.total_changes
+        conn.execute(
+            "DELETE FROM notion_identity_claims WHERE " + " OR ".join(identity_clauses),
+            tuple(identity_params),
+        )
+        delete_counts["notion_identity_claims"] = conn.total_changes - before
+
+        before = conn.total_changes
+        conn.execute(
+            "DELETE FROM notion_identity_overrides WHERE " + " OR ".join(identity_clauses),
+            tuple(identity_params),
+        )
+        delete_counts["notion_identity_overrides"] = conn.total_changes - before
+
+        before = conn.total_changes
+        conn.execute(
+            "DELETE FROM ssot_pending_writes WHERE " + " OR ".join(identity_clauses),
+            tuple(identity_params),
+        )
+        delete_counts["ssot_pending_writes"] = conn.total_changes - before
 
         before = conn.total_changes
         if token_ids:
@@ -1304,6 +1343,12 @@ def agent_deenroll(cfg: Config, target: str, actor: str) -> dict:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        identity = conn.execute(
+            "SELECT 1 FROM agent_identity WHERE agent_id = ? OR unix_user = ? LIMIT 1",
+            (str(agent["agent_id"]), unix_user),
+        ).fetchone()
+        if identity is not None:
+            suspend_agent_identity(conn, agent_id=str(agent["agent_id"]), unix_user=unix_user)
         mark_agent_deenrolled(conn, agent_id=str(agent["agent_id"]), archive_path=str(archive_path))
         queue_notification(
             conn,

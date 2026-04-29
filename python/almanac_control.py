@@ -7246,12 +7246,20 @@ def _find_agent_for_owner(conn: sqlite3.Connection, owner_identity: str) -> dict
     normalized_email = _normalize_email(owner_identity)
     identity_row = conn.execute(
         """
-        SELECT agent_id, unix_user, human_display_name AS display_name
-        FROM agent_identity
-        WHERE agent_id = ?
-           OR notion_user_id = ?
-           OR LOWER(notion_user_email) = ?
-        ORDER BY updated_at DESC
+        SELECT i.agent_id, i.unix_user,
+               COALESCE(NULLIF(i.human_display_name, ''), a.display_name) AS display_name
+        FROM agent_identity i
+        JOIN agents a ON a.agent_id = i.agent_id AND a.unix_user = i.unix_user
+        WHERE a.role = 'user'
+          AND a.status = 'active'
+          AND i.verification_status = 'verified'
+          AND (i.suspended_at IS NULL OR i.suspended_at = '')
+          AND (
+            i.agent_id = ?
+            OR i.notion_user_id = ?
+            OR LOWER(i.notion_user_email) = ?
+          )
+        ORDER BY i.updated_at DESC
         LIMIT 1
         """,
         (
@@ -7264,11 +7272,16 @@ def _find_agent_for_owner(conn: sqlite3.Connection, owner_identity: str) -> dict
         return dict(identity_row)
     override_row = conn.execute(
         """
-        SELECT agent_id, unix_user
-        FROM notion_identity_overrides
-        WHERE notion_user_id = ?
-           OR LOWER(notion_user_email) = ?
-        ORDER BY updated_at DESC
+        SELECT o.agent_id, o.unix_user, a.display_name
+        FROM notion_identity_overrides o
+        JOIN agents a ON a.agent_id = o.agent_id AND a.unix_user = o.unix_user
+        WHERE a.role = 'user'
+          AND a.status = 'active'
+          AND (
+            o.notion_user_id = ?
+            OR LOWER(o.notion_user_email) = ?
+          )
+        ORDER BY o.updated_at DESC
         LIMIT 1
         """,
         (
@@ -7277,17 +7290,7 @@ def _find_agent_for_owner(conn: sqlite3.Connection, owner_identity: str) -> dict
         ),
     ).fetchone()
     if override_row is not None:
-        agent_row = conn.execute(
-            """
-            SELECT agent_id, unix_user, display_name
-            FROM agents
-            WHERE agent_id = ?
-            LIMIT 1
-            """,
-            (str(override_row["agent_id"]),),
-        ).fetchone()
-        if agent_row is not None:
-            return dict(agent_row)
+        return dict(override_row)
     return None
 
 
@@ -12820,6 +12823,7 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
     failures: list[str] = []
     cache_hits = 0
     refresh_signals = 0
+    skipped_stale_agents = 0
     processed_notifications = len(global_rows)
     notion_stub_cache: dict[str, Any] = {}
     rows_by_agent: dict[str, list[sqlite3.Row]] = {}
@@ -12834,6 +12838,27 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
         if not any(_notification_due_now(str(row["next_attempt_at"] or "")) for row in grouped_rows):
             continue
         processed_notifications += len(grouped_rows)
+        agent_row = conn.execute(
+            "SELECT role, status FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+        if (
+            agent_row is None
+            or str(agent_row["role"] or "") != "user"
+            or str(agent_row["status"] or "") != "active"
+        ):
+            skipped_stale_agents += 1
+            stale_reason = f"stale or inactive agent target skipped: {agent_id}"
+            conn.executemany(
+                """
+                UPDATE notification_outbox
+                SET delivered_at = ?, delivery_error = ?
+                WHERE id = ?
+                """,
+                [(utc_now_iso(), stale_reason, int(row["id"])) for row in grouped_rows],
+            )
+            conn.commit()
+            continue
         try:
             publish_result = publish_central_managed_memory(
                 conn,
@@ -12912,7 +12937,8 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
             f"processed_notifications={processed_notifications}; "
             f"expanded_notifications={expanded_notifications}; "
             f"published {len(published)} central payload(s); "
-            f"cache_hits={cache_hits}; refresh_signals={refresh_signals}; failures={len(failures)}"
+            f"cache_hits={cache_hits}; refresh_signals={refresh_signals}; "
+            f"skipped_stale_agents={skipped_stale_agents}; failures={len(failures)}"
         ),
     )
     return {
@@ -12924,6 +12950,7 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
         "catalog_events": catalog_events,
         "cache_hits": cache_hits,
         "refresh_signals": refresh_signals,
+        "skipped_stale_agents": skipped_stale_agents,
     }
 
 

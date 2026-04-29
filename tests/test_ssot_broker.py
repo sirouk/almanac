@@ -2850,6 +2850,63 @@ def test_notion_batcher_hydrates_entity_before_routing() -> None:
             os.environ.update(old_env)
 
 
+def test_notion_batcher_ignores_stale_verified_identity_without_active_agent() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_stale_identity_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            mod.upsert_agent_identity(
+                conn,
+                agent_id="agent-stale",
+                unix_user="stale",
+                human_display_name="Stale User",
+                notion_user_id="11111111-1111-1111-1111-111111111111",
+                notion_user_email="stale@example.com",
+                verification_status="verified",
+                write_mode="verified_limited",
+                verified_at=mod.utc_now_iso(),
+            )
+            mod.store_notion_event(
+                conn,
+                event_id="event-stale",
+                event_type="page.created",
+                payload={
+                    "id": "webhook-event-stale",
+                    "entity": {
+                        "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                        "type": "page",
+                    },
+                    "created_by": {
+                        "id": "11111111-1111-1111-1111-111111111111",
+                    },
+                },
+            )
+
+            result = mod.process_pending_notion_events(conn)
+            expect(result["processed"] == 1, result)
+            expect(result["nudges"] == {}, result)
+            expect(result["unresolved_event_ids"] == ["event-stale"], result)
+            stale_outbox = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM notification_outbox
+                WHERE target_id = 'agent-stale'
+                  AND channel_kind IN ('notion-webhook', 'brief-fanout')
+                """
+            ).fetchone()
+            expect(int(stale_outbox["c"] if stale_outbox else 0) == 0, str(dict(stale_outbox) if stale_outbox else {}))
+            print("PASS test_notion_batcher_ignores_stale_verified_identity_without_active_agent")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_notion_batcher_retries_when_hydration_fails() -> None:
     mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_retry_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -3400,13 +3457,14 @@ def main() -> int:
     test_ssot_write_denies_suspended_identity()
     test_ssot_principal_fails_closed_when_identity_registry_errors()
     test_notion_batcher_hydrates_entity_before_routing()
+    test_notion_batcher_ignores_stale_verified_identity_without_active_agent()
     test_notion_batcher_retries_when_hydration_fails()
     test_notion_batcher_marks_event_failed_after_retry_budget()
     test_notion_batcher_verifies_claim_page_event()
     test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only()
     test_notion_batcher_rejects_claim_page_edit_from_wrong_email()
     test_notion_batcher_accepts_claim_page_edit_via_identity_override()
-    print("PASS all 44 ssot broker tests")
+    print("PASS all 45 ssot broker tests")
     return 0
 
 

@@ -75,7 +75,7 @@ while IFS='|' read -r SLUG URL BRANCH NOTE_TEXT || [[ -n "${SLUG:-}${URL:-}${BRA
     STAGE="$(mktemp -d /tmp/almanac-clone.XXXXXX)"
     git clone --branch "$BRANCH" "$URL" "$STAGE/$SLUG" \
       || { warn "  clone failed, likely auth or visibility; skipping $SLUG"; rm -rf "$STAGE"; continue; }
-    ${SUDO} chown -R almanac:almanac "$STAGE/$SLUG"
+    ${SUDO} chown -hR almanac:almanac "$STAGE/$SLUG"
     ${SUDO} mv "$STAGE/$SLUG" "$TARGET"
     rm -rf "$STAGE"
   fi

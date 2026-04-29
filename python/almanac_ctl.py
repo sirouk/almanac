@@ -893,7 +893,8 @@ def org_profile_apply(
     report = apply_profile(conn, cfg, profile=profile, source_path=source_path, actor=actor)
     refresh_results: list[dict[str, Any]] = []
     refresh_failures: list[str] = []
-    for row in report.get("matched_agents") or []:
+    refresh_rows = list(report.get("matched_agents") or []) + list(report.get("unmatched_active_agents") or [])
+    for row in refresh_rows:
         agent_id = str(row.get("agent_id") or "").strip()
         if not agent_id:
             continue

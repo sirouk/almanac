@@ -29,6 +29,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
+redact_output() {
+  local source_file="$1"
+  python3 - "$source_file" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+patterns = [
+    re.compile(r"(?i)(\b(?:token|api[_-]?key|password|passwd|secret|cookie|authorization|jwt|oauth)[A-Z0-9_.-]*\b\s*[:=]\s*)([^\s'\";,]+)"),
+    re.compile(r"(?i)(Authorization:\s*(?:Bearer|Basic)\s+)([^\s'\";,]+)"),
+    re.compile(r"(?i)((?:https?|ssh)://[^/\s:]+:)([^@\s/]+)(@)"),
+]
+for pattern in patterns:
+    if pattern.groups >= 3:
+        text = pattern.sub(r"\1[REDACTED]\3", text)
+    else:
+        text = pattern.sub(r"\1[REDACTED]", text)
+sys.stdout.write(text)
+PY
+}
+
 write_status() {
   local status="$1"
   local rc="$2"
@@ -36,11 +61,22 @@ write_status() {
   python3 - "$STATUS_FILE" "$JOB_NAME" "$status" "$rc" "$output_file" <<'PY'
 import datetime as dt
 import json
+import re
 import sys
 from pathlib import Path
 
 status_file = Path(sys.argv[1])
 output = Path(sys.argv[5]).read_text(encoding="utf-8", errors="replace") if Path(sys.argv[5]).exists() else ""
+patterns = [
+    re.compile(r"(?i)(\b(?:token|api[_-]?key|password|passwd|secret|cookie|authorization|jwt|oauth)[A-Z0-9_.-]*\b\s*[:=]\s*)([^\s'\";,]+)"),
+    re.compile(r"(?i)(Authorization:\s*(?:Bearer|Basic)\s+)([^\s'\";,]+)"),
+    re.compile(r"(?i)((?:https?|ssh)://[^/\s:]+:)([^@\s/]+)(@)"),
+]
+for pattern in patterns:
+    if pattern.groups >= 3:
+        output = pattern.sub(r"\1[REDACTED]\3", output)
+    else:
+        output = pattern.sub(r"\1[REDACTED]", output)
 payload = {
     "job": sys.argv[2],
     "status": sys.argv[3],
@@ -66,7 +102,7 @@ run_job_once() {
   local rc=0
   "$@" >"$output_file" 2>&1 || rc=$?
   if [[ "$rc" != "0" ]]; then
-    cat "$output_file" >&2
+    redact_output "$output_file" >&2
   fi
   write_status "$(status_for_return_code "$rc")" "$rc" "$output_file"
   cleanup

@@ -480,9 +480,22 @@ def list_pdf_sources() -> list[Path]:
         return []
 
     pdfs = []
+    vault_root = VAULT_DIR.resolve()
     for path in VAULT_DIR.rglob("*"):
-        if path.is_file() and path.suffix.lower() == ".pdf":
-            pdfs.append(path)
+        if path.is_symlink() or path.suffix.lower() != ".pdf":
+            continue
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            continue
+        if not path.is_file():
+            continue
+        try:
+            if os.path.commonpath([str(resolved), str(vault_root)]) != str(vault_root):
+                continue
+        except ValueError:
+            continue
+        pdfs.append(path)
     return sorted(pdfs)
 
 

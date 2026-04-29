@@ -102,7 +102,7 @@ managed_payload_source="live"
 if [[ -n "$ALMANAC_AGENT_ID" ]]; then
   managed_payload_path="$ALMANAC_AGENTS_STATE_DIR/$ALMANAC_AGENT_ID/managed-memory.json"
 fi
-if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$tmp" <<'PY'
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$tmp" "${ALMANAC_AGENT_ID:-}" <<'PY'
 import json
 import shutil
 import sys
@@ -110,6 +110,7 @@ from pathlib import Path
 
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
+expected_agent_id = str(sys.argv[3] or "").strip()
 try:
     payload = json.loads(source.read_text(encoding="utf-8"))
 except Exception as exc:
@@ -118,6 +119,14 @@ except Exception as exc:
 
 if not isinstance(payload, dict):
     print(f"Ignoring invalid central managed-memory payload at {source}: not a JSON object", file=sys.stderr)
+    raise SystemExit(1)
+
+payload_agent_id = str(payload.get("agent_id") or "").strip()
+if expected_agent_id and payload_agent_id != expected_agent_id:
+    print(
+        f"Ignoring central managed-memory payload at {source}: agent_id mismatch",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 
 required = ("agent_id", "vault-ref", "qmd-ref", "catalog", "subscriptions", "vault_path_contract")

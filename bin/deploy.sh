@@ -1944,6 +1944,7 @@ PY
 
   mkdir -p "$target_dir"
   rsync -a --delete \
+    --exclude '/.git' \
     --exclude '/.git/' \
     --exclude '/almanac-priv/' \
     --exclude '/.almanac-operator.env' \
@@ -2023,16 +2024,39 @@ checkout_upstream_release() {
     echo "git is required for deploy.sh upgrade." >&2
     return 1
   fi
+  if git_remote_uses_ssh "${ALMANAC_UPSTREAM_REPO_URL:-}" && [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    echo "Refusing SSH upstream without the Almanac upstream deploy-key lane enabled." >&2
+    echo "Run ./deploy.sh install to configure ALMANAC_UPSTREAM_DEPLOY_KEY_* or use an HTTPS upstream." >&2
+    return 1
+  fi
 
   rm -rf "$checkout_dir"
   if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$ALMANAC_UPSTREAM_REPO_URL"; then
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    GCM_INTERACTIVE=Never \
     GIT_SSH_COMMAND="$(upstream_git_ssh_command)" \
       git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
       "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
   else
-    git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    GCM_INTERACTIVE=Never \
+      git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
       "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
   fi
+}
+
+require_main_upstream_branch_for_upgrade() {
+  local branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  if [[ "$branch" == "main" || "${ALMANAC_ALLOW_NON_MAIN_UPGRADE:-0}" == "1" ]]; then
+    return 0
+  fi
+  echo "Refusing production upgrade from non-main upstream branch: $branch" >&2
+  echo "Set ALMANAC_ALLOW_NON_MAIN_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
+  return 1
 }
 
 write_operator_checkout_artifact() {
@@ -2802,6 +2826,71 @@ backup_github_owner_repo_from_remote() {
   github_owner_repo_from_remote "${1:-}"
 }
 
+github_repo_visibility() {
+  local owner_repo="${1:-}"
+  local api_base="${GITHUB_API_BASE:-${BACKUP_GIT_GITHUB_API_BASE:-https://api.github.com}}"
+
+  python3 - "$api_base" "$owner_repo" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+import urllib.error
+import urllib.request
+
+base = sys.argv[1].rstrip("/")
+owner_repo = sys.argv[2].strip("/")
+if not owner_repo:
+    print("unsupported")
+    raise SystemExit(0)
+
+request = urllib.request.Request(
+    f"{base}/repos/{owner_repo}",
+    headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "almanac-backup-visibility-check",
+    },
+)
+try:
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8") or "{}")
+except urllib.error.HTTPError as exc:
+    if exc.code == 404:
+        print("non-public-or-missing")
+        raise SystemExit(0)
+    print(f"error:{exc.code}")
+    raise SystemExit(0)
+except Exception as exc:  # noqa: BLE001
+    print(f"error:{exc}")
+    raise SystemExit(0)
+
+print("private" if bool(payload.get("private")) else "public")
+PY
+}
+
+require_private_github_backup_remote() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+  local owner_repo="" visibility=""
+
+  [[ -n "$remote" ]] || return 0
+  owner_repo="$(backup_github_owner_repo_from_remote "$remote")"
+  if [[ -z "$owner_repo" ]]; then
+    echo "almanac-priv backups currently support GitHub remotes only." >&2
+    echo "Use a remote like git@github.com:owner/private-repo.git" >&2
+    return 1
+  fi
+
+  visibility="$(github_repo_visibility "$owner_repo")"
+  if [[ "$visibility" == "public" ]]; then
+    echo "Refusing to back up almanac-priv to a public GitHub repository: $owner_repo" >&2
+    return 1
+  fi
+  if [[ "$visibility" == error:* || "$visibility" == "unsupported" ]]; then
+    echo "Could not verify GitHub visibility for $owner_repo ($visibility)." >&2
+    return 1
+  fi
+}
+
 backup_github_repo_page_from_remote() {
   github_repo_page_from_remote "${1:-}"
 }
@@ -2920,9 +3009,16 @@ collect_upstream_git_answers() {
     owner_repo="${owner_repo%/}"
     if [[ "$owner_repo" == */* && "$owner_repo" != */ && "$owner_repo" != /* ]]; then
       ALMANAC_UPSTREAM_REPO_URL="$(github_ssh_remote_from_owner_repo "$owner_repo")"
-      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$(ask "Unix user that should own the Almanac repo push deploy key" "$default_key_user")"
-      ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
-      ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+      key_user="$(ask "Unix user that should own the Almanac repo push deploy key" "$default_key_user")"
+      if [[ "$key_user" != "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" ]]; then
+        ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$key_user"
+        ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="$(default_upstream_git_deploy_key_path)"
+        ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="$(default_upstream_git_known_hosts_file)"
+      else
+        ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$key_user"
+        ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+        ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+      fi
       key_user="$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
       repo_page="$(github_repo_page_from_remote "$ALMANAC_UPSTREAM_REPO_URL")"
       echo "  Upstream SSH remote:"
@@ -3104,7 +3200,7 @@ verify_upstream_git_deploy_key_access() {
   ssh_command="$(upstream_git_ssh_command)"
 
   echo "  Verifying deploy-key read access with git ls-remote..."
-  if ! output="$(GIT_SSH_COMMAND="$ssh_command" git ls-remote "$remote" HEAD 2>&1)"; then
+  if ! output="$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never GIT_SSH_COMMAND="$ssh_command" git ls-remote "$remote" HEAD 2>&1)"; then
     echo "$output" >&2
     echo "GitHub deploy-key read check failed for $remote." >&2
     return 1
@@ -3112,15 +3208,20 @@ verify_upstream_git_deploy_key_access() {
   echo "  Read check passed."
 
   branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
-  write_ref="refs/heads/almanac-deploy-key-write-check"
+  write_ref="refs/heads/$branch"
   tmp_dir="$(mktemp -d)"
   if ! (
     set -e
-    git -C "$tmp_dir" init -b almanac-deploy-key-write-check >/dev/null
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    GCM_INTERACTIVE=Never \
+    GIT_SSH_COMMAND="$ssh_command" \
+      git clone --depth 1 --branch "$branch" --single-branch "$remote" "$tmp_dir" >/dev/null
     git -C "$tmp_dir" config user.name "Almanac Deploy Key Check"
     git -C "$tmp_dir" config user.email "almanac-deploy-key-check@localhost"
-    printf 'Almanac deploy key write check for %s\n' "$branch" > "$tmp_dir/README.md"
-    git -C "$tmp_dir" add README.md
+    printf 'Almanac deploy key write check for %s at %s\n' "$branch" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp_dir/.almanac-deploy-key-write-check"
+    git -C "$tmp_dir" add .almanac-deploy-key-write-check
     git -C "$tmp_dir" commit -m "Almanac deploy key write check" >/dev/null
   ); then
     rm -rf "$tmp_dir"
@@ -3129,7 +3230,7 @@ verify_upstream_git_deploy_key_access() {
   fi
 
   echo "  Verifying deploy-key write access with git push --dry-run..."
-  if ! output="$(GIT_SSH_COMMAND="$ssh_command" git -C "$tmp_dir" push --dry-run "$remote" "HEAD:$write_ref" 2>&1)"; then
+  if ! output="$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never GIT_SSH_COMMAND="$ssh_command" git -C "$tmp_dir" push --dry-run "$remote" "HEAD:$write_ref" 2>&1)"; then
     rm -rf "$tmp_dir"
     echo "$output" >&2
     echo "GitHub deploy-key write check failed for $remote." >&2
@@ -3438,6 +3539,7 @@ collect_backup_git_answers() {
       BACKUP_GIT_REMOTE="git@github.com:${owner_repo}.git"
       BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$(default_backup_git_deploy_key_path)}"
       BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$(default_backup_git_known_hosts_file)}"
+      require_private_github_backup_remote "$BACKUP_GIT_REMOTE"
       repo_page="$(backup_github_repo_page_from_remote "$BACKUP_GIT_REMOTE")"
       echo "  Repo to create or reuse:"
       echo "    $repo_page"
@@ -4127,26 +4229,26 @@ PY
 }
 
 chown_managed_paths() {
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR"
+  chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR"
 
   if [[ ! -d "$ALMANAC_PRIV_DIR" ]]; then
     return 0
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && -n "${NEXTCLOUD_STATE_DIR:-}" && -d "$NEXTCLOUD_STATE_DIR" ]]; then
-    chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+    chown -h "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
     find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
       -path "$NEXTCLOUD_STATE_DIR" -prune -o \
       -name "*.sqlite3-shm" -prune -o \
       -name "*.sqlite3-wal" -prune -o \
-      -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +
+      -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
     return 0
   fi
 
   find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
     -name "*.sqlite3-shm" -prune -o \
     -name "*.sqlite3-wal" -prune -o \
-    -exec chown "$ALMANAC_USER:$ALMANAC_USER" {} +
+    -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
 }
 
 enrollment_snapshot_json() {
@@ -4319,7 +4421,7 @@ run_root_install() {
     gateway_restart_policy="restart"
   fi
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+  chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   ensure_upstream_git_deploy_key_material_root
@@ -4407,6 +4509,7 @@ run_root_upgrade() {
   checkout_dir="$tmp_dir/repo"
   trap 'rm -rf "${tmp_dir:-}"' EXIT
 
+  require_main_upstream_branch_for_upgrade
   ensure_upstream_git_deploy_key_material_root
 
   echo "Fetching Almanac upstream..."
@@ -4450,7 +4553,7 @@ run_root_upgrade() {
     gateway_restart_policy="restart"
   fi
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+  chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   ensure_upstream_git_deploy_key_material_root
@@ -5662,6 +5765,7 @@ _run_component_check() {
 # commit + push + re-exec ./deploy.sh upgrade.
 _run_component_apply() {
   local component="$1"; shift
+  load_detected_config || true
   exec env \
     ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
     ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}" \
@@ -6252,6 +6356,8 @@ run_upgrade_flow() {
   echo "Upstream: ${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}#${ALMANAC_UPSTREAM_BRANCH:-main}"
   echo "Target:   $ALMANAC_REPO_DIR"
 
+  require_main_upstream_branch_for_upgrade
+
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     run_root_upgrade
     return 0
@@ -6436,14 +6542,15 @@ run_install_flow() {
   fi
 
   ANSWERS_FILE="$(mktemp /tmp/almanac-install.XXXXXX.env)"
+  trap 'rm -f "${ANSWERS_FILE:-}"' EXIT
   write_answers_file "$ANSWERS_FILE"
   echo
   echo "Switching to sudo for system setup..."
   if ! sudo env ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-install; then
-    rm -f "$ANSWERS_FILE"
     return 1
   fi
   rm -f "$ANSWERS_FILE"
+  trap - EXIT
   write_operator_checkout_artifact
 }
 
@@ -6457,14 +6564,15 @@ run_remove_flow() {
   fi
 
   ANSWERS_FILE="$(mktemp /tmp/almanac-remove.XXXXXX.env)"
+  trap 'rm -f "${ANSWERS_FILE:-}"' EXIT
   write_answers_file "$ANSWERS_FILE"
   echo
   echo "Switching to sudo for teardown..."
   if ! sudo env ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-remove; then
-    rm -f "$ANSWERS_FILE"
     return 1
   fi
   rm -f "$ANSWERS_FILE"
+  trap - EXIT
 }
 
 if [[ -n "$PRIVILEGED_MODE" ]]; then

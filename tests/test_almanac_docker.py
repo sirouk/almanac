@@ -83,6 +83,7 @@ def test_docker_operator_commands_are_present() -> None:
     body = read("bin/almanac-docker.sh")
     deploy = read("bin/deploy.sh")
     component_upgrade = read("bin/component-upgrade.sh")
+    job_loop = read("bin/docker-job-loop.sh")
     ctl = read("python/almanac_ctl.py")
     rotate = body[body.index("docker_rotate_nextcloud_secrets()"):body.index("docker_pins_show()")]
     for command in (
@@ -115,6 +116,9 @@ def test_docker_operator_commands_are_present() -> None:
     expect('env_args=(--env-file "$DOCKER_ENV_FILE")' in body, body)
     expect('docker compose "${env_args[@]}" -f "$COMPOSE_FILE"' in body, body)
     expect("compose build almanac-app" in body, body)
+    expect("compose config -q" in body, "docker config should validate without printing expanded secrets by default")
+    expect("--unsafe-print" in body, "full Docker config output should require an explicit unsafe flag")
+    expect('elif [[ "$1" == "--unsafe-print" ]]' in body and 'compose config "$@"' in body, "full compose config should be reachable only behind --unsafe-print")
     expect("reserve_docker_ports()" in body, body)
     expect("compose up -d --no-build" in body, body)
     expect("show_ports()" in body, body)
@@ -157,6 +161,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect('"$REPO_DIR/deploy.sh" docker upgrade' in component_upgrade, component_upgrade)
     expect('os.environ.get("ALMANAC_DOCKER_MODE") == "1"' in ctl and '["docker", "rm", "-f", container_name]' in ctl, ctl)
     expect("docker health passed" not in body.lower() or "Docker health passed." in body, body)
+    expect("redact_output" in job_loop and 'cat "$output_file"' not in job_loop, "Docker job loop must redact failure output before logs/state")
     print("PASS test_docker_operator_commands_are_present")
 
 

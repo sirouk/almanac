@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from email.message import Message
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -80,11 +81,39 @@ def test_wrappers_force_loopback_host_by_default() -> None:
     print("PASS test_wrappers_force_loopback_host_by_default")
 
 
+def test_loopback_proxy_identity_headers_are_not_trusted_by_default() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    mcp_server = load_module(MCP_SERVER_PY, "almanac_mcp_server_proxy_header_test")
+    handler = object.__new__(mcp_server.Handler)
+    handler.client_address = ("127.0.0.1", 12345)
+    headers = Message()
+    headers["Tailscale-User-Login"] = "spoof@example.test"
+    headers["Tailscale-User-Name"] = "Spoof"
+    handler.headers = headers
+
+    old_env = os.environ.copy()
+    try:
+        os.environ.pop("ALMANAC_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE", None)
+        os.environ.pop("ALMANAC_TRUST_TAILSCALE_PROXY_HEADERS", None)
+        expect(handler._request_source_ip({"source_ip": "100.64.1.2"}) == "127.0.0.1", "source_ip override should be ignored by default")
+        expect(handler._tailscale_identity() == {}, "Tailscale identity headers should be ignored by default")
+        os.environ["ALMANAC_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE"] = "1"
+        os.environ["ALMANAC_TRUST_TAILSCALE_PROXY_HEADERS"] = "1"
+        expect(handler._request_source_ip({"source_ip": "100.64.1.2"}) == "100.64.1.2", "explicit source override opt-in failed")
+        expect(handler._tailscale_identity()["login"] == "spoof@example.test", "explicit proxy header trust opt-in failed")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_loopback_proxy_identity_headers_are_not_trusted_by_default")
+
+
 def main() -> int:
     test_backend_client_allowed_only_accepts_loopback()
     test_backend_client_allowed_accepts_explicit_cidrs()
     test_wrappers_force_loopback_host_by_default()
-    print("PASS all 3 loopback hardening regression tests")
+    test_loopback_proxy_identity_headers_are_not_trusted_by_default()
+    print("PASS all 4 loopback hardening regression tests")
     return 0
 
 

@@ -219,11 +219,12 @@ install -d -m 0750 -o "$ALMANAC_USER" -g "$ALMANAC_USER" \
 install -d -m 0755 -o "$ALMANAC_USER" -g "$ALMANAC_USER" "$ALMANAC_REPO_DIR"
 
 rsync -a --delete \
+  --exclude ".git" \
   --exclude ".git/" \
   --exclude "almanac-priv/" \
   --exclude "config/almanac.env" \
   "$BOOTSTRAP_DIR/" "$ALMANAC_REPO_DIR/"
-chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
 chmod 0755 "$ALMANAC_REPO_DIR"
 
 loginctl enable-linger "$ALMANAC_USER" || true

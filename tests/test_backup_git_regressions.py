@@ -64,6 +64,26 @@ printf 'KNOWN_HOSTS=%s\\n' "$(cat "$BACKUP_GIT_KNOWN_HOSTS_FILE")"
     print("PASS test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts")
 
 
+def test_shared_backup_refuses_public_github_remote() -> None:
+    text = COMMON_SH.read_text()
+    snippet = extract(text, "github_owner_repo_from_remote() {", "backup_git_remote_host() {")
+    script = f"""
+{snippet}
+github_repo_visibility() {{
+  printf '%s\\n' public
+}}
+BACKUP_GIT_REMOTE=git@github.com:acme/almanac-priv.git
+if require_private_github_backup_remote "$BACKUP_GIT_REMOTE"; then
+  echo should-have-failed
+  exit 1
+fi
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"public shared backup refusal failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+    expect("Refusing to back up almanac-priv to a public GitHub repository" in result.stderr, result.stderr)
+    print("PASS test_shared_backup_refuses_public_github_remote")
+
+
 def test_backup_to_github_excludes_repo_local_key_material() -> None:
     common_text = COMMON_SH.read_text()
     backup_text = BACKUP_SH.read_text()
@@ -329,12 +349,13 @@ printf 'needs_push=%s\\n' "$BACKUP_RECONCILE_PUSH_REQUIRED"
 
 def main() -> int:
     test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts()
+    test_shared_backup_refuses_public_github_remote()
     test_backup_to_github_excludes_repo_local_key_material()
     test_backup_to_github_skips_nested_git_checkouts_without_submodule_dirt()
     test_backup_to_github_skips_ignored_state_tree_with_nested_git_checkout()
     test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main()
     test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push()
-    print("PASS all 6 backup git regression tests")
+    print("PASS all 7 backup git regression tests")
     return 0
 
 

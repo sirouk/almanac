@@ -386,8 +386,16 @@ push_current_head() {
   local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
   local ssh_command
   ssh_command="$(upstream_ssh_command)"
-  note "Pushing to ${ALMANAC_UPSTREAM_REPO_URL:-origin}..."
-  GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" push origin "HEAD:$upstream_branch" >/dev/null
+  if [[ -n "${ALMANAC_UPSTREAM_REPO_URL:-}" ]]; then
+    if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+      git -C "$REPO_DIR" remote set-url origin "$ALMANAC_UPSTREAM_REPO_URL"
+    else
+      git -C "$REPO_DIR" remote add origin "$ALMANAC_UPSTREAM_REPO_URL"
+    fi
+  fi
+  note "Pushing to ${ALMANAC_UPSTREAM_REPO_URL:-origin}#$upstream_branch..."
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
+    GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" push origin "HEAD:$upstream_branch" >/dev/null
 }
 
 upstream_branch_contains_head() {
@@ -397,7 +405,8 @@ upstream_branch_contains_head() {
   local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
   local ssh_command
   ssh_command="$(upstream_ssh_command)"
-  GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" fetch -q origin "$upstream_branch" >/dev/null 2>&1 || return 1
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
+    GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" fetch -q origin "$upstream_branch" >/dev/null 2>&1 || return 1
   git -C "$REPO_DIR" merge-base --is-ancestor HEAD FETCH_HEAD
 }
 

@@ -56,9 +56,40 @@ def test_tool_subprocess_env_scrubs_secrets() -> None:
             os.environ.update(old_env)
 
 
+def test_list_pdf_sources_rejects_symlink_escapes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault = root / "vault"
+        outside = root / "outside"
+        vault.mkdir(parents=True)
+        outside.mkdir(parents=True)
+        (vault / "inside.pdf").write_bytes(b"%PDF-1.4\n% inside\n")
+        (outside / "secret.pdf").write_bytes(b"%PDF-1.4\n% outside\n")
+        (vault / "linked.pdf").symlink_to(outside / "secret.pdf")
+        env = {
+            **os.environ,
+            "VAULT_DIR": str(vault),
+            "PDF_INGEST_MARKDOWN_DIR": str(root / "markdown"),
+            "PDF_INGEST_MANIFEST_DB": str(root / "manifest.sqlite3"),
+            "PDF_INGEST_STATUS_FILE": str(root / "status.json"),
+        }
+        old_env = os.environ.copy()
+        os.environ.clear()
+        os.environ.update(env)
+        try:
+            module = load_module(PDF_INGEST_PY, "pdf_ingest_symlink_rejection_test")
+            sources = {path.name for path in module.list_pdf_sources()}
+            expect(sources == {"inside.pdf"}, str(sources))
+            print("PASS test_list_pdf_sources_rejects_symlink_escapes")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_tool_subprocess_env_scrubs_secrets()
-    print("PASS all 1 pdf ingest env tests")
+    test_list_pdf_sources_rejects_symlink_escapes()
+    print("PASS all 2 pdf ingest env tests")
     return 0
 
 

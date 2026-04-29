@@ -317,6 +317,16 @@ def _profile_handle_key(value: str) -> str:
     return _profile_match_key(str(value or "").lstrip("@"))
 
 
+def _profile_identity_match_visibility(profile: dict[str, Any]) -> str:
+    identity = profile.get("identity_verification") if isinstance(profile.get("identity_verification"), dict) else {}
+    if identity.get("safe_roster_prompt") is False:
+        return "none"
+    visibility = str(identity.get("allowed_match_visibility") or "unclaimed_people_only").strip().lower()
+    if visibility not in {"none", "unclaimed_people_only", "team_visible", "all_profile_people"}:
+        visibility = "unclaimed_people_only"
+    return visibility
+
+
 def _profile_match_privacy_allows_list(profile: dict[str, Any]) -> bool:
     policies = profile.get("policies") if isinstance(profile.get("policies"), dict) else {}
     privacy = policies.get("privacy") if isinstance(policies.get("privacy"), dict) else {}
@@ -426,7 +436,8 @@ def _org_profile_match_candidates(conn, cfg: Config, incoming: IncomingMessage, 
     except Exception:
         return []
     profile = load_applied_profile(cfg)
-    if not profile or not _profile_match_privacy_allows_list(profile):
+    match_visibility = _profile_identity_match_visibility(profile)
+    if not profile or match_visibility == "none" or not _profile_match_privacy_allows_list(profile):
         return []
     people = profile.get("people") if isinstance(profile.get("people"), list) else []
     active_unix_users, linked_person_ids = _active_profile_links(conn)
@@ -441,6 +452,8 @@ def _org_profile_match_candidates(conn, cfg: Config, incoming: IncomingMessage, 
         if unix_user and unix_user in active_unix_users:
             continue
         score = _profile_person_match_score(person, incoming, full_name)
+        if score <= 0 and match_visibility != "all_profile_people":
+            continue
         candidates.append(
             {
                 "id": person_id,

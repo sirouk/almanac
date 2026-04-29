@@ -1146,6 +1146,98 @@ backup_git_remote_uses_ssh() {
   return 1
 }
 
+github_owner_repo_from_remote() {
+  local remote="${1:-}"
+  local owner_repo=""
+
+  case "$remote" in
+    https://github.com/*)
+      owner_repo="${remote#https://github.com/}"
+      ;;
+    git@github.com:*)
+      owner_repo="${remote#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      owner_repo="${remote#ssh://git@github.com/}"
+      ;;
+    *)
+      owner_repo=""
+      ;;
+  esac
+
+  owner_repo="${owner_repo%.git}"
+  printf '%s' "$owner_repo"
+}
+
+github_repo_visibility() {
+  local owner_repo="${1:-}"
+  local api_base="${GITHUB_API_BASE:-${BACKUP_GIT_GITHUB_API_BASE:-https://api.github.com}}"
+
+  python3 - "$api_base" "$owner_repo" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+import urllib.error
+import urllib.request
+
+base = sys.argv[1].rstrip("/")
+owner_repo = sys.argv[2].strip("/")
+if not owner_repo:
+    print("unsupported")
+    raise SystemExit(0)
+
+request = urllib.request.Request(
+    f"{base}/repos/{owner_repo}",
+    headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "almanac-backup-visibility-check",
+    },
+)
+try:
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8") or "{}")
+except urllib.error.HTTPError as exc:
+    if exc.code == 404:
+        print("non-public-or-missing")
+        raise SystemExit(0)
+    print(f"error:{exc.code}")
+    raise SystemExit(0)
+except Exception as exc:  # noqa: BLE001
+    print(f"error:{exc}")
+    raise SystemExit(0)
+
+print("private" if bool(payload.get("private")) else "public")
+PY
+}
+
+backup_github_owner_repo_from_remote() {
+  github_owner_repo_from_remote "${1:-}"
+}
+
+require_private_github_backup_remote() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+  local owner_repo="" visibility=""
+
+  [[ -n "$remote" ]] || return 0
+  owner_repo="$(backup_github_owner_repo_from_remote "$remote")"
+  if [[ -z "$owner_repo" ]]; then
+    echo "almanac-priv backups currently support GitHub remotes only." >&2
+    echo "Use a remote like git@github.com:owner/private-repo.git" >&2
+    return 1
+  fi
+
+  visibility="$(github_repo_visibility "$owner_repo")"
+  if [[ "$visibility" == "public" ]]; then
+    echo "Refusing to back up almanac-priv to a public GitHub repository: $owner_repo" >&2
+    return 1
+  fi
+  if [[ "$visibility" == error:* || "$visibility" == "unsupported" ]]; then
+    echo "Could not verify GitHub visibility for $owner_repo ($visibility)." >&2
+    return 1
+  fi
+}
+
 backup_git_remote_host() {
   local remote="${1:-$BACKUP_GIT_REMOTE}"
   local host=""

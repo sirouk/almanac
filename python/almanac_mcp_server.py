@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import pwd
 import re
 import secrets
@@ -1493,7 +1494,11 @@ class Handler(BaseHTTPRequestHandler):
     def _request_source_ip(self, arguments: dict) -> str:
         remote_ip = self.client_address[0]
         declared_ip = str(arguments.get("source_ip") or "").strip()
-        if is_loopback_ip(remote_ip) and declared_ip:
+        if (
+            is_loopback_ip(remote_ip)
+            and declared_ip
+            and os.environ.get("ALMANAC_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE", "0") == "1"
+        ):
             return declared_ip
         return remote_ip
 
@@ -1512,6 +1517,8 @@ class Handler(BaseHTTPRequestHandler):
         Returns an empty dict when the request did not come through Tailscale
         Serve (direct loopback, local testing, etc.).
         """
+        if os.environ.get("ALMANAC_TRUST_TAILSCALE_PROXY_HEADERS", "0") != "1":
+            return {}
         login = (self.headers.get("Tailscale-User-Login") or "").strip()
         name = (self.headers.get("Tailscale-User-Name") or "").strip()
         profile_pic = (self.headers.get("Tailscale-User-Profile-Pic") or "").strip()

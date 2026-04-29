@@ -128,6 +128,7 @@ if ! git -C "$ALMANAC_PRIV_DIR" diff --cached --quiet --exit-code; then
 fi
 
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
+  require_private_github_backup_remote "$BACKUP_GIT_REMOTE"
   ensure_backup_git_origin_remote "$ALMANAC_PRIV_DIR"
   prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
   reconcile_backup_git_remote_branch "$ALMANAC_PRIV_DIR" "$BACKUP_GIT_BRANCH"

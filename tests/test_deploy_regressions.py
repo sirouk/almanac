@@ -13,9 +13,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 DEPLOY_SH = REPO / "bin" / "deploy.sh"
+HEALTH_SH = REPO / "bin" / "health.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
 CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
+BOOTSTRAP_SYSTEM_SH = REPO / "bin" / "bootstrap-system.sh"
 
 
 def load_module(path: Path, name: str):
@@ -1015,6 +1017,7 @@ ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
 ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
 normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
 random_secret() {{ printf '%s' "generated-secret"; }}
+require_private_github_backup_remote() {{ return 0; }}
 detect_tailscale() {{
   TAILSCALE_DNS_NAME=""
   TAILSCALE_IPV4=""
@@ -1281,9 +1284,11 @@ def test_collect_install_answers_guides_backup_remote_setup() -> None:
     text = DEPLOY_SH.read_text()
     helpers = extract(text, "github_owner_repo_from_remote() {", "collect_install_answers() {")
     collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    expect("require_private_github_backup_remote() {" in helpers, "deploy install must define the backup visibility guard before collect_install_answers")
     script = f"""
 {helpers}
 {collect}
+github_repo_visibility() {{ printf '%s' private; }}
 ask() {{
   case "$1" in
     GitHub\\ owner/repo\\ for\\ almanac-priv\\ backup*) printf '%s' 'acme/almanac-priv' ;;
@@ -1836,6 +1841,7 @@ def test_shell_scripts_avoid_bash4_only_features() -> None:
 
 def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     text = DEPLOY_SH.read_text()
+    bootstrap_system = BOOTSTRAP_SYSTEM_SH.read_text(encoding="utf-8")
     refresh_helper = (REPO / "bin" / "refresh-agent-install.sh").read_text(encoding="utf-8")
     helper = extract(text, "realign_active_enrolled_agents_root() {", "chown_managed_paths() {")
     chown_helper = extract(text, "chown_managed_paths() {", "enrollment_snapshot_json() {")
@@ -1957,6 +1963,10 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "scoped ownership repair should tolerate transient SQLite sidecar files during live upgrades",
     )
     expect(
+        "chown -hR" in chown_helper and "-exec chown -h" in chown_helper and "chown -hR" in bootstrap_system,
+        "install ownership repair should not dereference stale or broken vault symlinks",
+    )
+    expect(
         "realign_active_enrolled_agents_root" in enrollment_align,
         "run_enrollment_align should reuse the shared active-agent realignment helper",
     )
@@ -2029,6 +2039,7 @@ def test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_le
         (source_dir / "templates" / "almanac-priv" / "vault" / "Research" / ".vault").write_text("name: Research\n", encoding="utf-8")
         (source_dir / "bin").mkdir(parents=True)
         (source_dir / "bin" / "bootstrap-userland.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        (source_dir / ".git").write_text("gitdir: /tmp/not-for-deploy\n", encoding="utf-8")
         script = f"""
 {snippet}
 sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
@@ -2042,11 +2053,17 @@ if [[ -f {shlex.quote(str(target_dir / 'templates' / 'almanac-priv' / 'vault' / 
 else
   echo 'TEMPLATE_PRIVATE_PRESENT=0'
 fi
+if [[ -e {shlex.quote(str(target_dir / '.git'))} ]]; then
+  echo 'GIT_POINTER_PRESENT=1'
+else
+  echo 'GIT_POINTER_PRESENT=0'
+fi
 """
         result = bash(script)
         expect(result.returncode == 0, f"sync_public_repo_from_source case failed: {result.stderr}")
         expect("TOP_LEVEL_PRIVATE_PRESENT=0" in result.stdout, result.stdout)
         expect("TEMPLATE_PRIVATE_PRESENT=1" in result.stdout, result.stdout)
+        expect("GIT_POINTER_PRESENT=0" in result.stdout, result.stdout)
     print("PASS test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo")
 
 
@@ -2237,6 +2254,46 @@ def test_install_system_services_units_pass_systemd_analyze_verify() -> None:
     print("PASS test_install_system_services_units_pass_systemd_analyze_verify")
 
 
+def test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh() -> None:
+    text = DEPLOY_SH.read_text()
+    checkout = extract(text, "checkout_upstream_release() {", "write_operator_checkout_artifact() {")
+    expect("GIT_TERMINAL_PROMPT=0" in checkout, checkout)
+    expect("GIT_ASKPASS=/bin/false" in checkout, checkout)
+    expect("SSH_ASKPASS=/bin/false" in checkout, checkout)
+    expect("GCM_INTERACTIVE=Never" in checkout, checkout)
+    expect("Refusing SSH upstream without the Almanac upstream deploy-key lane enabled" in checkout, checkout)
+    print("PASS test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh")
+
+
+def test_upgrade_refuses_non_main_branch_without_explicit_override() -> None:
+    text = DEPLOY_SH.read_text()
+    guard = extract(text, "require_main_upstream_branch_for_upgrade() {", "write_operator_checkout_artifact() {")
+    upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    flow = extract(text, "run_upgrade_flow() {", "run_agent_payload() {")
+    expect('ALMANAC_ALLOW_NON_MAIN_UPGRADE:-0' in guard, guard)
+    expect("Refusing production upgrade from non-main upstream branch" in guard, guard)
+    expect("require_main_upstream_branch_for_upgrade" in upgrade, upgrade)
+    expect("require_main_upstream_branch_for_upgrade" in flow, flow)
+    print("PASS test_upgrade_refuses_non_main_branch_without_explicit_override")
+
+
+def test_install_answer_file_has_exit_trap_cleanup() -> None:
+    text = DEPLOY_SH.read_text()
+    install_flow = extract(text, "run_install_flow() {", "run_remove_flow() {")
+    remove_flow = extract(text, "run_remove_flow() {", 'if [[ -n "$PRIVILEGED_MODE" ]]; then')
+    expect("mktemp /tmp/almanac-install" in install_flow and "trap 'rm -f" in install_flow, install_flow)
+    expect("mktemp /tmp/almanac-remove" in remove_flow and "trap 'rm -f" in remove_flow, remove_flow)
+    print("PASS test_install_answer_file_has_exit_trap_cleanup")
+
+
+def test_health_checks_failed_systemd_units_and_stale_podman_transients() -> None:
+    text = HEALTH_SH.read_text()
+    expect("check_system_failed_units" in text and "systemctl --failed --no-legend --plain" in text, text)
+    expect("check_service_user_failed_units" in text and "systemctl --user --failed --no-legend --plain" in text, text)
+    expect("failed_units_are_stale_podman_healthchecks" in text and "systemctl --user reset-failed" in text, text)
+    print("PASS test_health_checks_failed_systemd_units_and_stale_podman_transients")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
@@ -2299,6 +2356,10 @@ def main() -> int:
         test_enrollment_reset_supports_full_forget_purge,
         test_enrollment_align_reseeds_agent_identity,
         test_root_install_and_upgrade_do_not_globally_export_runtime_secrets,
+        test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh,
+        test_upgrade_refuses_non_main_branch_without_explicit_override,
+        test_install_answer_file_has_exit_trap_cleanup,
+        test_health_checks_failed_systemd_units_and_stale_podman_transients,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,
         test_install_system_services_includes_independent_notion_claim_poller,

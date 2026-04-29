@@ -20,7 +20,7 @@ dashboard/code/vault resource messages, Nextcloud vault access, and the
 `~/Almanac` workspace alias.
 
 Still not shipped as a complete pipeline: automatic ingestion of an operator
-profile into control-plane rows, profile-driven SOUL/managed-memory
+profile into control-plane rows, profile-driven SOUL/plugin-managed-context
 distribution, profile-sourced resource manifests, web-search backend setup, and
 demo data generation for local proof runs.
 
@@ -129,7 +129,7 @@ Expected behavior:
 - [ ] Support a centralized operator-provided provider key.
 - [ ] Keep bring-your-own-provider/key as an override.
 - [ ] Track shared-account or budget plans privately, never in public docs.
-- [ ] Keep provider credentials out of managed memory and long-lived visible
+- [ ] Keep provider credentials out of plugin-managed context and long-lived visible
       messages.
 - [ ] Remind users to edit or delete chat messages that contained keys when a
       chat platform does not allow the bot to delete user messages.
@@ -155,7 +155,7 @@ Expected behavior:
 
 - [ ] Keep dashboard and workspace links HTTPS when exposed through a tailnet.
 - [ ] Make clear which password unlocks the Almanac dashboard.
-- [ ] Keep credentials out of managed memory.
+- [ ] Keep credentials out of plugin-managed context.
 - [ ] Ensure the vault is visible in the code workspace and file-drop surface.
 - [ ] Keep Nextcloud available for bulk file uploads when enabled.
 

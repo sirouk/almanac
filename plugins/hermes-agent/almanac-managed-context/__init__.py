@@ -23,6 +23,9 @@ _MANAGED_KEYS = (
     "qmd-ref",
     "notion-ref",
     "vault-topology",
+    "vault-landmarks",
+    "recall-stubs",
+    "notion-landmarks",
     "notion-stub",
     "today-plate",
 )
@@ -43,6 +46,9 @@ _SECTION_LIMITS = {
     "qmd-ref": 1800,
     "notion-ref": 2200,
     "vault-topology": 900,
+    "vault-landmarks": 1600,
+    "recall-stubs": 1800,
+    "notion-landmarks": 1500,
     "notion-stub": 1400,
     "today-plate": 1400,
     "model-runtime": 1000,
@@ -217,7 +223,7 @@ _TOKEN_TOOL_NAMES = set(_TOKEN_TOOL_SUFFIXES.values()) | {
 # repo Python. Cards are compact by design; at most _MAX_RECIPES_PER_TURN are
 # injected per turn. When a recipe is the only reason to inject, the plugin
 # sends just the compact recipe card so generic turns do not churn the larger
-# managed-memory context.
+# plugin-managed context.
 _MAX_RECIPES_PER_TURN = 2
 _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     (
@@ -619,6 +625,117 @@ def _is_relevant(user_message: str) -> bool:
     return any(term in lowered for term in _RELEVANT_TERMS)
 
 
+_LANDMARK_TERM_STOPWORDS = {
+    "active",
+    "agent",
+    "agents",
+    "area",
+    "board",
+    "brief",
+    "docs",
+    "file",
+    "files",
+    "folder",
+    "folders",
+    "home",
+    "index",
+    "indexed",
+    "knowledge",
+    "notes",
+    "owner",
+    "owners",
+    "page",
+    "pages",
+    "pdf",
+    "pdfs",
+    "project",
+    "projects",
+    "repo",
+    "repos",
+    "research",
+    "shared",
+    "source",
+    "status",
+    "task",
+    "tasks",
+    "the",
+    "untitled",
+    "vault",
+    "vaults",
+    "work",
+}
+
+
+def _landmark_payload_terms(payload: dict[str, object]) -> list[str]:
+    terms: list[str] = []
+
+    def add(value: object) -> None:
+        cleaned = " ".join(str(value or "").strip().split())
+        if not cleaned:
+            return
+        terms.append(cleaned)
+        stem = Path(cleaned).stem
+        if stem and stem != cleaned:
+            terms.append(stem)
+        spaced = re.sub(r"[_\-.]+", " ", stem or cleaned).strip()
+        if spaced and spaced.casefold() != cleaned.casefold():
+            terms.append(spaced)
+
+    for key in ("vault_landmark_items", "notion_landmark_items"):
+        raw_items = payload.get(key)
+        if not isinstance(raw_items, list):
+            continue
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            for field in ("name", "area", "category", "brief"):
+                add(raw_item.get(field))
+            for field in ("query_terms", "repo_names", "subfolders", "files", "pdfs", "examples", "owners"):
+                values = raw_item.get(field)
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    add(value)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        compact = " ".join(str(term or "").strip().split())
+        if not compact:
+            continue
+        key = compact.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(compact)
+        if len(result) >= 180:
+            break
+    return result
+
+
+def _landmark_term_matches(user_message: str, term: str) -> bool:
+    compact = " ".join(str(term or "").strip().split())
+    if not compact:
+        return False
+    lowered = str(user_message or "").casefold()
+    compact_lower = compact.casefold()
+    normalized_message = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
+    normalized_term = re.sub(r"[^a-z0-9]+", " ", compact_lower).strip()
+    if len(compact_lower) < 4 and "." not in compact_lower and "_" not in compact_lower and "-" not in compact_lower:
+        return False
+    if normalized_term in _LANDMARK_TERM_STOPWORDS:
+        return False
+    if compact_lower in lowered:
+        return True
+    return bool(normalized_term and len(normalized_term) >= 4 and normalized_term in normalized_message)
+
+
+def _matches_payload_landmark(user_message: str, payload: dict[str, object]) -> bool:
+    if not str(user_message or "").strip():
+        return False
+    return any(_landmark_term_matches(user_message, term) for term in _landmark_payload_terms(payload))
+
+
 def _is_followup(user_message: str) -> bool:
     lowered = str(user_message or "").lower()
     return any(term in lowered for term in _FOLLOWUP_TERMS)
@@ -739,7 +856,7 @@ def _skill_snapshot(raw_value: object) -> str:
         "Use almanac-notion-mcp",
         "Use almanac-resources",
         "Use almanac-first-contact",
-        "Built-in MEMORY.md",
+        "Almanac does not patch dynamic",
         "Treat the skill as the workflow",
         "Human-facing completion",
         "Do not decide that a rail is unavailable",
@@ -1306,7 +1423,7 @@ def _pre_llm_call(
     )
     _SESSION_RUNTIME_REVISIONS[session_key] = runtime_revision
 
-    context_relevant = _is_relevant(user_message)
+    context_relevant = _is_relevant(user_message) or _matches_payload_landmark(user_message, payload)
     context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)
     recipes = _matching_recipes(user_message)
     runtime_gate = runtime_changed or runtime_first_seen_existing_session

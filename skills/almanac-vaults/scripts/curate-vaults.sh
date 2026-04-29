@@ -26,10 +26,10 @@ usage() {
 Usage: scripts/curate-vaults.sh [--json] <curate|list|refresh|stubs|subscribe|unsubscribe> [vault-name]
 
 Commands:
-  curate        Refresh subscriptions, fetch catalog + managed-memory payload, and print a curation summary.
+  curate        Refresh subscriptions, fetch catalog + plugin-context payload, and print a curation summary.
   list          Fetch the current vault catalog for this agent.
   refresh       Run vaults.refresh for this agent.
-  stubs         Fetch the canonical managed-memory payload for this agent.
+  stubs         Fetch the canonical plugin-context payload for this agent.
   subscribe     Subscribe the current agent to <vault-name> and trigger curator fanout.
   unsubscribe   Unsubscribe the current agent from <vault-name> and trigger curator fanout.
 
@@ -172,7 +172,7 @@ import json, sys
 payload = json.loads(sys.argv[1])
 state = "subscribed" if payload.get("subscribed") else "unsubscribed"
 print(f"{payload.get('agent_id')}: {payload.get('vault_name')} -> {state}")
-print("Curator brief-fanout has been queued; the per-user refresh rail will restub managed memory.")
+print("Curator brief-fanout has been queued; the per-user refresh rail will update plugin-managed context.")
 PY
   exit 0
 fi
@@ -210,8 +210,8 @@ payload = {
     "trigger_contract": {
         "subscription_change": "vaults.subscribe queues curator brief-fanout for the targeted agent",
         "catalog_reload": "vault catalog diffs queue curator brief-fanout for all active agents",
-        "delivery_worker": "notification delivery runs curator fanout and publishes central managed-memory payloads",
-        "agent_refresh": "almanac-user-agent-refresh rewrites local managed stubs on timer and activation-trigger path changes",
+        "delivery_worker": "notification delivery runs curator fanout and publishes central managed-memory payloads for plugin context",
+        "agent_refresh": "almanac-user-agent-refresh rewrites local plugin-managed context state on timer and activation-trigger path changes",
     },
 }
 print(json.dumps(payload, sort_keys=True))

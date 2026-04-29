@@ -636,7 +636,9 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
         "[managed:qmd-ref]",
         "[managed:notion-ref]",
         "[managed:vault-topology]",
+        "[managed:vault-landmarks]",
         "[managed:recall-stubs]",
+        "[managed:notion-landmarks]",
         "[managed:notion-stub]",
         "[managed:today-plate]",
     ]

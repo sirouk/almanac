@@ -134,6 +134,55 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
                 "INSERT INTO agent_vault_subscriptions (agent_id, vault_name, subscribed, source, updated_at) VALUES (?, ?, ?, ?, ?)",
                 ("agent-test", "Projects", 1, "default", now),
             )
+            (root / "vault" / "Projects" / "Briefs").mkdir(parents=True, exist_ok=True)
+            (root / "vault" / "Projects" / "Roadmap.md").write_text("# Roadmap\n", encoding="utf-8")
+            (root / "vault" / "Projects" / "Briefs" / "Q2.md").write_text("# Q2\n", encoding="utf-8")
+            (root / "vault" / "Research Annex").mkdir(parents=True, exist_ok=True)
+            (root / "vault" / "Research Annex" / "archive_note_alpha.pdf").write_text("pdf", encoding="utf-8")
+            (root / "vault" / "Research Annex" / "archive_note_beta.pdf").write_text("pdf", encoding="utf-8")
+            (root / "vault" / "Repos" / "sample-sdk").mkdir(parents=True, exist_ok=True)
+            (root / "vault" / "Repos" / "sample-sdk" / "README.md").write_text("# sample-sdk\n", encoding="utf-8")
+            for doc_key, page_id, title, breadcrumb in [
+                (
+                    "root-1:marketing:0",
+                    "11111111111111111111111111111111",
+                    "Launch Reddit ad test",
+                    ["The Almanac", "Marketing Visibility Board", "Launch Reddit ad test"],
+                ),
+                (
+                    "root-1:legal:0",
+                    "22222222222222222222222222222222",
+                    "SOC 2 readiness",
+                    ["The Almanac", "Legal/Compliance", "SOC 2 readiness"],
+                ),
+            ]:
+                conn.execute(
+                    """
+                    INSERT INTO notion_index_documents (
+                      doc_key, root_id, source_page_id, source_page_url, source_kind,
+                      file_path, page_title, section_heading, section_ordinal,
+                      breadcrumb_json, owners_json, last_edited_time, content_hash,
+                      indexed_at, state
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        doc_key,
+                        "root-1",
+                        page_id,
+                        f"https://www.notion.so/{page_id}",
+                        "page",
+                        f"notion-shared/root-1/{page_id}/0000.md",
+                        title,
+                        "",
+                        0,
+                        json.dumps(breadcrumb),
+                        json.dumps(["Test User"]),
+                        now,
+                        f"hash-{doc_key}",
+                        now,
+                        "active",
+                    ),
+                )
             hermes_home = root / "home-test" / ".local" / "share" / "almanac-agent" / "hermes-home"
             (hermes_home / "state").mkdir(parents=True, exist_ok=True)
             (hermes_home / "state" / "almanac-web-access.json").write_text(
@@ -188,6 +237,17 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("vault-topology" in managed_payload, managed_payload)
             expect("Vault subscription hierarchy" in managed_payload["vault-topology"], managed_payload["vault-topology"])
             expect("Projects" in managed_payload["vault-topology"], managed_payload["vault-topology"])
+            expect("vault-landmarks" in managed_payload, managed_payload)
+            expect("Vault landmarks:" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("Research Annex" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("archive_note_alpha.pdf" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("archive_note_beta.pdf" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("Repos" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("sample-sdk" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect(
+                any(item.get("name") == "Research Annex" for item in managed_payload.get("vault_landmark_items") or []),
+                managed_payload.get("vault_landmark_items"),
+            )
             expect("recall-stubs" in managed_payload, managed_payload)
             expect("Retrieval memory stubs:" in managed_payload["recall-stubs"], managed_payload["recall-stubs"])
             expect("Subscribed awareness lanes:" in managed_payload["recall-stubs"], managed_payload["recall-stubs"])
@@ -207,10 +267,18 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("Code workspace: https://almanac.example.test:40042/" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect(f"Almanac vault: {root / 'home-test' / 'Almanac'}" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect("Shared Notion SSOT: https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef" in managed_payload["resource-ref"], managed_payload["resource-ref"])
-            expect("Credentials are intentionally omitted from managed memory." in managed_payload["resource-ref"], managed_payload["resource-ref"])
+            expect("Credentials are intentionally omitted from plugin-managed context." in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect("agent-facing source of truth" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect("notion-stub" in managed_payload, managed_payload)
             expect("Shared Notion digest:" in managed_payload["notion-stub"], managed_payload["notion-stub"])
+            expect("notion-landmarks" in managed_payload, managed_payload)
+            expect("Shared Notion landmarks:" in managed_payload["notion-landmarks"], managed_payload["notion-landmarks"])
+            expect("Marketing Visibility Board" in managed_payload["notion-landmarks"], managed_payload["notion-landmarks"])
+            expect("Legal/Compliance" in managed_payload["notion-landmarks"], managed_payload["notion-landmarks"])
+            expect(
+                any(item.get("area") == "Marketing Visibility Board" for item in managed_payload.get("notion_landmark_items") or []),
+                managed_payload.get("notion_landmark_items"),
+            )
             expect("today-plate" in managed_payload, managed_payload)
             expect("Today plate:" in managed_payload["today-plate"], managed_payload["today-plate"])
             expect("not ready for a structured work plate" in managed_payload["today-plate"], managed_payload["today-plate"])
@@ -227,7 +295,7 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("Use almanac-resources" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
             expect("default shared Almanac workspace-search lane" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
             expect("Human-facing completion or onboarding messages may omit machine-facing MCP/control rails" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
-            expect("almanac-managed-context plugin can inject refreshed local Almanac context into future turns" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
+            expect("almanac-managed-context plugin hot-injects refreshed local Almanac context into future turns" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
             expect("next session, /reset, or gateway restart" not in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
             expect("Treat the skill as the workflow and guardrail layer" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
             expect("do not rediscover the qmd rail by repo-wide search" in managed_payload["almanac-skill-ref"], managed_payload["almanac-skill-ref"])
@@ -255,7 +323,7 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             trigger_payload = json.loads(trigger_path.read_text(encoding="utf-8"))
             expect(trigger_payload["agent_id"] == "agent-test", trigger_payload)
             expect(trigger_payload["status"] == "refresh", trigger_payload)
-            expect("managed memory stubs" in trigger_payload["note"], trigger_payload)
+            expect("plugin-managed context" in trigger_payload["note"], trigger_payload)
 
             delivered = conn.execute(
                 "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'curator' AND delivered_at IS NOT NULL"
@@ -791,12 +859,14 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
         hermes_home = root / "hermes-home"
         memory_path = hermes_home / "memories" / "MEMORY.md"
         memory_path.parent.mkdir(parents=True, exist_ok=True)
-        memory_path.write_text("Persistent preference", encoding="utf-8")
+        memory_path.write_text("Persistent preference\n§\n[managed:notion-ref]\nlegacy notion\n", encoding="utf-8")
+        legacy_stub_path = hermes_home / "memories" / "almanac-managed-stubs.md"
+        legacy_stub_path.write_text("# Almanac managed memory stubs\n\nlegacy\n", encoding="utf-8")
         payload = {
             "agent_id": "agent-test",
             "almanac-skill-ref": "Use almanac-qmd-mcp for retrieval.",
             "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Test User",
-            "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Credentials are intentionally omitted from managed memory.",
+            "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Credentials are intentionally omitted from plugin-managed context.",
             "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
             "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
             "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on — Active project workspaces",
@@ -818,21 +888,19 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
         first = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         expect(bool(first.get("changed")) is True, str(first))
         state_path = Path(first["state_path"])
-        stub_path = Path(first["stub_path"])
         first_state = state_path.read_text(encoding="utf-8")
-        first_stub = stub_path.read_text(encoding="utf-8")
         first_memory = memory_path.read_text(encoding="utf-8")
         expect("notion-ref" in json.loads(first_state), first_state)
         expect("today-plate" in json.loads(first_state), first_state)
-        expect("[managed:notion-ref]" in first_stub, first_stub)
-        expect("[managed:today-plate]" in first_stub, first_stub)
-        expect("[managed:notion-ref]" in first_memory, first_memory)
-        expect("[managed:today-plate]" in first_memory, first_memory)
+        expect(bool(first.get("legacy_stub_removed")) is True, str(first))
+        expect(not legacy_stub_path.exists(), f"legacy stub mirror should be removed: {legacy_stub_path}")
+        expect("[managed:notion-ref]" not in first_memory, first_memory)
+        expect("legacy notion" not in first_memory, first_memory)
 
         second = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         expect(bool(second.get("changed")) is False, str(second))
         expect(state_path.read_text(encoding="utf-8") == first_state, "state payload should not rewrite on cache hit")
-        expect(stub_path.read_text(encoding="utf-8") == first_stub, "stub mirror should not rewrite on cache hit")
+        expect(not legacy_stub_path.exists(), "stub mirror should stay absent on cache hit")
         expect(memory_path.read_text(encoding="utf-8") == first_memory, "MEMORY.md should not rewrite on cache hit")
         expect("Persistent preference" in first_memory, first_memory)
         print("PASS test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit")
@@ -849,7 +917,7 @@ def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> 
             "agent_id": "agent-test",
             "almanac-skill-ref": "Use almanac-qmd-mcp for retrieval.",
             "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Test User",
-            "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Credentials are intentionally omitted from managed memory.",
+            "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Credentials are intentionally omitted from plugin-managed context.",
             "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
             "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
             "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on — Active project workspaces",
@@ -870,8 +938,6 @@ def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> 
 
         first = mod.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         state_path = Path(first["state_path"])
-        stub_path = Path(first["stub_path"])
-        original_stub = stub_path.read_text(encoding="utf-8")
         original_memory = memory_path.read_text(encoding="utf-8")
         drifted_state = json.loads(state_path.read_text(encoding="utf-8"))
         drifted_state.pop("notion-ref", None)
@@ -886,7 +952,7 @@ def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> 
         expect("notion-ref" in repaired_state, repaired_state)
         expect("today-plate" in repaired_state, repaired_state)
         expect("notion.search / notion.fetch / notion.query" in repaired_state["notion-ref"], repaired_state)
-        expect(stub_path.read_text(encoding="utf-8") == original_stub, "stub mirror should stay unchanged when only state drifted")
+        expect(not Path(first["stub_path"]).exists(), "stub mirror should stay absent when only state drifted")
         expect(memory_path.read_text(encoding="utf-8") == original_memory, "MEMORY.md should stay unchanged when only state drifted")
         print("PASS test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift")
 

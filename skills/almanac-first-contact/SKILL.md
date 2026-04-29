@@ -1,6 +1,6 @@
 ---
 name: almanac-first-contact
-description: Use after Almanac enrolls a user agent and installs the default skills/MCP config to verify live Almanac MCP and qmd calls, resolve default vault subscriptions, materialize the managed-memory stubs, and complete first-contact orientation.
+description: Use after Almanac enrolls a user agent and installs the default skills/MCP config to verify live Almanac MCP and qmd calls, resolve default vault subscriptions, materialize plugin-managed context state, and complete first-contact orientation.
 ---
 
 # Almanac First Contact
@@ -40,21 +40,19 @@ On a shared host, `ALMANAC_SHARED_REPO_DIR` is the shared deployment root, not a
 - when the shared Notion knowledge rail is configured on the host, verify it by running one real `notion.search` probe through `almanac-mcp`
 - resolve the active `.vault` catalog and surface subscribed vs default state
 - run one initial vault refresh via `vaults.refresh`
-- load the canonical managed-memory payload from Curator's published snapshot when available, falling back to `agents.managed-memory` only when needed
-- materialize the agent-local managed-memory stubs immediately in the agent's own `HERMES_HOME`
+- load the canonical managed-memory payload for plugin context from Curator's published snapshot when available, falling back to `agents.managed-memory` only when needed
+- materialize the agent-local plugin-managed context state immediately in the agent's own `HERMES_HOME`
 - respect the home-channel state that enrollment already recorded
 - trigger the normal vault refresh rail, which can queue Curator fanout for
-  follow-up managed-memory updates
+  follow-up plugin-context updates
 
 ## First-flight outputs
 
 After a successful run, the enrolled user agent should have:
 
 - `$HERMES_HOME/state/almanac-vault-reconciler.json`
-- `$HERMES_HOME/memories/almanac-managed-stubs.md`
-- `$HERMES_HOME/memories/MEMORY.md` with the managed Almanac routing entries
 
-These are not optional extras. First-contact is not complete until the initial memory stubs exist.
+This is not an optional extra. First-contact is not complete until the initial plugin context state exists. Dynamic `[managed:*]` context is hot-injected by the `almanac-managed-context` plugin; it is not written into Hermes `MEMORY.md`.
 
 The JSON summary should also include a successful qmd probe record. If qmd cannot answer a real MCP query call, first-contact is not complete.
 

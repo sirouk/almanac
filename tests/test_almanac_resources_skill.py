@@ -50,7 +50,7 @@ def test_almanac_resources_skill_renders_local_no_secret_bundle() -> None:
                         "- Vault access in Nextcloud: https://almanac.example.test:8445/ (shared mount: /Vault)\n"
                         "- QMD MCP retrieval rail: https://almanac.example.test:8445/mcp\n"
                         "- Shared Notion SSOT: https://www.notion.so/The-Almanac-00000000000040008000000000000003\n"
-                        "- Credentials are intentionally omitted from managed memory."
+                        "- Credentials are intentionally omitted from plugin-managed context."
                     )
                 },
                 indent=2,

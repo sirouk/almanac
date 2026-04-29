@@ -11,7 +11,7 @@ Usage: refresh-agent-install.sh --unix-user <user> [--bot-name <name>] [--user-n
 
 Re-sync Almanac skills/plugins into an enrolled user's Hermes home, upsert the
 default Almanac MCP server entries without interactive prompts, refresh the
-identity prompt, then kick the managed-memory refresh and restart agent-facing
+identity prompt, then kick the plugin-managed context refresh and restart agent-facing
 services. By default, an already-running gateway is left alone to avoid
 interrupting user work. Pass --restart-gateway only when the shared Hermes
 runtime itself changed and the live gateway process must pick up new code.
@@ -494,7 +494,7 @@ run_user_systemctl disable --now almanac-user-agent-backup.timer >/dev/null 2>&1
 remove_legacy_backup_timer_unit
 ensure_systemd_bundled_skills_env
 try_user_systemctl "user manager daemon-reload" daemon-reload
-try_user_systemctl "managed-memory refresh service" start almanac-user-agent-refresh.service
+try_user_systemctl "plugin-managed context refresh service" start almanac-user-agent-refresh.service
 ensure_gateway_running_without_interrupting_active_turns
 try_user_systemctl "Hermes dashboard/proxy" restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service
 try_user_systemctl "code workspace" restart almanac-user-agent-code.service

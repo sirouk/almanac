@@ -1,11 +1,11 @@
 ---
 name: almanac-vault-reconciler
-description: Use when an agent needs to keep compact managed memories aligned with an Almanac vault behind qmd, run an initial reconciliation, or explain/repair the first-flight + refresh + Curator-triggered sync rails.
+description: Use when an agent needs to keep compact plugin-managed context aligned with an Almanac vault behind qmd, run an initial reconciliation, or explain/repair the first-flight + refresh + Curator-triggered sync rails.
 ---
 
 # Almanac Vault Reconciler
 
-Use this skill when the user wants an agent to treat a shared markdown vault plus qmd as the long-term knowledge layer while keeping only a small, managed memory stub inside the agent.
+Use this skill when the user wants an agent to treat a shared markdown vault plus qmd as the long-term knowledge layer while keeping only small, plugin-managed recall context inside the agent.
 
 This skill is for ongoing maintenance, not full-content ingestion.
 
@@ -34,7 +34,9 @@ Managed memory entries must use these prefixes exactly:
 - `[managed:qmd-ref]`
 - `[managed:notion-ref]`
 - `[managed:vault-topology]`
+- `[managed:vault-landmarks]`
 - `[managed:recall-stubs]`
+- `[managed:notion-landmarks]`
 - `[managed:notion-stub]`
 - `[managed:today-plate]`
 
@@ -48,11 +50,11 @@ There are three intended triggers:
 
 1. first flight
    - `activate-agent.sh` runs `almanac-first-contact`
-   - first-contact runs `vaults.refresh`, fetches `agents.managed-memory`, and materializes the initial stubs
+   - first-contact runs `vaults.refresh`, fetches `agents.managed-memory`, and materializes the initial plugin-managed context state
 
 2. scheduled refresh
    - `almanac-user-agent-refresh.timer` runs every 4 hours
-   - `user-agent-refresh.sh` refreshes subscriptions, rewrites local managed stubs, and drains recent notifications
+   - `user-agent-refresh.sh` refreshes subscriptions, rewrites local plugin context state, and drains recent notifications
 
 3. Curator-driven sync
    - curator refresh and subscription changes enqueue curator `brief-fanout`
@@ -64,8 +66,6 @@ There are three intended triggers:
 Keep state minimal and local to the user agent:
 
 - `$HERMES_HOME/state/almanac-vault-reconciler.json`
-- `$HERMES_HOME/memories/almanac-managed-stubs.md`
-- `$HERMES_HOME/memories/MEMORY.md`
 - `$HERMES_HOME/state/almanac-recent-events.json`
 
 The shared control plane may also publish:
@@ -78,9 +78,9 @@ That is enough. Do not build an additional ad hoc memory ledger.
 ## Use this skill to
 
 - discover the active shared vault that qmd is indexing
-- explain or repair managed memory drift
+- explain or repair plugin-managed context drift
 - verify that first-flight seeding ran correctly
-- verify that the 4-hour refresh rail exists and is writing local stubs
+- verify that the 4-hour refresh rail exists and is writing local plugin state
 - verify that Curator-triggered fanout is publishing managed-memory payloads and signaling the agent refresh rail
 - create or repair one recurring 4-hour reconciliation job only when the platform actually needs it
 
@@ -103,27 +103,27 @@ When the user says memory is stale or asks how Almanac sync works, do this in or
 
 1. verify first-contact state files exist
 2. verify the current managed-memory payload via `agents.managed-memory`
-3. verify the local stub files under the current user's `HERMES_HOME`
+3. verify the local plugin state under the current user's `HERMES_HOME`
 4. verify the 4-hour refresh rail (`user-agent-refresh`) is healthy
 5. verify Curator fanout / activation-trigger behavior when relevant
 6. report drift and repair the Almanac-side rail, not Hermes internals
 
 ## Warm reload reality
 
-Today, Almanac can refresh the managed stubs on disk immediately, and the preferred no-core-code path is to let the shipped `almanac-managed-context` Hermes plugin inject refreshed local Almanac context into future turns.
+Today, Almanac refreshes plugin-managed context state immediately, and the preferred no-core-code path is to let the shipped `almanac-managed-context` Hermes plugin inject refreshed local Almanac context into future turns.
 
 Important distinctions:
 
-- `user-agent-refresh.sh` rewrites the local files correctly
-- Hermes built-in `MEMORY.md` is still loaded into a frozen prompt snapshot for the session
-- the `almanac-managed-context` plugin avoids mutating that built-in snapshot by injecting ephemeral Almanac context through Hermes's plugin hook system on future turns
+- `user-agent-refresh.sh` rewrites the local plugin state correctly
+- Hermes built-in `MEMORY.md` is long-lived user memory, not Almanac's hot-swap rail
+- the `almanac-managed-context` plugin injects ephemeral Almanac context through Hermes's plugin hook system on future turns
 
 So if the user asks why the newest managed stub text is not visible in the built-in memory block of an already-active chat, do not misdiagnose the Almanac rail as broken.
 
 The right interpretation is usually:
 
 - disk refresh succeeded
-- built-in `MEMORY.md` remains a session snapshot
+- built-in `MEMORY.md` was not the source of the dynamic context
 - the plugin-injected Almanac context is the warm path for future turns without touching Hermes core
 - restart or `/reset` is only a fallback if the plugin is not loaded yet or the issue is in Hermes plugin discovery itself
 
@@ -132,7 +132,7 @@ The right interpretation is usually:
 If the user specifically wants warm reload without editing Hermes core, prefer this design:
 
 1. Almanac publishes a stable `managed_memory_revision` with the canonical payload
-2. `user-agent-refresh.sh` writes the local stubs and records the applied revision under the user's `HERMES_HOME/state`
+2. `user-agent-refresh.sh` writes the local plugin state and records the applied revision under the user's `HERMES_HOME/state`
 3. the shipped `almanac-managed-context` plugin reads that local state on `pre_llm_call`
 4. the plugin injects compact refreshed Almanac context into the current user turn when:
    - the session is new,
@@ -155,7 +155,7 @@ With the shipped plugin path, Almanac does not need Hermes core edits to achieve
 
 So when investigating this class of issue:
 
-- repair Almanac first if the payload, trigger, timer, local state file, or local stub writes are wrong
+- repair Almanac first if the payload, trigger, timer, or local state file writes are wrong
 - verify the plugin is installed under `HERMES_HOME/plugins/almanac-managed-context`
 - verify the plugin's local state source under `HERMES_HOME/state/almanac-vault-reconciler.json`
 - only consider Hermes core changes if the user explicitly wants built-in `MEMORY.md` hot-reload semantics instead of the non-invasive plugin path

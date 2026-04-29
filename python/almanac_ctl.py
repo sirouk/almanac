@@ -908,7 +908,7 @@ def org_profile_apply(
                 conn,
                 cfg,
                 agent_id=agent_id,
-                note="org-profile apply: refresh managed identity and memory stubs",
+                note="org-profile apply: refresh managed identity and plugin-managed context",
             )
             refresh_results.append(
                 {

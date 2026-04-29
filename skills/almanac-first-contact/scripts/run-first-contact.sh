@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # first-contact verification: check MCPs are reachable, pull vault catalog,
-# run a subscription refresh, materialize the managed-memory stubs, and
+# run a subscription refresh, materialize plugin-managed context state, and
 # emit a JSON summary. Called by init.sh right after agent registration and
 # also available as an operator diagnostic.
 
@@ -294,7 +294,7 @@ Path(sys.argv[1]).write_text(
 PY
 fi
 
-# Materialize the managed-memory stubs in this user's HERMES_HOME.
+# Materialize the plugin-managed context state in this user's HERMES_HOME.
 ALMANAC_MANAGED_PAYLOAD="$managed_file" ALMANAC_HERMES_HOME="$HERMES_HOME" \
 PYTHONPATH="$ALMANAC_SHARED_REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
 python3 - <<'PY' >/dev/null
@@ -328,7 +328,7 @@ non_default_subs = [v["vault_name"] for v in vaults if v.get("subscribed") and n
 unsubscribed = [v["vault_name"] for v in vaults if not v.get("subscribed")]
 
 state_path = Path(hermes_home) / "state" / "almanac-vault-reconciler.json"
-stub_path = Path(hermes_home) / "memories" / "almanac-managed-stubs.md"
+legacy_stub_path = Path(hermes_home) / "memories" / "almanac-managed-stubs.md"
 
 summary = {
     "ok": True,
@@ -345,9 +345,9 @@ summary = {
     "notion_probe": notion_probe,
     "managed_memory": {
         "state_path": str(state_path),
-        "stub_path": str(stub_path),
+        "legacy_stub_path": str(legacy_stub_path),
         "state_written": state_path.is_file(),
-        "stub_written": stub_path.is_file(),
+        "legacy_stub_present": legacy_stub_path.is_file(),
     },
 }
 

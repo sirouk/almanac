@@ -140,12 +140,13 @@ def test_ultimate_example_profile_applies_to_state_vault_and_agent_memory() -> N
             expect(identity["contact"]["discord_handle"] == "alex-rivera.example", identity)
             soul = (alex_home / "SOUL.md").read_text(encoding="utf-8")
             expect("Almanac operating-profile overlay:" in soul, soul)
-            memory = (alex_home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
-            expect("[managed:org-profile]" in memory, memory)
-            expect("[managed:user-responsibilities]" in memory, memory)
-            expect("[managed:team-map]" in memory, memory)
-            expect("Discord handle: alex-rivera.example" in memory, memory)
-            expect("Repo: northstar-demo/almanac-demo" in memory, memory)
+            state_payload = json.loads((alex_home / "state" / "almanac-vault-reconciler.json").read_text(encoding="utf-8"))
+            expect("Operating profile:" in state_payload["org-profile"], state_payload)
+            expect("Human served: Alex Rivera" in state_payload["user-responsibilities"], state_payload)
+            expect("Team map:" in state_payload["team-map"], state_payload)
+            expect("Discord handle: alex-rivera.example" in state_payload["user-responsibilities"], state_payload)
+            expect("Repo: northstar-demo/almanac-demo" in state_payload["user-responsibilities"], state_payload)
+            expect(not (alex_home / "memories" / "MEMORY.md").exists(), "managed context should not be written into MEMORY.md")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -469,7 +470,7 @@ def test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visib
     print("PASS test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visible")
 
 
-def test_managed_memory_clears_stale_org_profile_overlay_when_unmatched() -> None:
+def test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched() -> None:
     control = load_module(REPO / "python" / "almanac_control.py", "almanac_control_clear_org_profile_test")
     org_profile = load_module(REPO / "python" / "almanac_org_profile.py", "almanac_org_profile_clear_overlay_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -503,12 +504,14 @@ def test_managed_memory_clears_stale_org_profile_overlay_when_unmatched() -> Non
         }
         paths = control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         expect(paths["changed"], paths)
-        expect(not (hermes_home / "state" / "almanac-org-profile-context.json").exists(), paths)
+        state_payload = json.loads((hermes_home / "state" / "almanac-vault-reconciler.json").read_text(encoding="utf-8"))
+        expect(state_payload["org_profile_agent_context"] == {}, state_payload)
+        expect((hermes_home / "state" / "almanac-org-profile-context.json").exists(), paths)
         identity = json.loads((hermes_home / "state" / "almanac-identity-context.json").read_text(encoding="utf-8"))
-        expect("person_id" not in identity, identity)
+        expect(identity["person_id"] == "alex", identity)
         soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
-        expect("Almanac operating-profile overlay" not in soul, soul)
-    print("PASS test_managed_memory_clears_stale_org_profile_overlay_when_unmatched")
+        expect("Almanac operating-profile overlay" in soul, soul)
+    print("PASS test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched")
 
 
 def main() -> int:
@@ -520,7 +523,7 @@ def main() -> int:
     test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized()
     test_org_profile_rejects_ambiguous_identity_match_tokens()
     test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visible()
-    test_managed_memory_clears_stale_org_profile_overlay_when_unmatched()
+    test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched()
     print("PASS all 9 org-profile tests")
     return 0
 

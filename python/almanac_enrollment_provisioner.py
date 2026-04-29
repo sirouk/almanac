@@ -1217,7 +1217,7 @@ def _refresh_user_agent_memory(
     uid: int,
 ) -> None:
     managed_payload = build_managed_memory_payload(conn, cfg, agent_id=agent_id)
-    expected_entry = "[managed:resource-ref]"
+    expected_key = "resource-ref"
     if not str(managed_payload.get("resource-ref") or "").strip():
         raise RuntimeError(f"managed resource map is blank for {agent_id}")
 
@@ -1243,22 +1243,29 @@ def _refresh_user_agent_memory(
             uid=uid,
             hermes_home=hermes_home,
             cmd=["systemctl", "--user", "start", "almanac-user-agent-refresh.service"],
-        )
+    )
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "managed-memory refresh failed").strip()
+        detail = (result.stderr or result.stdout or "plugin-managed context refresh failed").strip()
         raise RuntimeError(f"user-agent refresh failed for {agent_id}: {detail}")
 
-    stub_path = hermes_home / "memories" / "almanac-managed-stubs.md"
-    memory_path = hermes_home / "memories" / "MEMORY.md"
+    state_path = hermes_home / "state" / "almanac-vault-reconciler.json"
     deadline = time.time() + 30
     while time.time() < deadline:
-        stub_text = stub_path.read_text(encoding="utf-8") if stub_path.is_file() else ""
-        memory_text = memory_path.read_text(encoding="utf-8") if memory_path.is_file() else ""
-        if expected_entry in stub_text and expected_entry in memory_text:
+        state = {}
+        if state_path.is_file():
+            try:
+                state = json_loads(state_path.read_text(encoding="utf-8"), {})
+            except Exception:
+                state = {}
+        if (
+            isinstance(state, dict)
+            and str(state.get("agent_id") or "") == agent_id
+            and str(state.get(expected_key) or "").strip()
+        ):
             return
         time.sleep(1)
     raise RuntimeError(
-        f"user-agent refresh completed without persisting {expected_entry} for {agent_id}"
+        f"user-agent refresh completed without persisting plugin-managed {expected_key} for {agent_id}"
     )
 
 

@@ -49,7 +49,7 @@ def write_fake_rpc_client(path: Path) -> None:
         "        'agent_id': 'agent-guide',\n"
         "        'almanac-skill-ref': 'Use almanac-qmd-mcp for retrieval and almanac-vault-reconciler for drift repair.',\n"
         "        'vault-ref': 'Vault root: /srv/almanac/vault\\nDedicated agent name: Guide',\n"
-        "        'resource-ref': 'Canonical user access rails and shared Almanac addresses:\\n- Hermes dashboard: https://almanac.example.test:30011/\\n- Code workspace: https://almanac.example.test:40011/\\n- Credentials are intentionally omitted from managed memory.',\n"
+        "        'resource-ref': 'Canonical user access rails and shared Almanac addresses:\\n- Hermes dashboard: https://almanac.example.test:30011/\\n- Code workspace: https://almanac.example.test:40011/\\n- Credentials are intentionally omitted from plugin-managed context.',\n"
         "        'qmd-ref': 'qmd MCP (deep retrieval): https://almanac.example.test/mcp',\n"
         "        'notion-ref': 'Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
@@ -125,7 +125,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                     "agent_id": "agent-guide",
                     "almanac-skill-ref": "Use almanac-qmd-mcp for retrieval and almanac-vault-reconciler for drift repair.",
                     "vault-ref": "Vault root: /srv/almanac/vault\nDedicated agent name: Guide",
-                    "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Hermes dashboard: https://almanac.example.test:30011/\n- Code workspace: https://almanac.example.test:40011/\n- Credentials are intentionally omitted from managed memory.",
+                    "resource-ref": "Canonical user access rails and shared Almanac addresses:\n- Hermes dashboard: https://almanac.example.test:30011/\n- Code workspace: https://almanac.example.test:40011/\n- Credentials are intentionally omitted from plugin-managed context.",
                     "qmd-ref": "qmd MCP (deep retrieval): https://almanac.example.test/mcp",
                     "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via Almanac MCP.",
                     "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
@@ -204,7 +204,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         state_path = hermes_home / "state" / "almanac-vault-reconciler.json"
         stub_path = hermes_home / "memories" / "almanac-managed-stubs.md"
         expect(state_path.is_file(), f"expected reconciler state file: {state_path}")
-        expect(stub_path.is_file(), f"expected managed stubs markdown: {stub_path}")
+        expect(not stub_path.exists(), f"dynamic managed context should not be mirrored to markdown: {stub_path}")
 
         state_payload = json.loads(state_path.read_text(encoding="utf-8"))
         expect(state_payload["agent_id"] == "agent-guide", state_payload)
@@ -214,37 +214,16 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         expect("today-plate" in state_payload, state_payload)
         expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
         expect("Example Unicorn launch" in state_payload["today-plate"], state_payload)
+        expect("Hermes dashboard: https://almanac.example.test:30011/" in state_payload["resource-ref"], state_payload)
+        expect("Code workspace: https://almanac.example.test:40011/" in state_payload["resource-ref"], state_payload)
         expect(len(str(state_payload.get("managed_memory_revision") or "")) >= 12, state_payload)
-
-        stub_body = stub_path.read_text(encoding="utf-8")
-        expect("# Almanac managed memory stubs" in stub_body, stub_body)
-        expect("[managed:almanac-skill-ref]" in stub_body, stub_body)
-        expect("[managed:notion-ref]" in stub_body, stub_body)
-        expect("[managed:today-plate]" in stub_body, stub_body)
-        expect("notion.search / notion.fetch / notion.query" in stub_body, stub_body)
-        expect("Example Unicorn launch" in stub_body, stub_body)
-        expect("Dedicated agent name: Guide" in stub_body, stub_body)
 
         memory_entries = [entry.strip() for entry in memory_path.read_text(encoding="utf-8").split("\n§\n") if entry.strip()]
         expect(memory_entries[0] == "Persistent preference", memory_entries)
         expect(memory_entries[1] == "Another note", memory_entries)
         expect(all("old qmd routing" not in entry for entry in memory_entries), memory_entries)
         expect(all("old topology" not in entry for entry in memory_entries), memory_entries)
-        managed_prefixes = [
-            "[managed:almanac-skill-ref]",
-            "[managed:vault-ref]",
-            "[managed:resource-ref]",
-            "[managed:qmd-ref]",
-            "[managed:notion-ref]",
-            "[managed:vault-topology]",
-            "[managed:recall-stubs]",
-            "[managed:notion-stub]",
-            "[managed:today-plate]",
-        ]
-        for prefix in managed_prefixes:
-            expect(any(entry.startswith(prefix) for entry in memory_entries), f"missing {prefix} in {memory_entries}")
-        expect(any("Hermes dashboard: https://almanac.example.test:30011/" in entry for entry in memory_entries), memory_entries)
-        expect(any("Code workspace: https://almanac.example.test:40011/" in entry for entry in memory_entries), memory_entries)
+        expect(all(not entry.startswith("[managed:") for entry in memory_entries), memory_entries)
 
         events_payload = json.loads(recent_events_path.read_text(encoding="utf-8"))
         expect(events_payload["agent_id"] == "agent-guide", events_payload)

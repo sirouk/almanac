@@ -19,7 +19,7 @@ Use this skill when the user wants an agent to work with the Almanac vault throu
 
 Check these local files first:
 
-- `$HERMES_HOME/state/almanac-vault-reconciler.json` and `$HERMES_HOME/memories/almanac-managed-stubs.md` for safe, agent-local Almanac routing state
+- `$HERMES_HOME/state/almanac-vault-reconciler.json` for safe, agent-local plugin-managed Almanac routing state
 - `$HERMES_HOME/state/almanac-recent-events.json` for recent Curator/SSOT nudges that may explain why the current session should restub or re-query qmd
 - `~/Almanac` for the shared vault as the current user sees it in shell and VS Code
 - `docs/hermes-qmd-config.yaml` for the default MCP client snippet

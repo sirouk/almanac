@@ -90,7 +90,7 @@ def managed_resource_lines(
         lines.append(f"Almanac vault: {Path(workspace_root_text) / 'Almanac'}")
 
     lines.extend(str(line).strip() for line in shared_lines if str(line).strip())
-    lines.append("Credentials are intentionally omitted from managed memory.")
+    lines.append("Credentials are intentionally omitted from plugin-managed context.")
     lines.append("If the user needs access reset or reissued, route that through Curator or the operator.")
     lines.append("These rails are the agent-facing source of truth even when a human-facing message summarizes them more narrowly.")
     return lines

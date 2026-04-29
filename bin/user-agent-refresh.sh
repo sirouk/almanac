@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Periodic per-user-agent refresh:
 #   1. hits vaults.refresh to keep the subscription side up-to-date
-#   2. fetches agents.managed-memory and materializes the managed-memory
-#      stubs in this user's HERMES_HOME (never crosses uid boundaries)
+#   2. fetches agents.managed-memory and materializes plugin-managed
+#      context state in this user's HERMES_HOME (never crosses uid boundaries)
 #
 # Runs as a systemd user oneshot, every 4h per install-agent-user-services.sh.
 set -euo pipefail
@@ -93,7 +93,8 @@ python3 "$REPO_DIR/python/almanac_rpc_client.py" \
   --tool "vaults.refresh" \
   --json-args-file "$rpc_args_file" >/dev/null
 
-# 2. materialize the last curator-published managed-memory payload when it is
+# 2. materialize the last curator-published managed-memory payload into plugin
+# context state when it is
 # available locally and parseable; otherwise fall back to a live fetch. The
 # local file is a convenience cache, never a reason to break agent refresh.
 

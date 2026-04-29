@@ -136,7 +136,7 @@ file belongs at `almanac-priv/config/org-profile.yaml`; use the public
 `config/org-profile.ultimate.example.yaml` for the full fictional layered
 ingestion example. Applying the profile writes normalized
 control-plane rows, a private applied revision, a sanitized vault render,
-per-agent context slices, managed-memory sections, and a managed `SOUL.md`
+per-agent context slices, plugin-managed sections, and a durable `SOUL.md`
 overlay for matched agents after refresh.
 
 Operator-specific resource rails belong in private state too. Keep real source

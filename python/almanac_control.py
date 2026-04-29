@@ -4572,7 +4572,7 @@ def queue_vault_content_notifications(
                 channel_kind="brief-fanout",
                 message=(
                     "vault-content-refresh: "
-                    f"{summary}. Refresh managed-memory stubs only if this agent's "
+                    f"{summary}. Refresh plugin-managed context only if this agent's "
                     "subscription-scoped context changed."
                 ),
                 extra={
@@ -10091,7 +10091,7 @@ def _discover_child_task_databases(
     at least one people-typed property — any label the workspace uses
     (Owner, Assignee, Reviewer, DRI, Lead, ...) qualifies as an ownership
     channel. Cached in ``notion_stub_cache`` so repeated calls within a
-    single managed-memory build don't re-issue the same Notion API requests.
+    single plugin-context build don't re-issue the same Notion API requests.
     """
     normalized_root = extract_notion_space_id(str(root_page_id or ""))
     if not normalized_root:
@@ -12275,7 +12275,7 @@ def build_managed_memory_payload(
     notion_stub_cache: dict[str, Any] | None = None,
     previous_today_plate_item_ids: object = None,
 ) -> dict[str, Any]:
-    """Compose the canonical managed-memory stubs for an agent.
+    """Compose the canonical plugin-managed context payload for an agent.
 
     The skill contract is:
       [managed:almanac-skill-ref] default Almanac skill routing hints
@@ -12287,7 +12287,9 @@ def build_managed_memory_payload(
       [managed:qmd-ref]        how to query qmd for retrieval
       [managed:notion-ref]     how to search/fetch/query shared Notion knowledge
       [managed:vault-topology] compact summary of subscribed vaults + briefs
+      [managed:vault-landmarks] compact top-level vault map, including plain qmd-indexed folders
       [managed:recall-stubs]   small source-linked awareness cards that point to MCP retrieval for depth
+      [managed:notion-landmarks] compact local-index map of shared Notion areas
       [managed:notion-stub]    Curator-produced shared Notion digest + verification state
       [managed:today-plate]    compact user-scoped involvement snapshot across any people-typed column on discovered task surfaces
     """
@@ -12371,16 +12373,16 @@ def build_managed_memory_payload(
         "- Use almanac-first-contact for Almanac setup or diagnostic checks.\n"
         "- Org-published Hermes skills live under ~/Almanac/Agents_Skills/*/skills and are wired into skills.external_dirs during install/refresh; use skills_list/skill_view when the skill is active, and qmd vault.search-and-fetch for source-level review or edits.\n"
         "- The shared vault does not require a fixed Projects/Repos taxonomy; qmd indexes text-like files anywhere under the vault root, and .vault files only define subscription/notification lanes.\n"
-        "- All vaults remain retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions only shape managed-memory awareness and Curator push behavior.\n"
-        "- Curator publishes a shared Notion digest into managed memory so the agent has ambient SSOT orientation without live cross-user reads.\n"
+        "- All vaults remain retrievable through Almanac/qmd even when a vault is unsubscribed; subscriptions only shape plugin-managed awareness and Curator push behavior.\n"
+        "- Curator publishes a shared Notion digest into plugin-managed context so the agent has ambient SSOT orientation without live cross-user reads.\n"
         "- Curator publishes [managed:today-plate] as the user's compact involvement snapshot — every record across discovered task surfaces where the user appears in any people-typed column, regardless of what the workspace named that column. Use it as the structured starting point when the user asks about their work, focus, recent involvement, or what's on their plate; then verify live details before changing shared state.\n"
-        "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local managed-memory stubs and recent events.\n"
-        "- Built-in MEMORY.md is still a session-start snapshot, but the almanac-managed-context plugin can inject refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
+        "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local plugin context state and recent events.\n"
+        "- Almanac does not patch dynamic [managed:*] stubs into built-in MEMORY.md; the almanac-managed-context plugin hot-injects refreshed local Almanac context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
         "- The almanac-managed-context plugin also injects [local:model-runtime] from Hermes's actual current-turn model argument, so model self-identification uses the live runtime instead of stale session prompts, saved memory, onboarding records, or config defaults after setup or model switches.\n"
         "- Treat the skill as the workflow and guardrail layer, and the wired broker/MCP/tool as the actuation layer.\n"
         "- For private/shared-vault questions, start with [managed:qmd-ref] and the current user's local Almanac state; do not rediscover the qmd rail by repo-wide search unless that rail actually fails.\n"
         "- Human-facing completion or onboarding messages may omit machine-facing MCP/control rails for simplicity; [managed:resource-ref] is the authoritative map of the rails that this agent can try.\n"
-        "- Do not decide that a rail is unavailable just because raw env vars are absent in a chat turn; use the installed skills, managed stubs, and Almanac-provisioned rails as the source of truth.\n"
+        "- Do not decide that a rail is unavailable just because raw env vars are absent in a chat turn; use the installed skills, plugin-managed context, and Almanac-provisioned rails as the source of truth.\n"
         "- When a brokered action is refused, explain whether the block is verification, ownership scope, or an unsupported archive/delete request instead of saying the skill is missing.\n"
         "- On a shared host, central service-user deployment paths are read-only shared infrastructure; use the current user's ~/Almanac alias for vault files."
     )
@@ -12505,6 +12507,11 @@ def build_managed_memory_payload(
         "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n"
         + "\n".join(topology_lines)
     )
+    vault_landmarks, vault_landmark_items = _build_vault_landmarks(
+        cfg,
+        subscriptions=subscriptions,
+        vault_root=vault_root,
+    )
     recall_stubs = _build_recall_stubs(
         conn,
         cfg,
@@ -12512,6 +12519,7 @@ def build_managed_memory_payload(
         subscriptions=subscriptions,
         vault_root=vault_root,
     )
+    notion_landmarks, notion_landmark_items = _build_notion_landmarks(conn)
     local_notion_stub_cache = notion_stub_cache if isinstance(notion_stub_cache, dict) else {}
     notion_stub = _build_notion_stub(
         conn,
@@ -12545,10 +12553,14 @@ def build_managed_memory_payload(
         "qmd-ref": qmd_ref,
         "notion-ref": notion_ref,
         "vault-topology": topology,
+        "vault-landmarks": vault_landmarks,
         "recall-stubs": recall_stubs,
+        "notion-landmarks": notion_landmarks,
         "notion-stub": notion_stub,
         "today-plate": today_plate,
         "today_plate_item_ids": today_plate_item_ids,
+        "vault_landmark_items": vault_landmark_items,
+        "notion_landmark_items": notion_landmark_items,
         "catalog": catalog,
         "subscriptions": subscriptions,
         "active_subscriptions": active_subscriptions,
@@ -12570,7 +12582,9 @@ _MANAGED_MEMORY_KEYS = (
     "qmd-ref",
     "notion-ref",
     "vault-topology",
+    "vault-landmarks",
     "recall-stubs",
+    "notion-landmarks",
     "notion-stub",
     "today-plate",
 )
@@ -12582,6 +12596,8 @@ _MANAGED_PAYLOAD_CACHE_KEYS = (
     "subscriptions",
     "active_subscriptions",
     "vault_path_contract",
+    "vault_landmark_items",
+    "notion_landmark_items",
     "org_profile_agent_context",
     "org_profile_revision",
 )
@@ -12656,6 +12672,353 @@ def _recent_vault_change_rows_for_agent(conn: sqlite3.Connection, agent_id: str,
             }
         )
     return result
+
+
+_VAULT_LANDMARK_TEXT_SUFFIXES = {".md", ".markdown", ".mdx", ".txt", ".text"}
+_VAULT_LANDMARK_REPO_DIR_NAMES = {"repos", "repositories"}
+
+
+def _safe_list_dir(path: Path) -> list[Path]:
+    try:
+        if not path.is_dir():
+            return []
+        return sorted(path.iterdir(), key=lambda item: item.name.casefold())
+    except OSError:
+        return []
+
+
+def _compact_unique(values: Sequence[str], *, limit: int = 4) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = " ".join(str(value or "").strip().split())
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+        if len(result) >= max(1, int(limit or 4)):
+            break
+    return result
+
+
+def _compact_preview(values: Sequence[str], *, limit: int = 4) -> str:
+    cleaned = _compact_unique(values, limit=200)
+    if not cleaned:
+        return ""
+    visible = cleaned[:limit]
+    preview = ", ".join(visible)
+    if len(cleaned) > limit:
+        preview += f" (+{len(cleaned) - limit} more)"
+    return preview
+
+
+def _landmark_query_terms(values: Sequence[str], *, limit: int = 24) -> list[str]:
+    candidates: list[str] = []
+    for value in values:
+        cleaned = " ".join(str(value or "").strip().split())
+        if not cleaned:
+            continue
+        candidates.append(cleaned)
+        stem = Path(cleaned).stem
+        if stem and stem != cleaned:
+            candidates.append(stem)
+        spaced = re.sub(r"[_\-.]+", " ", stem or cleaned).strip()
+        if spaced and spaced.casefold() != cleaned.casefold():
+            candidates.append(spaced)
+    return _compact_unique(candidates, limit=limit)
+
+
+def _build_vault_landmark_items(
+    cfg: Config,
+    *,
+    subscriptions: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    vault_root = cfg.vault_dir
+    if not vault_root.is_dir():
+        return []
+    subscriptions_by_name = {
+        str(subscription.get("vault_name") or "").strip(): subscription
+        for subscription in subscriptions
+        if str(subscription.get("vault_name") or "").strip()
+    }
+    items: list[dict[str, Any]] = []
+    for child in _safe_list_dir(vault_root):
+        name = child.name
+        if not name or name.startswith(".") or not child.is_dir():
+            continue
+        subscription = subscriptions_by_name.get(name, {})
+        subscribed = bool(subscription.get("effective_subscribed")) or bool(subscription.get("push_enabled"))
+        category = str(subscription.get("category") or "").strip()
+        owner = str(subscription.get("owner") or "").strip()
+        brief = _first_nonempty_line(
+            str(subscription.get("brief_template") or subscription.get("description") or ""),
+            limit=150,
+        )
+        children = _safe_list_dir(child)
+        repo_inventory = name.casefold() in _VAULT_LANDMARK_REPO_DIR_NAMES or category.casefold() in {
+            "repo",
+            "repos",
+            "repository",
+            "repositories",
+            "repository-inventory",
+            "code",
+        }
+        repo_names: list[str] = []
+        subfolders: list[str] = []
+        file_names: list[str] = []
+        pdf_names: list[str] = []
+        for nested in children:
+            nested_name = nested.name
+            if not nested_name or nested_name.startswith("."):
+                continue
+            try:
+                is_dir = nested.is_dir()
+                is_file = nested.is_file()
+            except OSError:
+                continue
+            if is_dir:
+                if repo_inventory:
+                    repo_names.append(nested_name)
+                else:
+                    subfolders.append(nested_name)
+                continue
+            if not is_file:
+                continue
+            suffix = nested.suffix.casefold()
+            if suffix == ".pdf":
+                pdf_names.append(nested_name)
+            elif suffix in _VAULT_LANDMARK_TEXT_SUFFIXES:
+                file_names.append(nested_name)
+
+        kind = "subscription-lane" if subscription else "plain-folder"
+        if (child / ".git").exists():
+            kind = "git-repo"
+        query_terms = _landmark_query_terms(
+            [
+                name,
+                category,
+                brief,
+                *repo_names,
+                *subfolders,
+                *file_names,
+                *pdf_names,
+            ]
+        )
+        items.append(
+            {
+                "name": name,
+                "kind": kind,
+                "category": category,
+                "owner": owner,
+                "subscribed": subscribed,
+                "repo_inventory": repo_inventory,
+                "repo_names": _compact_unique(repo_names, limit=24),
+                "subfolders": _compact_unique(subfolders, limit=24),
+                "files": _compact_unique(file_names, limit=24),
+                "pdfs": _compact_unique(pdf_names, limit=24),
+                "brief": brief,
+                "query_terms": query_terms,
+            }
+        )
+
+    items.sort(
+        key=lambda item: (
+            0 if bool(item.get("subscribed")) else 1,
+            0 if str(item.get("kind") or "") == "subscription-lane" else 1,
+            str(item.get("name") or "").casefold(),
+        )
+    )
+    return items
+
+
+def _render_vault_landmarks(
+    items: Sequence[dict[str, Any]],
+    *,
+    vault_root: str,
+) -> str:
+    lines = [
+        "Vault landmarks:",
+        "- Compact map only: names, folders, and filenames are recall cues, not evidence. Use knowledge.search-and-fetch or vault.search-and-fetch for content before answering.",
+    ]
+    if not items:
+        lines.append("- Shared vault root is not readable yet, or no top-level vault folders have been discovered.")
+        return "\n".join(lines)
+    lines.append(
+        f"- Coverage: {len(items)} top-level folder(s) under {vault_root}; .vault subscription lanes and plain qmd-indexed folders both count."
+    )
+    for item in items[:14]:
+        name = str(item.get("name") or "").strip()
+        traits: list[str] = []
+        if bool(item.get("subscribed")):
+            traits.append("subscribed")
+        traits.append(str(item.get("kind") or "folder"))
+        category = str(item.get("category") or "").strip()
+        if category:
+            traits.append(f"category={category}")
+        owner = str(item.get("owner") or "").strip()
+        if owner:
+            traits.append(f"owner={owner}")
+
+        details: list[str] = []
+        brief = str(item.get("brief") or "").strip()
+        if brief:
+            details.append(brief)
+        if bool(item.get("repo_inventory")):
+            repo_preview = _compact_preview([str(v) for v in item.get("repo_names") or []], limit=5)
+            if repo_preview:
+                details.append(f"repos: {repo_preview}; do not infer deep subfolders until retrieved")
+        else:
+            folder_preview = _compact_preview([str(v) for v in item.get("subfolders") or []], limit=5)
+            if folder_preview:
+                details.append(f"subfolders: {folder_preview}")
+        pdf_preview = _compact_preview([str(v) for v in item.get("pdfs") or []], limit=4)
+        if pdf_preview:
+            details.append(f"PDFs: {pdf_preview}")
+        file_preview = _compact_preview([str(v) for v in item.get("files") or []], limit=4)
+        if file_preview:
+            details.append(f"files: {file_preview}")
+        detail_suffix = f". {'; '.join(details)}" if details else "."
+        lines.append(f"- {name}: {', '.join(traits)}{detail_suffix}")
+    if len(items) > 14:
+        lines.append(f"- Plus {len(items) - 14} more top-level folder(s); search by folder or project name for depth.")
+    lines.append("- Routing: use this map to choose nouns; use retrieval tools for current text, PDFs, repo contents, and citations.")
+    return "\n".join(lines)
+
+
+def _build_vault_landmarks(
+    cfg: Config,
+    *,
+    subscriptions: Sequence[dict[str, Any]],
+    vault_root: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    items = _build_vault_landmark_items(cfg, subscriptions=subscriptions)
+    return _render_vault_landmarks(items, vault_root=vault_root), items
+
+
+def _notion_landmark_area(breadcrumb: Sequence[Any], title: str) -> str:
+    parts = [str(part or "").strip() for part in breadcrumb if str(part or "").strip()]
+    compact_title = str(title or "").strip()
+    if parts and compact_title and parts[-1].casefold() == compact_title.casefold():
+        parts = parts[:-1]
+    for part in reversed(parts):
+        if part and part.casefold() not in {"untitled", "home"}:
+            return part[:120]
+    return (compact_title or "Root")[:120]
+
+
+def _build_notion_landmark_items(conn: sqlite3.Connection, *, limit: int = 180) -> list[dict[str, Any]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT source_page_id, source_page_url, source_kind, page_title,
+                   breadcrumb_json, owners_json,
+                   MAX(last_edited_time) AS last_edited_time,
+                   MAX(indexed_at) AS indexed_at,
+                   COUNT(*) AS section_count
+            FROM notion_index_documents
+            WHERE state = 'active'
+            GROUP BY source_page_id
+            ORDER BY MAX(CASE WHEN last_edited_time != '' THEN last_edited_time ELSE indexed_at END) DESC,
+                     MAX(indexed_at) DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit or 180), 400)),),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+
+    groups: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        page_id = str(row["source_page_id"] or "").strip()
+        if not page_id:
+            continue
+        title = str(row["page_title"] or "").strip()
+        breadcrumb = json_loads(str(row["breadcrumb_json"] or "[]"), [])
+        if not isinstance(breadcrumb, list):
+            breadcrumb = []
+        owners = json_loads(str(row["owners_json"] or "[]"), [])
+        if not isinstance(owners, list):
+            owners = []
+        area = _notion_landmark_area(breadcrumb, title)
+        if not title:
+            title = next((str(part).strip() for part in reversed(breadcrumb) if str(part).strip()), page_id[:8])
+        entry = groups.setdefault(
+            area,
+            {
+                "area": area,
+                "count": 0,
+                "examples": [],
+                "owners": [],
+                "last_edited_time": "",
+                "indexed_at": "",
+                "query_terms": [area],
+            },
+        )
+        entry["count"] = int(entry.get("count") or 0) + 1
+        if title:
+            entry["examples"].append(title)
+            entry["query_terms"].append(title)
+        for owner in owners:
+            owner_text = str(owner or "").strip()
+            if owner_text:
+                entry["owners"].append(owner_text)
+                entry["query_terms"].append(owner_text)
+        last_edited = str(row["last_edited_time"] or "").strip()
+        indexed_at = str(row["indexed_at"] or "").strip()
+        if last_edited and last_edited > str(entry.get("last_edited_time") or ""):
+            entry["last_edited_time"] = last_edited
+        if indexed_at and indexed_at > str(entry.get("indexed_at") or ""):
+            entry["indexed_at"] = indexed_at
+
+    items = list(groups.values())
+    for item in items:
+        item["examples"] = _compact_unique([str(value) for value in item.get("examples") or []], limit=8)
+        item["owners"] = _compact_unique([str(value) for value in item.get("owners") or []], limit=6)
+        item["query_terms"] = _landmark_query_terms([str(value) for value in item.get("query_terms") or []], limit=28)
+    items.sort(
+        key=lambda item: (
+            int(item.get("count") or 0),
+            str(item.get("last_edited_time") or str(item.get("indexed_at") or "")),
+            str(item.get("area") or "").casefold(),
+        ),
+        reverse=True,
+    )
+    return items
+
+
+def _render_notion_landmarks(items: Sequence[dict[str, Any]]) -> str:
+    lines = [
+        "Shared Notion landmarks:",
+        "- Compact local-index map only: use these area names as query hints, not as evidence. Search/fetch/query before answering or changing shared state.",
+    ]
+    if not items:
+        lines.append("- No active shared Notion index documents are visible locally yet. Use notion.fetch for exact URLs, or wait for the Notion index sync/backfill.")
+        return "\n".join(lines)
+    total_pages = sum(int(item.get("count") or 0) for item in items)
+    lines.append(f"- Coverage: {total_pages} indexed page/source(s) across {len(items)} area(s).")
+    for item in items[:10]:
+        area = str(item.get("area") or "Root").strip()
+        count = int(item.get("count") or 0)
+        examples = _compact_preview([str(value) for value in item.get("examples") or []], limit=3)
+        owners = _compact_preview([str(value) for value in item.get("owners") or []], limit=2)
+        detail = f"{count} indexed page/source(s)"
+        if examples:
+            detail += f"; examples: {examples}"
+        if owners:
+            detail += f"; owners: {owners}"
+        lines.append(f"- {area}: {detail}.")
+    if len(items) > 10:
+        lines.append(f"- Plus {len(items) - 10} more indexed Notion area(s); search by exact topic, owner, or page title.")
+    lines.append("- Routing: docs/notes -> notion.search-and-fetch; exact page -> notion.fetch; live status/assignment rows -> notion.query.")
+    return "\n".join(lines)
+
+
+def _build_notion_landmarks(conn: sqlite3.Connection) -> tuple[str, list[dict[str, Any]]]:
+    items = _build_notion_landmark_items(conn)
+    return _render_notion_landmarks(items), items
 
 
 def _build_recall_stubs(
@@ -12791,16 +13154,19 @@ def write_managed_memory_stubs(
     hermes_home: Path,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Idempotently write the managed-memory stubs into an agent's
-    HERMES_HOME. Three artefacts are produced:
+    """Idempotently publish Almanac's dynamic managed context for an agent.
 
-    1. `$HERMES_HOME/state/almanac-vault-reconciler.json` — structured state
-       the vault-reconciler skill can read for drift detection.
-    2. `$HERMES_HOME/memories/almanac-managed-stubs.md` — a human-readable
-       markdown mirror of the managed entries.
-    3. `$HERMES_HOME/memories/MEMORY.md` — the actual Hermes built-in memory
-       store, patched in-place using Hermes's `§`-delimited entry format so the
-       next session start sees the Almanac routing hints immediately.
+    The canonical dynamic artifact is
+    `$HERMES_HOME/state/almanac-vault-reconciler.json`, which the
+    almanac-managed-context plugin reads and hot-injects into turns. Legacy
+    markdown mirrors and `[managed:*]` entries in Hermes `MEMORY.md` are cleaned
+    when encountered, but Almanac no longer writes dynamic recall stubs through
+    Hermes memory files.
+
+    `SOUL.md` remains the durable onboarding/orientation prompt. It is
+    materialized only when the payload carries org-profile agent context; a
+    dynamic refresh without org-profile context does not clear an existing
+    `SOUL.md` overlay.
 
     Returns the paths written. Called from the user-agent-refresh context
     running as the enrollment user — never from the central curator (which runs
@@ -12824,14 +13190,14 @@ def write_managed_memory_stubs(
         " /almanac-resources and user-facing dashboard/code/vault links, and almanac-first-contact for"
         " Almanac setup or diagnostic checks. All vaults remain retrievable"
         " through Almanac/qmd even when a vault is unsubscribed; subscriptions"
-        " only shape managed-memory awareness and Curator push behavior. On a"
+        " only shape plugin-managed awareness and Curator push behavior. On a"
         " shared host, central service-user deployment paths are read-only shared"
         " infrastructure; use the current user's ~/Almanac alias for vault files.",
     )
     payload.setdefault(
         "resource-ref",
         "Canonical user access rails and shared Almanac addresses:\n"
-        "- Credentials are intentionally omitted from managed memory.\n"
+        "- Credentials are intentionally omitted from plugin-managed context.\n"
         "- Ask Curator or the operator to reissue access if the user loses those credentials.",
     )
     payload.setdefault(
@@ -12842,12 +13208,22 @@ def write_managed_memory_stubs(
     )
     payload.setdefault(
         "notion-stub",
-        "Shared Notion digest:\n- Curator has not published a Notion digest into managed memory yet.",
+        "Shared Notion digest:\n- Curator has not published a Notion digest into plugin-managed context yet.",
+    )
+    payload.setdefault(
+        "vault-landmarks",
+        "Vault landmarks:\n- Curator has not published a compact vault landmark map into plugin-managed context yet.",
+    )
+    payload.setdefault(
+        "notion-landmarks",
+        "Shared Notion landmarks:\n- Curator has not published a compact Notion landmark map into plugin-managed context yet.",
     )
     payload.setdefault(
         "today-plate",
-        "Today plate:\n- Curator has not published a user-scoped work snapshot into managed memory yet.",
+        "Today plate:\n- Curator has not published a user-scoped work snapshot into plugin-managed context yet.",
     )
+    payload.setdefault("vault_landmark_items", [])
+    payload.setdefault("notion_landmark_items", [])
     payload.setdefault("managed_memory_revision", _compute_managed_memory_revision(payload))
     payload.setdefault("active_subscriptions", [
         str(row.get("vault_name") or "")
@@ -12859,7 +13235,6 @@ def write_managed_memory_stubs(
     state_dir = hermes_home / "state"
     memories_dir = hermes_home / "memories"
     state_dir.mkdir(parents=True, exist_ok=True)
-    memories_dir.mkdir(parents=True, exist_ok=True)
 
     now = utc_now_iso()
     state_path = state_dir / "almanac-vault-reconciler.json"
@@ -12876,9 +13251,13 @@ def write_managed_memory_stubs(
         "qmd-ref": payload["qmd-ref"],
         "notion-ref": payload["notion-ref"],
         "vault-topology": payload["vault-topology"],
+        "vault-landmarks": payload.get("vault-landmarks") or "",
         "recall-stubs": payload.get("recall-stubs") or "",
+        "notion-landmarks": payload.get("notion-landmarks") or "",
         "notion-stub": payload.get("notion-stub") or "",
         "today-plate": payload.get("today-plate") or "",
+        "vault_landmark_items": payload.get("vault_landmark_items") or [],
+        "notion_landmark_items": payload.get("notion_landmark_items") or [],
         "catalog": payload["catalog"],
         "subscriptions": payload["subscriptions"],
         "active_subscriptions": payload.get("active_subscriptions") or [],
@@ -12898,43 +13277,24 @@ def write_managed_memory_stubs(
         )
 
     stub_path = memories_dir / "almanac-managed-stubs.md"
-    org_profile_body = ""
-    if str(payload.get("org-profile") or "").strip():
-        org_profile_body += f"## [managed:org-profile]\n\n{payload.get('org-profile') or ''}\n\n"
-    if str(payload.get("user-responsibilities") or "").strip():
-        org_profile_body += f"## [managed:user-responsibilities]\n\n{payload.get('user-responsibilities') or ''}\n\n"
-    if str(payload.get("team-map") or "").strip():
-        org_profile_body += f"## [managed:team-map]\n\n{payload.get('team-map') or ''}\n\n"
-    body = (
-        "# Almanac managed memory stubs\n\n"
-        "Maintained by the user-agent-refresh worker every 4 hours. Do not\n"
-        "hand-edit; changes are overwritten on next refresh.\n\n"
-        f"## [managed:almanac-skill-ref]\n\n{payload['almanac-skill-ref']}\n\n"
-        f"{org_profile_body}"
-        f"## [managed:vault-ref]\n\n{payload['vault-ref']}\n\n"
-        f"## [managed:resource-ref]\n\n{payload['resource-ref']}\n\n"
-        f"## [managed:qmd-ref]\n\n{payload['qmd-ref']}\n\n"
-        f"## [managed:notion-ref]\n\n{payload['notion-ref']}\n\n"
-        f"## [managed:vault-topology]\n\n{payload['vault-topology']}\n\n"
-        f"## [managed:recall-stubs]\n\n{payload.get('recall-stubs') or ''}\n\n"
-        f"## [managed:notion-stub]\n\n{payload.get('notion-stub') or ''}\n\n"
-        f"## [managed:today-plate]\n\n{payload.get('today-plate') or ''}\n"
-    )
-    stub_changed = _read_text_file(stub_path) != body
-    if stub_changed:
-        _atomic_write_text(stub_path, body)
+    legacy_stub_removed = False
+    if stub_path.exists():
+        stub_path.unlink()
+        legacy_stub_removed = True
 
     memory_path = memories_dir / "MEMORY.md"
-    existing_entries = _read_memory_entries(memory_path)
-    filtered_entries = [
-        entry
-        for entry in existing_entries
-        if not any(entry.lstrip().startswith(prefix) for prefix in _MANAGED_MEMORY_PREFIXES)
-    ]
-    desired_memory_content = _render_memory_entries(filtered_entries + _managed_memory_entries(payload))
-    memory_changed = _read_text_file(memory_path) != desired_memory_content
-    if memory_changed:
-        _atomic_write_text(memory_path, desired_memory_content)
+    memory_changed = False
+    if memory_path.exists():
+        existing_entries = _read_memory_entries(memory_path)
+        filtered_entries = [
+            entry
+            for entry in existing_entries
+            if not any(entry.lstrip().startswith(prefix) for prefix in _MANAGED_MEMORY_PREFIXES)
+        ]
+        memory_changed = len(filtered_entries) != len(existing_entries)
+        if memory_changed:
+            desired_memory_content = _render_memory_entries(filtered_entries)
+            _atomic_write_text(memory_path, desired_memory_content)
 
     org_profile_context = payload.get("org_profile_agent_context")
     org_profile_paths: dict[str, Any] = {}
@@ -12945,25 +13305,22 @@ def write_managed_memory_stubs(
             org_profile_paths = materialize_agent_context(hermes_home, org_profile_context)
         except Exception as exc:  # noqa: BLE001
             org_profile_paths = {"org_profile_error": str(exc)}
-    else:
-        try:
-            from almanac_org_profile import clear_materialized_agent_context
-
-            org_profile_paths = clear_materialized_agent_context(hermes_home)
-        except Exception as exc:  # noqa: BLE001
-            org_profile_paths = {"org_profile_error": str(exc)}
 
     org_profile_changed = bool(org_profile_paths.get("changed")) if org_profile_paths else False
-    return {
+    result = {
         "state_path": str(state_path),
         "stub_path": str(stub_path),
+        "legacy_stub_path": str(stub_path),
         "memory_path": str(memory_path),
         "state_changed": state_changed,
-        "stub_changed": stub_changed,
+        "stub_changed": legacy_stub_removed,
+        "legacy_stub_removed": legacy_stub_removed,
         "memory_changed": memory_changed,
-        "changed": state_changed or stub_changed or memory_changed or org_profile_changed,
+        "legacy_memory_cleaned": memory_changed,
         **org_profile_paths,
     }
+    result["changed"] = state_changed or legacy_stub_removed or memory_changed or org_profile_changed
+    return result
 
 
 def _central_managed_payload_path(cfg: Config, agent_id: str) -> Path:
@@ -13009,7 +13366,7 @@ def publish_central_managed_memory(
     agent_id: str,
     notion_stub_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Write the agent's managed-memory payload into the shared state dir so
+    """Write the agent's plugin-context payload into the shared state dir so
     the user-agent-refresh worker (running as the enrollment user) can read
     the curator's latest view without crossing uid boundaries."""
     out_path = _central_managed_payload_path(cfg, agent_id)
@@ -13074,13 +13431,13 @@ def signal_agent_refresh_from_curator(
 
 def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[str, Any]:
     """Pull pending curator:brief-fanout notifications, publish fresh central
-    managed-memory payloads for each impacted agent (shared state, no HERMES
+    plugin-context payloads for each impacted agent (shared state, no HERMES
     writes), and mark the notifications delivered.
 
     Each enrollment user's `user-agent-refresh.sh` then picks up the central
-    payload on its next run (every 4h or on agent boot) and writes it into the
-    user's own HERMES_HOME. This respects the uid boundary between curator and
-    user agents."""
+    payload on its next run (every 4h or on agent boot) and writes plugin state
+    into the user's own HERMES_HOME. This respects the uid boundary between
+    curator and user agents."""
     now_iso = utc_now_iso()
     due_rows = conn.execute(
         """
@@ -13211,7 +13568,7 @@ def consume_curator_brief_fanout(conn: sqlite3.Connection, cfg: Config) -> dict[
                     cfg,
                     agent_id=agent_id,
                     note=(
-                        "curator brief-fanout: refresh managed memory stubs"
+                        "curator brief-fanout: refresh plugin-managed context"
                         if bool(publish_result.get("changed"))
                         else "curator brief-fanout: consume pending Almanac event notifications"
                     ),

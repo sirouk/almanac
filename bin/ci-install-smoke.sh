@@ -956,12 +956,12 @@ assert_agent_payload() {
     "hermes mcp add almanac-mcp" \
     "run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup" \
     "first contact must resolve YAML .vault defaults" \
-    "maintain only [managed:almanac-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:vault-topology]" \
-    "MEMORY.md is a frozen snapshot at session start" \
+    "plugin-managed context state" \
+    "do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md" \
     "Almanac skills are active defaults, not passive extras" \
     "keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there" \
     "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
-    "if cron lacks the native memory tool, patch only those five entries in \$HERMES_HOME/memories/MEMORY.md" \
+    "if legacy [managed:*] entries exist in \$HERMES_HOME/memories/MEMORY.md" \
     "recurring success output: exactly 1 short line" \
     "recurring warn/fail output: at most 2 short lines" \
     "$ALMANAC_REPO_DIR/skills/almanac-qmd-mcp" \
@@ -996,12 +996,12 @@ assert_agent_payload() {
   for required in \
     "almanac_task_v1:" \
     "goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
-    "MEMORY.md is a frozen snapshot at session start" \
+    "plugin-managed context state" \
     "first contact must resolve YAML .vault defaults" \
     "Almanac skills are active defaults, not passive extras" \
     "keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there" \
     "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
-    "if cron lacks the native memory tool, patch only those five entries in \$HERMES_HOME/memories/MEMORY.md" \
+    "if legacy [managed:*] entries exist in \$HERMES_HOME/memories/MEMORY.md" \
     "recurring success output: exactly 1 short line"
   do
     if ! grep -Fq "$required" "$payload_file"; then

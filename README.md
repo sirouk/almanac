@@ -476,7 +476,7 @@ Vault rules:
   each Curator/user-agent `skills.external_dirs` during install/refresh, so
   org-published skills can show up in Hermes `skills_list` while remaining
   shared read-only vault assets.
-- Subscriptions control managed-memory fanout and notifications, not raw
+- Subscriptions control plugin-managed fanout and notifications, not raw
   retrieval permission.
 - Vault notifications are category-aware: skills, plugins, Hermes docs, and
   general project updates get different copy.
@@ -531,7 +531,7 @@ config/org-profile.ultimate.example.yaml
 docs/org-profile.md
 ```
 
-The profile pipeline feeds agent `SOUL.md`, identity state, managed memory,
+The profile pipeline feeds agent `SOUL.md`, identity state, plugin-managed context,
 control-plane rows, and a sanitized vault render so agents understand who they
 serve, what that human owns, who the other people are, which workflows,
 automations, and benchmarks matter, and where the agent must ask instead of
@@ -542,7 +542,7 @@ During onboarding, Curator can offer safe profile-person choices from unapplied
 roster entries when the applied profile privacy policy allows it. That
 user-selected link is stored separately from the bot name and Unix account name,
 shown to the operator as unverified, and used only to orient the agent through
-managed memory and the `SOUL.md` overlay after normal approval.
+plugin-managed context and the `SOUL.md` overlay after normal approval.
 
 Profiles can also carry practical non-secret identity and source pointers such
 as Discord handles, GitHub usernames, person-specific repos, and shared repo
@@ -733,15 +733,17 @@ Event lanes include:
 - Plugin updates.
 - Hermes docs updates.
 - Shared Notion webhook changes.
-- SSOT digests, `[managed:recall-stubs]`, and `[managed:today-plate]`.
+- SSOT digests, compact `[managed:vault-landmarks]` /
+  `[managed:notion-landmarks]`, `[managed:recall-stubs]`, and
+  `[managed:today-plate]`.
 - Pending write approvals.
 - Assigned or due work.
 - Host upgrade notices.
 - Backup and health problems.
 
-Curator delivers ambient context through managed memory and hot events through
-notification delivery. Agents should verify live state before writing shared
-systems.
+Curator delivers ambient context through plugin-managed context and hot events
+through notification delivery. Agents should verify live state before writing
+shared systems.
 
 `almanac-health-watch.timer` runs the full host health check on a 15-minute
 cadence and queues an operator notification when failures appear or change. It

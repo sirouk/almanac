@@ -304,7 +304,7 @@ def profile_starter() -> dict[str, Any]:
                 "status": "active",
                 "owner": "example-operator",
                 "applies_to": ["all_agents"],
-                "surfaces": ["vault", "control-plane", "managed-memory"],
+                "surfaces": ["vault", "control-plane", "plugin-managed-context"],
                 "steps": [
                     "Collect non-secret source material and source pointers.",
                     "Separate shared baseline, role/function modules, human owner modules, and agent-specific profiles.",

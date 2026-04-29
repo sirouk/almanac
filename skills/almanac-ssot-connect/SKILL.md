@@ -73,7 +73,7 @@ If the user is on a shared-host Almanac agent, keep the language simple:
   Notion password
 - do not ask the user to paste long-lived OAuth tokens into chat if the client
   can authorize directly
-- do not store user-owned Notion credentials in Almanac managed memory
+- do not store user-owned Notion credentials in Almanac plugin-managed context
 - do not treat success as complete until one real search and one real fetch work
 - do not confuse a working OAuth connection with proof that broad retrieval is
   exhaustive, fresh, or complete

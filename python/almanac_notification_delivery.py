@@ -215,7 +215,7 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
 
     if target_kind == "curator":
         # Curator brief-fanout rows are actuated by consume_curator_brief_fanout,
-        # which publishes central managed-memory JSON for each impacted agent and
+        # which publishes central managed-memory JSON for plugin context and
         # marks its own rows delivered. Running it here is safe and idempotent —
         # the worker is the scheduler for Curator side-effects.
         return "HANDLED_BY_CONSUMER"

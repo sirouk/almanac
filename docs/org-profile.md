@@ -37,8 +37,9 @@ Shipped today:
 - The `almanac-managed-context` plugin can read the local identity state when
   it exists and inject a compact `[local:identity]` section.
 - Applied profiles also feed `[managed:org-profile]`,
-  `[managed:user-responsibilities]`, and `[managed:team-map]`, plus a managed
-  `SOUL.md` overlay for matched agents after their refresh runs.
+  `[managed:user-responsibilities]`, and `[managed:team-map]` through plugin
+  state, plus a durable `SOUL.md` overlay for matched agents after their
+  refresh runs.
 - During chat onboarding, Curator can offer safe, non-secret profile-person
   choices for unapplied roster entries when the applied profile privacy policy
   allows it. The user-selected link is stored separately from bot and Unix
@@ -248,7 +249,7 @@ Distribution
     agent-alex, agent-morgan, agent-priya
   per-agent identity state:
     state/almanac-identity-context.json
-  managed memory:
+  plugin-managed context:
     org-profile, user-responsibilities, team-map
   vault render:
     Agents_KB/Operating_Context/org-profile.generated.md
@@ -308,9 +309,9 @@ identity for the installed `almanac-managed-context` plugin:
 - teammates needed for coordination
 - applied org-profile revision
 
-### Managed Memory
+### Plugin-Managed Context
 
-Managed memory receives compact, refreshable operational slices:
+Plugin-managed context receives compact, refreshable operational slices:
 
 - `[managed:org-profile]`: context mission, operating principles, work surfaces
   and relevant operational rails
@@ -319,7 +320,9 @@ Managed memory receives compact, refreshable operational slices:
 - `[managed:team-map]`: teams and teammate coordination context
 
 These should be small enough to inject without drowning the agent, but precise
-enough to prevent authority confusion.
+enough to prevent authority confusion. Dynamic `[managed:*]` slices, including
+vault/Notion landmark maps and today-plate recall, are not written into Hermes
+`MEMORY.md`; `SOUL.md` remains the durable identity and orientation artifact.
 
 ### Vault Render
 
@@ -341,7 +344,7 @@ During onboarding, Almanac can ask a newly enrolled human to select one of the
 applied profile people that is not already linked to an active agent. Curator
 shows only short labels such as name, role/title, and group/team when the
 profile privacy policy permits roster visibility. The selected
-`org_profile_person_id` orients managed memory and the `SOUL.md` overlay even
+`org_profile_person_id` orients plugin-managed context and the `SOUL.md` overlay even
 when the user chooses an unrelated bot name or Unix account name. Existing
 agents can also match by exact `unix_user`, then simple display/alias/agent
 name matches. A match can prefill or orient:
@@ -406,7 +409,7 @@ Updated
   agent-alex context slice: ok
   agent-morgan context slice: ok
   agent-priya context slice: ok
-  managed memory refresh queued: ok
+  plugin-managed context refresh queued: ok
 ```
 
 Apply is idempotent. Reapplying the same file should produce the same

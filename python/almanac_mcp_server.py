@@ -78,7 +78,7 @@ TOOLS = {
     "vault.search": "Fast search of shared/private vault knowledge through Almanac's qmd-backed vault rail. Prefer vault.search-and-fetch when you need the body to answer, especially for PDFs.",
     "vault.fetch": "Fetch a qmd vault hit by exact file/docid and return plain structured text. Prefer over raw qmd.get when the agent needs readable content instead of MCP resource objects. A leading Markdown YAML metadata block stays inline in text when fetched from the top and is also duplicated into metadata when present.",
     "vault.search-and-fetch": "Fast bounded search of shared/private vault knowledge and fetched text for top hits. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default and does not rerank. A leading Markdown YAML metadata block stays inline in text when fetched from the top and is also duplicated into metadata when present.",
-    "agents.managed-memory": "Fetch the caller's canonical managed-memory payload, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
+    "agents.managed-memory": "Fetch the caller's canonical managed-memory payload used by the managed-context plugin, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",

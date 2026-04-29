@@ -55,11 +55,9 @@ def write_fake_almanac_control(path: Path) -> None:
         "\n"
         "def write_managed_memory_stubs(*, hermes_home, payload):\n"
         "    state_dir = Path(hermes_home) / 'state'\n"
-        "    memories_dir = Path(hermes_home) / 'memories'\n"
         "    state_dir.mkdir(parents=True, exist_ok=True)\n"
-        "    memories_dir.mkdir(parents=True, exist_ok=True)\n"
         "    (state_dir / 'almanac-vault-reconciler.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
-        "    (memories_dir / 'almanac-managed-stubs.md').write_text('# Almanac managed memory stubs\\n\\n[managed:qmd-ref]\\n' + str(payload.get('qmd-ref') or '') + '\\n', encoding='utf-8')\n",
+        ,
         encoding="utf-8",
     )
 
@@ -228,7 +226,7 @@ def test_first_contact_runs_real_qmd_probe() -> None:
             expect(summary["notion_probe"]["ok"] is True, summary)
             expect(summary["notion_probe"]["collection"] == "notion-shared", summary)
             expect(summary["managed_memory"]["state_written"] is True, summary)
-            expect(summary["managed_memory"]["stub_written"] is True, summary)
+            expect(summary["managed_memory"]["legacy_stub_present"] is False, summary)
 
             methods = [str(call.get("method")) for call in calls]
             expect(methods == ["initialize", "notifications/initialized", "tools/list", "tools/call"], methods)

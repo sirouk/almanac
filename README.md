@@ -276,6 +276,11 @@ The selected ports are persisted in `almanac-priv/state/docker/ports.json`.
 Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
+Docker install/upgrade also applies the private operating profile when present,
+records the release state, runs strict Docker health, and runs the live agent
+MCP tool smoke so the containerized path stays aligned with the baremetal
+operator contract.
+
 Docker agent homes are stored under `almanac-priv/state/docker/users/`, so
 container recreation does not erase enrolled-agent Hermes homes. Agent dashboard
 and code-server ports are published one surface at a time from the access-state
@@ -293,6 +298,8 @@ The Docker path keeps the same operator vocabulary for container-native work:
 ./deploy.sh docker enrollment-reset --unix-user <user>
 ./deploy.sh docker curator-setup
 ./deploy.sh docker rotate-nextcloud-secrets
+./deploy.sh docker reconcile
+./deploy.sh docker live-smoke
 ./deploy.sh docker pins-check
 ```
 

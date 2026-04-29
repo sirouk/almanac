@@ -370,8 +370,8 @@ Usage:
   deploy.sh health
 
 Docker control center:
-  deploy.sh docker install        # idempotent bootstrap + build + up + health
-  deploy.sh docker upgrade        # rebuild/recreate from current checkout + health
+  deploy.sh docker install        # idempotent bootstrap + build + up + reconcile + health + smoke
+  deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
   deploy.sh docker reconfigure    # refresh generated Docker config/ports only
   deploy.sh docker health
   deploy.sh docker ports
@@ -940,18 +940,21 @@ EOF
 docker_usage() {
   cat <<'EOF'
 Usage:
-  deploy.sh docker install        # idempotent bootstrap + build + up + health
-  deploy.sh docker upgrade        # rebuild/recreate from current checkout + health
+  deploy.sh docker install        # idempotent bootstrap + build + up + reconcile + health + smoke
+  deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
   deploy.sh docker reconfigure    # refresh generated Docker config/ports only
   deploy.sh docker bootstrap
   deploy.sh docker config [-q]
   deploy.sh docker build [SERVICE...]
   deploy.sh docker up [SERVICE...]
+  deploy.sh docker reconcile
   deploy.sh docker down
   deploy.sh docker ps
   deploy.sh docker ports
   deploy.sh docker logs [SERVICE]
   deploy.sh docker health
+  deploy.sh docker record-release
+  deploy.sh docker live-smoke
   deploy.sh docker notion-ssot
   deploy.sh docker notion-migrate
   deploy.sh docker notion-transfer
@@ -7236,8 +7239,11 @@ run_docker_install_flow() {
   run_almanac_docker bootstrap
   run_almanac_docker build
   run_almanac_docker up
+  run_almanac_docker reconcile
+  run_almanac_docker record-release
   run_almanac_docker ports
   run_almanac_docker health
+  run_almanac_docker live-smoke
 }
 
 run_docker_reconfigure_flow() {
@@ -7268,7 +7274,7 @@ run_docker_deploy_flow() {
     reconfigure)
       run_docker_reconfigure_flow
       ;;
-    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    bootstrap|write-config|config|build|up|reconcile|down|ps|ports|logs|health|record-release|live-smoke|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       run_almanac_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
       ;;
     *)

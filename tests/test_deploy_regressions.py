@@ -1685,7 +1685,10 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect('local helper="$BOOTSTRAP_DIR/bin/almanac-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
     expect("run_docker_install_flow()" in text, "expected idempotent Docker install flow")
     expect("run_docker_reconfigure_flow()" in text, "expected Docker reconfigure flow")
-    expect("run_almanac_docker health" in text, "expected Docker install flow to end with health")
+    expect("run_almanac_docker reconcile" in text, "expected Docker install flow to apply org-profile/agent reconciliation")
+    expect("run_almanac_docker record-release" in text, "expected Docker install flow to record release state")
+    expect("run_almanac_docker health" in text, "expected Docker install flow to run health")
+    expect("run_almanac_docker live-smoke" in text, "expected Docker install flow to run live agent smoke")
     print("PASS test_deploy_sh_exposes_docker_control_center")
 
 

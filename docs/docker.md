@@ -78,6 +78,10 @@ for enrolled agents: it reconciles refresh, Hermes gateway, dashboard,
 authenticated dashboard proxy, cron tick, and code-server workspace processes
 from the control-plane state.
 
+`install` and `upgrade` also apply the private operating profile when present,
+record `state/almanac-release.json`, run Docker health, and run the same live
+agent MCP tool smoke that the baremetal upgrade path uses.
+
 Agent web surfaces are published individually as they are reconciled. Almanac
 keeps the same access-state ports as baremetal, but Docker mode does not reserve
 the entire possible port range at Compose startup.
@@ -108,8 +112,9 @@ COMPOSE_PROFILES=curator ./deploy.sh docker install
 ```
 
 Health validates the Compose file, required persisted directories, running
-core services, core HTTP/database endpoints, and Docker user-agent MCP token
-validity/refresh status when the stack is up.
+core services, core HTTP/database endpoints, and Docker user-agent managed
+context/SOUL presence plus MCP token validity/refresh status when the stack is
+up.
 
 ## Operator Command Parity
 
@@ -136,9 +141,9 @@ the `agent-supervisor` container instead of systemd timers. `enrollment-align`
 restarts that supervisor and runs an immediate provisioner pass.
 
 The same supervisor also owns per-agent install realignment in Docker mode: it
-syncs skills/plugins/MCP entries, runs the local managed-context refresh, and
-validates or repairs each agent's private Almanac MCP bootstrap token before
-starting gateways or agent web surfaces.
+syncs skills/plugins/MCP entries, refreshes identity/SOUL, runs the local
+managed-context refresh, and validates or repairs each agent's private Almanac
+MCP bootstrap token before starting gateways or agent web surfaces.
 
 Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
 pin bump, so a Docker operator does not accidentally fall back into the

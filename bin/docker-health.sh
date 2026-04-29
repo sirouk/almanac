@@ -143,7 +143,23 @@ with connect_db(cfg) as conn:
     for agent in agents:
         agent_id = str(agent["agent_id"] or "")
         unix_user = str(agent["unix_user"] or "")
-        token_file = Path(str(agent["hermes_home"] or "")) / "secrets" / "almanac-bootstrap-token"
+        hermes_home = Path(str(agent["hermes_home"] or ""))
+        token_file = hermes_home / "secrets" / "almanac-bootstrap-token"
+        managed_context_plugin = hermes_home / "plugins" / "almanac-managed-context" / "plugin.yaml"
+        soul_file = hermes_home / "SOUL.md"
+        vault_reconciler_state = hermes_home / "state" / "almanac-vault-reconciler.json"
+        if not managed_context_plugin.is_file():
+            print(f"FAIL {agent_id}: Docker managed-context plugin is missing at {managed_context_plugin}")
+            failures += 1
+            continue
+        if not soul_file.is_file():
+            print(f"FAIL {agent_id}: Docker agent SOUL.md is missing at {soul_file}")
+            failures += 1
+            continue
+        if not vault_reconciler_state.is_file():
+            print(f"FAIL {agent_id}: Docker managed memory/vault refresh state is missing at {vault_reconciler_state}")
+            failures += 1
+            continue
         try:
             raw_token = token_file.read_text(encoding="utf-8").strip()
         except OSError as exc:
@@ -186,7 +202,7 @@ with connect_db(cfg) as conn:
             print(f"FAIL {agent_id}: Docker user-agent refresh stale since {job['last_run_at']}")
             failures += 1
             continue
-        print(f"OK {agent_id}: unix_user={unix_user} Docker MCP token validates and refresh={job['last_status']} at {job['last_run_at']}")
+        print(f"OK {agent_id}: unix_user={unix_user} Docker managed plugin/SOUL present, MCP token validates, and refresh={job['last_status']} at {job['last_run_at']}")
 
 raise SystemExit(1 if failures else 0)
 PY

@@ -37,11 +37,15 @@ Commands:
   config      Validate and print the Docker Compose configuration
   build       Build Almanac Docker images
   up          Start the Docker stack
+  reconcile   Apply private org profile and refresh Docker agent supervisor state
   down        Stop the Docker stack
   ps          Show Compose service state
   ports       Show assigned Docker host ports
   logs        Follow or print Compose logs
   health      Validate Compose config, state directories, and running services
+  record-release
+              Record the current Docker checkout as the deployed Almanac release
+  live-smoke  Run the live agent MCP tool smoke inside the Docker supervisor
   notion-ssot
               Run the shared Notion SSOT setup against Docker config
   notion-migrate
@@ -430,6 +434,104 @@ health() {
   retry_compose_exec_quiet postgres sh -lc 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
   compose exec -T health-watch ./bin/docker-health.sh
   echo "Docker health passed."
+}
+
+docker_reconcile() {
+  prepare_compose
+  if [[ -f "$REPO_DIR/almanac-priv/config/org-profile.yaml" ]]; then
+    echo "Applying Docker private operating profile..."
+    compose_app_command ./bin/almanac-ctl org-profile apply --yes
+  fi
+  compose up -d --no-build agent-supervisor
+  if compose_service_running agent-supervisor; then
+    compose restart agent-supervisor >/dev/null
+  fi
+  wait_for_docker_agent_reconcile ||
+    echo "Docker agent supervisor is still reconciling; docker health will report details if it remains incomplete."
+  echo "Docker agent supervisor realigned."
+}
+
+wait_for_docker_agent_reconcile() {
+  local attempt=0
+
+  for attempt in $(seq 1 60); do
+    if compose exec -T agent-supervisor python3 - <<'PY' >/dev/null 2>&1
+from pathlib import Path
+
+from almanac_control import Config, connect_db
+
+cfg = Config.from_env()
+with connect_db(cfg) as conn:
+    conn.row_factory = __import__("sqlite3").Row
+    rows = conn.execute(
+        """
+        SELECT agent_id, unix_user, hermes_home
+        FROM agents
+        WHERE role = 'user' AND status = 'active'
+        ORDER BY unix_user
+        """
+    ).fetchall()
+    for row in rows:
+        agent_id = str(row["agent_id"] or "")
+        hermes_home = Path(str(row["hermes_home"] or ""))
+        required = (
+            hermes_home / "plugins" / "almanac-managed-context" / "plugin.yaml",
+            hermes_home / "SOUL.md",
+            hermes_home / "state" / "almanac-vault-reconciler.json",
+            hermes_home / "secrets" / "almanac-bootstrap-token",
+        )
+        if not all(path.is_file() for path in required):
+            raise SystemExit(1)
+        job = conn.execute(
+            "SELECT last_status FROM refresh_jobs WHERE job_name = ?",
+            (f"{agent_id}-refresh",),
+        ).fetchone()
+        if job is None or str(job["last_status"] or "") != "ok":
+            raise SystemExit(1)
+PY
+    then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+docker_record_release_state() {
+  local commit="" branch="" origin_url="" upstream_url="" upstream_branch=""
+  local target="$REPO_DIR/almanac-priv/state/almanac-release.json"
+
+  bootstrap >/dev/null
+  commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+  branch="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  origin_url="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
+  upstream_url="$(configured_or_default ALMANAC_UPSTREAM_REPO_URL "$origin_url")"
+  upstream_branch="$(configured_or_default ALMANAC_UPSTREAM_BRANCH "${branch:-main}")"
+  mkdir -p "$(dirname "$target")"
+  python3 - "$target" "$commit" "$origin_url" "$branch" "$REPO_DIR" "$upstream_url" "$upstream_branch" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+target = Path(sys.argv[1])
+payload = {
+    "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "deployed_from": "docker-checkout",
+    "deployed_commit": sys.argv[2],
+    "deployed_source_repo": sys.argv[3],
+    "deployed_source_branch": sys.argv[4],
+    "deployed_source_path": sys.argv[5],
+    "tracked_upstream_repo_url": sys.argv[6],
+    "tracked_upstream_branch": sys.argv[7],
+}
+target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  echo "Docker release state recorded: $target"
+}
+
+docker_live_agent_smoke() {
+  compose_supervisor_command ./bin/live-agent-tool-smoke.sh "$@"
 }
 
 show_ports() {
@@ -1068,6 +1170,9 @@ main() {
       prepare_compose
       compose up -d --no-build "$@"
       ;;
+    reconcile)
+      docker_reconcile "$@"
+      ;;
     down)
       require_docker_compose
       compose down "$@"
@@ -1085,6 +1190,12 @@ main() {
       ;;
     health)
       health "$@"
+      ;;
+    record-release)
+      docker_record_release_state "$@"
+      ;;
+    live-smoke)
+      docker_live_agent_smoke "$@"
       ;;
     notion-ssot)
       docker_deploy_in_app notion-ssot "$@"

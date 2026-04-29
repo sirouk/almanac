@@ -70,10 +70,18 @@ def active_agents(cfg: Config) -> list[dict[str, Any]]:
     with connect_db(cfg) as conn:
         rows = conn.execute(
             """
-            SELECT agent_id, unix_user, display_name, hermes_home, channels_json
-            FROM agents
-            WHERE role = 'user' AND status = 'active'
-            ORDER BY agent_id
+            SELECT
+              a.agent_id,
+              a.unix_user,
+              a.display_name,
+              a.hermes_home,
+              a.channels_json,
+              COALESCE(NULLIF(ai.agent_name, ''), a.display_name, a.unix_user) AS agent_label,
+              COALESCE(NULLIF(ai.human_display_name, ''), a.unix_user) AS user_label
+            FROM agents a
+            LEFT JOIN agent_identity ai ON ai.agent_id = a.agent_id
+            WHERE a.role = 'user' AND a.status = 'active'
+            ORDER BY a.agent_id
             """
         ).fetchall()
     return [dict(row) for row in rows]
@@ -147,6 +155,36 @@ def install_agent_assets(cfg: Config, agent: dict[str, Any], home: Path, hermes_
         result = subprocess.run(cmd, cwd=str(cfg.repo_dir), text=True, stdout=log, stderr=subprocess.STDOUT, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"agent install failed for {agent['agent_id']} with exit {result.returncode}")
+    run_headless_identity_setup(cfg, agent, home, hermes_home)
+
+
+def run_headless_identity_setup(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: Path) -> None:
+    unix_user = str(agent["unix_user"])
+    env = user_env(cfg, agent, home, hermes_home)
+    python_bin = cfg.runtime_dir / "hermes-venv" / "bin" / "python3"
+    if not python_bin.exists():
+        python_bin = Path("python3")
+    bot_name = str(agent.get("agent_label") or agent.get("display_name") or unix_user)
+    user_name = str(agent.get("user_label") or unix_user)
+    cmd = runuser_cmd(
+        unix_user,
+        env,
+        [
+            str(python_bin),
+            str(cfg.repo_dir / "python" / "almanac_headless_hermes_setup.py"),
+            "--identity-only",
+            "--bot-name",
+            bot_name,
+            "--unix-user",
+            unix_user,
+            "--user-name",
+            user_name,
+        ],
+    )
+    with log_handle(cfg, f"{agent['agent_id']}-install") as log:
+        result = subprocess.run(cmd, cwd=str(cfg.repo_dir), text=True, stdout=log, stderr=subprocess.STDOUT, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"agent identity refresh failed for {agent['agent_id']} with exit {result.returncode}")
 
 
 def ensure_agent_mcp_auth(cfg: Config, agent: dict[str, Any], hermes_home: Path) -> None:

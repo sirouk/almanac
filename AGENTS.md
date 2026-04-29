@@ -103,10 +103,12 @@ control center:
 
 ```bash
 ./deploy.sh docker                  # Docker submenu
-./deploy.sh docker install          # bootstrap, build, up, ports, health
-./deploy.sh docker upgrade          # rebuild/recreate from current checkout + health
+./deploy.sh docker install          # bootstrap, build, up, reconcile, release state, health, smoke
+./deploy.sh docker upgrade          # rebuild/recreate from current checkout + reconcile, health, smoke
 ./deploy.sh docker reconfigure      # refresh generated config and ports
+./deploy.sh docker reconcile        # apply profile and restart Docker agent supervisor
 ./deploy.sh docker health
+./deploy.sh docker live-smoke
 ./deploy.sh docker ports
 ./deploy.sh docker ps
 ./deploy.sh docker logs [SERVICE]
@@ -124,7 +126,9 @@ control center:
 Docker mode is expected to preserve the baremetal operator contract. Shared
 services are Compose services, and enrolled user agents are reconciled by
 `agent-supervisor` through `bin/docker-agent-supervisor.sh` instead of per-user
-systemd units. Persistent Docker agent homes live under
+systemd units. The Docker install/upgrade path applies the private operating
+profile when present, records the release state, runs strict Docker health, and
+runs the live agent tool smoke. Persistent Docker agent homes live under
 `almanac-priv/state/docker/users/`.
 
 `deploy.sh` is a thin wrapper around `bin/deploy.sh`.

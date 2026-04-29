@@ -82,6 +82,7 @@ From the repo root:
 ./deploy.sh health                  # full host health check
 ./deploy.sh curator-setup           # repair Curator only
 ./deploy.sh notion-ssot             # configure shared Notion SSOT
+./deploy.sh notion-migrate          # guided migration to a new Notion workspace
 ./deploy.sh enrollment-status
 ./deploy.sh enrollment-trace --unix-user <user>
 ./deploy.sh enrollment-align
@@ -108,6 +109,8 @@ control center:
 ./deploy.sh docker ports
 ./deploy.sh docker ps
 ./deploy.sh docker logs [SERVICE]
+./deploy.sh docker notion-ssot
+./deploy.sh docker notion-migrate
 ./deploy.sh docker down
 ./deploy.sh docker teardown
 ./deploy.sh docker remove           # alias for Docker teardown

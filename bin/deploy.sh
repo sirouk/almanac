@@ -356,6 +356,7 @@ Usage:
   deploy.sh install
   deploy.sh upgrade
   deploy.sh notion-ssot
+  deploy.sh notion-migrate
   deploy.sh enrollment-status
   deploy.sh enrollment-trace [--unix-user USER | --session-id onb_xxx | --request-id req_xxx]
   deploy.sh enrollment-align
@@ -376,6 +377,7 @@ Docker control center:
   deploy.sh docker logs [SERVICE]
   deploy.sh docker ps
   deploy.sh docker notion-ssot
+  deploy.sh docker notion-migrate
   deploy.sh docker enrollment-status
   deploy.sh docker enrollment-trace --unix-user <user>
   deploy.sh docker enrollment-align
@@ -444,13 +446,13 @@ while [[ $# -gt 0 ]]; do
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
+    docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
       MODE="$1"
       shift
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    install|upgrade|notion-ssot|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    install|upgrade|notion-ssot|notion-migrate|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       MODE="$1"
       shift
       ;;
@@ -893,17 +895,18 @@ Almanac deploy menu
   2) Upgrade deployed host from configured upstream
   3) Write config only
   4) Notion SSOT setup / test
-  5) Enrollment status
-  6) Enrollment trace
-  7) Enrollment align / repair
-  8) Enrollment reset / cleanup
-  9) Curator setup / repair
- 10) Rotate Nextcloud secrets
- 11) Print agent payload
- 12) Health check
- 13) Remove / teardown
- 14) Docker control center
- 15) Exit
+  5) Notion workspace migration
+  6) Enrollment status
+  7) Enrollment trace
+  8) Enrollment align / repair
+  9) Enrollment reset / cleanup
+ 10) Curator setup / repair
+ 11) Rotate Nextcloud secrets
+ 12) Print agent payload
+ 13) Health check
+ 14) Remove / teardown
+ 15) Docker control center
+ 16) Exit
 EOF
 
   while true; do
@@ -913,18 +916,19 @@ EOF
       2) MODE="upgrade"; return 0 ;;
       3) MODE="write-config"; return 0 ;;
       4) MODE="notion-ssot"; return 0 ;;
-      5) MODE="enrollment-status"; return 0 ;;
-      6) MODE="enrollment-trace"; return 0 ;;
-      7) MODE="enrollment-align"; return 0 ;;
-      8) MODE="enrollment-reset"; return 0 ;;
-      9) MODE="curator-setup"; return 0 ;;
-      10) MODE="rotate-nextcloud-secrets"; return 0 ;;
-      11) MODE="agent-payload"; return 0 ;;
-      12) MODE="health"; return 0 ;;
-      13) MODE="remove"; return 0 ;;
-      14) MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"; return 0 ;;
-      15) exit 0 ;;
-      *) echo "Please choose 1 through 15." ;;
+      5) MODE="notion-migrate"; return 0 ;;
+      6) MODE="enrollment-status"; return 0 ;;
+      7) MODE="enrollment-trace"; return 0 ;;
+      8) MODE="enrollment-align"; return 0 ;;
+      9) MODE="enrollment-reset"; return 0 ;;
+      10) MODE="curator-setup"; return 0 ;;
+      11) MODE="rotate-nextcloud-secrets"; return 0 ;;
+      12) MODE="agent-payload"; return 0 ;;
+      13) MODE="health"; return 0 ;;
+      14) MODE="remove"; return 0 ;;
+      15) MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"; return 0 ;;
+      16) exit 0 ;;
+      *) echo "Please choose 1 through 16." ;;
     esac
   done
 }
@@ -945,6 +949,7 @@ Usage:
   deploy.sh docker logs [SERVICE]
   deploy.sh docker health
   deploy.sh docker notion-ssot
+  deploy.sh docker notion-migrate
   deploy.sh docker enrollment-status
   deploy.sh docker enrollment-trace --unix-user <user>
   deploy.sh docker enrollment-align
@@ -981,14 +986,15 @@ Almanac Docker control center
   4) Docker health check
   5) Show Docker ports
   6) Show Docker service state
-  7) Enrollment status
-  8) Enrollment align / repair
-  9) Curator setup
- 10) Rotate Nextcloud secrets
- 11) Show Docker logs
- 12) Stop Docker stack
- 13) Teardown Docker stack and named volumes
- 14) Exit
+  7) Notion workspace migration
+  8) Enrollment status
+  9) Enrollment align / repair
+ 10) Curator setup
+ 11) Rotate Nextcloud secrets
+ 12) Show Docker logs
+ 13) Stop Docker stack
+ 14) Teardown Docker stack and named volumes
+ 15) Exit
 EOF
 
   while true; do
@@ -1000,15 +1006,16 @@ EOF
       4) DOCKER_DEPLOY_COMMAND="health"; return 0 ;;
       5) DOCKER_DEPLOY_COMMAND="ports"; return 0 ;;
       6) DOCKER_DEPLOY_COMMAND="ps"; return 0 ;;
-      7) DOCKER_DEPLOY_COMMAND="enrollment-status"; return 0 ;;
-      8) DOCKER_DEPLOY_COMMAND="enrollment-align"; return 0 ;;
-      9) DOCKER_DEPLOY_COMMAND="curator-setup"; return 0 ;;
-      10) DOCKER_DEPLOY_COMMAND="rotate-nextcloud-secrets"; return 0 ;;
-      11) DOCKER_DEPLOY_COMMAND="logs"; return 0 ;;
-      12) DOCKER_DEPLOY_COMMAND="down"; return 0 ;;
-      13) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
-      14) exit 0 ;;
-      *) echo "Please choose 1 through 14." ;;
+      7) DOCKER_DEPLOY_COMMAND="notion-migrate"; return 0 ;;
+      8) DOCKER_DEPLOY_COMMAND="enrollment-status"; return 0 ;;
+      9) DOCKER_DEPLOY_COMMAND="enrollment-align"; return 0 ;;
+      10) DOCKER_DEPLOY_COMMAND="curator-setup"; return 0 ;;
+      11) DOCKER_DEPLOY_COMMAND="rotate-nextcloud-secrets"; return 0 ;;
+      12) DOCKER_DEPLOY_COMMAND="logs"; return 0 ;;
+      13) DOCKER_DEPLOY_COMMAND="down"; return 0 ;;
+      14) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
+      15) exit 0 ;;
+      *) echo "Please choose 1 through 15." ;;
     esac
   done
 }
@@ -5992,6 +5999,15 @@ run_notion_ssot_setup() {
   fi
   ensure_deployed_config_exists
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  if [[ "${ALMANAC_NOTION_MIGRATION_FRESH_DEFAULTS:-0}" == "1" ]]; then
+    ALMANAC_SSOT_NOTION_ROOT_PAGE_URL=""
+    ALMANAC_SSOT_NOTION_ROOT_PAGE_ID=""
+    ALMANAC_SSOT_NOTION_SPACE_URL=""
+    ALMANAC_SSOT_NOTION_SPACE_ID=""
+    ALMANAC_SSOT_NOTION_SPACE_KIND=""
+    ALMANAC_SSOT_NOTION_TOKEN=""
+    ALMANAC_NOTION_INDEX_ROOTS=""
+  fi
 
   if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
     echo "Switching to sudo for Notion SSOT setup..."
@@ -6185,7 +6201,11 @@ PY
     exit 1
   fi
 
-  notion_index_roots="$(normalize_optional_answer "$(ask "Shared Notion index roots (comma-separated page/database URLs or IDs; ENTER keeps current/default root)" "${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}")")"
+  local notion_index_roots_default="${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}"
+  if [[ "${ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT:-0}" == "1" ]]; then
+    notion_index_roots_default="$root_page_url"
+  fi
+  notion_index_roots="$(normalize_optional_answer "$(ask "Shared Notion index roots (comma-separated page/database URLs or IDs; ENTER keeps current/default root)" "$notion_index_roots_default")")"
   notion_index_roots="${notion_index_roots:-$root_page_url}"
 
   ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"
@@ -6245,6 +6265,16 @@ PY
   echo "  $CONFIG_TARGET"
 
   if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    if [[ "${ALMANAC_NOTION_MIGRATION_FORCE_WEBHOOK_RESET:-0}" == "1" ]]; then
+      echo
+      echo "Migration mode: clearing the previous Notion webhook verification token before the new subscription handshake."
+      if ! env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+        "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion webhook-reset-token \
+          --actor "${SUDO_USER:-$(id -un)}" --minutes 0 --force >/dev/null; then
+        echo "Could not clear the previous Notion webhook token; leaving migration paused before webhook verification." >&2
+        exit 1
+      fi
+    fi
     if ! run_notion_webhook_setup_flow "$BOOTSTRAP_DIR/bin/almanac-ctl" "${SUDO_USER:-$(id -un)}"; then
       rm -f "$handshake_file"
       echo "Shared Notion configuration was saved, but webhook verification is still incomplete." >&2
@@ -6253,6 +6283,441 @@ PY
   fi
 
   rm -f "$handshake_file"
+}
+
+notion_migration_pause() {
+  local prompt="${1:-Press ENTER to continue.}"
+  if [[ -t 0 ]]; then
+    read -r -p "$prompt " _
+  fi
+}
+
+print_notion_migration_runbook() {
+  cat <<'EOF'
+Notion workspace migration guide
+
+This flow moves Almanac's shared Notion SSOT lane from one Notion workspace to
+another. It does not copy Notion pages for you; create or import the new Notion
+content first, then point Almanac at the new shared root page.
+
+The guided migration will:
+  1. Show the current Notion config without revealing the integration secret.
+  2. Create private backups under almanac-priv/state/migrations/.
+  3. Drain pending Notion webhook events before the cutover when possible.
+  4. Pause write/batcher surfaces while leaving the webhook receiver reachable.
+  5. Re-run the Notion SSOT setup against the new workspace, including the
+     internal integration checklist and webhook verification walkthrough.
+  6. Archive old workspace-specific rows, then clear cached verification
+     database IDs, identity claims, identity overrides, queued writes, webhook
+     events, and generated notion-shared index rows/files.
+  7. Run a full notion-shared index sync for the new workspace.
+  8. Restart shared services and remind users to verify Notion again.
+
+What you need before starting:
+  - A normal Notion page in the new workspace for Almanac to use as its root.
+  - A new Notion internal integration secret from the new workspace.
+  - Page access granted from that new integration to the Almanac root subtree.
+  - Access to the Notion Developer Portal Webhooks tab if webhooks are enabled.
+
+Expected user impact:
+  - Pending writes that target old Notion page/database IDs are archived and
+    removed instead of replayed.
+  - Users lose verified Notion write access until they re-run verification.
+  - Historical SSOT audit rows remain as audit history, but operational caches
+    are rebuilt against the new workspace.
+EOF
+}
+
+choose_notion_migration_action() {
+  local answer=""
+
+  cat >&2 <<'EOF'
+Notion workspace migration
+
+  1) Read the migration guide
+  2) Start guided migration
+  3) Exit
+EOF
+
+  while true; do
+    read -r -p "Choose Notion migration action [1]: " answer
+    case "${answer:-1}" in
+      1) printf '%s\n' "read"; return 0 ;;
+      2) printf '%s\n' "start"; return 0 ;;
+      3) printf '%s\n' "exit"; return 0 ;;
+      *) echo "Please choose 1 through 3." >&2 ;;
+    esac
+  done
+}
+
+notion_migration_backup_state() {
+  local timestamp="" db_backup="" config_backup="" index_backup=""
+
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  NOTION_MIGRATION_DIR="$STATE_DIR/migrations/notion-workspace-$timestamp"
+  mkdir -p "$NOTION_MIGRATION_DIR"
+
+  echo "Creating private migration backups:"
+  echo "  $NOTION_MIGRATION_DIR"
+
+  if [[ -f "$CONFIG_TARGET" ]]; then
+    config_backup="$NOTION_MIGRATION_DIR/almanac.env.before"
+    cp -p "$CONFIG_TARGET" "$config_backup"
+    echo "  config: $config_backup"
+  fi
+
+  if [[ -f "$ALMANAC_DB_PATH" ]]; then
+    db_backup="$NOTION_MIGRATION_DIR/almanac-control.sqlite3.before"
+    python3 - "$ALMANAC_DB_PATH" "$db_backup" <<'PY'
+import sqlite3
+import sys
+
+source, target = sys.argv[1], sys.argv[2]
+src = sqlite3.connect(source)
+dst = sqlite3.connect(target)
+try:
+    src.backup(dst)
+finally:
+    dst.close()
+    src.close()
+PY
+    echo "  sqlite: $db_backup"
+  else
+    echo "  sqlite: skipped; DB not found at $ALMANAC_DB_PATH"
+  fi
+
+  if [[ -d "$STATE_DIR/notion-index" ]]; then
+    index_backup="$NOTION_MIGRATION_DIR/notion-index.before.tar.gz"
+    tar -C "$STATE_DIR" -czf "$index_backup" notion-index
+    echo "  notion index cache: $index_backup"
+  fi
+}
+
+notion_migration_pause_write_surfaces() {
+  local uid=""
+
+  echo
+  echo "Pausing shared Notion write/batcher surfaces."
+  echo "The Notion webhook receiver stays online so the new subscription can complete its verification handshake."
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    systemctl stop almanac-notion-claim-poll.timer almanac-notion-claim-poll.service >/dev/null 2>&1 || true
+    uid="$(id -u "$ALMANAC_USER" 2>/dev/null || true)"
+    if [[ -n "$uid" ]]; then
+      systemctl start "user@$uid.service" >/dev/null 2>&1 || true
+      if [[ -S "/run/user/$uid/bus" ]]; then
+        run_as_user_systemd "$ALMANAC_USER" "$uid" \
+          "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop almanac-mcp.service almanac-ssot-batcher.timer almanac-ssot-batcher.service >/dev/null 2>&1 || true" || true
+      fi
+    fi
+    return 0
+  fi
+
+  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+    if set_user_systemd_bus_env; then
+      systemctl --user stop almanac-mcp.service almanac-ssot-batcher.timer almanac-ssot-batcher.service >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+notion_migration_restart_services() {
+  local uid=""
+
+  echo
+  echo "Restarting shared Almanac services."
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    restart_shared_user_services_root || true
+    systemctl restart almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
+    systemctl start almanac-notion-claim-poll.service >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+    if set_user_systemd_bus_env; then
+      systemctl --user daemon-reload
+      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer || true
+      systemctl --user start almanac-curator-refresh.service >/dev/null 2>&1 || true
+      systemctl --user start almanac-health-watch.service >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  uid="$(id -u "$ALMANAC_USER" 2>/dev/null || true)"
+  if [[ -n "$uid" && -S "/run/user/$uid/bus" ]]; then
+    run_as_user_systemd "$ALMANAC_USER" "$uid" \
+      "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer >/dev/null 2>&1 || true" || true
+  fi
+}
+
+notion_migration_restore_paused_services() {
+  if [[ "${NOTION_MIGRATION_SERVICES_PAUSED:-0}" == "1" ]]; then
+    NOTION_MIGRATION_SERVICES_PAUSED=0
+    notion_migration_restart_services || true
+  fi
+}
+
+notion_migration_clear_workspace_state() {
+  if [[ ! -f "$ALMANAC_DB_PATH" ]]; then
+    echo "Skipping DB state cleanup; DB not found at $ALMANAC_DB_PATH"
+    return 0
+  fi
+
+  python3 - "$ALMANAC_DB_PATH" "$STATE_DIR" "$NOTION_MIGRATION_DIR" <<'PY'
+import datetime as dt
+import json
+import shutil
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+state_dir = Path(sys.argv[2])
+migration_dir = Path(sys.argv[3])
+archive_path = migration_dir / "notion-workspace-state-archive.json"
+now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+
+
+def table_exists(name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (name,),
+    ).fetchone() is not None
+
+
+def rows(name: str, where: str = "", params: tuple = ()) -> list[dict]:
+    if not table_exists(name):
+        return []
+    sql = f"SELECT * FROM {name}"
+    if where:
+        sql += f" WHERE {where}"
+    return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+archive = {
+    "archived_at": now,
+    "reason": "notion workspace migration",
+    "tables": {
+        "settings": rows("settings", "key LIKE 'notion_verification_database%'"),
+        "agent_identity": rows("agent_identity"),
+        "notion_identity_claims": rows("notion_identity_claims"),
+        "notion_identity_overrides": rows("notion_identity_overrides"),
+        "notion_webhook_events": rows("notion_webhook_events"),
+        "ssot_pending_writes": rows("ssot_pending_writes"),
+        "notion_index_documents": rows("notion_index_documents"),
+    },
+}
+migration_dir.mkdir(parents=True, exist_ok=True)
+archive_path.write_text(json.dumps(archive, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+counts: dict[str, int] = {}
+with conn:
+    if table_exists("settings"):
+        counts["settings_verification_database"] = conn.execute(
+            "DELETE FROM settings WHERE key LIKE 'notion_verification_database%'"
+        ).rowcount
+    if table_exists("agent_identity"):
+        counts["agent_identity_reset"] = conn.execute(
+            """
+            UPDATE agent_identity
+            SET claimed_notion_email = '',
+                notion_user_id = '',
+                notion_user_email = '',
+                verification_status = 'unverified',
+                write_mode = 'read_only',
+                verified_at = NULL,
+                verification_source = 'notion-workspace-migration',
+                updated_at = ?
+            """,
+            (now,),
+        ).rowcount
+    for table in (
+        "notion_identity_claims",
+        "notion_identity_overrides",
+        "notion_webhook_events",
+        "ssot_pending_writes",
+        "notion_index_documents",
+    ):
+        if table_exists(table):
+            counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
+
+markdown_dir = state_dir / "notion-index" / "markdown"
+removed_markdown = markdown_dir.exists()
+if removed_markdown:
+    shutil.rmtree(markdown_dir)
+markdown_dir.mkdir(parents=True, exist_ok=True)
+
+print(f"archive={archive_path}")
+for key in sorted(counts):
+    print(f"{key}={counts[key]}")
+print(f"notion_index_markdown_reset={1 if removed_markdown else 0}")
+PY
+}
+
+run_notion_migrate_flow() {
+  local reexec_status="" action="" answer="" actor="" index_rc=0 setup_rc=0
+  local old_notion_space_url="" old_notion_space_id="" old_notion_root_page_id=""
+
+  prepare_deployed_context
+  if maybe_reexec_with_sudo_for_config notion-migrate; then
+    return 0
+  else
+    reexec_status="$?"
+    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+      return "$reexec_status"
+    fi
+  fi
+  ensure_deployed_config_exists
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
+    echo "Switching to sudo for Notion workspace migration..."
+    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" notion-migrate
+    write_operator_checkout_artifact
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    print_notion_migration_runbook
+    echo
+    echo "Notion workspace migration is intentionally interactive; rerun with a terminal." >&2
+    return 1
+  fi
+
+  echo "Almanac deploy: Notion workspace migration"
+  echo
+  echo "Current deployment:"
+  echo "  config:          $CONFIG_TARGET"
+  echo "  db:              $ALMANAC_DB_PATH"
+  echo "  current root:    ${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-not configured}"
+  echo "  current target:  ${ALMANAC_SSOT_NOTION_SPACE_URL:-not configured}"
+  echo "  current index:   ${ALMANAC_NOTION_INDEX_ROOTS:-${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-not configured}}"
+  echo "  webhook URL:     ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-not configured}"
+  if [[ -n "${ALMANAC_SSOT_NOTION_TOKEN:-}" ]]; then
+    echo "  Notion token:    configured ($(mask_secret "$ALMANAC_SSOT_NOTION_TOKEN"))"
+  else
+    echo "  Notion token:    not configured"
+  fi
+  echo
+
+  old_notion_space_url="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
+  old_notion_space_id="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+  old_notion_root_page_id="${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
+
+  action="$(choose_notion_migration_action)"
+  case "$action" in
+    read)
+      echo
+      print_notion_migration_runbook
+      return 0
+      ;;
+    exit)
+      return 0
+      ;;
+  esac
+
+  print_notion_migration_runbook
+  echo
+  echo "This will change live Notion configuration and clear old workspace-specific operational state."
+  while true; do
+    read -r -p "Type MIGRATE NOTION to continue: " answer
+    if [[ "$answer" == "MIGRATE NOTION" ]]; then
+      break
+    fi
+    echo "Please type MIGRATE NOTION exactly, or press Ctrl-C to abort."
+  done
+
+  notion_migration_backup_state
+  notion_migration_pause "Press ENTER after you have confirmed the backup paths above."
+
+  if [[ "$(ask_yes_no "Drain pending Notion webhook events before the cutover" "1")" == "1" ]]; then
+    echo "Draining pending Notion webhook events..."
+    if ! env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion process-pending; then
+      echo "Pending Notion event processing failed." >&2
+      if [[ "$(ask_yes_no "Continue migration anyway" "0")" != "1" ]]; then
+        return 1
+      fi
+    fi
+  fi
+
+  NOTION_MIGRATION_SERVICES_PAUSED=0
+  trap notion_migration_restore_paused_services EXIT
+  trap 'notion_migration_restore_paused_services; exit 130' INT TERM
+
+  notion_migration_pause_write_surfaces
+  NOTION_MIGRATION_SERVICES_PAUSED=1
+  actor="${SUDO_USER:-$(id -un)}"
+
+  echo
+  echo "Starting the new workspace SSOT setup."
+  echo "Old Notion URL and token values will not be offered as defaults; paste the new workspace page URL and new integration secret."
+  if (
+    ALMANAC_NOTION_MIGRATION_FRESH_DEFAULTS=1
+    ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT=1
+    ALMANAC_NOTION_MIGRATION_FORCE_WEBHOOK_RESET=1
+    run_notion_ssot_setup
+  ); then
+    setup_rc=0
+  else
+    setup_rc=$?
+    reload_runtime_config_from_file "$CONFIG_TARGET" || true
+    if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]] &&
+      [[ "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" != "$old_notion_space_url" ||
+         "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" != "$old_notion_space_id" ||
+         "${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}" != "$old_notion_root_page_id" ]]; then
+      echo "New Notion configuration was saved before setup stopped." >&2
+      echo "Continuing workspace-state cleanup so old Notion identities and queued writes cannot be used against the new workspace." >&2
+      index_rc=1
+    else
+      echo "New Notion SSOT setup failed before a new workspace config was saved; restarting services and leaving the migration backup intact." >&2
+      notion_migration_restore_paused_services
+      trap - EXIT
+      trap - INT TERM
+      return "$setup_rc"
+    fi
+  fi
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+
+  if [[ -z "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    echo
+    echo "No Notion webhook public URL is configured; clearing any stored webhook verification token from the old workspace."
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion webhook-reset-token \
+      --actor "$actor" --minutes 0 --force >/dev/null || true
+  fi
+
+  echo
+  echo "Clearing old workspace-specific Almanac state."
+  notion_migration_clear_workspace_state
+
+  if [[ "$(ask_yes_no "Run a full notion-shared index sync for the new workspace now" "1")" == "1" ]]; then
+    echo "Running full Notion index sync. This can take a while on large workspaces..."
+    if ! env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion index-sync --full --actor "$actor" >"$NOTION_MIGRATION_DIR/notion-index-sync.json"; then
+      index_rc=1
+      echo "Notion index sync failed; details may be in $NOTION_MIGRATION_DIR/notion-index-sync.json" >&2
+    else
+      echo "Notion index sync result: $NOTION_MIGRATION_DIR/notion-index-sync.json"
+    fi
+  else
+    echo "Skipped full Notion index sync. Run this later:"
+    echo "  ./bin/almanac-ctl notion index-sync --full"
+  fi
+
+  notion_migration_restart_services
+  NOTION_MIGRATION_SERVICES_PAUSED=0
+  trap - EXIT
+  trap - INT TERM
+
+  echo
+  echo "Notion workspace migration guide complete."
+  echo "Backups and archived old workspace state:"
+  echo "  $NOTION_MIGRATION_DIR"
+  echo "Users must re-run Notion identity verification before shared Notion writes are enabled again."
+  echo "Run a final health check when ready:"
+  echo "  ./deploy.sh health"
+
+  return "$index_rc"
 }
 
 run_curator_setup_flow() {
@@ -6420,6 +6885,7 @@ docker_command_from_mode() {
     docker-write-config) printf '%s\n' "write-config" ;;
     docker-remove) printf '%s\n' "remove" ;;
     docker-notion-ssot) printf '%s\n' "notion-ssot" ;;
+    docker-notion-migrate) printf '%s\n' "notion-migrate" ;;
     docker-enrollment-status) printf '%s\n' "enrollment-status" ;;
     docker-enrollment-trace) printf '%s\n' "enrollment-trace" ;;
     docker-enrollment-align) printf '%s\n' "enrollment-align" ;;
@@ -6498,7 +6964,7 @@ run_docker_deploy_flow() {
     reconfigure)
       run_docker_reconfigure_flow
       ;;
-    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|teardown|remove|notion-ssot|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|teardown|remove|notion-ssot|notion-migrate|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       run_almanac_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
       ;;
     *)
@@ -6602,7 +7068,7 @@ if [[ -z "$MODE" || "$MODE" == "menu" ]]; then
 fi
 
 case "$MODE" in
-  docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
+  docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
     run_docker_deploy_flow
     ;;
   install|write-config)
@@ -6613,6 +7079,9 @@ case "$MODE" in
     ;;
   notion-ssot)
     run_notion_ssot_setup
+    ;;
+  notion-migrate)
+    run_notion_migrate_flow
     ;;
   enrollment-status)
     run_enrollment_status

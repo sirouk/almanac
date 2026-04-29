@@ -97,6 +97,7 @@ def test_docker_operator_commands_are_present() -> None:
         "logs)",
         "health)",
         "notion-ssot)",
+        "notion-migrate)",
         "enrollment-status)",
         "enrollment-trace)",
         "enrollment-align)",
@@ -134,6 +135,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("COMPOSE_PROFILES=curator,quarto,backup" in body, body)
     expect("FAIL Docker Compose config is valid, but no Almanac services are running." in body, body)
     expect("docker_enrollment_status()" in body, body)
+    expect("docker_notion_migrate()" in body and "compose stop almanac-mcp ssot-batcher agent-supervisor" in body, body)
     expect("Docker supervisor loop (not systemd)" in body, body)
     expect("docker_enrollment_align()" in body and "./bin/almanac-enrollment-provision.sh" in body, body)
     expect("docker_enrollment_reset()" in body and "--remove-nextcloud-user" in body, body)

@@ -44,6 +44,8 @@ Commands:
   health      Validate Compose config, state directories, and running services
   notion-ssot
               Run the shared Notion SSOT setup against Docker config
+  notion-migrate
+              Guide migration from one Notion workspace to another
   enrollment-status
               Show Docker enrollment/provisioning state
   enrollment-trace
@@ -486,6 +488,20 @@ nextcloud_config_value() {
 
 docker_deploy_in_app() {
   compose_app_interactive ./deploy.sh "$@"
+}
+
+docker_notion_migrate() {
+  local rc=0
+
+  prepare_compose
+  echo "Pausing Docker Notion write/batcher services; keeping notion-webhook online for verification."
+  compose stop almanac-mcp ssot-batcher agent-supervisor >/dev/null 2>&1 || true
+  compose_run_maybe_tty almanac-mcp ./deploy.sh notion-migrate "$@" || rc=$?
+  echo "Restarting Docker Notion services."
+  if ! compose up -d --no-build almanac-mcp ssot-batcher agent-supervisor notion-webhook; then
+    return 1
+  fi
+  return "$rc"
 }
 
 docker_enrollment_status() {
@@ -1070,6 +1086,9 @@ main() {
       ;;
     notion-ssot)
       docker_deploy_in_app notion-ssot "$@"
+      ;;
+    notion-migrate)
+      docker_notion_migrate "$@"
       ;;
     enrollment-status)
       docker_enrollment_status "$@"

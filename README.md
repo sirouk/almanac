@@ -206,6 +206,7 @@ Common direct modes:
 ./deploy.sh health                  # full host health check
 ./deploy.sh curator-setup           # repair Curator only
 ./deploy.sh notion-ssot             # configure shared Notion
+./deploy.sh notion-migrate          # guided migration to a new Notion workspace
 ./deploy.sh enrollment-status
 ./deploy.sh enrollment-align
 ./deploy.sh enrollment-reset
@@ -283,6 +284,7 @@ The Docker path keeps the same operator vocabulary for container-native work:
 
 ```bash
 ./deploy.sh docker notion-ssot
+./deploy.sh docker notion-migrate
 ./deploy.sh docker enrollment-status
 ./deploy.sh docker enrollment-trace --unix-user <user>
 ./deploy.sh docker enrollment-align
@@ -661,6 +663,18 @@ Configure the shared Notion workspace with:
 ```bash
 ./deploy.sh notion-ssot
 ```
+
+To move Almanac to a different Notion workspace, use:
+
+```bash
+./deploy.sh notion-migrate
+```
+
+The migration guide backs up private config and SQLite state, walks the operator
+through creating the new internal integration and webhook subscription, archives
+old workspace-specific caches and pending writes, clears user Notion identity
+verification so users can re-verify, and runs a fresh `notion-shared` index
+sync.
 
 The shared Notion lane uses one operator-managed internal integration, not
 per-user OAuth. Almanac verifies each user's local Notion identity through a

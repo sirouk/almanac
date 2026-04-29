@@ -1675,12 +1675,44 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
     expect("Almanac Docker control center" in text, "expected Docker submenu")
     expect('MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
+    expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
     expect("docker-install|docker-upgrade|docker-reconfigure" in text, "expected Docker shortcut aliases")
     expect('local helper="$BOOTSTRAP_DIR/bin/almanac-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
     expect("run_docker_install_flow()" in text, "expected idempotent Docker install flow")
     expect("run_docker_reconfigure_flow()" in text, "expected Docker reconfigure flow")
     expect("run_almanac_docker health" in text, "expected Docker install flow to end with health")
     print("PASS test_deploy_sh_exposes_docker_control_center")
+
+
+def test_deploy_sh_guides_notion_workspace_migration() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    cleanup = extract(text, "notion_migration_clear_workspace_state() {", "run_notion_migrate_flow() {")
+    migration = extract(text, "run_notion_migrate_flow() {", "run_curator_setup_flow() {")
+    notion_setup = extract(text, "run_notion_ssot_setup() {", "notion_migration_pause() {")
+    expect("deploy.sh notion-migrate" in text, "expected direct notion migration command in usage")
+    expect("deploy.sh docker notion-migrate" in text, "expected Docker notion migration command in usage")
+    expect("Notion workspace migration" in text, "expected guided Notion migration submenu")
+    expect("Type MIGRATE NOTION to continue" in migration, "expected explicit typed migration acknowledgement")
+    expect("notion_migration_backup_state" in migration, "expected migration to create private backups")
+    expect("notion process-pending" in migration, "expected migration to drain pending Notion events")
+    expect("notion_migration_pause_write_surfaces" in migration, "expected migration to pause Notion write surfaces")
+    expect("trap notion_migration_restore_paused_services EXIT" in migration, "expected migration to restore paused services if the shell exits")
+    expect("trap notion_migration_restore_paused_services RETURN" not in migration, "migration must not use RETURN traps that fire after every helper function")
+    expect("ALMANAC_NOTION_MIGRATION_FRESH_DEFAULTS=1" in migration, "expected migration to require fresh Notion URL/token defaults")
+    expect("ALMANAC_NOTION_MIGRATION_FORCE_WEBHOOK_RESET=1" in migration, "expected migration to force a fresh webhook handshake")
+    expect("Continuing workspace-state cleanup so old Notion identities" in migration, "expected migration to keep clearing old identities if webhook verification stops after config save")
+    expect("No Notion webhook public URL is configured; clearing any stored webhook verification token" in migration, "expected migration to clear old webhook tokens when webhooks are disabled")
+    expect("notion index-sync --full" in migration, "expected migration to run a full Notion index sync")
+    expect("notion_migration_restart_services" in migration, "expected migration to restart shared services")
+    expect("DELETE FROM settings WHERE key LIKE 'notion_verification_database%'" in cleanup, "expected verification DB cache to be cleared")
+    expect("UPDATE agent_identity" in cleanup and "verification_status = 'unverified'" in cleanup, "expected identities to be reset for re-verification")
+    expect("notion_identity_claims" in cleanup and "notion_identity_overrides" in cleanup, "expected Notion identity claims and overrides to be archived/cleared")
+    expect("ssot_pending_writes" in cleanup, "expected old workspace pending writes to be archived/cleared")
+    expect("notion_webhook_events" in cleanup, "expected old webhook events to be archived/cleared")
+    expect("notion_index_documents" in cleanup and "notion-index" in cleanup, "expected old notion-shared index rows/files to be rebuilt")
+    expect("ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT" in notion_setup, "expected SSOT setup to default indexing to the new root during migration")
+    expect("webhook-reset-token" in notion_setup, "expected SSOT setup to clear stale webhook verification during migration")
+    print("PASS test_deploy_sh_guides_notion_workspace_migration")
 
 
 def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
@@ -2345,6 +2377,7 @@ def main() -> int:
         test_collect_install_answers_records_missing_host_dependency_choices,
         test_write_answers_file_persists_host_dependency_choices,
         test_deploy_sh_exposes_docker_control_center,
+        test_deploy_sh_guides_notion_workspace_migration,
         test_shell_scripts_avoid_bash4_only_features,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_curator_gateway_defaults_reactions_on,

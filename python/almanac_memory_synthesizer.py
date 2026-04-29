@@ -30,7 +30,7 @@ from almanac_control import (
 from almanac_http import http_request, parse_json_object
 
 
-PROMPT_VERSION = "memory-synth-v1"
+PROMPT_VERSION = "memory-synth-v2"
 DEFAULT_MAX_SOURCES_PER_RUN = 12
 DEFAULT_MAX_SOURCE_CHARS = 4500
 DEFAULT_MAX_OUTPUT_TOKENS = 450
@@ -38,6 +38,39 @@ DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_FAILURE_RETRY_SECONDS = 3600
 DEFAULT_CARDS_IN_CONTEXT = 8
 TEXT_SUFFIXES = {".md", ".markdown", ".mdx", ".txt", ".text"}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".svg"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpeg", ".mpg", ".wmv", ".flv"}
+AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".aiff"}
+OFFICE_SUFFIXES = {".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".odt", ".ods", ".odp", ".rtf"}
+DATA_SUFFIXES = {
+    ".csv",
+    ".tsv",
+    ".json",
+    ".jsonl",
+    ".ndjson",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".html",
+    ".htm",
+    ".ics",
+    ".vcf",
+    ".eml",
+    ".msg",
+    ".sql",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".parquet",
+    ".ipynb",
+}
+DESIGN_SUFFIXES = {".fig", ".sketch", ".psd", ".ai", ".indd", ".xd", ".xcf"}
+ARCHIVE_SUFFIXES = {".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar"}
+ASSET_SUFFIXES = (
+    IMAGE_SUFFIXES | VIDEO_SUFFIXES | AUDIO_SUFFIXES | OFFICE_SUFFIXES | DATA_SUFFIXES | DESIGN_SUFFIXES | ARCHIVE_SUFFIXES
+)
+SIGNATURE_SUFFIXES = TEXT_SUFFIXES | {".pdf"} | ASSET_SUFFIXES
 SKIP_DIR_NAMES = {
     ".git",
     ".hg",
@@ -192,7 +225,7 @@ def _compact_unique(values: Sequence[Any], *, limit: int = 8, item_limit: int = 
 
 def _safe_iterdir(path: Path) -> list[Path]:
     try:
-        if not path.is_dir():
+        if path.is_symlink() or not path.is_dir():
             return []
         return sorted(path.iterdir(), key=lambda item: item.name.casefold())
     except OSError:
@@ -214,7 +247,10 @@ def _bounded_walk_files(root: Path, *, suffixes: set[str], limit: int = 800) -> 
                 [
                     dirname
                     for dirname in dirnames
-                    if dirname and not dirname.startswith(".") and dirname not in SKIP_DIR_NAMES
+                    if dirname
+                    and not dirname.startswith(".")
+                    and dirname not in SKIP_DIR_NAMES
+                    and not (Path(current_root) / dirname).is_symlink()
                 ],
                 key=str.casefold,
             )[:80]
@@ -224,6 +260,8 @@ def _bounded_walk_files(root: Path, *, suffixes: set[str], limit: int = 800) -> 
                 if not filename or filename.startswith("."):
                     continue
                 path = Path(current_root) / filename
+                if path.is_symlink():
+                    continue
                 if path.suffix.casefold() in suffixes:
                     result.append(path)
     except OSError:
@@ -240,7 +278,7 @@ def _path_rel(path: Path, root: Path) -> str:
 
 def _read_file_snippet(path: Path, *, max_chars: int) -> str:
     try:
-        if not path.is_file() or path.stat().st_size > 2_000_000:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
             return ""
         raw = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -302,6 +340,74 @@ def _pdf_sidecar_snippets(cfg: Config, relative_top: str, *, limit: int, max_cha
     return snippets
 
 
+def _asset_kind_for_suffix(suffix: str) -> str:
+    normalized = str(suffix or "").casefold()
+    if normalized in IMAGE_SUFFIXES:
+        return "image"
+    if normalized in VIDEO_SUFFIXES:
+        return "video"
+    if normalized in AUDIO_SUFFIXES:
+        return "audio"
+    if normalized in OFFICE_SUFFIXES:
+        return "office"
+    if normalized in DATA_SUFFIXES:
+        return "data"
+    if normalized in DESIGN_SUFFIXES:
+        return "design"
+    if normalized in ARCHIVE_SUFFIXES:
+        return "archive"
+    if normalized == ".pdf":
+        return "pdf"
+    if normalized in TEXT_SUFFIXES:
+        return "text"
+    return "other"
+
+
+def _asset_summary_for_path(path: Path, root: Path, *, max_rel_len: int = 180) -> dict[str, Any]:
+    stat = _safe_stat(path)
+    return {
+        "path": _clean_space(_path_rel(path, root), limit=max_rel_len),
+        "kind": _asset_kind_for_suffix(path.suffix),
+        "size": stat.st_size if stat else 0,
+        "mtime": int(stat.st_mtime) if stat else 0,
+    }
+
+
+def _payload_for_prompt(payload: dict[str, Any]) -> dict[str, Any]:
+    prompt_payload = dict(payload)
+    fingerprint = prompt_payload.pop("fingerprint", [])
+    if isinstance(fingerprint, list):
+        prompt_payload["fingerprint_count"] = len(fingerprint)
+    asset_examples = prompt_payload.get("asset_examples")
+    if isinstance(asset_examples, list):
+        prompt_payload["asset_examples"] = [
+            {
+                "path": str(item.get("path") or ""),
+                "kind": str(item.get("kind") or ""),
+                "size": int(item.get("size") or 0),
+            }
+            for item in asset_examples
+            if isinstance(item, dict)
+        ][:24]
+    root_files = prompt_payload.get("files")
+    if isinstance(root_files, list):
+        prompt_payload["files"] = [
+            {
+                key: value
+                for key, value in {
+                    "path": item.get("path"),
+                    "kind": item.get("kind"),
+                    "size": item.get("size"),
+                    "snippet": item.get("snippet"),
+                }.items()
+                if value not in {"", None}
+            }
+            for item in root_files
+            if isinstance(item, dict)
+        ][:60]
+    return prompt_payload
+
+
 def _is_repo_inventory(child: Path, *, folder_name: str, category: str = "") -> bool:
     lowered = folder_name.casefold()
     if lowered in {"repos", "repositories", "source", "code"}:
@@ -326,17 +432,12 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
     for child in _safe_iterdir(vault_root):
         if not child.name or child.name.startswith("."):
             continue
-        if child.is_file() and child.suffix.casefold() in TEXT_SUFFIXES | {".pdf"}:
-            stat = _safe_stat(child)
-            root_files.append(
-                {
-                    "path": child.name,
-                    "kind": "pdf" if child.suffix.casefold() == ".pdf" else "text",
-                    "size": stat.st_size if stat else 0,
-                    "mtime": int(stat.st_mtime) if stat else 0,
-                    "snippet": _read_file_snippet(child, max_chars=600) if child.suffix.casefold() in TEXT_SUFFIXES else "",
-                }
-            )
+        if child.is_symlink():
+            continue
+        if child.is_file() and child.suffix.casefold() in SIGNATURE_SUFFIXES:
+            root_item = _asset_summary_for_path(child, vault_root, max_rel_len=140)
+            root_item["snippet"] = _read_file_snippet(child, max_chars=600) if child.suffix.casefold() in TEXT_SUFFIXES else ""
+            root_files.append(root_item)
             continue
         if not child.is_dir() or child.name in SKIP_DIR_NAMES:
             continue
@@ -346,11 +447,14 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
         repos: list[str] = []
         text_files: list[str] = []
         pdfs: list[str] = []
+        asset_examples: list[dict[str, Any]] = []
+        asset_counts: dict[str, int] = {}
+        asset_seen: set[str] = set()
         snippets: list[dict[str, str]] = []
         fingerprints: list[str] = []
         nested_dirs = _safe_iterdir(child)
         for nested in nested_dirs[:250]:
-            if not nested.name or nested.name.startswith(".") or nested.name in SKIP_DIR_NAMES:
+            if not nested.name or nested.name.startswith(".") or nested.name in SKIP_DIR_NAMES or nested.is_symlink():
                 continue
             stat = _safe_stat(nested)
             if nested.is_dir():
@@ -359,7 +463,12 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
                 else:
                     subfolders.append(nested.name)
                     for grandchild in _safe_iterdir(nested)[:40]:
-                        if grandchild.is_dir() and not grandchild.name.startswith(".") and grandchild.name not in SKIP_DIR_NAMES:
+                        if (
+                            grandchild.is_dir()
+                            and not grandchild.is_symlink()
+                            and not grandchild.name.startswith(".")
+                            and grandchild.name not in SKIP_DIR_NAMES
+                        ):
                             subfolders.append(f"{nested.name}/{grandchild.name}")
                 fingerprints.append(f"d:{nested.name}:{int(stat.st_mtime) if stat else 0}")
                 continue
@@ -371,11 +480,19 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
                 pdfs.append(nested.name)
             elif suffix in TEXT_SUFFIXES:
                 text_files.append(nested.name)
+            if suffix in ASSET_SUFFIXES:
+                kind = _asset_kind_for_suffix(suffix)
+                rel_path = _path_rel(nested, child)
+                if rel_path not in asset_seen:
+                    asset_seen.add(rel_path)
+                    asset_counts[kind] = asset_counts.get(kind, 0) + 1
+                    if len(asset_examples) < 24:
+                        asset_examples.append(_asset_summary_for_path(nested, child))
 
         preferred_snippet_files = [
             path
             for path in [child / ".vault", child / "README.md", child / "README.txt", child / "readme.md", child / "readme.txt"]
-            if path.is_file()
+            if path.is_file() and not path.is_symlink()
         ]
         for path in preferred_snippet_files[:3]:
             snippet = _read_file_snippet(path, max_chars=min(900, settings.max_source_chars // 4))
@@ -398,10 +515,18 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
         )
         snippets = snippets[:4]
         if not repo_inventory:
-            for path in _bounded_walk_files(child, suffixes=TEXT_SUFFIXES | {".pdf"}, limit=200):
+            for path in _bounded_walk_files(child, suffixes=SIGNATURE_SUFFIXES, limit=300):
                 rel_path = _path_rel(path, child)
                 stat = _safe_stat(path)
+                suffix = path.suffix.casefold()
                 fingerprints.append(f"deep:{rel_path}:{stat.st_size if stat else 0}:{int(stat.st_mtime) if stat else 0}")
+                if suffix in ASSET_SUFFIXES:
+                    kind = _asset_kind_for_suffix(suffix)
+                    if rel_path not in asset_seen:
+                        asset_seen.add(rel_path)
+                        asset_counts[kind] = asset_counts.get(kind, 0) + 1
+                        if len(asset_examples) < 24:
+                            asset_examples.append(_asset_summary_for_path(path, child))
 
         payload = {
             "source": "vault",
@@ -411,6 +536,8 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
             "subfolders": _compact_unique(subfolders, limit=40),
             "text_files": _compact_unique(text_files, limit=30),
             "pdfs": _compact_unique(pdfs, limit=30),
+            "asset_counts": dict(sorted(asset_counts.items())),
+            "asset_examples": asset_examples[:24],
             "snippets": snippets,
             "fingerprint": _compact_unique(fingerprints, limit=80, item_limit=220),
         }
@@ -581,12 +708,13 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 def _candidate_prompt(candidate: SourceCandidate, settings: SynthesisSettings) -> str:
+    prompt_payload = _payload_for_prompt(candidate.payload)
     parts = _source_text_budget(
         [
             f"Source kind: {candidate.source_kind}",
             f"Source key: {candidate.source_key}",
             f"Source title: {candidate.source_title}",
-            json.dumps(candidate.payload, ensure_ascii=False, sort_keys=True),
+            json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True),
         ],
         settings.max_source_chars,
     )
@@ -597,17 +725,23 @@ def call_openai_compatible_model(candidate: SourceCandidate, settings: Synthesis
     if not (settings.endpoint and settings.model and settings.api_key):
         raise RuntimeError("memory synthesis LLM is not configured")
     system_prompt = (
-        "You compress private organizational knowledge into compact retrieval hints for AI agents. "
+        "You compress private user and organization knowledge into compact retrieval hints for AI agents. "
         "Return strict JSON only. Do not include secrets, credentials, or long excerpts. "
-        "This card is an awareness hint, not evidence; phrase uncertain inferences conservatively."
+        "This card is an awareness hint, not evidence; phrase uncertain inferences conservatively. "
+        "The source may belong to a family, household, solo entrepreneur, creator, business, nonprofit, "
+        "research group, school, club, Discord community, local team, or large organization."
     )
     user_prompt = (
         "Build one compact memory card from this bounded source inventory. "
-        "Use the source names, folders, page titles, snippets, and PDFs as retrieval cues. "
+        "Use source names, folders, page titles, snippets, PDFs, media/data asset inventories, and owners as retrieval cues. "
+        "Prefer durable nouns and workflows over generic labels. "
         "If the source is too thin or mostly boilerplate, set inject=false.\n\n"
         "Required JSON shape:\n"
-        '{"summary":"<=35 words","topics":["<=6"],"entities":["<=8"],'
-        '"retrieval_queries":["<=5 concise searches"],"source_hints":["<=5 filenames/pages/folders"],'
+        '{"summary":"<=35 words","domains":["<=5 e.g. family, creator, community, business"],'
+        '"workflows":["<=6 recurring activities or jobs-to-be-done"],'
+        '"content_types":["<=6 e.g. PDFs, videos, invoices, notes, runbooks"],'
+        '"topics":["<=6"],"entities":["<=8"],'
+        '"retrieval_queries":["<=5 concise searches"],"source_hints":["<=5 filenames/pages/folders/assets"],'
         '"confidence":"low|medium|high","inject":true}\n\n'
         + _candidate_prompt(candidate, settings)
     )
@@ -647,6 +781,9 @@ def _normalize_card_payload(raw: dict[str, Any]) -> dict[str, Any]:
         confidence = "low"
     return {
         "summary": _clean_space(raw.get("summary"), limit=260),
+        "domains": _compact_unique(raw.get("domains") if isinstance(raw.get("domains"), list) else [], limit=5, item_limit=80),
+        "workflows": _compact_unique(raw.get("workflows") if isinstance(raw.get("workflows"), list) else [], limit=6, item_limit=100),
+        "content_types": _compact_unique(raw.get("content_types") if isinstance(raw.get("content_types"), list) else [], limit=6, item_limit=80),
         "topics": _compact_unique(raw.get("topics") if isinstance(raw.get("topics"), list) else [], limit=6, item_limit=80),
         "entities": _compact_unique(raw.get("entities") if isinstance(raw.get("entities"), list) else [], limit=8, item_limit=80),
         "retrieval_queries": _compact_unique(
@@ -668,10 +805,19 @@ def render_card_text(candidate: SourceCandidate, card: dict[str, Any]) -> str:
     if not card.get("inject") or not str(card.get("summary") or "").strip():
         return ""
     bits = [f"- [{candidate.source_kind}:{candidate.source_title}] {card['summary']}"]
+    domains = ", ".join(card.get("domains") or [])
+    workflows = ", ".join(card.get("workflows") or [])
+    content_types = ", ".join(card.get("content_types") or [])
     topics = ", ".join(card.get("topics") or [])
     entities = ", ".join(card.get("entities") or [])
     queries = "; ".join(card.get("retrieval_queries") or [])
     hints = ", ".join(card.get("source_hints") or [])
+    if domains:
+        bits.append(f"Domains: {domains}.")
+    if workflows:
+        bits.append(f"Workflows: {workflows}.")
+    if content_types:
+        bits.append(f"Content: {content_types}.")
     if topics:
         bits.append(f"Topics: {topics}.")
     if entities:

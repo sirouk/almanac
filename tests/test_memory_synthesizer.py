@@ -107,6 +107,19 @@ def seed_sources(root: Path, conn) -> None:
     (root / "vault" / "Repos" / "archive-delta").mkdir(parents=True)
     (root / "vault" / "Repos" / "archive-delta" / ".git").mkdir()
     (root / "vault" / "Repos" / "archive-delta" / "README.md").write_text("# Archive Delta\n", encoding="utf-8")
+    (root / "vault" / "Creator Studio" / "Episodes").mkdir(parents=True)
+    (root / "vault" / "Creator Studio" / "Episodes" / "pilot-cut.mp4").write_bytes(b"video")
+    (root / "vault" / "Creator Studio" / "Episodes" / "thumbnail.png").write_bytes(b"image")
+    (root / "vault" / "Creator Studio" / "content-calendar.csv").write_text(
+        "episode,status\npilot,draft\n",
+        encoding="utf-8",
+    )
+    (root / "vault" / "Family Hub").mkdir(parents=True)
+    (root / "vault" / "Family Hub" / "school-calendar.csv").write_text("date,event\n2026-05-01,example\n", encoding="utf-8")
+    outside = root / "outside"
+    outside.mkdir()
+    (outside / "private-note.md").write_text("off-vault private note", encoding="utf-8")
+    (root / "vault" / "Creator Studio" / "linked-private-note.md").symlink_to(outside / "private-note.md")
 
     notion_md = root / "state" / "notion-index" / "markdown" / "root-1" / "abc" / "0000.md"
     notion_md.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +171,20 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
             with control.connect_db(cfg) as conn:
                 insert_agent(conn, root)
                 seed_sources(root, conn)
+                settings = synth.load_settings(cfg)
+                candidates = synth.build_candidates(conn, cfg, settings)
+                creator = next(candidate for candidate in candidates if candidate.source_key == "Creator Studio")
+                creator_payload = json.dumps(creator.payload, sort_keys=True)
+                expect('"video": 1' in creator_payload, creator_payload)
+                expect('"image": 1' in creator_payload, creator_payload)
+                expect('"data": 1' in creator_payload, creator_payload)
+                expect("pilot-cut.mp4" in creator_payload and "thumbnail.png" in creator_payload, creator_payload)
+                expect("linked-private-note" not in creator_payload, creator_payload)
+                expect("off-vault private note" not in creator_payload, creator_payload)
+                creator_prompt = synth._candidate_prompt(creator, settings)
+                expect("fingerprint_count" in creator_prompt, creator_prompt)
+                expect("deep:content-calendar.csv" not in creator_prompt, creator_prompt)
+                expect("pilot-cut.mp4" in creator_prompt and "thumbnail.png" in creator_prompt, creator_prompt)
 
             calls: list[str] = []
 
@@ -166,6 +193,9 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 source_text = json.dumps(candidate.payload, sort_keys=True)
                 return {
                     "summary": f"{candidate.source_title} contains compact orientation for retrieval.",
+                    "domains": ["creator", "family", "business"],
+                    "workflows": ["content planning", "household coordination", "research review"],
+                    "content_types": ["notes", "PDFs", "videos", "images", "tables"],
                     "topics": ["research" if "Horizon" in source_text else "operations"],
                     "entities": ["Horizon Protocol", "Nimbus Trading Lab", "Archive Delta", "Example Workspace"],
                     "retrieval_queries": [candidate.source_title, "Horizon protocol", "Nimbus Trading Lab market making"],
@@ -177,6 +207,8 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
             first = synth.run_once(cfg, model_client=fake_model)
             expect(first["status"] == "ok", str(first))
             expect(first["synthesized"] >= 4, str(first))
+            expect(any(call == "vault:Creator Studio" for call in calls), calls)
+            expect(any(call == "vault:Family Hub" for call in calls), calls)
             expect(any(call == "vault:Research" for call in calls), calls)
             expect(any(call == "vault:Projects" for call in calls), calls)
             expect(any(call == "vault:Repos" for call in calls), calls)
@@ -190,6 +222,9 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 expect("Repos contains compact orientation" in card_text, card_text)
                 expect("Nimbus Trading Lab" in card_text, card_text)
                 expect("Archive Delta" in card_text, card_text)
+                expect("Domains: creator, family, business." in card_text, card_text)
+                expect("Workflows: content planning, household coordination, research review." in card_text, card_text)
+                expect("Content: notes, PDFs, videos, images, tables." in card_text, card_text)
                 fanout = conn.execute(
                     "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'"
                 ).fetchone()

@@ -600,10 +600,15 @@ fast retrieval path needs to stay alive.
 OpenAI-compatible vision/chat model is configured through
 `ALMANAC_MEMORY_SYNTH_*` or the existing `PDF_VISION_*` settings, it periodically
 summarizes bounded vault folders and indexed Notion areas into compact semantic
-cards. Those cards are stored in the control-plane database and rendered into
-`[managed:recall-stubs]` by the managed-context plugin. The service skips
-unchanged sources, keeps output short, and treats every card as a retrieval cue
-rather than evidence.
+cards. The synthesis prompt is domain-neutral: it is meant to work for families,
+creators, small businesses, communities, research groups, and larger
+organizations. Vault cards include bounded media, office, data, design, archive,
+PDF, and text inventories as retrieval cues, while repo inventories stay shallow
+so a source tree does not explode the prompt. Cache fingerprints are kept out of
+the model prompt, so freshness checks do not spend tokens. Cards are stored in
+the control-plane database and rendered into `[managed:recall-stubs]` by the
+managed-context plugin. The service skips unchanged sources, keeps output short,
+and treats every card as a retrieval cue rather than evidence.
 
 ## PDFs And Files
 

@@ -597,9 +597,14 @@ collection.
 `almanac-memory-synth.timer` is the optional cached second-stage sensemaking
 lane. It uses `ALMANAC_MEMORY_SYNTH_*` or falls back to `PDF_VISION_*`, writes
 compact rows to `memory_synthesis_cards`, and lets managed memory render those
-cards into `[managed:recall-stubs]`. It must stay off the chat critical path:
-skip unchanged source signatures, bound snippets and output, and treat cards as
-retrieval hints rather than answerable facts.
+cards into `[managed:recall-stubs]`. It is intentionally domain-neutral for
+families, creators, businesses, communities, research groups, and larger
+organizations. Vault synthesis may use bounded media, office, data, design,
+archive, PDF, and text inventories as recall cues, but it must not follow
+symlinks out of the vault or recurse deeply through repo source trees. It must
+stay off the chat critical path: skip unchanged source signatures, keep cache
+fingerprints out of the model prompt, bound snippets and output, and treat cards
+as retrieval hints rather than answerable facts.
 
 Shared Notion writes must go through the SSOT broker. Destructive operations
 such as archive/delete/trash are intentionally rejected or require approval

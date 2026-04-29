@@ -46,7 +46,8 @@ Recent hot-reload signals:
 - 2026-04-29T19:04:52+00:00 Projects changed via vault-watch; 3 path(s): README.md, roadmap.md, design/overview.md. Use search-and-fetch for current contents; this stub only tells you where to look.
 Semantic synthesis cards:
 - LLM-compressed recall hints only: use retrieval tools for evidence, exact text, citations, or state changes.
-- [vault:Research Annex] Fictional research PDFs and notes for retrieval tests. Topics: research, protocols. Entities: Research Annex. Search hints: Research Annex; archive note alpha. Sources to fetch: archive_note_alpha.pdf. Confidence: medium.
+- [vault:Creator Studio] Fictional episode assets, publishing notes, and lightweight planning tables for a sample creator workflow. Domains: creator, business. Workflows: content planning, production review, publishing cadence. Content: videos, images, tables, notes. Topics: episode production, thumbnails. Entities: Creator Studio. Search hints: Creator Studio episode plan; pilot cut thumbnail. Sources to fetch: Episodes/pilot-cut.mp4, Episodes/thumbnail.png, content-calendar.csv. Confidence: medium.
+- [vault:Research Annex] Fictional research PDFs and notes for retrieval tests. Domains: research. Workflows: literature review. Content: PDFs, notes. Topics: research, protocols. Entities: Research Annex. Search hints: Research Annex; archive note alpha. Sources to fetch: archive_note_alpha.pdf. Confidence: medium.
 Quality rule: if recall feels thin, say which rail was searched and retry once with narrower nouns, owner names, file titles, or source lane.
 ```
 

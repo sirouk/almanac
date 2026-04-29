@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 import pwd
@@ -1792,6 +1793,20 @@ def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
 
 
 def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
+    lock_path = cfg.state_dir / "notion-claim-poll.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        try:
+            _run_pending_onboarding_notion_verifications_locked(conn, cfg)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> None:
     expired_claims = expire_stale_notion_identity_claims(conn)
     pending_sessions = 0
     verified_sessions = 0

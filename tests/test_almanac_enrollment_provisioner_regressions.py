@@ -123,6 +123,19 @@ def test_onboarding_paths_enter_notion_phase_before_final_completion() -> None:
     print("PASS test_onboarding_paths_enter_notion_phase_before_final_completion")
 
 
+def test_onboarding_notion_verification_poll_is_single_flight() -> None:
+    text = PROVISIONER_PY.read_text(encoding="utf-8")
+    wrapper = extract(
+        text,
+        "def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:",
+        "def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> None:",
+    )
+    expect("notion-claim-poll.lock" in wrapper, wrapper)
+    expect("fcntl.LOCK_EX | fcntl.LOCK_NB" in wrapper, wrapper)
+    expect("_run_pending_onboarding_notion_verifications_locked(conn, cfg)" in wrapper, wrapper)
+    print("PASS test_onboarding_notion_verification_poll_is_single_flight")
+
+
 def test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed() -> None:
     text = PROVISIONER_PY.read_text(encoding="utf-8")
     telegram = extract(text, "def _configure_user_telegram_gateway", "def _configure_user_discord_gateway")
@@ -1094,6 +1107,7 @@ def test_install_system_services_does_not_self_deadlock_on_active_oneshots() -> 
 def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
+    test_onboarding_notion_verification_poll_is_single_flight()
     test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed()
     test_discord_onboarding_writes_home_channel_env()
     test_discord_completion_handoff_queues_root_dm_action()
@@ -1109,7 +1123,7 @@ def main() -> int:
     test_run_host_upgrade_seeds_home_when_missing()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
-    print("PASS all 17 enrollment provisioner regression tests")
+    print("PASS all 18 enrollment provisioner regression tests")
     return 0
 
 

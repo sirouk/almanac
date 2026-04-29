@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from almanac_control import Config, connect_db, json_loads
+from almanac_control import Config, connect_db, ensure_agent_mcp_bootstrap_token, json_loads
 
 
 STOP = False
@@ -147,6 +147,23 @@ def install_agent_assets(cfg: Config, agent: dict[str, Any], home: Path, hermes_
         result = subprocess.run(cmd, cwd=str(cfg.repo_dir), text=True, stdout=log, stderr=subprocess.STDOUT, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"agent install failed for {agent['agent_id']} with exit {result.returncode}")
+
+
+def ensure_agent_mcp_auth(cfg: Config, agent: dict[str, Any], hermes_home: Path) -> None:
+    unix_user = str(agent["unix_user"])
+    with connect_db(cfg) as conn:
+        result = ensure_agent_mcp_bootstrap_token(
+            conn,
+            unix_user=unix_user,
+            hermes_home=hermes_home,
+            actor="docker-agent-supervisor",
+        )
+    if result.get("changed"):
+        log_agent_error(
+            cfg,
+            str(agent["agent_id"]),
+            "repaired Almanac MCP bootstrap token for Docker agent runtime",
+        )
 
 
 def access_state(hermes_home: Path) -> dict[str, Any]:
@@ -351,6 +368,7 @@ def main() -> int:
                 hermes_home = Path(str(agent["hermes_home"] or "")).resolve()
                 home = home_from_hermes(hermes_home)
                 ensure_container_user(unix_user, home)
+                ensure_agent_mcp_auth(cfg, agent, hermes_home)
                 channels = [str(channel).lower() for channel in json_loads(str(agent.get("channels_json") or "[]"), [])]
                 if agent_id not in installed:
                     install_agent_assets(cfg, agent, home, hermes_home, channels)

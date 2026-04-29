@@ -763,7 +763,9 @@ The default posture is local-first and tailnet-first:
 - User agents get isolated Unix accounts and private Hermes homes.
 - User agents authenticate to Almanac MCP with a per-agent bootstrap token
   stored in their private Hermes home; the managed-context plugin injects it
-  automatically so agents do not expose or hand-type it.
+  automatically so agents do not expose or hand-type it. Baremetal
+  realignment and Docker agent supervision both validate and repair that token
+  path idempotently.
 - User-facing write access goes through scoped broker rails, not raw Notion
   access.
 - Health checks flag placeholder secrets, missing keys, inaccessible ports,

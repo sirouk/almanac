@@ -354,133 +354,20 @@ ensure_agent_mcp_auth() {
   fi
 
   PYTHONPATH="$SOURCE_REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" python3 - \
-    "$ALMANAC_DB_PATH" "$UNIX_USER" "$TARGET_HERMES_HOME" "$token_file" <<'PY'
-from __future__ import annotations
-
-import os
-from pathlib import Path
-import pwd
-import sqlite3
+    "$UNIX_USER" "$TARGET_HERMES_HOME" "$token_file" <<'PY'
 import sys
 
-from almanac_control import (
-    generate_raw_token,
-    generate_token_id,
-    hash_token,
-    utc_now_iso,
-    validate_token,
-)
+from almanac_control import Config, connect_db, ensure_agent_mcp_bootstrap_token
 
-db_path = sys.argv[1]
-unix_user = sys.argv[2]
-hermes_home = sys.argv[3]
-token_path = Path(sys.argv[4])
-
-conn = sqlite3.connect(db_path)
-conn.row_factory = sqlite3.Row
-
-agent = conn.execute(
-    """
-    SELECT agent_id, unix_user, display_name, hermes_home
-    FROM agents
-    WHERE role = 'user' AND status = 'active' AND unix_user = ?
-    ORDER BY last_enrolled_at DESC
-    LIMIT 1
-    """,
-    (unix_user,),
-).fetchone()
-if agent is None:
-    raise SystemExit(0)
-
-agent_id = str(agent["agent_id"] or "")
-expected_home = str(agent["hermes_home"] or "").strip()
-if expected_home and os.path.abspath(expected_home) != os.path.abspath(hermes_home):
-    raise SystemExit(f"refusing to repair MCP auth for {agent_id}: Hermes home mismatch")
-
-try:
-    pw = pwd.getpwnam(unix_user)
-except KeyError as exc:
-    raise SystemExit(f"cannot repair MCP auth for {agent_id}: missing unix user {unix_user}") from exc
-
-token_path.parent.mkdir(parents=True, exist_ok=True)
-os.chown(token_path.parent, pw.pw_uid, pw.pw_gid)
-token_path.parent.chmod(0o700)
-
-def harden_existing_file(path: Path) -> None:
-    os.chown(path, pw.pw_uid, pw.pw_gid)
-    path.chmod(0o600)
-
-
-def read_existing_token(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
-raw = read_existing_token(token_path)
-if raw:
-    try:
-        token_row = validate_token(conn, raw)
-    except Exception:
-        token_row = None
-    if token_row is not None and str(token_row["agent_id"] or "") == agent_id:
-        harden_existing_file(token_path)
-        raise SystemExit(0)
-
-now_iso = utc_now_iso()
-conn.execute(
-    """
-    UPDATE bootstrap_tokens
-    SET revoked_at = ?,
-        revoked_by_surface = 'refresh-agent-install',
-        revoked_by_actor = ?,
-        revocation_reason = 'superseded by repaired agent MCP bootstrap token'
-    WHERE agent_id = ? AND revoked_at IS NULL
-    """,
-    (now_iso, unix_user, agent_id),
-)
-
-new_raw = generate_raw_token()
-token_id = generate_token_id()
-conn.execute(
-    """
-    INSERT INTO bootstrap_tokens (
-      token_id, agent_id, token_hash, requester_identity, source_ip, issued_at, issued_by,
-      activation_request_id, activated_at
+cfg = Config.from_env()
+with connect_db(cfg) as conn:
+    ensure_agent_mcp_bootstrap_token(
+        conn,
+        unix_user=sys.argv[1],
+        hermes_home=sys.argv[2],
+        token_path=sys.argv[3],
+        actor="refresh-agent-install",
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
-    """,
-    (
-        token_id,
-        agent_id,
-        hash_token(new_raw),
-        str(agent["display_name"] or unix_user),
-        "127.0.0.1",
-        now_iso,
-        "refresh-agent-install",
-        now_iso,
-    ),
-)
-
-tmp_path = token_path.with_name(f".{token_path.name}.tmp")
-fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(new_raw + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chown(tmp_path, pw.pw_uid, pw.pw_gid)
-    os.replace(tmp_path, token_path)
-    harden_existing_file(token_path)
-except BaseException:
-    try:
-        tmp_path.unlink()
-    except OSError:
-        pass
-    raise
-
-conn.commit()
 PY
   SERVICE_NOTES+=("    - Almanac MCP auth: bootstrap token checked/repaired")
 }

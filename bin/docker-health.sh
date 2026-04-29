@@ -115,6 +115,103 @@ else
   fail "qmd CLI is unavailable"
 fi
 
+check_docker_agent_mcp_auth() {
+  local output=""
+  if output="$(PYTHONPATH="$SCRIPT_DIR/../python${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+import datetime as dt
+from pathlib import Path
+
+from almanac_control import Config, connect_db, parse_utc_iso, validate_token
+
+cfg = Config.from_env()
+now = dt.datetime.now(dt.timezone.utc)
+failures = 0
+with connect_db(cfg) as conn:
+    conn.row_factory = __import__("sqlite3").Row
+    agents = conn.execute(
+        """
+        SELECT agent_id, unix_user, display_name, hermes_home
+        FROM agents
+        WHERE role = 'user' AND status = 'active'
+        ORDER BY unix_user
+        """
+    ).fetchall()
+    if not agents:
+        print("OK no active Docker user agents yet")
+        raise SystemExit(0)
+
+    for agent in agents:
+        agent_id = str(agent["agent_id"] or "")
+        unix_user = str(agent["unix_user"] or "")
+        token_file = Path(str(agent["hermes_home"] or "")) / "secrets" / "almanac-bootstrap-token"
+        try:
+            raw_token = token_file.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            print(f"FAIL {agent_id}: Docker agent MCP token file is unreadable at {token_file}: {exc}")
+            failures += 1
+            continue
+        if not raw_token:
+            print(f"FAIL {agent_id}: Docker agent MCP token file is empty at {token_file}")
+            failures += 1
+            continue
+        try:
+            token_row = validate_token(conn, raw_token)
+        except Exception as exc:
+            print(f"FAIL {agent_id}: Docker agent MCP token did not validate: {exc}")
+            failures += 1
+            continue
+        if str(token_row["agent_id"] or "") != agent_id:
+            print(f"FAIL {agent_id}: Docker agent MCP token belongs to {token_row['agent_id']}")
+            failures += 1
+            continue
+
+        job = conn.execute(
+            "SELECT last_run_at, last_status FROM refresh_jobs WHERE job_name = ?",
+            (f"{agent_id}-refresh",),
+        ).fetchone()
+        if job is None or not job["last_run_at"]:
+            print(f"FAIL {agent_id}: Docker user-agent refresh has not completed")
+            failures += 1
+            continue
+        if str(job["last_status"] or "") != "ok":
+            print(f"FAIL {agent_id}: Docker user-agent refresh last_status={job['last_status'] or 'unknown'}")
+            failures += 1
+            continue
+        last_run = parse_utc_iso(str(job["last_run_at"] or ""))
+        if last_run is None:
+            print(f"FAIL {agent_id}: Docker user-agent refresh timestamp is invalid: {job['last_run_at']}")
+            failures += 1
+            continue
+        if (now - last_run).total_seconds() > 8 * 3600:
+            print(f"FAIL {agent_id}: Docker user-agent refresh stale since {job['last_run_at']}")
+            failures += 1
+            continue
+        print(f"OK {agent_id}: unix_user={unix_user} Docker MCP token validates and refresh={job['last_status']} at {job['last_run_at']}")
+
+raise SystemExit(1 if failures else 0)
+PY
+  )"; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        OK\ *) pass "${line#OK }" ;;
+        *) warn "$line" ;;
+      esac
+    done <<<"$output"
+  else
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        FAIL\ *) fail "${line#FAIL }" ;;
+        OK\ *) pass "${line#OK }" ;;
+        *) fail "$line" ;;
+      esac
+    done <<<"$output"
+  fi
+}
+
+check_docker_agent_mcp_auth
+
 if [[ "${POSTGRES_PASSWORD:-}" == "change-me" || "${NEXTCLOUD_ADMIN_PASSWORD:-}" == "change-me" ]]; then
   warn "Docker bootstrap is using placeholder Nextcloud/Postgres secrets; rotate before any durable live use"
 fi

@@ -182,6 +182,8 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     expect('"ALMANAC_DOCKER_CONTAINER_NAME"' in supervisor, supervisor)
     expect("run-agent-code-server.sh" in supervisor, supervisor)
     expect('"cron", "tick"' in supervisor, supervisor)
+    expect("ensure_agent_mcp_auth" in supervisor and "ensure_agent_mcp_bootstrap_token" in supervisor, supervisor)
+    expect('"docker-agent-supervisor"' in supervisor, supervisor)
     expect('ALMANAC_AGENT_SERVICE_MANAGER:-systemd' in installer, installer)
     expect("def _ensure_docker_user_ready" in provisioner, provisioner)
     expect('"ALMANAC_AGENT_SERVICE_MANAGER": "docker-supervisor"' in provisioner, provisioner)
@@ -215,6 +217,8 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect('"host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}"' in body, body)
     expect('"postgres" "5432"' in body, body)
     expect('"redis" "6379"' in body, body)
+    expect("check_docker_agent_mcp_auth" in body, body)
+    expect("validate_token" in body and "Docker MCP token validates" in body, body)
     expect("Summary: %d ok, %d warn, %d fail" in body, body)
     print("PASS test_docker_health_script_checks_container_runtime")
 

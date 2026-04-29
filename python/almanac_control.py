@@ -5550,6 +5550,180 @@ def normalize_surface(raw: str, default: str = "curator-tui") -> str:
     return value
 
 
+def _safe_token_surface(raw: str, default: str = "agent-refresh") -> str:
+    value = re.sub(r"[^a-z0-9_.:-]+", "-", str(raw or "").strip().lower()).strip("-")
+    return (value or default)[:80]
+
+
+def _harden_agent_token_path(token_path: Path, *, unix_user: str) -> None:
+    try:
+        user_info = pwd.getpwnam(unix_user)
+    except KeyError:
+        user_info = None
+    try:
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    if user_info is not None:
+        try:
+            os.chown(token_path.parent, user_info.pw_uid, user_info.pw_gid)
+        except PermissionError:
+            pass
+    try:
+        token_path.parent.chmod(0o700)
+    except PermissionError:
+        pass
+    if token_path.exists():
+        if user_info is not None:
+            try:
+                os.chown(token_path, user_info.pw_uid, user_info.pw_gid)
+            except PermissionError:
+                pass
+        try:
+            token_path.chmod(0o600)
+        except PermissionError:
+            pass
+
+
+def ensure_agent_mcp_bootstrap_token(
+    conn: sqlite3.Connection,
+    *,
+    unix_user: str,
+    hermes_home: str | Path,
+    token_path: str | Path | None = None,
+    actor: str = "agent-refresh",
+) -> dict[str, Any]:
+    """Ensure an active user agent has a valid private Almanac MCP token file.
+
+    This is shared by bare-metal realignment and Docker supervision. It never
+    returns the raw token; callers get only repair status and paths so logs stay
+    secret-free.
+    """
+    unix_user = str(unix_user or "").strip()
+    if not unix_user:
+        raise ValueError("unix_user is required")
+    hermes_home_path = Path(hermes_home).expanduser()
+    token_file = (
+        Path(token_path).expanduser()
+        if token_path is not None
+        else hermes_home_path / "secrets" / "almanac-bootstrap-token"
+    )
+
+    agent = conn.execute(
+        """
+        SELECT agent_id, unix_user, display_name, hermes_home
+        FROM agents
+        WHERE role = 'user' AND status = 'active' AND unix_user = ?
+        ORDER BY last_enrolled_at DESC
+        LIMIT 1
+        """,
+        (unix_user,),
+    ).fetchone()
+    if agent is None:
+        return {"applied": False, "reason": "no_active_agent", "unix_user": unix_user}
+
+    agent_id = str(agent["agent_id"] or "")
+    expected_home = str(agent["hermes_home"] or "").strip()
+    if expected_home and os.path.abspath(expected_home) != os.path.abspath(str(hermes_home_path)):
+        raise RuntimeError(f"refusing to repair MCP auth for {agent_id}: Hermes home mismatch")
+
+    _harden_agent_token_path(token_file, unix_user=unix_user)
+    try:
+        existing_raw = token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing_raw = ""
+    if existing_raw:
+        try:
+            token_row = validate_token(conn, existing_raw)
+        except Exception:
+            token_row = None
+        if token_row is not None and str(token_row["agent_id"] or "") == agent_id:
+            _harden_agent_token_path(token_file, unix_user=unix_user)
+            return {
+                "applied": True,
+                "changed": False,
+                "agent_id": agent_id,
+                "unix_user": unix_user,
+                "token_file": str(token_file),
+            }
+
+    surface = _safe_token_surface(actor)
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE bootstrap_tokens
+        SET revoked_at = ?,
+            revoked_by_surface = ?,
+            revoked_by_actor = ?,
+            revocation_reason = 'superseded by repaired agent MCP bootstrap token'
+        WHERE agent_id = ? AND revoked_at IS NULL
+        """,
+        (now_iso, surface, unix_user, agent_id),
+    )
+
+    new_raw = generate_raw_token()
+    token_id = generate_token_id()
+    conn.execute(
+        """
+        INSERT INTO bootstrap_tokens (
+          token_id, agent_id, token_hash, requester_identity, source_ip, issued_at, issued_by,
+          activation_request_id, activated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        """,
+        (
+            token_id,
+            agent_id,
+            hash_token(new_raw),
+            str(agent["display_name"] or unix_user),
+            "127.0.0.1",
+            now_iso,
+            surface,
+            now_iso,
+        ),
+    )
+
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(token_file.parent), prefix=f".{token_file.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(new_raw + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            tmp_path.chmod(0o600)
+        except PermissionError:
+            pass
+        try:
+            user_info = pwd.getpwnam(unix_user)
+        except KeyError:
+            user_info = None
+        if user_info is not None:
+            try:
+                os.chown(tmp_path, user_info.pw_uid, user_info.pw_gid)
+            except PermissionError:
+                pass
+        os.replace(tmp_path, token_file)
+        _harden_agent_token_path(token_file, unix_user=unix_user)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+    conn.commit()
+    return {
+        "applied": True,
+        "changed": True,
+        "agent_id": agent_id,
+        "unix_user": unix_user,
+        "token_id": token_id,
+        "token_file": str(token_file),
+    }
+
+
 def _subscription_source_kind(raw_source: str) -> str:
     source = str(raw_source or "").strip().lower()
     return "user" if source == "user" else "default"

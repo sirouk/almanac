@@ -495,7 +495,9 @@ New and refreshed agents should get these defaults from the outset:
   manually; `almanac-managed-context` injects it before Almanac MCP tool
   dispatch. `refresh-agent-install.sh`, and therefore idempotent install and
   upgrade realignment, validates the token against the control-plane DB and
-  repairs the file/token row when needed.
+  repairs the file/token row when needed. Docker mode performs the same repair
+  from `python/almanac_docker_agent_supervisor.py` before user-agent refresh or
+  gateway work.
 - `TELEGRAM_REACTIONS=true`.
 - `DISCORD_REACTIONS=true`.
 - Gateway run with Hermes `gateway run --replace`.

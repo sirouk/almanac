@@ -108,7 +108,8 @@ COMPOSE_PROFILES=curator ./deploy.sh docker install
 ```
 
 Health validates the Compose file, required persisted directories, running
-core services, and core HTTP/database endpoints when the stack is up.
+core services, core HTTP/database endpoints, and Docker user-agent MCP token
+validity/refresh status when the stack is up.
 
 ## Operator Command Parity
 
@@ -133,6 +134,11 @@ operation has a container-native equivalent:
 The Docker enrollment provisioner and self-serve Notion claim poller are run by
 the `agent-supervisor` container instead of systemd timers. `enrollment-align`
 restarts that supervisor and runs an immediate provisioner pass.
+
+The same supervisor also owns per-agent install realignment in Docker mode: it
+syncs skills/plugins/MCP entries, runs the local managed-context refresh, and
+validates or repairs each agent's private Almanac MCP bootstrap token before
+starting gateways or agent web surfaces.
 
 Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
 pin bump, so a Docker operator does not accidentally fall back into the

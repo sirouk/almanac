@@ -6456,6 +6456,26 @@ notion_migration_restore_paused_services() {
   fi
 }
 
+notion_migration_repair_state_ownership() {
+  if [[ ${EUID:-$(id -u)} -ne 0 || "${ALMANAC_DOCKER_MODE:-0}" == "1" ]]; then
+    return 0
+  fi
+  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$STATE_DIR/notion-index" "$NOTION_MIGRATION_DIR" >/dev/null 2>&1 || true
+  chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_DB_PATH" "$ALMANAC_DB_PATH"-* >/dev/null 2>&1 || true
+}
+
+run_notion_migration_index_sync() {
+  local actor="$1"
+  local ctl_bin="$ALMANAC_REPO_DIR/bin/almanac-ctl"
+
+  if [[ "${ALMANAC_DOCKER_MODE:-0}" == "1" || "$(id -un)" == "$ALMANAC_USER" ]]; then
+    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ctl_bin" --json notion index-sync --full --actor "$actor"
+    return $?
+  fi
+
+  run_service_user_cmd "$ctl_bin" --json notion index-sync --full --actor "$actor"
+}
+
 notion_migration_clear_workspace_state() {
   if [[ ! -f "$ALMANAC_DB_PATH" ]]; then
     echo "Skipping DB state cleanup; DB not found at $ALMANAC_DB_PATH"
@@ -6690,10 +6710,11 @@ run_notion_migrate_flow() {
   echo
   echo "Clearing old workspace-specific Almanac state."
   notion_migration_clear_workspace_state
+  notion_migration_repair_state_ownership
 
   if [[ "$(ask_yes_no "Run a full notion-shared index sync for the new workspace now" "1")" == "1" ]]; then
     echo "Running full Notion index sync. This can take a while on large workspaces..."
-    if ! env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion index-sync --full --actor "$actor" >"$NOTION_MIGRATION_DIR/notion-index-sync.json"; then
+    if ! run_notion_migration_index_sync "$actor" >"$NOTION_MIGRATION_DIR/notion-index-sync.json"; then
       index_rc=1
       echo "Notion index sync failed; details may be in $NOTION_MIGRATION_DIR/notion-index-sync.json" >&2
     else

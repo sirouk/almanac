@@ -1704,6 +1704,8 @@ def test_deploy_sh_guides_notion_workspace_migration() -> None:
     expect("No Notion webhook public URL is configured; clearing any stored webhook verification token" in migration, "expected migration to clear old webhook tokens when webhooks are disabled")
     expect("notion index-sync --full" in migration, "expected migration to run a full Notion index sync")
     expect("notion_migration_restart_services" in migration, "expected migration to restart shared services")
+    expect("notion_migration_repair_state_ownership" in migration, "expected migration to repair state ownership before service-user index sync")
+    expect("run_notion_migration_index_sync" in migration, "expected migration to run Notion index sync through the service-user helper")
     expect("DELETE FROM settings WHERE key LIKE 'notion_verification_database%'" in cleanup, "expected verification DB cache to be cleared")
     expect("UPDATE agent_identity" in cleanup and "verification_status = 'unverified'" in cleanup, "expected identities to be reset for re-verification")
     expect("notion_identity_claims" in cleanup and "notion_identity_overrides" in cleanup, "expected Notion identity claims and overrides to be archived/cleared")
@@ -1712,6 +1714,8 @@ def test_deploy_sh_guides_notion_workspace_migration() -> None:
     expect("notion_index_documents" in cleanup and "notion-index" in cleanup, "expected old notion-shared index rows/files to be rebuilt")
     expect("ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT" in notion_setup, "expected SSOT setup to default indexing to the new root during migration")
     expect("webhook-reset-token" in notion_setup, "expected SSOT setup to clear stale webhook verification during migration")
+    expect("run_service_user_cmd \"$ctl_bin\" --json notion index-sync --full --actor \"$actor\"" in text, "expected baremetal migration index sync to run as the Almanac service user")
+    expect("env ALMANAC_CONFIG_FILE=\"$CONFIG_TARGET\" \"$BOOTSTRAP_DIR/bin/almanac-ctl\" --json notion index-sync --full" not in migration, "migration must not run qmd-backed index sync as root from the deploy checkout")
     print("PASS test_deploy_sh_guides_notion_workspace_migration")
 
 

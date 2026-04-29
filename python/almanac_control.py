@@ -9968,17 +9968,18 @@ def _build_notion_stub(
         lines = [
             "Shared Notion digest:",
             "- Current SSOT shape: page-scoped. Almanac cannot build a structured database digest from this target yet.",
-            "- Current rail map: use ssot.read for live scoped page lookups and ssot.write for permitted brokered updates on in-scope user work.",
+            "- Read routing: use knowledge.search-and-fetch or notion.search-and-fetch for indexed shared Notion/vault context; use notion.fetch when an exact page URL or id is known. ssot.read page reads require verified Notion ownership and a scoped target.",
+            "- Write routing: use ssot.write for permitted brokered updates on in-scope user work.",
             "- Best fit for repeated brokered writes is still a database row whose people-typed column(s) name the verified caller (any column name — Owner, Assignee, DRI, Lead, Reviewer, ...). Plain child pages can be more fragile under strict scope checks.",
             "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing or the rail disappearing.",
         ]
         if verification_status != "verified":
             if claimed_email:
-                lines.append(f"- Verification: pending for {claimed_email}. Shared writes remain read-only until the claim is verified.")
+                lines.append(f"- Verification: pending for {claimed_email}. Brokered ssot.read page reads and shared writes remain gated until the claim is verified.")
             else:
-                lines.append("- Verification: not started yet. Shared writes remain read-only until the user verifies their Notion identity.")
+                lines.append("- Verification: not started yet. Brokered ssot.read page reads and shared writes remain gated until the user verifies their Notion identity.")
         else:
-            lines.append(f"- Verification: confirmed for {verified_email or 'your verified Notion identity'}. Shared brokered reads and writes are enabled within your scoped rails.")
+            lines.append(f"- Verification: confirmed for {verified_email or 'your verified Notion identity'}. Shared brokered reads and writes are enabled within scoped rails; broad plate or knowledge questions should still start with notion.search-and-fetch / knowledge.search-and-fetch.")
             lines.append("- Plain shared pages stay writable when they are in your user's edit lane or when this same agent already established brokered write history there. If a page is still outside scope, move the work into an owned database item or ask for approval instead of asking the user to re-touch it.")
         lines.extend(pending_lines)
         return "\n".join(lines)
@@ -10004,9 +10005,9 @@ def _build_notion_stub(
     ]
     if identity is None or verification_status != "verified":
         if claimed_email:
-            lines.append(f"- Verification: pending for {claimed_email}. Shared writes remain read-only until the claim is verified.")
+            lines.append(f"- Verification: pending for {claimed_email}. Brokered ssot.read and shared writes remain gated until the claim is verified.")
         else:
-            lines.append("- Verification: not started yet. Shared writes remain read-only until the user verifies their Notion identity.")
+            lines.append("- Verification: not started yet. Brokered ssot.read and shared writes remain gated until the user verifies their Notion identity.")
         lines.extend(pending_lines)
         lines.extend(_notion_team_summary(team_items))
         return "\n".join(lines)
@@ -10249,8 +10250,9 @@ def _build_today_plate(
             lines.append("- No structured ownership surfaces discovered: no child database under the SSOT root exposes a people-typed property the current user could appear in.")
             if pending_lines:
                 lines.extend(pending_lines)
-            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: read the qmd notion-shared collection via knowledge.search-and-fetch using the user's own framing — names, projects, intent — and reason from what comes back rather than matching specific keywords. Reach for ssot.read or notion.query for live verification before changing shared state.")
-            lines.append("- For brokered writes to the SSOT page or its descendants use ssot.write; ssot.read returns the latest live page contents.")
+            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: read the qmd notion-shared collection via knowledge.search-and-fetch or notion.search-and-fetch using the user's own framing — names, projects, intent — and reason from what comes back rather than matching specific keywords.")
+            lines.append("- Live read routing: use notion.fetch for exact page URLs/ids and notion.query for live structured database targets. Use ssot.read only after Notion verification and only for scoped brokered targets; unverified page reads are refused by design.")
+            lines.append("- For brokered writes to the SSOT page or its descendants use ssot.write; use ssot.preflight first when scope is uncertain.")
             return "\n".join(lines)
         db_titles = [str(db.get("title") or "").strip() for db in task_dbs]
         per_db_channels: list[str] = []
@@ -13693,7 +13695,7 @@ def _notion_signal_label(signal: str) -> str:
 def _render_notion_agent_nudge(entries: list[dict[str, str]]) -> str:
     clean_entries = [entry for entry in entries if isinstance(entry, dict)]
     if not clean_entries:
-        return "Notion digest: shared Notion changed. Use notion.query or ssot.read before changing shared state."
+        return "Notion digest: shared Notion changed. Use notion.query/notion.fetch, or verified ssot.read for scoped brokered targets, before changing shared state."
     total = len(clean_entries)
     counts: dict[str, int] = {}
     for entry in clean_entries:
@@ -13713,7 +13715,7 @@ def _render_notion_agent_nudge(entries: list[dict[str, str]]) -> str:
         + ". Examples: "
         + "; ".join(examples)
         + suffix
-        + ". Check live details with notion.query or ssot.read before acting."
+        + ". Check live details with notion.query/notion.fetch, or verified ssot.read for scoped brokered targets, before acting."
     )
 
 

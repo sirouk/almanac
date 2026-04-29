@@ -1935,6 +1935,15 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "refresh-agent-install should repair gateway home-channel env from enrollment state",
     )
     expect(
+        "ensure_agent_mcp_auth" in refresh_helper
+        and "almanac-bootstrap-token" in refresh_helper
+        and "validate_token" in refresh_helper
+        and "generate_raw_token" in refresh_helper
+        and "superseded by repaired agent MCP bootstrap token" in refresh_helper
+        and "bootstrap token checked/repaired" in refresh_helper,
+        "refresh-agent-install should validate or repair the per-agent Almanac MCP bootstrap token during install/upgrade realignment",
+    )
+    expect(
         "TELEGRAM_REACTIONS" in refresh_helper
         and "DISCORD_REACTIONS" in refresh_helper,
         "refresh-agent-install should keep messaging reactions enabled by default",

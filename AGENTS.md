@@ -490,6 +490,12 @@ New and refreshed agents should get these defaults from the outset:
   read-only active skills for each agent.
 - Telegram `/start` support through Almanac's Hermes hook, not core Hermes.
 - `almanac-managed-context` plugin installed and enabled.
+- Per-agent Almanac MCP bootstrap token installed at
+  `HERMES_HOME/secrets/almanac-bootstrap-token`. Agents do not pass this token
+  manually; `almanac-managed-context` injects it before Almanac MCP tool
+  dispatch. `refresh-agent-install.sh`, and therefore idempotent install and
+  upgrade realignment, validates the token against the control-plane DB and
+  repairs the file/token row when needed.
 - `TELEGRAM_REACTIONS=true`.
 - `DISCORD_REACTIONS=true`.
 - Gateway run with Hermes `gateway run --replace`.

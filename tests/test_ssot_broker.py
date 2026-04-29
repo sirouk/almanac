@@ -2815,7 +2815,7 @@ def test_notion_batcher_hydrates_entity_before_routing() -> None:
             expect(int(agent_notice["c"] if agent_notice else 0) == 1, str(dict(agent_notice) if agent_notice else {}))
             expect("Notion digest: 1 scoped update" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
             expect("properties updated on Launch checklist" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
-            expect("Check live details with notion.query or ssot.read before acting" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
+            expect("Check live details with notion.query/notion.fetch, or verified ssot.read for scoped brokered targets, before acting" in str(agent_notice["message"] or ""), str(dict(agent_notice)))
             extra = json.loads(str(agent_notice["extra_json"] or "{}"))
             expect(extra["events"][0]["target"] == "Launch checklist (page aaaaaaaa)", str(extra))
             expect(extra["events"][0]["signal_label"] == "work update", str(extra))

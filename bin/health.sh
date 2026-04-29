@@ -1049,6 +1049,23 @@ for agent in agents:
         failures += 1
         continue
 
+    token_count_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM bootstrap_tokens
+        WHERE agent_id = ?
+          AND revoked_at IS NULL
+          AND COALESCE(activated_at, '') != ''
+        """,
+        (agent_id,),
+    ).fetchone()
+    active_token_count = int(token_count_row["count"] if token_count_row is not None else 0)
+    if active_token_count <= 0:
+        print(f"FAIL {agent_id}: no active Almanac MCP bootstrap token row")
+        failures += 1
+        continue
+    status_notes.append("MCP bootstrap token row active")
+
     vault_failures, vault_warnings, vault_notes = check_shared_vault_acl(vault_dir_raw, unix_user)
     for warning in vault_warnings:
         print(f"WARN {agent_id}: {warning}")
@@ -1086,6 +1103,11 @@ for agent in agents:
         print(f"FAIL {agent_id}: refresh stale since {job['last_run_at']} (status={job['last_status'] or 'unknown'})")
         failures += 1
         continue
+    if str(job["last_status"] or "") != "ok":
+        print(f"FAIL {agent_id}: refresh job last_status={job['last_status'] or 'unknown'}")
+        failures += 1
+        continue
+    status_notes.append("MCP token validated by user-owned refresh job")
 
     note_parts = []
     if privacy_notes:

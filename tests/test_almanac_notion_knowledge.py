@@ -1111,6 +1111,9 @@ def test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message() -> 
             expect("No structured ownership surfaces discovered" in plate, plate)
             expect("people-typed property" in plate, plate)
             expect("knowledge.search-and-fetch" in plate, plate)
+            expect("notion.search-and-fetch" in plate, plate)
+            expect("Use ssot.read only after Notion verification" in plate, plate)
+            expect("unverified page reads are refused by design" in plate, plate)
             # And critically: do NOT bake in keyword instructions.
             expect("'task'" not in plate and "'todo'" not in plate, plate)
             print("PASS test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message")

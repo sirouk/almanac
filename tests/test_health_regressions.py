@@ -30,6 +30,22 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def install_active_mcp_token_row(conn: sqlite3.Connection, agent_id: str) -> None:
+    conn.execute(
+        """
+        CREATE TABLE bootstrap_tokens (
+          agent_id TEXT,
+          revoked_at TEXT,
+          activated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO bootstrap_tokens (agent_id, revoked_at, activated_at) VALUES (?, NULL, ?)",
+        (agent_id, dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")),
+    )
+
+
 def test_placeholder_secret_detection_and_reporting() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, "trim_secret_marker() {", "check_curator_gateway_runtime() {")
@@ -479,6 +495,7 @@ def test_active_agent_health_treats_private_user_runtime_as_ok() -> None:
                 "ok",
             ),
         )
+        install_active_mcp_token_row(conn, "agent-private")
         conn.commit()
         conn.close()
 
@@ -610,6 +627,7 @@ ACL
                 "ok",
             ),
         )
+        install_active_mcp_token_row(conn, "agent-private")
         conn.commit()
         conn.close()
 
@@ -744,6 +762,7 @@ def test_active_agent_health_fails_when_agent_backup_cron_last_run_failed() -> N
                 "ok",
             ),
         )
+        install_active_mcp_token_row(conn, "agent-backup")
         conn.commit()
         conn.close()
 

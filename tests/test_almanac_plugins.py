@@ -482,7 +482,7 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
                             {
                                 "channel_kind": "notion-webhook",
                                 "created_at": "2026-04-21T12:05:00+00:00",
-                                "message": "Notion digest: 1 scoped update(s) for this user (work update). Examples: properties updated on Launch checklist (page aaaaaaaa) (event evt_123). Check live details with notion.query or ssot.read before acting.",
+                                "message": "Notion digest: 1 scoped update(s) for this user (work update). Examples: properties updated on Launch checklist (page aaaaaaaa) (event evt_123). Check live details with notion.query/notion.fetch, or verified ssot.read for scoped brokered targets, before acting.",
                             },
                         ],
                     },
@@ -504,7 +504,7 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
             )
             expect(isinstance(third, dict) and third.get("context"), f"expected recent-event revision injection, got {third!r}")
             expect("Notion digest: 1 scoped update" in third["context"], third["context"])
-            expect("Check live details with notion.query or ssot.read before acting" in third["context"], third["context"])
+            expect("notion.query/notion.fetch, or verified ssot.read" in third["context"], third["context"])
 
             access_state_path.write_text(
                 json.dumps(

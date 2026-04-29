@@ -596,6 +596,15 @@ Those wrappers normalize qmd resource shapes, include PDF-ingest by default,
 bound fetch sizes, and fall back from vector+lex search to lex-only when a
 fast retrieval path needs to stay alive.
 
+`almanac-memory-synth.timer` is a cached second-stage sensemaking lane. When an
+OpenAI-compatible vision/chat model is configured through
+`ALMANAC_MEMORY_SYNTH_*` or the existing `PDF_VISION_*` settings, it periodically
+summarizes bounded vault folders and indexed Notion areas into compact semantic
+cards. Those cards are stored in the control-plane database and rendered into
+`[managed:recall-stubs]` by the managed-context plugin. The service skips
+unchanged sources, keeps output short, and treats every card as a retrieval cue
+rather than evidence.
+
 ## PDFs And Files
 
 qmd indexes text-like files directly:
@@ -741,7 +750,7 @@ Event lanes include:
 - Hermes docs updates.
 - Shared Notion webhook changes.
 - SSOT digests, compact `[managed:vault-landmarks]` /
-  `[managed:notion-landmarks]`, `[managed:recall-stubs]`, and
+  `[managed:notion-landmarks]`, synthesis-backed `[managed:recall-stubs]`, and
   `[managed:today-plate]`.
 - Pending write approvals.
 - Assigned or due work.

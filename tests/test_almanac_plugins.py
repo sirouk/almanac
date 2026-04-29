@@ -404,7 +404,7 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
             )
             expect(second is None, f"expected no injection for unrelated turn with unchanged revision, got {second!r}")
 
-            parallax = hook(
+            annex = hook(
                 session_id="session-1",
                 user_message="what is in Research Annex?",
                 conversation_history=[{"role": "user", "content": "hello there"}],
@@ -413,9 +413,9 @@ def test_almanac_managed_context_plugin_registers_hook_and_uses_local_revision()
                 platform="telegram",
                 sender_id="user-1",
             )
-            expect(isinstance(parallax, dict) and parallax.get("context"), f"expected landmark-triggered injection, got {parallax!r}")
-            expect("[managed:vault-landmarks]" in parallax["context"], parallax["context"])
-            expect("archive_note_alpha.pdf" in parallax["context"], parallax["context"])
+            expect(isinstance(annex, dict) and annex.get("context"), f"expected landmark-triggered injection, got {annex!r}")
+            expect("[managed:vault-landmarks]" in annex["context"], annex["context"])
+            expect("archive_note_alpha.pdf" in annex["context"], annex["context"])
 
             switch_seed = hook(
                 session_id="session-model-switch",

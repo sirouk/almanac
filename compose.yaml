@@ -31,6 +31,16 @@ x-almanac-app: &almanac-app
     HOME: /home/almanac
     XDG_CONFIG_HOME: /home/almanac/.qmd/config
     XDG_CACHE_HOME: /home/almanac/.qmd/cache
+    ALMANAC_MEMORY_SYNTH_ENABLED: ${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}
+    ALMANAC_MEMORY_SYNTH_ENDPOINT: ${ALMANAC_MEMORY_SYNTH_ENDPOINT:-}
+    ALMANAC_MEMORY_SYNTH_MODEL: ${ALMANAC_MEMORY_SYNTH_MODEL:-}
+    ALMANAC_MEMORY_SYNTH_API_KEY: ${ALMANAC_MEMORY_SYNTH_API_KEY:-}
+    ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN: ${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}
+    ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS: ${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}
+    ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS: ${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}
+    ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS: ${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}
+    ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS: ${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}
+    ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT: ${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}
   volumes:
     - ./almanac-priv:/home/almanac/almanac/almanac-priv
     - almanac-qmd:/home/almanac/.qmd
@@ -190,6 +200,10 @@ services:
   pdf-ingest:
     <<: *almanac-job
     command: ["./bin/docker-job-loop.sh", "pdf-ingest", "300", "./bin/pdf-ingest.sh", "--quiet"]
+
+  memory-synth:
+    <<: *almanac-job
+    command: ["./bin/docker-job-loop.sh", "memory-synth", "1800", "./bin/memory-synth.sh"]
 
   hermes-docs-sync:
     <<: *almanac-job

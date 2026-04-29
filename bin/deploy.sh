@@ -24,6 +24,16 @@ PDF_VISION_ENDPOINT="${PDF_VISION_ENDPOINT:-}"
 PDF_VISION_MODEL="${PDF_VISION_MODEL:-}"
 PDF_VISION_API_KEY="${PDF_VISION_API_KEY:-}"
 PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
+ALMANAC_MEMORY_SYNTH_ENABLED="${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
+ALMANAC_MEMORY_SYNTH_ENDPOINT="${ALMANAC_MEMORY_SYNTH_ENDPOINT:-}"
+ALMANAC_MEMORY_SYNTH_MODEL="${ALMANAC_MEMORY_SYNTH_MODEL:-}"
+ALMANAC_MEMORY_SYNTH_API_KEY="${ALMANAC_MEMORY_SYNTH_API_KEY:-}"
+ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN="${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
+ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS="${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
+ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS="${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
+ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS="${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
+ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS="${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
+ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT="${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
 NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
 NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
 ENABLE_NEXTCLOUD="${ENABLE_NEXTCLOUD:-1}"
@@ -1768,6 +1778,16 @@ emit_runtime_config() {
     write_kv PDF_VISION_MODEL "${PDF_VISION_MODEL:-}"
     write_kv PDF_VISION_API_KEY "${PDF_VISION_API_KEY:-}"
     write_kv PDF_VISION_MAX_PAGES "${PDF_VISION_MAX_PAGES:-6}"
+    write_kv ALMANAC_MEMORY_SYNTH_ENABLED "${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
+    write_kv ALMANAC_MEMORY_SYNTH_ENDPOINT "${ALMANAC_MEMORY_SYNTH_ENDPOINT:-}"
+    write_kv ALMANAC_MEMORY_SYNTH_MODEL "${ALMANAC_MEMORY_SYNTH_MODEL:-}"
+    write_kv ALMANAC_MEMORY_SYNTH_API_KEY "${ALMANAC_MEMORY_SYNTH_API_KEY:-}"
+    write_kv ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN "${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
+    write_kv ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS "${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
+    write_kv ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS "${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
+    write_kv ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS "${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
+    write_kv ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS "${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
+    write_kv ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT "${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
     write_kv VAULT_WATCH_DEBOUNCE_SECONDS "${VAULT_WATCH_DEBOUNCE_SECONDS:-0.5}"
     write_kv VAULT_WATCH_MAX_BATCH_SECONDS "${VAULT_WATCH_MAX_BATCH_SECONDS:-10}"
     write_kv VAULT_WATCH_RUN_EMBED "${VAULT_WATCH_RUN_EMBED:-auto}"
@@ -4359,8 +4379,9 @@ restart_shared_user_services_root() {
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
   if [[ -S "/run/user/$uid/bus" ]]; then
     run_as_user_systemd "$ALMANAC_USER" "$uid" "systemctl --user daemon-reload"
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer"
+    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer"
     run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-curator-refresh.service" || true
+    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-memory-synth.service" || true
     run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-health-watch.service" || true
 
     if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
@@ -4660,7 +4681,7 @@ run_root_remove() {
     fi
 
     if [[ -S "/run/user/$uid/bus" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-curator-gateway.service almanac-curator-onboarding.service almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true" || true
+      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer almanac-memory-synth.service almanac-curator-gateway.service almanac-curator-onboarding.service almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true" || true
       run_as_user_systemd "$ALMANAC_USER" "$uid" "systemctl --user daemon-reload >/dev/null 2>&1 || true" || true
     fi
 
@@ -6449,8 +6470,9 @@ notion_migration_restart_services() {
   if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
     if set_user_systemd_bus_env; then
       systemctl --user daemon-reload
-      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer || true
+      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer || true
       systemctl --user start almanac-curator-refresh.service >/dev/null 2>&1 || true
+      systemctl --user start almanac-memory-synth.service >/dev/null 2>&1 || true
       systemctl --user start almanac-health-watch.service >/dev/null 2>&1 || true
     fi
     return 0
@@ -7044,8 +7066,9 @@ run_curator_setup_flow() {
     reload_runtime_config_from_file "$CONFIG_TARGET" || true
     if set_user_systemd_bus_env; then
       systemctl --user daemon-reload
-      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer
+      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer
       systemctl --user start almanac-curator-refresh.service >/dev/null 2>&1 || true
+      systemctl --user start almanac-memory-synth.service >/dev/null 2>&1 || true
       systemctl --user start almanac-health-watch.service >/dev/null 2>&1 || true
       if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
         systemctl --user restart almanac-pdf-ingest.timer

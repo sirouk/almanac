@@ -52,6 +52,7 @@ enable_user_units almanac-ssot-batcher.timer
 enable_user_units almanac-notification-delivery.timer
 enable_user_units almanac-health-watch.timer
 enable_user_units almanac-curator-refresh.timer
+enable_user_units almanac-memory-synth.timer
 enable_user_units almanac-qmd-mcp.service
 enable_user_units almanac-qmd-update.timer
 enable_user_units almanac-vault-watch.service
@@ -112,6 +113,7 @@ restart_user_units \
   almanac-notification-delivery.timer \
   almanac-health-watch.timer \
   almanac-curator-refresh.timer \
+  almanac-memory-synth.timer \
   almanac-qmd-mcp.service \
   almanac-qmd-update.timer \
   almanac-vault-watch.service \
@@ -121,6 +123,7 @@ if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
   start_user_units almanac-hermes-docs-sync.service
 fi
 start_user_units almanac-curator-refresh.service
+start_user_units almanac-memory-synth.service
 
 if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
   restart_user_units almanac-pdf-ingest.timer

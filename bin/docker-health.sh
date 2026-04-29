@@ -109,6 +109,12 @@ check_optional_tcp "host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-
 check_tcp "postgres" "5432" "Postgres"
 check_tcp "redis" "6379" "Redis"
 
+if [[ -f "$ALMANAC_MEMORY_SYNTH_STATUS_FILE" ]]; then
+  pass "memory synthesis status file exists"
+else
+  warn "memory synthesis status file not written yet"
+fi
+
 if qmd --version >/dev/null 2>&1; then
   pass "qmd CLI is available"
 else

@@ -267,6 +267,8 @@ almanac-health-watch.service
 almanac-health-watch.timer
 almanac-curator-refresh.service
 almanac-curator-refresh.timer
+almanac-memory-synth.service
+almanac-memory-synth.timer
 almanac-qmd-mcp.service
 almanac-qmd-update.service
 almanac-qmd-update.timer
@@ -592,6 +594,13 @@ PDF files are converted into generated markdown under
 `state/pdf-ingest/markdown`, then indexed via the `vault-pdf-ingest`
 collection.
 
+`almanac-memory-synth.timer` is the optional cached second-stage sensemaking
+lane. It uses `ALMANAC_MEMORY_SYNTH_*` or falls back to `PDF_VISION_*`, writes
+compact rows to `memory_synthesis_cards`, and lets managed memory render those
+cards into `[managed:recall-stubs]`. It must stay off the chat critical path:
+skip unchanged source signatures, bound snippets and output, and treat cards as
+retrieval hints rather than answerable facts.
+
 Shared Notion writes must go through the SSOT broker. Destructive operations
 such as archive/delete/trash are intentionally rejected or require approval
 rails; do not bypass this with raw Notion access. Shared org pages and
@@ -734,6 +743,8 @@ bin/qmd-refresh.sh
 bin/qmd-daemon.sh
 bin/pdf-ingest.sh
 bin/pdf-ingest.py
+bin/memory-synth.sh
+python/almanac_memory_synthesizer.py
 bin/sync-hermes-docs-into-vault.sh
 bin/vault-repo-sync.sh
 ```

@@ -880,6 +880,24 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           note TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS memory_synthesis_cards (
+          card_id TEXT PRIMARY KEY,
+          source_kind TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          source_title TEXT NOT NULL DEFAULT '',
+          source_signature TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          model TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          card_json TEXT NOT NULL DEFAULT '{}',
+          card_text TEXT NOT NULL DEFAULT '',
+          source_count INTEGER NOT NULL DEFAULT 0,
+          token_estimate INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
         """
     )
     _migrate_notion_identity_claims_remove_legacy_nonce(conn)
@@ -962,6 +980,18 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_notion_retrieval_audit_agent_created
         ON notion_retrieval_audit (agent_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_synthesis_cards_source
+        ON memory_synthesis_cards (source_kind, source_key)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memory_synthesis_cards_status_updated
+        ON memory_synthesis_cards (status, updated_at)
         """
     )
     conn.execute(
@@ -13197,6 +13227,36 @@ def _build_notion_landmarks(conn: sqlite3.Connection) -> tuple[str, list[dict[st
     return _render_notion_landmarks(items), items
 
 
+def _memory_synthesis_card_lines(conn: sqlite3.Connection) -> list[str]:
+    try:
+        limit = int(config_env_value("ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT", "8") or "8")
+    except (TypeError, ValueError):
+        limit = 8
+    limit = max(1, min(limit, 30))
+    try:
+        rows = conn.execute(
+            """
+            SELECT source_kind, source_key, source_title, card_text, updated_at
+            FROM memory_synthesis_cards
+            WHERE status = 'ok'
+              AND card_text != ''
+            ORDER BY updated_at DESC, source_kind ASC, source_key ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    lines = [str(row["card_text"] or "").strip() for row in rows if str(row["card_text"] or "").strip()]
+    if not lines:
+        return []
+    return [
+        "Semantic synthesis cards:",
+        "- LLM-compressed recall hints only: use retrieval tools for evidence, exact text, citations, or state changes.",
+        *lines,
+    ]
+
+
 def _build_recall_stubs(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -13259,6 +13319,10 @@ def _build_recall_stubs(
             )
     else:
         lines.append("Recent hot-reload signals: none queued for this agent.")
+
+    synthesis_lines = _memory_synthesis_card_lines(conn)
+    if synthesis_lines:
+        lines.extend(synthesis_lines)
 
     lines.append(
         "Quality rule: if recall feels thin, say which rail was searched and retry once with narrower nouns, owner names, file titles, or source lane."

@@ -72,11 +72,16 @@ Show the current assignment with:
 ```
 
 The default stack starts Almanac MCP, qmd MCP, Notion webhook, Nextcloud,
-Postgres, Redis, vault watching, recurring job containers, and the Docker
-agent supervisor. The supervisor replaces the baremetal per-user systemd units
-for enrolled agents: it reconciles refresh, Hermes gateway, dashboard,
-authenticated dashboard proxy, cron tick, and code-server workspace processes
-from the control-plane state.
+Postgres, Redis, vault watching, recurring job containers, memory synthesis,
+and the Docker agent supervisor. The supervisor replaces the baremetal per-user
+systemd units for enrolled agents: it reconciles refresh, Hermes gateway,
+dashboard, authenticated dashboard proxy, cron tick, and code-server workspace
+processes from the control-plane state.
+
+The `memory-synth` job mirrors the baremetal `almanac-memory-synth.timer`: it
+uses the configured `ALMANAC_MEMORY_SYNTH_*` values, or falls back to
+`PDF_VISION_*`, to build cached semantic recall cards for managed-context
+hot injection without putting LLM summarization on the chat path.
 
 `install` and `upgrade` also apply the private operating profile when present,
 record `state/almanac-release.json`, run Docker health, and run the same live

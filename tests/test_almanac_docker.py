@@ -59,6 +59,7 @@ def test_compose_defines_full_stack_services() -> None:
         "curator-refresh:",
         "qmd-refresh:",
         "pdf-ingest:",
+        "memory-synth:",
         "hermes-docs-sync:",
         "quarto-render:",
         "backup:",

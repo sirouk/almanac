@@ -1788,6 +1788,81 @@ PY
   fi
 }
 
+check_memory_synth_status() {
+  local enabled_raw="${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
+  local endpoint="${ALMANAC_MEMORY_SYNTH_ENDPOINT:-${PDF_VISION_ENDPOINT:-}}"
+  local model="${ALMANAC_MEMORY_SYNTH_MODEL:-${PDF_VISION_MODEL:-}}"
+  local api_key="${ALMANAC_MEMORY_SYNTH_API_KEY:-${PDF_VISION_API_KEY:-}}"
+  local explicit_enabled=1
+  local enabled=0
+  local resolved_endpoint=""
+
+  case "$(lowercase "$enabled_raw")" in
+    ""|auto)
+      explicit_enabled=0
+      if [[ -n "$endpoint" && -n "$model" && -n "$api_key" ]]; then
+        enabled=1
+      fi
+      ;;
+    1|true|yes|on|enabled)
+      enabled=1
+      ;;
+    *)
+      enabled=0
+      ;;
+  esac
+
+  if [[ "$enabled" != "1" ]]; then
+    if [[ "$explicit_enabled" == "0" ]]; then
+      pass "memory synthesis auto-disabled until LLM endpoint/model/key are configured"
+    else
+      pass "memory synthesis disabled in config"
+    fi
+  elif [[ -n "$endpoint" && -n "$model" && -n "$api_key" ]]; then
+    resolved_endpoint="$(resolve_pdf_vision_endpoint "$endpoint" 2>/dev/null || printf '%s' "$endpoint")"
+    pass "memory synthesis configured via $resolved_endpoint (model $model)"
+  else
+    warn_or_fail "memory synthesis is enabled, but ALMANAC_MEMORY_SYNTH_ENDPOINT, MODEL, and API_KEY are not complete"
+  fi
+
+  if [[ -f "$ALMANAC_MEMORY_SYNTH_STATUS_FILE" ]]; then
+    local memory_status_output=""
+    local memory_status_rc=0
+    memory_status_output="$(
+      ALMANAC_MEMORY_SYNTH_STATUS_JSON="$(cat "$ALMANAC_MEMORY_SYNTH_STATUS_FILE")" python3 - <<'PY'
+import json
+import os
+
+status = json.loads(os.environ["ALMANAC_MEMORY_SYNTH_STATUS_JSON"])
+state = str(status.get("status") or "unknown")
+candidate_count = int(status.get("candidate_count") or 0)
+changed = int(status.get("changed") or 0)
+synthesized = int(status.get("synthesized") or 0)
+failed = int(status.get("failed") or 0)
+finished_at = str(status.get("finished_at") or "")
+print(f"last memory synthesis run status={state}; candidates={candidate_count}; synthesized={synthesized}; changed={changed}; failed={failed}; finished_at={finished_at or 'unknown'}")
+raise SystemExit(2 if state in {"fail", "failed"} or failed else 0)
+PY
+    )" || memory_status_rc=$?
+    if [[ "$memory_status_rc" != "0" && -z "$memory_status_output" ]]; then
+      warn_or_fail "could not parse $ALMANAC_MEMORY_SYNTH_STATUS_FILE"
+      return 0
+    fi
+    while IFS= read -r line; do
+      if [[ -z "$line" ]]; then
+        continue
+      fi
+      if [[ "$memory_status_rc" == "0" ]]; then
+        pass "$line"
+      else
+        warn_or_fail "$line"
+      fi
+    done <<<"$memory_status_output"
+  else
+    warn "memory synthesis status file not found yet at $ALMANAC_MEMORY_SYNTH_STATUS_FILE"
+  fi
+}
+
 if [[ -n "${CONFIG_FILE:-}" ]]; then
   pass "config loaded from $CONFIG_FILE"
 else
@@ -1846,6 +1921,7 @@ if command -v qmd >/dev/null 2>&1; then
 fi
 
 check_pdf_ingest_status
+check_memory_synth_status
 
 if [[ "$QMD_RUN_EMBED" == "1" ]]; then
   pass "qmd refresh will run embeddings"
@@ -1895,6 +1971,8 @@ if set_user_systemd_bus_env; then
     check_user_timer_job_result almanac-health-watch.service required
   fi
   check_unit_state almanac-curator-refresh.timer required
+  check_unit_state almanac-memory-synth.timer required
+  check_user_timer_job_result almanac-memory-synth.service required
   check_unit_state almanac-qmd-mcp.service required
   check_unit_state almanac-qmd-update.timer required
   check_unit_state almanac-vault-watch.service required

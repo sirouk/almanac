@@ -225,6 +225,10 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
     teams = profile.get("teams") if isinstance(profile.get("teams"), list) else []
     references = profile.get("references") if isinstance(profile.get("references"), list) else []
 
+    generated_path_error = _generated_vault_profile_path_error(profile)
+    if generated_path_error:
+        errors.append(generated_path_error)
+
     person_ids = _list_ids(people)
     duplicate_people = sorted({person_id for person_id in person_ids if person_ids.count(person_id) > 1})
     if duplicate_people:
@@ -677,12 +681,39 @@ def generated_vault_profile_path(profile: dict[str, Any]) -> str:
     return str(vault.get("generated_org_profile_path") or DEFAULT_GENERATED_PROFILE_PATH).strip()
 
 
-def _generated_vault_abs_path(cfg: Any, profile: dict[str, Any]) -> Path:
+def _generated_vault_profile_path_error(profile: dict[str, Any]) -> str:
     relative = generated_vault_profile_path(profile)
+    if not relative:
+        return "work_surfaces.vault.generated_org_profile_path must not be empty"
     path = Path(relative)
     if path.is_absolute():
-        return path
-    return Path(cfg.vault_dir) / path
+        return "work_surfaces.vault.generated_org_profile_path must be relative to the shared vault"
+    if any(part == ".." for part in path.parts):
+        return "work_surfaces.vault.generated_org_profile_path must not traverse outside the shared vault"
+    return ""
+
+
+def _generated_vault_abs_path(cfg: Any, profile: dict[str, Any]) -> Path:
+    path_error = _generated_vault_profile_path_error(profile)
+    if path_error:
+        raise ValueError(path_error)
+    relative = generated_vault_profile_path(profile)
+    return Path(cfg.vault_dir) / Path(relative)
+
+
+def _display_source_path(source_path: Path) -> str:
+    try:
+        return str(source_path.relative_to(REPO_ROOT))
+    except ValueError:
+        pass
+    parts = source_path.parts
+    if "almanac-priv" in parts:
+        index = parts.index("almanac-priv")
+        suffix = "/".join(parts[index + 1 :])
+        return f"<private>/{suffix}" if suffix else "<private>"
+    if source_path.is_absolute():
+        return source_path.name
+    return str(source_path)
 
 
 def _safe_join(values: object) -> str:
@@ -728,7 +759,7 @@ def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = 
         f"- Revision: sha256:{checksum}",
     ]
     if source_path is not None:
-        lines.append(f"- Source file: {source_path}")
+        lines.append(f"- Source file: {_display_source_path(source_path)}")
     lineage = _lineage(profile)
     if lineage:
         lines.extend(["", "## Agent Lineage", ""])

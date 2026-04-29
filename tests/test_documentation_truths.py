@@ -41,8 +41,13 @@ def test_org_profile_docs_mark_cli_as_shipped_contract() -> None:
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     org_doc = (REPO / "docs" / "org-profile.md").read_text(encoding="utf-8")
     ctl = (REPO / "python" / "almanac_ctl.py").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
     expect('subparsers.add_parser("org-profile")' in ctl, "org-profile CLI should be implemented")
-    expect("`almanac-ctl org-profile`" in readme and "validate,\npreview, apply, and doctor workflow" in readme, readme)
+    expect(
+        "`almanac-ctl org-profile`" in readme
+        and "build, validate, preview, apply, and doctor workflow" in normalized_readme,
+        readme,
+    )
     expect("The commands and receipts below are the shipped operator contract." in org_doc, org_doc)
     print("PASS test_org_profile_docs_mark_cli_as_shipped_contract")
 

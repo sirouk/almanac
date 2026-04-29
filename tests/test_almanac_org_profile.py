@@ -332,10 +332,13 @@ def test_builder_starter_profile_covers_operational_rails() -> None:
         expect(profile["workflows"][0]["id"] == "profile-ingestion", profile["workflows"])
         expect(profile["automations"][0]["id"] == "profile-doctor", profile["automations"])
         expect(profile["benchmarks"][0]["id"] == "orientation-baseline", profile["benchmarks"])
+        profile["organization"]["name"] = "Cafe \u5bb6"
 
         builder.write_profile(path, profile)
         expect(path.is_file(), path)
         expect((path.stat().st_mode & 0o777) == 0o600, oct(path.stat().st_mode))
+        body = path.read_text(encoding="utf-8")
+        expect("Cafe \u5bb6" in body, body)
         loaded = org_profile.load_profile(path)
         context = org_profile.agent_context_for_person(loaded, loaded["people"][0], agent_id="agent-example")
         expect(context["workflows"][0]["id"] == "profile-ingestion", context)
@@ -345,12 +348,48 @@ def test_builder_starter_profile_covers_operational_rails() -> None:
     print("PASS test_builder_starter_profile_covers_operational_rails")
 
 
+def test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized() -> None:
+    org_profile = load_module(REPO / "python" / "almanac_org_profile.py", "almanac_org_profile_path_safety_test")
+    builder = load_module(REPO / "python" / "almanac_org_profile_builder.py", "almanac_org_profile_path_builder_test")
+    profile = builder.profile_starter()
+    validation = org_profile.validate_profile(profile)
+    expect(validation["valid"], validation)
+
+    absolute_profile = json.loads(json.dumps(profile))
+    absolute_profile.setdefault("work_surfaces", {}).setdefault("vault", {})["generated_org_profile_path"] = "/tmp/org-profile.md"
+    absolute_validation = org_profile.validate_profile(absolute_profile)
+    expect(not absolute_validation["valid"], absolute_validation)
+    expect(any("must be relative" in error for error in absolute_validation["errors"]), absolute_validation)
+
+    traversal_profile = json.loads(json.dumps(profile))
+    traversal_profile.setdefault("work_surfaces", {}).setdefault("vault", {})["generated_org_profile_path"] = "../outside.md"
+    traversal_validation = org_profile.validate_profile(traversal_profile)
+    expect(not traversal_validation["valid"], traversal_validation)
+    expect(any("must not traverse" in error for error in traversal_validation["errors"]), traversal_validation)
+
+    rendered = org_profile.render_vault_profile(
+        profile,
+        source_path=Path("/home/example/almanac/almanac-priv/config/org-profile.yaml"),
+    )
+    expect("<private>/config/org-profile.yaml" in rendered, rendered)
+    expect("/home/example" not in rendered, rendered)
+
+    public_rendered = org_profile.render_vault_profile(
+        profile,
+        source_path=REPO / "config" / "org-profile.ultimate.example.yaml",
+    )
+    expect("config/org-profile.ultimate.example.yaml" in public_rendered, public_rendered)
+
+    print("PASS test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized")
+
+
 def main() -> int:
     test_ultimate_example_profile_applies_to_state_vault_and_agent_memory()
     test_human_owner_modules_and_seed_checksums_are_distributed()
     test_explicit_identity_profile_link_orients_arbitrary_agent_names()
     test_builder_starter_profile_covers_operational_rails()
-    print("PASS all 4 org-profile tests")
+    test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized()
+    print("PASS all 5 org-profile tests")
     return 0
 
 

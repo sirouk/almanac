@@ -61,6 +61,8 @@ def prompt_line(prompt: str, default: str = "", *, required: bool = False) -> st
         sys.stdout.flush()
         answer = sys.stdin.readline()
         if answer == "":
+            if not sys.stdin.isatty():
+                raise SystemExit("input closed while org profile builder was waiting for a response")
             answer = "\n"
         value = answer.rstrip("\n")
         if not value:
@@ -95,7 +97,7 @@ def prompt_choice(prompt: str, choices: list[str], default: str = "") -> str:
 def prompt_multiline(prompt: str, current: str = "") -> str:
     print(f"{prompt}")
     if current:
-        print("Current value is shown below. Press ENTER then a single '.' to keep it unchanged.")
+        print("Current value is shown below. Enter a single '.' immediately to keep it unchanged.")
         print("--- current ---")
         print(current)
         print("--- end current ---")
@@ -355,7 +357,7 @@ def load_or_start(path: Path, *, from_scratch: bool) -> dict[str, Any]:
 
 def write_profile(path: Path, profile: dict[str, Any], *, backup: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = yaml.safe_dump(profile, sort_keys=False, allow_unicode=False, width=1000)
+    content = yaml.safe_dump(profile, sort_keys=False, allow_unicode=True, width=1000)
     if path.exists() and backup:
         existing = path.read_text(encoding="utf-8")
         if existing != content:

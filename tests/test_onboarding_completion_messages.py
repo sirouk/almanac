@@ -415,6 +415,7 @@ def test_completion_bundle_falls_back_to_branch_when_deployed_commit_lacks_helpe
         os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
+            completion._repo_ref_contains_path = lambda _cfg, _ref, _relative_path: False
             conn = control.connect_db(cfg)
             unix_user = pwd.getpwuid(os.getuid()).pw_name
             hermes_home = root / "homes" / unix_user / ".local" / "share" / "almanac-agent" / "hermes-home"

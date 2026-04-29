@@ -427,7 +427,10 @@ An enrolled user gets:
   sends the dashboard and workspace links, the user-agent bot DMs the user
   directly with the same code. Operators can retry that outreach from the
   configured operator channel with `/retry_contact <unixusername|discordname>`
-  or from the host with `almanac-ctl onboarding retry-contact`.
+  or from the host with `almanac-ctl onboarding retry-contact`; retries reuse
+  the stored Curator confirmation code and refuse to send if that code is
+  missing or mismatched. Discord onboarding users can also DM Curator
+  `/retry-contact` to retry their own agent-bot DM with the same code.
 - Optional remote SSH control over Tailscale using a user-provided public key.
 
 Vault shortcuts refuse to overwrite a real directory. Stale symlinks are
@@ -767,7 +770,9 @@ Useful operator commands:
 Telegram bot command menus use Telegram-compatible underscores for multiword
 commands, such as `/setup_backup`, `/verify_notion`, `/ssh_key`, and
 operator-only `/retry_contact`. The older typed hyphen aliases continue to
-work when sent as plain messages.
+work when sent as plain messages. Discord app commands include `/retry-contact`;
+in the operator channel it accepts a target, while in an onboarding DM it
+retries that user's own Discord agent-bot handoff.
 
 For deliberate cleanup and re-testing of a user lane:
 

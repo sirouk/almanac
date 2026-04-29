@@ -452,7 +452,10 @@ Users should not have to add their agent bot to a server or manually open the
 agent DM. Almanac opens the DM by Discord user id, uses that DM channel as the
 agent home channel, and after Curator sends the completion links it queues a
 root-side handoff that sends the user-agent bot DM with the same visual
-confirmation code Curator showed.
+confirmation code Curator showed. If that DM does not arrive, the onboarding
+user can DM Curator `/retry-contact` to queue the same handoff again; operator
+channels can use `/retry_contact <unixusername|discordname>` for the same
+root-side retry.
 
 Telegram cannot cold-DM a user. For Telegram lanes, Curator should show the
 agent bot handle, such as `@agent_bot`, and tell the user to tap it and press
@@ -466,6 +469,8 @@ rejects hyphens in BotCommand entries. Keep aliases such as `/retry-contact`
 working when useful, but register menu commands as `/retry_contact`,
 `/setup_backup`, `/verify_notion`, and `/ssh_key`. Curator startup refreshes
 Telegram command menus, and Discord startup syncs app commands.
+Discord contact retries must reuse the stored Curator confirmation code from
+the onboarding session; do not mint a fresh code during retry outreach.
 
 ## Agent Gateway Defaults
 

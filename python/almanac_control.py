@@ -3985,25 +3985,67 @@ def _find_discord_contact_session(
     return session, agent
 
 
-def retry_discord_contact(
+def _find_discord_contact_session_for_sender(
+    conn: sqlite3.Connection,
+    *,
+    platform: str,
+    sender_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized_platform = str(platform or "").strip().lower()
+    normalized_sender_id = str(sender_id or "").strip()
+    if normalized_platform != "discord" or not normalized_sender_id:
+        raise ValueError("self-service retry-contact is only available from a Discord onboarding DM")
+    for session in list_onboarding_sessions(conn, redact_secrets=False):
+        answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+        if str(session.get("platform") or "").strip().lower() != "discord":
+            continue
+        if str(session.get("sender_id") or "").strip() != normalized_sender_id:
+            continue
+        bot_platform = str(answers.get("bot_platform") or session.get("platform") or "").strip().lower()
+        if bot_platform != "discord":
+            continue
+        if str(session.get("state") or "").strip().lower() in {"denied", "cancelled"}:
+            continue
+        agent_id = str(session.get("linked_agent_id") or "").strip()
+        if not agent_id:
+            continue
+        agent = get_agent(conn, agent_id)
+        if agent is None:
+            continue
+        if str(agent.get("role") or "") != "user" or str(agent.get("status") or "") != "active":
+            continue
+        return session, agent
+    raise ValueError("no completed Discord agent handoff was found for your onboarding user yet")
+
+
+def _queue_discord_contact_retry(
     conn: sqlite3.Connection,
     cfg: Config,
     *,
+    session: dict[str, Any],
+    agent: dict[str, Any],
     target: str,
     actor: str,
     request_source: str,
 ) -> dict[str, Any]:
-    session, agent = _find_discord_contact_session(conn, target)
     session_id = str(session.get("session_id") or "").strip()
     agent_id = str(agent.get("agent_id") or "").strip()
     recipient_id = str(session.get("sender_id") or "").strip()
     if not session_id or not agent_id or not recipient_id:
         raise ValueError("matched contact is missing session, agent, or Discord recipient id")
+    answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+    confirmation_code = str(answers.get("discord_agent_dm_confirmation_code") or "").strip()
+    if not confirmation_code:
+        raise ValueError(
+            "matched Discord contact has no stored Curator confirmation code; "
+            "retry-contact will not send an unverifiable handoff"
+        )
 
     payload = {
         "session_id": session_id,
         "agent_id": agent_id,
         "recipient_id": recipient_id,
+        "confirmation_code": confirmation_code,
         "force": True,
     }
     action_row, created = request_operator_action(
@@ -4028,23 +4070,70 @@ def retry_discord_contact(
     if created:
         message = (
             f"Queued Discord contact retry for {label}. "
-            "The root maintenance loop will send the agent-bot DM within about a minute."
+            f"The root maintenance loop will send the agent-bot DM with confirmation code {confirmation_code} "
+            "within about a minute."
         )
     elif status == "running":
-        message = f"Discord contact retry for {label} is already running."
+        message = f"Discord contact retry for {label} is already running with confirmation code {confirmation_code}."
     else:
-        message = f"Discord contact retry for {label} is already queued."
+        message = f"Discord contact retry for {label} is already queued with confirmation code {confirmation_code}."
     return {
         "target": target,
         "session_id": session_id,
         "agent_id": agent_id,
         "unix_user": str(agent.get("unix_user") or ""),
         "recipient_id": recipient_id,
+        "confirmation_code": confirmation_code,
         "action_id": int(action_row.get("id") or 0),
         "action_status": status,
         "created": created,
         "message": message,
     }
+
+
+def retry_discord_contact(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    target: str,
+    actor: str,
+    request_source: str,
+) -> dict[str, Any]:
+    session, agent = _find_discord_contact_session(conn, target)
+    return _queue_discord_contact_retry(
+        conn,
+        cfg,
+        session=session,
+        agent=agent,
+        target=target,
+        actor=actor,
+        request_source=request_source,
+    )
+
+
+def retry_discord_contact_for_onboarding_user(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    platform: str,
+    sender_id: str,
+    actor: str,
+    request_source: str,
+) -> dict[str, Any]:
+    session, agent = _find_discord_contact_session_for_sender(
+        conn,
+        platform=platform,
+        sender_id=sender_id,
+    )
+    return _queue_discord_contact_retry(
+        conn,
+        cfg,
+        session=session,
+        agent=agent,
+        target=str(session.get("session_id") or sender_id or "self"),
+        actor=actor,
+        request_source=request_source,
+    )
 
 
 def mark_operator_action_running(

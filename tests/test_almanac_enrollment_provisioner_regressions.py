@@ -169,6 +169,8 @@ def test_discord_completion_handoff_queues_root_dm_action() -> None:
     expect('@tree.command(name="backup"' in curator_text, "Curator Discord should register /backup")
     expect('@tree.command(name="sshkey"' in curator_text, "Curator Discord should register /sshkey")
     expect('@tree.command(name="retry-contact"' in curator_text, "Curator Discord should expose /retry-contact")
+    expect('target: str = ""' in curator_text, "Curator Discord /retry-contact target should be optional for user self-retry")
+    expect('_handle_dm_command(interaction, "/retry-contact")' in curator_text, "Curator Discord should route DM /retry-contact to onboarding flow")
     expect('command in {"/retry-contact", "/retry_contact"}' in curator_text, "Curator Discord should accept typed retry-contact aliases")
     print("PASS test_discord_completion_handoff_queues_root_dm_action")
 
@@ -269,6 +271,33 @@ def test_retry_contact_force_resends_discord_handoff_after_sent_marker() -> None
             answers = refreshed_session.get("answers") or {}
             expect(answers.get("discord_agent_dm_handoff_message_id") == "msg-2", str(answers))
             expect(answers.get("discord_agent_dm_handoff_error") == "", str(answers))
+
+            bad_action, bad_created = control.request_operator_action(
+                conn,
+                action_kind="send-discord-agent-dm",
+                requested_by="operator",
+                request_source="test-retry-contact",
+                requested_target=json.dumps(
+                    {
+                        "session_id": session["session_id"],
+                        "agent_id": "agent-alex",
+                        "recipient_id": "777",
+                        "confirmation_code": "WRONG",
+                        "force": True,
+                    },
+                    sort_keys=True,
+                ),
+                dedupe_by_target=True,
+            )
+            expect(bad_created, str(bad_action))
+            provisioner._run_pending_discord_agent_dm_actions(conn, cfg)
+            bad_refreshed = conn.execute(
+                "SELECT status, note FROM operator_actions WHERE id = ?",
+                (int(bad_action["id"]),),
+            ).fetchone()
+            expect(bad_refreshed["status"] == "failed", str(dict(bad_refreshed)))
+            expect("confirmation code mismatch" in bad_refreshed["note"].lower(), str(dict(bad_refreshed)))
+            expect(len(sent) == 1, f"mismatched confirmation code must not send another DM: {sent}")
             print("PASS test_retry_contact_force_resends_discord_handoff_after_sent_marker")
         finally:
             os.environ.clear()

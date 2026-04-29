@@ -33,6 +33,15 @@ def _repo_ref_contains_path(cfg: Config, ref: str, relative_path: str) -> bool |
     if not ref or shutil.which("git") is None:
         return None
     try:
+        ref_result = subprocess.run(
+            ["git", "-C", str(cfg.repo_dir), "cat-file", "-e", f"{ref}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if ref_result.returncode != 0:
+            return None
         result = subprocess.run(
             ["git", "-C", str(cfg.repo_dir), "cat-file", "-e", f"{ref}:{relative_path}"],
             capture_output=True,
@@ -234,6 +243,7 @@ def _discord_handoff_followup_lines(code: str) -> list[str]:
         "Discord handoff:",
         f"- Your agent bot will DM you directly now with confirmation code `{code}`." if code else "- Your agent bot will DM you directly now.",
         "- If the code matches here and in the bot DM, that DM is your private agent lane.",
+        "- If the bot DM does not arrive, run `/retry-contact` here and I will ask it to try again with the same code.",
     ]
 
 

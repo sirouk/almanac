@@ -26,6 +26,7 @@ from almanac_control import (
     queue_notification,
     request_bootstrap,
     request_operator_action,
+    retry_discord_contact_for_onboarding_user,
     save_onboarding_session,
     start_notion_identity_claim,
     start_onboarding_session,
@@ -57,6 +58,7 @@ STATUS_COMMANDS = {"/status", "status"}
 CANCEL_COMMANDS = {"/cancel", "cancel"}
 VERIFY_NOTION_COMMANDS = {"/verify-notion", "/verify_notion", "verify-notion", "verify_notion", "verify notion"}
 SETUP_BACKUP_COMMANDS = {"/setup-backup", "/setup_backup", "setup-backup", "setup_backup", "setup backup", "/backup", "backup"}
+RETRY_CONTACT_COMMANDS = {"/retry-contact", "/retry_contact", "retry-contact", "retry_contact", "retry contact"}
 NOTION_READY_COMMANDS = {"ready"}
 UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
 GITHUB_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -1497,6 +1499,74 @@ def _resume_verify_notion_session(
     return [_session_prompt_reply(cfg, incoming, updated)]
 
 
+def _retry_contact_from_chat(conn, cfg: Config, incoming: IncomingMessage) -> list[OutboundMessage]:
+    platform = str(incoming.platform or "").strip().lower()
+    if platform == "discord":
+        try:
+            result = retry_discord_contact_for_onboarding_user(
+                conn,
+                cfg,
+                platform=incoming.platform,
+                sender_id=incoming.sender_id,
+                actor=format_user_label(
+                    incoming.platform,
+                    incoming.sender_username,
+                    incoming.sender_display_name,
+                    incoming.sender_id,
+                ),
+                request_source="discord-self-retry-contact",
+            )
+        except ValueError as exc:
+            return [OutboundMessage(incoming.chat_id, str(exc))]
+        status = str(result.get("action_status") or "pending")
+        if result.get("created"):
+            lead = "I queued your agent bot to DM you again."
+        elif status == "running":
+            lead = "Your agent bot DM retry is already running."
+        else:
+            lead = "Your agent bot DM retry is already queued."
+        confirmation_code = str(result.get("confirmation_code") or "").strip()
+        return [
+            OutboundMessage(
+                incoming.chat_id,
+                (
+                    f"{lead} It will use confirmation code `{confirmation_code}`. "
+                    "Only trust that bot DM if it shows the same code Curator showed here."
+                ),
+            )
+        ]
+
+    if platform == "telegram":
+        session = find_latest_onboarding_session_for_sender(
+            conn,
+            platform=incoming.platform,
+            sender_id=incoming.sender_id,
+            redact_secrets=False,
+        )
+        answers = session.get("answers", {}) if session and isinstance(session.get("answers"), dict) else {}
+        bot_username = str(
+            answers.get("bot_username")
+            or answers.get("telegram_bot_username")
+            or (session or {}).get("telegram_bot_username")
+            or ""
+        ).strip().lstrip("@")
+        if bot_username:
+            return [
+                OutboundMessage(
+                    incoming.chat_id,
+                    f"Telegram agent bots cannot message you first. Open @{bot_username}, press Start, and that will open your private agent chat.",
+                )
+            ]
+        return [
+            OutboundMessage(
+                incoming.chat_id,
+                "Telegram agent bots cannot message you first. Once Curator gives you the agent bot handle, open that bot and press Start.",
+            )
+        ]
+
+    return [OutboundMessage(incoming.chat_id, "Retry contact is only available for Discord and Telegram onboarding chats.")]
+
+
 def _advance_after_agent_backup_from_chat(conn, cfg: Config, incoming: IncomingMessage, session: dict[str, Any]) -> list[OutboundMessage]:
     answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
     if str(answers.get("agent_backup_next_phase") or "").strip() == "completed":
@@ -1568,6 +1638,8 @@ def process_onboarding_message(
             return _queue_remote_ssh_key_install(conn, cfg, incoming, pubkey=remote_ssh_pubkey)
         if lower in SETUP_BACKUP_COMMANDS:
             return _resume_agent_backup_session(conn, cfg, incoming)
+        if lower in RETRY_CONTACT_COMMANDS:
+            return _retry_contact_from_chat(conn, cfg, incoming)
 
         session = find_active_onboarding_session(conn, platform=incoming.platform, sender_id=incoming.sender_id)
         if session is None and lower in VERIFY_NOTION_COMMANDS:

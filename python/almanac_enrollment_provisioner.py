@@ -2220,8 +2220,8 @@ def _discord_agent_handoff_text(*, bot_label: str, confirmation_code: str) -> st
     return (
         f"Your Almanac lane is ready here with `{bot_label}`.\n\n"
         f"Confirmation code: `{confirmation_code}`\n\n"
-        "Curator just showed this same code after your dashboard links. "
-        "If the codes match, this DM is your private agent lane."
+        "Curator shows this same code in your onboarding handoff. "
+        "Only trust this DM if the codes match; then this DM is your private agent lane."
     )
 
 
@@ -2251,6 +2251,7 @@ def _run_pending_discord_agent_dm_actions(conn, cfg: Config) -> None:
             if not session_id:
                 raise ValueError("missing session_id")
             force_retry = bool(payload.get("force"))
+            requested_confirmation_code = str(payload.get("confirmation_code") or "").strip()
             session = get_onboarding_session(conn, session_id, redact_secrets=False)
             if session is None:
                 raise ValueError(f"unknown onboarding session {session_id}")
@@ -2270,7 +2271,29 @@ def _run_pending_discord_agent_dm_actions(conn, cfg: Config) -> None:
                 or agent.get("display_name")
                 or "your agent bot"
             ).strip() or "your agent bot"
-            session, confirmation_code = ensure_discord_agent_dm_confirmation_code(conn, session)
+            stored_confirmation_code = str(answers.get("discord_agent_dm_confirmation_code") or "").strip()
+            if requested_confirmation_code and stored_confirmation_code and requested_confirmation_code != stored_confirmation_code:
+                raise ValueError(
+                    "Discord confirmation code mismatch: "
+                    f"action requested {requested_confirmation_code}, session stores {stored_confirmation_code}"
+                )
+            if requested_confirmation_code:
+                confirmation_code = requested_confirmation_code
+                if not stored_confirmation_code:
+                    session = save_onboarding_session(
+                        conn,
+                        session_id=session_id,
+                        answers={"discord_agent_dm_confirmation_code": confirmation_code},
+                    )
+            elif stored_confirmation_code:
+                confirmation_code = stored_confirmation_code
+            else:
+                if force_retry:
+                    raise ValueError(
+                        "retry-contact requires a stored Curator confirmation code; "
+                        "refusing to send an unverifiable Discord handoff"
+                    )
+                session, confirmation_code = ensure_discord_agent_dm_confirmation_code(conn, session)
             answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
             if str(answers.get("discord_agent_dm_handoff_sent_at") or "").strip() and not force_retry:
                 finish_operator_action(

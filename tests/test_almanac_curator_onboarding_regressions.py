@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
 CONTROL_PY = PYTHON_DIR / "almanac_control.py"
 CURATOR_ONBOARDING_PY = PYTHON_DIR / "almanac_curator_onboarding.py"
+ONBOARDING_PY = PYTHON_DIR / "almanac_onboarding_flow.py"
 
 
 def load_module(path: Path, name: str):
@@ -344,6 +345,7 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
                     "unix_user": "alex",
                     "full_name": "Alex Rivera",
                     "bot_platform": "discord",
+                    "discord_agent_dm_confirmation_code": "ABC-123",
                     "discord_agent_dm_handoff_sent_at": "2026-04-29T00:00:00+00:00",
                 },
             )
@@ -365,6 +367,7 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
             expect(payload["session_id"] == session["session_id"], str(payload))
             expect(payload["agent_id"] == "agent-alex", str(payload))
             expect(payload["recipient_id"] == "777", str(payload))
+            expect(payload["confirmation_code"] == "ABC-123", str(payload))
             expect(payload["force"] is True, str(payload))
             refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
             expect(
@@ -372,7 +375,134 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
                 str(refreshed),
             )
             expect(outbound and "Queued Discord contact retry" in outbound[0], str(outbound))
+            expect("ABC-123" in outbound[0], str(outbound))
             print("PASS test_telegram_operator_retry_contact_queues_discord_handoff")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_retry_contact_refuses_missing_confirmation_code() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_retry_contact_missing_code_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True, exist_ok=True)
+            insert_agent(control, conn, agent_id="agent-alex", unix_user="alex", hermes_home=hermes_home)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="555",
+                sender_id="777",
+                sender_username="alex.discord",
+                sender_display_name="Alex Rivera",
+            )
+            control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-alex",
+                answers={"unix_user": "alex", "full_name": "Alex Rivera", "bot_platform": "discord"},
+            )
+            try:
+                control.retry_discord_contact(
+                    conn,
+                    cfg,
+                    target="alex",
+                    actor="operator",
+                    request_source="test",
+                )
+            except ValueError as exc:
+                expect("no stored Curator confirmation code" in str(exc), str(exc))
+            else:
+                raise AssertionError("retry_contact should reject contacts without a stored confirmation code")
+            row = conn.execute(
+                "SELECT * FROM operator_actions WHERE action_kind = 'send-discord-agent-dm'"
+            ).fetchone()
+            expect(row is None, "missing-code retry-contact must not queue a DM action")
+            print("PASS test_retry_contact_refuses_missing_confirmation_code")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_discord_onboarding_user_retry_contact_queues_own_handoff() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_self_retry_contact_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_self_retry_contact_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True, exist_ok=True)
+            insert_agent(control, conn, agent_id="agent-alex", unix_user="alex", hermes_home=hermes_home)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="555",
+                sender_id="777",
+                sender_username="alex.discord",
+                sender_display_name="Alex Rivera",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-alex",
+                answers={
+                    "unix_user": "alex",
+                    "full_name": "Alex Rivera",
+                    "bot_platform": "discord",
+                    "bot_username": "Guide",
+                    "discord_agent_dm_confirmation_code": "ABC-123",
+                },
+            )
+
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="555",
+                    sender_id="777",
+                    sender_username="alex.discord",
+                    sender_display_name="Alex Rivera",
+                    text="/retry-contact",
+                ),
+                validate_bot_token=lambda raw: onboarding.BotIdentity("unused"),
+            )
+
+            row = conn.execute(
+                "SELECT * FROM operator_actions WHERE action_kind = 'send-discord-agent-dm'"
+            ).fetchone()
+            expect(row is not None, "expected self retry-contact to queue a Discord DM action")
+            payload = json.loads(str(row["requested_target"] or "{}"))
+            expect(payload["session_id"] == session["session_id"], str(payload))
+            expect(payload["agent_id"] == "agent-alex", str(payload))
+            expect(payload["recipient_id"] == "777", str(payload))
+            expect(payload["confirmation_code"] == "ABC-123", str(payload))
+            expect(payload["force"] is True, str(payload))
+            expect(row["request_source"] == "discord-self-retry-contact", str(dict(row)))
+            expect("queued your agent bot" in replies[0].text, replies[0].text)
+            expect("ABC-123" in replies[0].text, replies[0].text)
+            print("PASS test_discord_onboarding_user_retry_contact_queues_own_handoff")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -420,8 +550,10 @@ def main() -> int:
     test_stale_telegram_request_callback_clears_buttons_with_status()
     test_telegram_backup_callback_reopens_completed_lane_backup_setup()
     test_telegram_operator_retry_contact_queues_discord_handoff()
+    test_retry_contact_refuses_missing_confirmation_code()
+    test_discord_onboarding_user_retry_contact_queues_own_handoff()
     test_telegram_command_registration_includes_user_and_operator_commands()
-    print("PASS all 5 curator onboarding regression tests")
+    print("PASS all 7 curator onboarding regression tests")
     return 0
 
 

@@ -450,9 +450,20 @@ async def main() -> None:
         await interaction.response.send_message(response)
 
     @tree.command(name="retry-contact", description="Retry a Discord agent-bot contact handoff.")
-    @app_commands.describe(target="Unix username, onboarding session id, Discord user id, username, or display name")
-    async def retry_contact_command(interaction, target: str) -> None:  # type: ignore[no-untyped-def]
+    @app_commands.describe(target="Operator use: Unix username, onboarding session id, Discord user id, username, or display name")
+    async def retry_contact_command(interaction, target: str = "") -> None:  # type: ignore[no-untyped-def]
+        operator_channel_id = _operator_channel_id()
+        channel_id = str(getattr(interaction.channel, "id", "") or "")
+        if interaction.guild is None and channel_id != operator_channel_id:
+            await _handle_dm_command(interaction, "/retry-contact")
+            return
         if not await _ensure_operator_channel(interaction):
+            return
+        if not target.strip():
+            await interaction.response.send_message(
+                "Use `/retry-contact <unixusername|discordname>` here. Onboarding users can DM me `/retry-contact` for their own handoff.",
+                ephemeral=True,
+            )
             return
         actor = _format_actor_label(interaction.user)
         try:

@@ -36,6 +36,10 @@ def test_vault_watch_defaults_to_low_latency_debounce() -> None:
         'VAULT_WATCH_MAX_BATCH_SECONDS="${VAULT_WATCH_MAX_BATCH_SECONDS:-10}"' in body,
         "vault hot reload should cap burst batching so continuous edits still refresh",
     )
+    expect(
+        'ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE="${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"' in body,
+        "vault changes should request a low-latency memory synthesis pass by default",
+    )
     print("PASS test_vault_watch_defaults_to_low_latency_debounce")
 
 
@@ -64,6 +68,44 @@ def test_vault_watch_caps_continuous_burst_batches() -> None:
     expect("VAULT_WATCH_MAX_BATCH_SECONDS" in snippet, "drain_event_burst should use a max batch window")
     expect("SECONDS - batch_started_at" in snippet, "drain_event_burst should stop continuous bursts on elapsed time")
     print("PASS test_vault_watch_caps_continuous_burst_batches")
+
+
+def test_vault_watch_requests_async_memory_synthesis_without_blocking() -> None:
+    body = VAULT_WATCH_SH.read_text(encoding="utf-8")
+    snippet = extract(body, "request_memory_synth_refresh() {", "\nfold_event_into_flags() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        log_path = root / "memory-synth.log"
+        (bin_dir / "memory-synth.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "sleep 0.05\n"
+            f"printf 'ran\\n' >> {log_path}\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "memory-synth.sh").chmod(0o755)
+        script = f"""
+lowercase() {{
+  printf '%s\\n' "$1" | tr '[:upper:]' '[:lower:]'
+}}
+SCRIPT_DIR={bin_dir}
+ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE=0
+ALMANAC_MEMORY_SYNTH_ENABLED=1
+{snippet}
+request_memory_synth_refresh
+sleep 0.1
+printf 'disabled_count=%s\\n' "$(wc -l < {log_path} 2>/dev/null || printf 0)"
+ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE=1
+request_memory_synth_refresh
+sleep 0.2
+printf 'enabled_count=%s\\n' "$(wc -l < {log_path} 2>/dev/null || printf 0)"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"memory synth request case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        expect("disabled_count=0" in result.stdout, result.stdout)
+        expect("enabled_count=1" in result.stdout, result.stdout)
+    print("PASS test_vault_watch_requests_async_memory_synthesis_without_blocking")
 
 
 def test_directory_events_only_trigger_pdf_reconcile_when_needed() -> None:
@@ -98,6 +140,7 @@ vault_watch_need_vault_reload=0
 vault_watch_notify_paths=()
 fold_event_into_flags {empty_dir} 'CREATE,ISDIR'
 printf 'empty_dir=%s/%s\\n' "$vault_watch_need_qmd" "$vault_watch_need_pdf"
+printf 'empty_dir_notify=%s\\n' "${{#vault_watch_notify_paths[@]}}"
 
 vault_watch_need_qmd=0
 vault_watch_need_pdf=0
@@ -123,6 +166,7 @@ printf 'deleted_pdf_dir=%s/%s\\n' "$vault_watch_need_qmd" "$vault_watch_need_pdf
         result = bash(script)
         expect(result.returncode == 0, f"vault-watch function case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
         expect("empty_dir=1/0" in result.stdout, result.stdout)
+        expect("empty_dir_notify=1" in result.stdout, result.stdout)
         expect("pdf_dir=1/1" in result.stdout, result.stdout)
         expect("deleted_dir=1/0" in result.stdout, result.stdout)
         expect("deleted_pdf_dir=1/1" in result.stdout, result.stdout)
@@ -133,8 +177,9 @@ def main() -> int:
     test_vault_watch_defaults_to_low_latency_debounce()
     test_vault_watch_accepts_fractional_debounce()
     test_vault_watch_caps_continuous_burst_batches()
+    test_vault_watch_requests_async_memory_synthesis_without_blocking()
     test_directory_events_only_trigger_pdf_reconcile_when_needed()
-    print("PASS all 4 vault watch regression tests")
+    print("PASS all 5 vault watch regression tests")
     return 0
 
 

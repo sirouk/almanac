@@ -375,8 +375,12 @@ def _asset_summary_for_path(path: Path, root: Path, *, max_rel_len: int = 180) -
 
 def _payload_for_prompt(payload: dict[str, Any]) -> dict[str, Any]:
     prompt_payload = dict(payload)
+    prompt_payload.pop("fingerprint_hash", None)
     fingerprint = prompt_payload.pop("fingerprint", [])
-    if isinstance(fingerprint, list):
+    fingerprint_count = prompt_payload.pop("fingerprint_count", None)
+    if isinstance(fingerprint_count, int):
+        prompt_payload["fingerprint_count"] = fingerprint_count
+    elif isinstance(fingerprint, list):
         prompt_payload["fingerprint_count"] = len(fingerprint)
     asset_examples = prompt_payload.get("asset_examples")
     if isinstance(asset_examples, list):
@@ -408,6 +412,15 @@ def _payload_for_prompt(payload: dict[str, Any]) -> dict[str, Any]:
     return prompt_payload
 
 
+def _fingerprint_digest(fingerprints: Sequence[str]) -> dict[str, Any]:
+    cleaned = [str(fingerprint or "") for fingerprint in fingerprints if str(fingerprint or "")]
+    return {
+        "fingerprint": _compact_unique(cleaned, limit=80, item_limit=220),
+        "fingerprint_count": len(cleaned),
+        "fingerprint_hash": _sha256(json_dumps(cleaned)),
+    }
+
+
 def _is_repo_inventory(child: Path, *, folder_name: str, category: str = "") -> bool:
     lowered = folder_name.casefold()
     if lowered in {"repos", "repositories", "source", "code"}:
@@ -429,12 +442,17 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
         return []
     candidates: list[SourceCandidate] = []
     root_files: list[dict[str, Any]] = []
+    root_fingerprints: list[str] = []
     for child in _safe_iterdir(vault_root):
         if not child.name or child.name.startswith("."):
             continue
         if child.is_symlink():
             continue
         if child.is_file() and child.suffix.casefold() in SIGNATURE_SUFFIXES:
+            stat = _safe_stat(child)
+            root_fingerprints.append(
+                f"root:{child.name}:{stat.st_size if stat else 0}:{int(stat.st_mtime) if stat else 0}"
+            )
             root_item = _asset_summary_for_path(child, vault_root, max_rel_len=140)
             root_item["snippet"] = _read_file_snippet(child, max_chars=600) if child.suffix.casefold() in TEXT_SUFFIXES else ""
             root_files.append(root_item)
@@ -539,7 +557,7 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
             "asset_counts": dict(sorted(asset_counts.items())),
             "asset_examples": asset_examples[:24],
             "snippets": snippets,
-            "fingerprint": _compact_unique(fingerprints, limit=80, item_limit=220),
+            **_fingerprint_digest(fingerprints),
         }
         candidates.append(
             _candidate_from_payload(
@@ -556,6 +574,7 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
             "source": "vault",
             "folder": "/",
             "files": root_files[:60],
+            **_fingerprint_digest(root_fingerprints),
         }
         candidates.append(_candidate_from_payload("vault", "__root_files__", "Vault root files", payload, source_count=len(root_files)))
 
@@ -616,7 +635,23 @@ def build_notion_candidates(conn: sqlite3.Connection, cfg: Config, settings: Syn
         snippets: list[dict[str, str]] = []
         fingerprints: list[str] = []
         owners: list[str] = []
-        for row in area_rows[:80]:
+        all_page_ids = {
+            str(row["source_page_id"] or "").strip()
+            for row in area_rows
+            if str(row["source_page_id"] or "").strip()
+        }
+        for index, row in enumerate(area_rows):
+            fingerprints.append(
+                ":".join(
+                    [
+                        str(row["doc_key"] or ""),
+                        str(row["content_hash"] or ""),
+                        str(row["indexed_at"] or ""),
+                    ]
+                )
+            )
+            if index >= 80:
+                continue
             page_id = str(row["source_page_id"] or "").strip()
             title = _clean_space(row["page_title"], limit=160) or page_id[:8]
             owners_payload = json_loads(str(row["owners_json"] or "[]"), [])
@@ -635,15 +670,6 @@ def build_notion_candidates(conn: sqlite3.Connection, cfg: Config, settings: Syn
             heading = _clean_space(row["section_heading"], limit=120)
             if heading:
                 entry["sections"].append(heading)
-            fingerprints.append(
-                ":".join(
-                    [
-                        str(row["doc_key"] or ""),
-                        str(row["content_hash"] or ""),
-                        str(row["indexed_at"] or ""),
-                    ]
-                )
-            )
             if len(snippets) < 6:
                 path = _safe_notion_markdown_path(cfg, str(row["file_path"] or ""))
                 snippet = _read_file_snippet(path, max_chars=min(650, settings.max_source_chars // 4)) if path else ""
@@ -663,11 +689,11 @@ def build_notion_candidates(conn: sqlite3.Connection, cfg: Config, settings: Syn
         payload = {
             "source": "notion",
             "area": area,
-            "page_count": len(pages),
+            "page_count": len(all_page_ids) or len(pages),
             "owners": _compact_unique(owners, limit=10),
             "pages": page_examples[:35],
             "snippets": snippets,
-            "fingerprint": _compact_unique(fingerprints, limit=100, item_limit=240),
+            **_fingerprint_digest(fingerprints),
         }
         candidates.append(
             _candidate_from_payload(
@@ -675,7 +701,7 @@ def build_notion_candidates(conn: sqlite3.Connection, cfg: Config, settings: Syn
                 area,
                 area,
                 payload,
-                source_count=len(pages),
+                source_count=len(all_page_ids) or len(pages),
             )
         )
     return candidates

@@ -51,6 +51,7 @@ def base_config(root: Path) -> dict[str, str]:
         "ALMANAC_MEMORY_SYNTH_API_KEY": "test-key",
         "ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN": "20",
         "ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS": "60",
+        "ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT": "1",
         "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
         "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
         "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
@@ -95,6 +96,14 @@ def insert_agent(conn, root: Path) -> None:
 
 def seed_sources(root: Path, conn) -> None:
     (root / "vault" / "Research").mkdir(parents=True)
+    (root / "vault" / "Research" / ".vault").write_text(
+        "name: Research\n"
+        "description: Fictional shared research notes\n"
+        "owner: operator\n"
+        "default_subscribed: true\n"
+        "category: research\n",
+        encoding="utf-8",
+    )
     (root / "vault" / "Research" / "Horizon protocol notes.md").write_text(
         "# Horizon protocol\nPrivacy preserving distributed systems notes and open research questions.\n",
         encoding="utf-8",
@@ -108,6 +117,14 @@ def seed_sources(root: Path, conn) -> None:
     (root / "vault" / "Repos" / "archive-delta" / ".git").mkdir()
     (root / "vault" / "Repos" / "archive-delta" / "README.md").write_text("# Archive Delta\n", encoding="utf-8")
     (root / "vault" / "Creator Studio" / "Episodes").mkdir(parents=True)
+    (root / "vault" / "Creator Studio" / ".vault").write_text(
+        "name: Creator Studio\n"
+        "description: Fictional creator production workspace\n"
+        "owner: operator\n"
+        "default_subscribed: false\n"
+        "category: creator\n",
+        encoding="utf-8",
+    )
     (root / "vault" / "Creator Studio" / "Episodes" / "pilot-cut.mp4").write_bytes(b"video")
     (root / "vault" / "Creator Studio" / "Episodes" / "thumbnail.png").write_bytes(b"image")
     (root / "vault" / "Creator Studio" / "content-calendar.csv").write_text(
@@ -116,6 +133,12 @@ def seed_sources(root: Path, conn) -> None:
     )
     (root / "vault" / "Family Hub").mkdir(parents=True)
     (root / "vault" / "Family Hub" / "school-calendar.csv").write_text("date,event\n2026-05-01,example\n", encoding="utf-8")
+    (root / "vault" / "Big Archive").mkdir(parents=True)
+    for index in range(100):
+        (root / "vault" / "Big Archive" / f"note-{index:03d}.md").write_text(
+            f"# Note {index:03d}\nFictional bulk archive note.\n",
+            encoding="utf-8",
+        )
     outside = root / "outside"
     outside.mkdir()
     (outside / "private-note.md").write_text("off-vault private note", encoding="utf-8")
@@ -171,6 +194,9 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
             with control.connect_db(cfg) as conn:
                 insert_agent(conn, root)
                 seed_sources(root, conn)
+                control.reload_vault_definitions(conn, cfg)
+                conn.execute("DELETE FROM notification_outbox")
+                conn.commit()
                 settings = synth.load_settings(cfg)
                 candidates = synth.build_candidates(conn, cfg, settings)
                 creator = next(candidate for candidate in candidates if candidate.source_key == "Creator Studio")
@@ -178,13 +204,26 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 expect('"video": 1' in creator_payload, creator_payload)
                 expect('"image": 1' in creator_payload, creator_payload)
                 expect('"data": 1' in creator_payload, creator_payload)
+                expect('"fingerprint_hash"' in creator_payload, creator_payload)
                 expect("pilot-cut.mp4" in creator_payload and "thumbnail.png" in creator_payload, creator_payload)
                 expect("linked-private-note" not in creator_payload, creator_payload)
                 expect("off-vault private note" not in creator_payload, creator_payload)
                 creator_prompt = synth._candidate_prompt(creator, settings)
                 expect("fingerprint_count" in creator_prompt, creator_prompt)
+                expect("fingerprint_hash" not in creator_prompt, creator_prompt)
                 expect("deep:content-calendar.csv" not in creator_prompt, creator_prompt)
                 expect("pilot-cut.mp4" in creator_prompt and "thumbnail.png" in creator_prompt, creator_prompt)
+                archive = next(candidate for candidate in candidates if candidate.source_key == "Big Archive")
+                archive_signature = archive.source_signature
+                archive_hash = str(archive.payload.get("fingerprint_hash") or "")
+                (root / "vault" / "Big Archive" / "note-099.md").write_text(
+                    "# Note 099\nUpdated fictional bulk archive note.\n",
+                    encoding="utf-8",
+                )
+                refreshed_candidates = synth.build_candidates(conn, cfg, settings)
+                refreshed_archive = next(candidate for candidate in refreshed_candidates if candidate.source_key == "Big Archive")
+                expect(str(refreshed_archive.payload.get("fingerprint_hash") or "") != archive_hash, refreshed_archive.payload)
+                expect(refreshed_archive.source_signature != archive_signature, refreshed_archive.payload)
 
             calls: list[str] = []
 
@@ -229,10 +268,20 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                     "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'"
                 ).fetchone()
                 expect(int(fanout["c"]) == 1, f"expected one curator fanout notification, got {fanout['c']}")
+                conn.execute(
+                    "UPDATE memory_synthesis_cards SET updated_at = ? WHERE source_kind = 'vault' AND source_key = ?",
+                    ("2026-01-01T00:00:00+00:00", "Research"),
+                )
+                conn.execute(
+                    "UPDATE memory_synthesis_cards SET updated_at = ? WHERE source_kind = 'vault' AND source_key = ?",
+                    ("2026-12-31T00:00:00+00:00", "Creator Studio"),
+                )
+                conn.commit()
                 payload = control.build_managed_memory_payload(conn, cfg, agent_id="agent-test")
                 expect("Semantic synthesis cards:" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("LLM-compressed recall hints only" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("[vault:Research]" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("[vault:Creator Studio]" not in payload["recall-stubs"], payload["recall-stubs"])
 
             calls.clear()
             second = synth.run_once(cfg, model_client=fake_model)

@@ -13227,27 +13227,75 @@ def _build_notion_landmarks(conn: sqlite3.Connection) -> tuple[str, list[dict[st
     return _render_notion_landmarks(items), items
 
 
-def _memory_synthesis_card_lines(conn: sqlite3.Connection) -> list[str]:
+def _memory_synthesis_card_lines(
+    conn: sqlite3.Connection,
+    *,
+    subscriptions: Sequence[dict[str, Any]] | None = None,
+) -> list[str]:
     try:
         limit = int(config_env_value("ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT", "8") or "8")
     except (TypeError, ValueError):
         limit = 8
     limit = max(1, min(limit, 30))
+    subscribed_vaults = {
+        str(subscription.get("vault_name") or "").strip()
+        for subscription in (subscriptions or [])
+        if bool(subscription.get("effective_subscribed")) or bool(subscription.get("push_enabled"))
+    }
+    subscribed_vaults.discard("")
     try:
-        rows = conn.execute(
-            """
-            SELECT source_kind, source_key, source_title, card_text, updated_at
-            FROM memory_synthesis_cards
-            WHERE status = 'ok'
-              AND card_text != ''
-            ORDER BY updated_at DESC, source_kind ASC, source_key ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        rows: list[sqlite3.Row] = []
+        if subscribed_vaults:
+            placeholders = ",".join("?" for _ in subscribed_vaults)
+            rows.extend(
+                conn.execute(
+                    f"""
+                    SELECT source_kind, source_key, source_title, card_text, updated_at
+                    FROM memory_synthesis_cards
+                    WHERE status = 'ok'
+                      AND card_text != ''
+                      AND source_kind = 'vault'
+                      AND source_key IN ({placeholders})
+                    ORDER BY updated_at DESC, source_key ASC
+                    LIMIT ?
+                    """,
+                    (*sorted(subscribed_vaults), limit),
+                ).fetchall()
+            )
+        rows.extend(
+            conn.execute(
+                """
+                SELECT source_kind, source_key, source_title, card_text, updated_at
+                FROM memory_synthesis_cards
+                WHERE status = 'ok'
+                  AND card_text != ''
+                ORDER BY updated_at DESC, source_kind ASC, source_key ASC
+                LIMIT ?
+                """,
+                (max(60, limit * 4),),
+            ).fetchall()
+        )
     except sqlite3.Error:
         return []
-    lines = [str(row["card_text"] or "").strip() for row in rows if str(row["card_text"] or "").strip()]
+    deduped_rows: list[sqlite3.Row] = []
+    seen_cards: set[tuple[str, str]] = set()
+    for row in rows:
+        marker = (str(row["source_kind"] or ""), str(row["source_key"] or ""))
+        if marker in seen_cards:
+            continue
+        seen_cards.add(marker)
+        deduped_rows.append(row)
+    ranked_rows = sorted(
+        deduped_rows,
+        key=lambda row: (
+            1 if str(row["source_kind"] or "") == "vault" and str(row["source_key"] or "") in subscribed_vaults else 0,
+            str(row["updated_at"] or ""),
+            str(row["source_kind"] or ""),
+            str(row["source_key"] or ""),
+        ),
+        reverse=True,
+    )
+    lines = [str(row["card_text"] or "").strip() for row in ranked_rows[:limit] if str(row["card_text"] or "").strip()]
     if not lines:
         return []
     return [
@@ -13320,7 +13368,7 @@ def _build_recall_stubs(
     else:
         lines.append("Recent hot-reload signals: none queued for this agent.")
 
-    synthesis_lines = _memory_synthesis_card_lines(conn)
+    synthesis_lines = _memory_synthesis_card_lines(conn, subscriptions=subscriptions)
     if synthesis_lines:
         lines.extend(synthesis_lines)
 

@@ -603,8 +603,12 @@ organizations. Vault synthesis may use bounded media, office, data, design,
 archive, PDF, and text inventories as recall cues, but it must not follow
 symlinks out of the vault or recurse deeply through repo source trees. It must
 stay off the chat critical path: skip unchanged source signatures, keep cache
-fingerprints out of the model prompt, bound snippets and output, and treat cards
-as retrieval hints rather than answerable facts.
+fingerprints out of the model prompt, use full-source hashes for freshness,
+bound snippets and output, and treat cards as retrieval hints rather than
+answerable facts. Vault-watch requests an asynchronous synthesis pass after
+changed-content batches so moves, renames, deletions, and directory changes do
+not wait only for the 30-minute timer, and managed recall stubs should prefer
+the agent's subscribed vault cards before newer global cards.
 
 Shared Notion writes must go through the SSOT broker. Destructive operations
 such as archive/delete/trash are intentionally rejected or require approval

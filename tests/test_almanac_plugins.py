@@ -909,6 +909,7 @@ def _write_minimal_managed_state(hermes_home: Path) -> None:
                 "vault-ref": "Vault root: /srv/almanac/vault",
                 "qmd-ref": "qmd MCP (deep retrieval): https://kor.example/mcp",
                 "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.",
+                "recall-stubs": "Retrieval memory stubs:\n- Projects: ask vault.search-and-fetch for depth.",
                 "today-plate": "Today plate:\n- Work candidates:\n  - Example Unicorn launch — status In Progress",
             },
             indent=2,
@@ -1096,6 +1097,23 @@ def test_almanac_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             )
             expect("Bounded: search_limit ≤ 5" in vault_lookup_turn["context"], vault_lookup_turn["context"])
             expect("metadata" in vault_lookup_turn["context"], vault_lookup_turn["context"])
+
+            knowledge_memory_turn = hook(
+                session_id="session-recipes-knowledge-memory",
+                user_message="what do we know about Example Lattice?",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(
+                isinstance(knowledge_memory_turn, dict)
+                and "- knowledge.search-and-fetch:" in knowledge_memory_turn.get("context", ""),
+                f"expected knowledge.search-and-fetch recipe, got {knowledge_memory_turn!r}",
+            )
+            expect("[managed:recall-stubs]" in knowledge_memory_turn["context"], knowledge_memory_turn["context"])
+            expect("Projects: ask vault.search-and-fetch for depth." in knowledge_memory_turn["context"], knowledge_memory_turn["context"])
 
             page_say_turn = hook(
                 session_id="session-recipes-page-say",

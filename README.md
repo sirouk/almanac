@@ -605,10 +605,15 @@ creators, small businesses, communities, research groups, and larger
 organizations. Vault cards include bounded media, office, data, design, archive,
 PDF, and text inventories as retrieval cues, while repo inventories stay shallow
 so a source tree does not explode the prompt. Cache fingerprints are kept out of
-the model prompt, so freshness checks do not spend tokens. Cards are stored in
+the model prompt and represented as full-source hashes, so freshness checks do
+not spend tokens or miss ordinary moves, renames, edits, and deletions outside
+the compact prompt sample. Cards are stored in
 the control-plane database and rendered into `[managed:recall-stubs]` by the
-managed-context plugin. The service skips unchanged sources, keeps output short,
-and treats every card as a retrieval cue rather than evidence.
+managed-context plugin. The vault watcher requests an asynchronous synthesis
+pass after vault refresh batches, while the 30-minute timer remains the backstop.
+Per-agent recall stubs prioritize subscribed vault lanes before falling back to
+newer global cards. The service skips unchanged sources, keeps output short, and
+treats every card as a retrieval cue rather than evidence.
 
 ## PDFs And Files
 

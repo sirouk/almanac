@@ -111,6 +111,7 @@ _RELEVANT_TERMS = (
     "due",
     "file",
     "files",
+    "know about",
     "knowledge",
     "latest",
     "focus",
@@ -131,6 +132,8 @@ _RELEVANT_TERMS = (
     "priorities",
     "project",
     "recent",
+    "recall",
+    "remember",
     "roadmap",
     "schedule",
     "status",
@@ -140,7 +143,11 @@ _RELEVANT_TERMS = (
     "update",
     "updated",
     "uploads",
+    "what do we know",
 )
+_FULL_CONTEXT_RECIPE_TOOLS = {
+    "knowledge.search-and-fetch",
+}
 _RESOURCE_REQUEST_TERMS = (
     "/almanac-resources",
     "/almanac-links",
@@ -1464,7 +1471,15 @@ def _pre_llm_call(
     context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)
     recipes = _matching_recipes(user_message)
     runtime_gate = runtime_changed or runtime_first_seen_existing_session
-    full_context_gate = is_first_turn or revision_changed or runtime_gate or context_relevant or context_followup
+    recipe_context_gate = any(entry.get("tool") in _FULL_CONTEXT_RECIPE_TOOLS for entry in recipes)
+    full_context_gate = (
+        is_first_turn
+        or revision_changed
+        or runtime_gate
+        or context_relevant
+        or context_followup
+        or recipe_context_gate
+    )
     if not (full_context_gate or recipes):
         _emit_telemetry(
             {
@@ -1505,6 +1520,8 @@ def _pre_llm_call(
         gate.append("followup")
     if recipes:
         gate.append("recipe")
+    if recipe_context_gate:
+        gate.append("recipe_context")
     _emit_telemetry(
         {
             "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),

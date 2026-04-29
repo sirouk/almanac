@@ -249,12 +249,42 @@ run_vault_notify_paths() {
   rm -f "$err_file"
 }
 
+request_memory_synth_refresh() {
+  local enabled=""
+  local change_enabled=""
+
+  change_enabled="$(lowercase "${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}")"
+  case "$change_enabled" in
+    0|false|no|off|disabled)
+      return 0
+      ;;
+  esac
+
+  enabled="$(lowercase "${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}")"
+  case "$enabled" in
+    0|false|no|off|disabled)
+      return 0
+      ;;
+  esac
+
+  if [[ ! -x "$SCRIPT_DIR/memory-synth.sh" ]]; then
+    return 0
+  fi
+
+  echo "Vault watcher: requesting asynchronous memory synthesis refresh..."
+  (
+    exec </dev/null >/dev/null 2>&1
+    "$SCRIPT_DIR/memory-synth.sh"
+  ) &
+}
+
 fold_event_into_flags() {
   local event_path="$1"
   local event_flags="$2"
 
   if [[ "$event_flags" == *ISDIR* ]]; then
     vault_watch_need_qmd=1
+    vault_watch_notify_paths+=("$event_path")
     if [[ "$PDF_INGEST_ENABLED" == "1" ]] && {
       { { [[ "$event_flags" == *DELETE* ]] || [[ "$event_flags" == *MOVED_FROM* ]]; } && directory_tree_had_manifest_pdf "$event_path"; } ||
       directory_tree_has_pdf "$event_path"
@@ -421,6 +451,10 @@ while true; do
 
   if (( ${#vault_watch_notify_paths[@]} > 0 )); then
     run_vault_notify_paths
+  fi
+
+  if (( vault_watch_need_qmd || vault_watch_need_pdf || vault_watch_need_vault_reload || ${#vault_watch_notify_paths[@]} > 0 )); then
+    request_memory_synth_refresh
   fi
 
   if [[ "$(lowercase "${VAULT_WATCH_RUN_EMBED:-}")" != "1" ]]; then

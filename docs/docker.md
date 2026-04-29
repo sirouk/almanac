@@ -84,7 +84,10 @@ uses the configured `ALMANAC_MEMORY_SYNTH_*` values, or falls back to
 hot injection without putting LLM summarization on the chat path. The same
 generalized vault and Notion synthesis behavior is used in Docker and baremetal,
 including bounded media/data inventories, symlink boundary checks, and shallow
-repo handling.
+repo handling. Vault changes can request a non-blocking synthesis pass in both
+modes, and full-source hashes keep move/rename/delete freshness separate from
+the compact prompt sample; the recurring `memory-synth` job remains the
+backstop.
 
 `install` and `upgrade` also apply the private operating profile when present,
 record `state/almanac-release.json`, run Docker health, and run the same live

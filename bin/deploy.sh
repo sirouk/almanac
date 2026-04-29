@@ -6336,7 +6336,8 @@ Notion workspace migration
 
   1) Read the migration guide
   2) Start guided migration
-  3) Exit
+  3) Retry last migration index sync
+  4) Exit
 EOF
 
   while true; do
@@ -6344,8 +6345,9 @@ EOF
     case "${answer:-1}" in
       1) printf '%s\n' "read"; return 0 ;;
       2) printf '%s\n' "start"; return 0 ;;
-      3) printf '%s\n' "exit"; return 0 ;;
-      *) echo "Please choose 1 through 3." >&2 ;;
+      3) printf '%s\n' "retry-index"; return 0 ;;
+      4) printf '%s\n' "exit"; return 0 ;;
+      *) echo "Please choose 1 through 4." >&2 ;;
     esac
   done
 }
@@ -6474,6 +6476,44 @@ run_notion_migration_index_sync() {
   fi
 
   run_service_user_cmd "$ctl_bin" --json notion index-sync --full --actor "$actor"
+}
+
+latest_notion_migration_dir() {
+  local dir="" latest=""
+
+  if [[ ! -d "$STATE_DIR/migrations" ]]; then
+    return 1
+  fi
+  for dir in "$STATE_DIR"/migrations/notion-workspace-*; do
+    if [[ -d "$dir" ]]; then
+      latest="$dir"
+    fi
+  done
+  if [[ -z "$latest" ]]; then
+    return 1
+  fi
+  printf '%s\n' "$latest"
+}
+
+run_notion_migration_retry_index_sync() {
+  local actor="$1"
+
+  if ! NOTION_MIGRATION_DIR="$(latest_notion_migration_dir)"; then
+    echo "No previous Notion workspace migration directory found under $STATE_DIR/migrations." >&2
+    return 1
+  fi
+
+  echo
+  echo "Retrying full Notion index sync for the latest migration:"
+  echo "  $NOTION_MIGRATION_DIR"
+  notion_migration_repair_state_ownership
+  if ! run_notion_migration_index_sync "$actor" >"$NOTION_MIGRATION_DIR/notion-index-sync.json"; then
+    echo "Notion index sync failed; details may be in $NOTION_MIGRATION_DIR/notion-index-sync.json" >&2
+    notion_migration_restart_services
+    return 1
+  fi
+  echo "Notion index sync result: $NOTION_MIGRATION_DIR/notion-index-sync.json"
+  notion_migration_restart_services
 }
 
 notion_migration_clear_workspace_state() {
@@ -6622,6 +6662,7 @@ run_notion_migrate_flow() {
   fi
   echo
 
+  actor="${SUDO_USER:-$(id -un)}"
   old_notion_space_url="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
   old_notion_space_id="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
   old_notion_root_page_id="${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
@@ -6635,6 +6676,10 @@ run_notion_migrate_flow() {
       ;;
     exit)
       return 0
+      ;;
+    retry-index)
+      run_notion_migration_retry_index_sync "$actor"
+      return $?
       ;;
   esac
 
@@ -6668,7 +6713,6 @@ run_notion_migrate_flow() {
 
   notion_migration_pause_write_surfaces
   NOTION_MIGRATION_SERVICES_PAUSED=1
-  actor="${SUDO_USER:-$(id -un)}"
 
   echo
   echo "Starting the new workspace SSOT setup."

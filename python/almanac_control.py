@@ -3874,6 +3874,179 @@ def request_operator_action(
     return _operator_action_row_to_dict(row) or {}, True
 
 
+def _contact_match_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _contact_handle_key(value: str) -> str:
+    return _contact_match_key(str(value or "").lstrip("@"))
+
+
+def _discord_contact_candidate_label(session: dict[str, Any], agent: dict[str, Any] | None) -> str:
+    answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+    parts = [
+        str(answers.get("full_name") or session.get("sender_display_name") or "").strip(),
+        str((agent or {}).get("unix_user") or answers.get("unix_user") or "").strip(),
+        str(session.get("sender_username") or "").strip(),
+    ]
+    visible = [part for part in parts if part]
+    return " / ".join(visible) or str(session.get("session_id") or "contact")
+
+
+def _discord_contact_session_score(
+    session: dict[str, Any],
+    *,
+    target: str,
+    target_key: str,
+    handle_key: str,
+    exact_agent: dict[str, Any] | None,
+    session_agent: dict[str, Any] | None,
+) -> int:
+    answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+    linked_agent_id = str(session.get("linked_agent_id") or "").strip()
+    if exact_agent is not None and linked_agent_id == str(exact_agent.get("agent_id") or ""):
+        return 100
+    unix_values = {
+        str(answers.get("unix_user") or "").strip(),
+        str((session_agent or {}).get("unix_user") or "").strip(),
+    }
+    if target and target in unix_values:
+        return 100
+    if target.startswith("onb_") and str(session.get("session_id") or "").strip() == target:
+        return 100
+    if target.isdigit() and str(session.get("sender_id") or "").strip() == target:
+        return 95
+    username_values = [
+        str(session.get("sender_username") or ""),
+        str(answers.get("discord_handle") or ""),
+        str(answers.get("bot_username") or ""),
+    ]
+    if handle_key and handle_key in {_contact_handle_key(value) for value in username_values if value}:
+        return 90
+    name_values = [
+        str(session.get("sender_display_name") or ""),
+        str(answers.get("full_name") or ""),
+        str(answers.get("org_profile_person_label") or ""),
+        str((session_agent or {}).get("display_name") or ""),
+    ]
+    if target_key and target_key in {_contact_match_key(value) for value in name_values if value}:
+        return 80
+    return 0
+
+
+def _find_discord_contact_session(
+    conn: sqlite3.Connection,
+    target: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = str(target or "").strip()
+    if not normalized:
+        raise ValueError("retry-contact target is required")
+    target_key = _contact_match_key(normalized)
+    handle_key = _contact_handle_key(normalized)
+    exact_agent = get_agent(conn, normalized)
+    candidates: list[tuple[int, str, dict[str, Any], dict[str, Any]]] = []
+    for session in list_onboarding_sessions(conn, redact_secrets=False):
+        answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+        platform = str(session.get("platform") or "").strip().lower()
+        bot_platform = str(answers.get("bot_platform") or platform).strip().lower()
+        if platform != "discord" and bot_platform != "discord":
+            continue
+        if str(session.get("state") or "").strip().lower() in {"denied", "cancelled"}:
+            continue
+        agent_id = str(session.get("linked_agent_id") or "").strip()
+        if not agent_id:
+            continue
+        agent = get_agent(conn, agent_id)
+        if agent is None:
+            continue
+        score = _discord_contact_session_score(
+            session,
+            target=normalized,
+            target_key=target_key,
+            handle_key=handle_key,
+            exact_agent=exact_agent,
+            session_agent=agent,
+        )
+        if score > 0:
+            candidates.append((score, str(session.get("updated_at") or ""), session, agent))
+    if not candidates:
+        raise ValueError(f"no Discord onboarding contact found for {normalized}")
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    top_score = candidates[0][0]
+    top = [item for item in candidates if item[0] == top_score]
+    top_agent_ids = {str(item[3].get("agent_id") or "") for item in top}
+    if len(top_agent_ids) > 1:
+        labels = ", ".join(_discord_contact_candidate_label(item[2], item[3]) for item in top[:5])
+        raise ValueError(f"ambiguous retry-contact target {normalized}: {labels}")
+    session = top[0][2]
+    agent = top[0][3]
+    if str(agent.get("role") or "") != "user" or str(agent.get("status") or "") != "active":
+        raise ValueError(f"retry-contact target is not an active user agent: {normalized}")
+    return session, agent
+
+
+def retry_discord_contact(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    target: str,
+    actor: str,
+    request_source: str,
+) -> dict[str, Any]:
+    session, agent = _find_discord_contact_session(conn, target)
+    session_id = str(session.get("session_id") or "").strip()
+    agent_id = str(agent.get("agent_id") or "").strip()
+    recipient_id = str(session.get("sender_id") or "").strip()
+    if not session_id or not agent_id or not recipient_id:
+        raise ValueError("matched contact is missing session, agent, or Discord recipient id")
+
+    payload = {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "recipient_id": recipient_id,
+        "force": True,
+    }
+    action_row, created = request_operator_action(
+        conn,
+        action_kind="send-discord-agent-dm",
+        requested_by=str(actor or "").strip() or "operator",
+        request_source=str(request_source or "").strip() or "retry-contact",
+        requested_target=json.dumps(payload, sort_keys=True),
+        dedupe_by_target=True,
+    )
+    now_iso = utc_now_iso()
+    save_onboarding_session(
+        conn,
+        session_id=session_id,
+        answers={
+            "discord_agent_dm_retry_requested_at": now_iso,
+            "discord_agent_dm_handoff_error": "",
+        },
+    )
+    status = str(action_row.get("status") or "pending")
+    label = _discord_contact_candidate_label(session, agent)
+    if created:
+        message = (
+            f"Queued Discord contact retry for {label}. "
+            "The root maintenance loop will send the agent-bot DM within about a minute."
+        )
+    elif status == "running":
+        message = f"Discord contact retry for {label} is already running."
+    else:
+        message = f"Discord contact retry for {label} is already queued."
+    return {
+        "target": target,
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "unix_user": str(agent.get("unix_user") or ""),
+        "recipient_id": recipient_id,
+        "action_id": int(action_row.get("id") or 0),
+        "action_status": status,
+        "created": created,
+        "message": message,
+    }
+
+
 def mark_operator_action_running(
     conn: sqlite3.Connection,
     *,

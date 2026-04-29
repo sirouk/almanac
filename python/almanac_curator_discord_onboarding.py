@@ -19,6 +19,7 @@ from almanac_control import (
     get_onboarding_session,
     get_pin_upgrade_action_payload,
     request_operator_action,
+    retry_discord_contact,
     save_onboarding_session,
     utc_now_iso,
     upsert_setting,
@@ -342,11 +343,31 @@ async def main() -> None:
 
         parts = content.strip().split(maxsplit=2)
         command = parts[0].lower() if parts else ""
+        if command == "/retry-contact":
+            retry_parts = content.strip().split(maxsplit=1)
+            if len(retry_parts) < 2 or not retry_parts[1].strip():
+                await message.channel.send("Use /retry-contact <unixusername|discordname>.")
+                return True
+            actor = _format_actor_label(message.author)
+            try:
+                with connect_db(cfg) as conn:
+                    result = retry_discord_contact(
+                        conn,
+                        cfg,
+                        target=retry_parts[1].strip(),
+                        actor=actor,
+                        request_source="discord-retry-contact",
+                    )
+                await message.channel.send(str(result.get("message") or "Queued contact retry."))
+            except Exception as exc:  # noqa: BLE001
+                await message.channel.send(f"Could not retry contact: {exc}")
+            return True
+
         if command not in {"/approve", "/deny"}:
             return False
         if len(parts) < 2:
             await message.channel.send(
-                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, or /deny ssotw_xxx optional reason."
+                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, /deny ssotw_xxx optional reason, or /retry-contact <unixusername|discordname>."
             )
             return True
 
@@ -414,6 +435,25 @@ async def main() -> None:
             reason=reason,
         )
         await interaction.response.send_message(response)
+
+    @tree.command(name="retry-contact", description="Retry a Discord agent-bot contact handoff.")
+    @app_commands.describe(target="Unix username, onboarding session id, Discord user id, username, or display name")
+    async def retry_contact_command(interaction, target: str) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        try:
+            with connect_db(cfg) as conn:
+                result = retry_discord_contact(
+                    conn,
+                    cfg,
+                    target=target.strip(),
+                    actor=actor,
+                    request_source="discord-slash-retry-contact",
+                )
+            await interaction.response.send_message(str(result.get("message") or "Queued contact retry."))
+        except Exception as exc:  # noqa: BLE001
+            await interaction.response.send_message(f"Could not retry contact: {exc}", ephemeral=True)
 
     @client.event
     async def on_ready() -> None:  # type: ignore[no-untyped-def]

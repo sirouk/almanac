@@ -61,6 +61,7 @@ from almanac_control import (
     try_verify_notion_identity_claim,
     upsert_agent_identity,
     update_agent_channels,
+    utc_now_iso,
     write_onboarding_secret,
     mark_operator_action_running,
 )
@@ -2249,6 +2250,7 @@ def _run_pending_discord_agent_dm_actions(conn, cfg: Config) -> None:
             session_id = str(payload.get("session_id") or "").strip()
             if not session_id:
                 raise ValueError("missing session_id")
+            force_retry = bool(payload.get("force"))
             session = get_onboarding_session(conn, session_id, redact_secrets=False)
             if session is None:
                 raise ValueError(f"unknown onboarding session {session_id}")
@@ -2270,7 +2272,7 @@ def _run_pending_discord_agent_dm_actions(conn, cfg: Config) -> None:
             ).strip() or "your agent bot"
             session, confirmation_code = ensure_discord_agent_dm_confirmation_code(conn, session)
             answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
-            if str(answers.get("discord_agent_dm_handoff_sent_at") or "").strip():
+            if str(answers.get("discord_agent_dm_handoff_sent_at") or "").strip() and not force_retry:
                 finish_operator_action(
                     conn,
                     action_id=action_id,

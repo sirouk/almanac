@@ -93,6 +93,7 @@ From the repo root:
 ./bin/almanac-ctl org-profile preview
 ./bin/almanac-ctl org-profile apply --yes
 ./bin/almanac-ctl org-profile doctor
+./bin/almanac-ctl onboarding retry-contact <unixusername|discordname>
 ```
 
 Docker mode is also routed through `deploy.sh` so the operator keeps one

@@ -165,7 +165,111 @@ def test_discord_completion_handoff_queues_root_dm_action() -> None:
     expect("_run_pending_discord_agent_dm_actions(conn, cfg)" in provisioner_text, "main loop should run Discord DM handoff actions")
     expect('action_kind="send-discord-agent-dm"' in curator_text, "Curator should queue the handoff after completion links")
     expect("ensure_discord_agent_dm_confirmation_code" in curator_text, "Curator should show the same visual confirmation code")
+    expect('@tree.command(name="retry-contact"' in curator_text, "Curator Discord should expose /retry-contact")
+    expect('command == "/retry-contact"' in curator_text, "Curator Discord should accept typed /retry-contact")
     print("PASS test_discord_completion_handoff_queues_root_dm_action")
+
+
+def test_retry_contact_force_resends_discord_handoff_after_sent_marker() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_retry_contact_force_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_retry_contact_force_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True, exist_ok=True)
+            (hermes_home / ".env").write_text("DISCORD_BOT_TOKEN='agent-token'\n", encoding="utf-8")
+            now = control.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO agents (
+                  agent_id, role, unix_user, display_name, status, hermes_home, manifest_path,
+                  archived_state_path, model_preset, model_string, channels_json,
+                  allowed_mcps_json, home_channel_json, operator_notify_channel_json,
+                  notes, created_at, last_enrolled_at
+                ) VALUES (?, 'user', ?, ?, 'active', ?, ?, NULL, 'codex', 'openai:codex', '["discord"]', '[]', '{}', '{}', '', ?, ?)
+                """,
+                (
+                    "agent-alex",
+                    "alex",
+                    "AlexBot",
+                    str(hermes_home),
+                    str(hermes_home / "manifest.json"),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="555",
+                sender_id="777",
+                sender_username="alex.discord",
+                sender_display_name="Alex Rivera",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-alex",
+                answers={
+                    "unix_user": "alex",
+                    "bot_platform": "discord",
+                    "bot_username": "AlexBot",
+                    "discord_agent_dm_confirmation_code": "ABC-123",
+                    "discord_agent_dm_handoff_sent_at": "2026-04-20T00:00:00+00:00",
+                },
+            )
+            action_row, created = control.request_operator_action(
+                conn,
+                action_kind="send-discord-agent-dm",
+                requested_by="operator",
+                request_source="test-retry-contact",
+                requested_target=json.dumps(
+                    {
+                        "session_id": session["session_id"],
+                        "agent_id": "agent-alex",
+                        "recipient_id": "777",
+                        "force": True,
+                    },
+                    sort_keys=True,
+                ),
+                dedupe_by_target=True,
+            )
+            expect(created, str(action_row))
+
+            sent: list[dict[str, str]] = []
+            provisioner.discord_create_dm_channel = lambda **kwargs: {"id": "dm-777"}
+            provisioner.discord_send_message = lambda **kwargs: sent.append(kwargs) or {"id": "msg-2"}
+            provisioner._run_pending_discord_agent_dm_actions(conn, cfg)
+
+            refreshed_action = conn.execute(
+                "SELECT status, note FROM operator_actions WHERE id = ?",
+                (int(action_row["id"]),),
+            ).fetchone()
+            expect(refreshed_action["status"] == "completed", str(dict(refreshed_action)))
+            expect(len(sent) == 1, str(sent))
+            expect(sent[0]["bot_token"] == "agent-token", str(sent))
+            expect(sent[0]["channel_id"] == "dm-777", str(sent))
+            expect("ABC-123" in sent[0]["text"], sent[0]["text"])
+            refreshed_session = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            answers = refreshed_session.get("answers") or {}
+            expect(answers.get("discord_agent_dm_handoff_message_id") == "msg-2", str(answers))
+            expect(answers.get("discord_agent_dm_handoff_error") == "", str(answers))
+            print("PASS test_retry_contact_force_resends_discord_handoff_after_sent_marker")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def test_completion_bundle_send_is_idempotent() -> None:
@@ -961,6 +1065,7 @@ def main() -> int:
     test_onboarding_gateway_updates_agent_runtime_model_after_provider_seed()
     test_discord_onboarding_writes_home_channel_env()
     test_discord_completion_handoff_queues_root_dm_action()
+    test_retry_contact_force_resends_discord_handoff_after_sent_marker()
     test_completion_bundle_send_is_idempotent()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
@@ -972,7 +1077,7 @@ def main() -> int:
     test_run_host_upgrade_seeds_home_when_missing()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
-    print("PASS all 16 enrollment provisioner regression tests")
+    print("PASS all 17 enrollment provisioner regression tests")
     return 0
 
 

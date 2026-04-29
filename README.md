@@ -425,7 +425,9 @@ An enrolled user gets:
   plus dry-run write access verifies.
 - Discord completion handoff with a visual confirmation code: after Curator
   sends the dashboard and workspace links, the user-agent bot DMs the user
-  directly with the same code.
+  directly with the same code. Operators can retry that outreach from the
+  configured operator channel with `/retry-contact <unixusername|discordname>`
+  or from the host with `almanac-ctl onboarding retry-contact`.
 - Optional remote SSH control over Tailscale using a user-provided public key.
 
 Vault shortcuts refuse to overwrite a real directory. Stale symlinks are
@@ -752,6 +754,7 @@ Useful operator commands:
 ./bin/almanac-ctl onboarding list
 ./bin/almanac-ctl onboarding approve <session-id>
 ./bin/almanac-ctl onboarding deny <session-id>
+./bin/almanac-ctl onboarding retry-contact <unixusername|discordname>
 ./bin/almanac-ctl provision list
 ./bin/almanac-ctl provision retry <request-id>
 ./bin/almanac-ctl agent list

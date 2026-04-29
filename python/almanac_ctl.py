@@ -76,6 +76,7 @@ from almanac_control import (
     reinstate_token,
     reload_vault_definitions,
     retry_auto_provision_request,
+    retry_discord_contact,
     revoke_token,
     approve_onboarding_session,
     signal_agent_refresh_from_curator,
@@ -136,6 +137,9 @@ def parse_args() -> argparse.Namespace:
     onboarding_deny.add_argument("session_id")
     onboarding_deny.add_argument("--actor", default=os.environ.get("USER", "operator"))
     onboarding_deny.add_argument("--reason", default="")
+    onboarding_retry_contact = onboarding_sub.add_parser("retry-contact")
+    onboarding_retry_contact.add_argument("target", help="Unix username, onboarding session id, Discord user id, username, or display name")
+    onboarding_retry_contact.add_argument("--actor", default=os.environ.get("USER", "operator"))
 
     ssot = subparsers.add_parser("ssot")
     ssot_sub = ssot.add_subparsers(dest="action", required=True)
@@ -2066,6 +2070,18 @@ def main() -> None:
             )
             send_session_message(cfg, session, f"The operator declined this onboarding request: {session.get('denial_reason') or 'denied'}")
             dump_output(args, session)
+            return
+        if args.domain == "onboarding" and args.action == "retry-contact":
+            dump_output(
+                args,
+                retry_discord_contact(
+                    conn,
+                    cfg,
+                    target=args.target,
+                    actor=args.actor,
+                    request_source="ctl-retry-contact",
+                ),
+            )
             return
 
         if args.domain == "ssot" and args.action == "list":

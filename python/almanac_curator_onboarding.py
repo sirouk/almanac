@@ -25,6 +25,7 @@ from almanac_control import (
     get_setting,
     mark_onboarding_update_skipped,
     record_onboarding_update_failure,
+    retry_discord_contact,
     save_onboarding_session,
     utc_now_iso,
     upsert_setting,
@@ -163,12 +164,32 @@ def _handle_operator_command(
     parts = text.strip().split(maxsplit=2)
     command = parts[0].lower()
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
+    if command == "/retry-contact":
+        retry_parts = text.strip().split(maxsplit=1)
+        if len(retry_parts) < 2 or not retry_parts[1].strip():
+            send_text(bot_token, operator_chat_id, "Use /retry-contact <unixusername|discordname>.")
+            return
+        actor = _format_actor_label(message)
+        try:
+            with connect_db(cfg) as conn:
+                result = retry_discord_contact(
+                    conn,
+                    cfg,
+                    target=retry_parts[1].strip(),
+                    actor=actor,
+                    request_source="telegram-retry-contact",
+                )
+            send_text(bot_token, operator_chat_id, str(result.get("message") or "Queued contact retry."))
+        except Exception as exc:  # noqa: BLE001
+            send_text(bot_token, operator_chat_id, f"Could not retry contact: {exc}")
+        return
+
     if command not in {"/approve", "/deny"} or len(parts) < 2:
-        if command.startswith("/approve") or command.startswith("/deny"):
+        if command.startswith("/approve") or command.startswith("/deny") or command.startswith("/retry-contact"):
             send_text(
                 bot_token,
                 operator_chat_id,
-                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, or /deny ssotw_xxx optional reason.",
+                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, /deny ssotw_xxx optional reason, or /retry-contact <unixusername|discordname>.",
             )
         return
     target_id = parts[1].strip()

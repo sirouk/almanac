@@ -1181,6 +1181,42 @@ for agent in agents:
         continue
     status_notes.append("MCP token validated by user-owned refresh job")
 
+    state_dir = Path(db_path).parent
+    central_payload_path = state_dir / "agents" / agent_id / "managed-memory.json"
+    central_payload_updated = None
+    try:
+        if central_payload_path.is_file():
+            try:
+                central_payload = json.loads(central_payload_path.read_text(encoding="utf-8"))
+                central_payload_updated = parse_iso(central_payload.get("updated_at"))
+            except Exception:
+                central_payload_updated = dt.datetime.fromtimestamp(
+                    central_payload_path.stat().st_mtime,
+                    tz=dt.timezone.utc,
+                )
+    except OSError:
+        central_payload_updated = None
+    if central_payload_updated and central_payload_updated > last_run + dt.timedelta(seconds=30):
+        print(
+            f"WARN {agent_id}: central managed context updated at "
+            f"{central_payload_updated.isoformat().replace('+00:00', '+00:00')} "
+            f"but user-owned refresh last ran at {job['last_run_at']}; "
+            "start almanac-user-agent-refresh.service for this user to apply it immediately"
+        )
+
+    trigger_path = state_dir / "activation-triggers" / f"{agent_id}.json"
+    try:
+        if trigger_path.is_file():
+            trigger_updated = dt.datetime.fromtimestamp(trigger_path.stat().st_mtime, tz=dt.timezone.utc)
+            if trigger_updated > last_run + dt.timedelta(seconds=30):
+                print(
+                    f"WARN {agent_id}: activation trigger is newer than the last user-owned refresh "
+                    f"(trigger={trigger_updated.isoformat().replace('+00:00', '+00:00')}, "
+                    f"refresh={job['last_run_at']}); verify almanac-user-agent-activate.path is active"
+                )
+    except OSError:
+        pass
+
     note_parts = []
     if privacy_notes:
         note_parts.append(f"{'; '.join(privacy_notes)}; verified by user-owned refresh/service state")

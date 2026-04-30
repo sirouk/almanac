@@ -3906,6 +3906,18 @@ collect_install_answers() {
   default_pdf_vision_model="${PDF_VISION_MODEL:-}"
   default_pdf_vision_api_key="${PDF_VISION_API_KEY:-}"
 
+  print_tailscale_https_certificate_guidance() {
+    cat <<'EOF'
+Tailscale Serve/Funnel prerequisite
+  Before enabling Tailscale HTTPS routes here, open:
+    https://login.tailscale.com/admin/dns
+  In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
+  Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
+  consent URL or fail before Almanac can publish the routes.
+
+EOF
+  }
+
   ALMANAC_NAME="almanac"
   ALMANAC_HOME="$(ask "Service home" "$default_home")"
   ALMANAC_REPO_DIR="$(ask "Public repo path" "$default_repo")"
@@ -3960,6 +3972,9 @@ collect_install_answers() {
     default_enable_tailscale_serve="1"
     echo "Detected Tailscale tailnet:  $TAILSCALE_TAILNET"
     echo
+  fi
+  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "$default_enable_tailscale_serve" == "1" || "$default_enable_tailscale_notion_webhook_funnel" == "1" ]]; then
+    print_tailscale_https_certificate_guidance
   fi
 
   NEXTCLOUD_TRUSTED_DOMAIN="$(ask "Nextcloud trusted domain / Tailscale hostname" "$default_domain")"
@@ -7580,6 +7595,18 @@ collect_docker_install_answers() {
   default_pdf_vision_model="${PDF_VISION_MODEL:-}"
   default_pdf_vision_api_key="${PDF_VISION_API_KEY:-}"
 
+  print_tailscale_https_certificate_guidance() {
+    cat <<'EOF'
+Tailscale Serve/Funnel prerequisite
+  Before enabling Tailscale HTTPS routes here, open:
+    https://login.tailscale.com/admin/dns
+  In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
+  Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
+  consent URL or fail before Almanac can publish the routes.
+
+EOF
+  }
+
   ALMANAC_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ALMANAC_ORG_NAME:-}")")"
   ALMANAC_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ALMANAC_ORG_MISSION:-}")")"
   ALMANAC_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ALMANAC_ORG_PRIMARY_PROJECT:-}")")"
@@ -7622,6 +7649,9 @@ collect_docker_install_answers() {
     default_enable_tailscale_serve="1"
     echo "Detected Tailscale tailnet:  $TAILSCALE_TAILNET"
     echo
+  fi
+  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "$default_enable_tailscale_serve" == "1" || "$default_enable_tailscale_notion_webhook_funnel" == "1" ]]; then
+    print_tailscale_https_certificate_guidance
   fi
 
   NEXTCLOUD_TRUSTED_DOMAIN="$(ask "Nextcloud trusted domain / Tailscale hostname" "$default_domain")"

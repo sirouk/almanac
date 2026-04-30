@@ -1146,7 +1146,25 @@ printf 'PROMPTS_END\\n'
             "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes|8443" in prompts,
             f"expected tailnet Serve default to move to 8443 when public Funnel uses 443, got: {prompts!r}",
         )
+        expect("https://login.tailscale.com/admin/dns" in result.stdout, result.stdout)
+        expect("HTTPS Certificates" in result.stdout, result.stdout)
     print("PASS test_collect_install_answers_moves_tailnet_serve_when_public_notion_funnel_uses_443")
+
+
+def test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows() -> None:
+    text = DEPLOY_SH.read_text()
+    native_snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    docker_snippet = extract(text, "collect_docker_install_answers() {", "run_docker_install_flow() {")
+    for label, snippet in (("native", native_snippet), ("docker", docker_snippet)):
+        expect(
+            "https://login.tailscale.com/admin/dns" in snippet,
+            f"expected {label} onboarding to point operators to the Tailscale DNS admin page",
+        )
+        expect(
+            "MagicDNS and HTTPS Certificates" in snippet,
+            f"expected {label} onboarding to name the required Tailscale settings",
+        )
+    print("PASS test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows")
 
 
 def test_collect_install_answers_does_not_prompt_for_telegram_token_up_front() -> None:
@@ -2598,6 +2616,7 @@ def main() -> int:
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,
         test_collect_install_answers_guides_upstream_deploy_key_setup,
+        test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows,
         test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access,
         test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works,
         test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,

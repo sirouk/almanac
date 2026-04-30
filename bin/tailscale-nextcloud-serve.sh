@@ -57,7 +57,7 @@ run_serve_cmd() {
     if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
       printf '%s\n' "$output" >&2
       echo "tailscale serve command did not complete within ${timeout_duration}." >&2
-      echo "If Tailscale says Serve is not enabled, open the URL it printed, enable Serve for the tailnet, then rerun ./deploy.sh install." >&2
+      echo "If Tailscale says Serve is not enabled, open https://login.tailscale.com/admin/dns in the same tailnet, enable MagicDNS and HTTPS Certificates, then rerun ./deploy.sh install." >&2
       return "$status"
     fi
 

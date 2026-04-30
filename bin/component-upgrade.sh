@@ -381,11 +381,7 @@ upstream_ssh_command() {
     "$known_hosts"
 }
 
-push_current_head() {
-  require_upstream_push_ready
-  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
-  local ssh_command
-  ssh_command="$(upstream_ssh_command)"
+configure_origin_for_upstream() {
   if [[ -n "${ALMANAC_UPSTREAM_REPO_URL:-}" ]]; then
     if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
       git -C "$REPO_DIR" remote set-url origin "$ALMANAC_UPSTREAM_REPO_URL"
@@ -393,20 +389,85 @@ push_current_head() {
       git -C "$REPO_DIR" remote add origin "$ALMANAC_UPSTREAM_REPO_URL"
     fi
   fi
-  note "Pushing to ${ALMANAC_UPSTREAM_REPO_URL:-origin}#$upstream_branch..."
+}
+
+upstream_git() {
+  local ssh_command
+  ssh_command="$(upstream_ssh_command)"
   GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
-    GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" push origin "HEAD:$upstream_branch" >/dev/null
+    GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" "$@"
+}
+
+fetch_upstream_branch() {
+  require_upstream_push_ready
+  configure_origin_for_upstream
+  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  local fetch_output="" fetch_status=0
+  fetch_output="$(upstream_git fetch -q origin "$upstream_branch" 2>&1)" || fetch_status=$?
+  if [[ "$fetch_status" -eq 0 ]]; then
+    return 0
+  fi
+  if printf '%s\n' "$fetch_output" | grep -q "couldn't find remote ref $upstream_branch"; then
+    return 2
+  fi
+  printf '%s\n' "$fetch_output" >&2
+  return "$fetch_status"
+}
+
+tracked_worktree_is_clean() {
+  git -C "$REPO_DIR" diff --quiet --ignore-submodules -- \
+    && git -C "$REPO_DIR" diff --cached --quiet --ignore-submodules --
+}
+
+sync_current_head_with_upstream_branch() {
+  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  local fetch_status=0
+  fetch_upstream_branch || fetch_status=$?
+  if [[ "$fetch_status" -eq 2 ]]; then
+    note "No origin/$upstream_branch branch found yet; pushing current HEAD as the branch tip."
+    return 0
+  fi
+  if [[ "$fetch_status" -ne 0 ]]; then
+    return "$fetch_status"
+  fi
+  if git -C "$REPO_DIR" merge-base --is-ancestor FETCH_HEAD HEAD; then
+    return 0
+  fi
+  if ! tracked_worktree_is_clean; then
+    fatal "local tracked changes remain after committing pins.json; cannot integrate origin/$upstream_branch before push"
+  fi
+  if git -C "$REPO_DIR" merge-base --is-ancestor HEAD FETCH_HEAD; then
+    note "Fast-forwarding local branch to origin/$upstream_branch before push..."
+    git -C "$REPO_DIR" merge --ff-only FETCH_HEAD >/dev/null
+    return 0
+  fi
+
+  local git_author_name git_author_email
+  git_author_name="${ALMANAC_UPSTREAM_GIT_AUTHOR_NAME:-Almanac Upgrade Bot}"
+  git_author_email="${ALMANAC_UPSTREAM_GIT_AUTHOR_EMAIL:-almanac-upgrade@localhost}"
+  note "Rebasing local pins commit onto origin/$upstream_branch before push..."
+  if ! git -C "$REPO_DIR" \
+      -c user.name="$git_author_name" \
+      -c user.email="$git_author_email" \
+      rebase FETCH_HEAD >/dev/null; then
+    git -C "$REPO_DIR" rebase --abort >/dev/null 2>&1 || true
+    fatal "could not rebase local pins commit onto origin/$upstream_branch; resolve the checkout and retry"
+  fi
+}
+
+push_current_head() {
+  require_upstream_push_ready
+  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  sync_current_head_with_upstream_branch
+  note "Pushing to ${ALMANAC_UPSTREAM_REPO_URL:-origin}#$upstream_branch..."
+  upstream_git push origin "HEAD:$upstream_branch" >/dev/null
 }
 
 upstream_branch_contains_head() {
   if [[ -z "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" || ! -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
     return 0
   fi
-  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
-  local ssh_command
-  ssh_command="$(upstream_ssh_command)"
-  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
-    GIT_SSH_COMMAND="$ssh_command" git -C "$REPO_DIR" fetch -q origin "$upstream_branch" >/dev/null 2>&1 || return 1
+  fetch_upstream_branch >/dev/null 2>&1 || return 1
   git -C "$REPO_DIR" merge-base --is-ancestor HEAD FETCH_HEAD
 }
 

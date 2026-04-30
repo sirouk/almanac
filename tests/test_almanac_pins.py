@@ -422,6 +422,113 @@ def test_component_upgrade_commits_pending_pin_bump_without_git_identity() -> No
     print("PASS test_component_upgrade_commits_pending_pin_bump_without_git_identity")
 
 
+def test_component_upgrade_rebases_pin_commit_when_remote_main_advances() -> None:
+    """The deployed checkout can be stale when an operator clicks Install.
+
+    The helper should replay the just-created pins commit onto the current
+    upstream branch before pushing, instead of failing with git's "fetch first"
+    non-fast-forward rejection.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        repo.mkdir()
+        (repo / "bin").mkdir()
+        (repo / "config").mkdir()
+        shutil.copy(COMPONENT_UPGRADE, repo / "bin" / "component-upgrade.sh")
+        shutil.copy(PINS_SH, repo / "bin" / "pins.sh")
+        pins_path = repo / "config" / "pins.json"
+        pins_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "components": {
+                        "nvm": {
+                            "kind": "nvm-version",
+                            "version": "v22.22.2",
+                            "description": "Node version managed by nvm.",
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True, text=True)
+        commit_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Initial Test",
+            "GIT_AUTHOR_EMAIL": "initial@example.test",
+            "GIT_COMMITTER_NAME": "Initial Test",
+            "GIT_COMMITTER_EMAIL": "initial@example.test",
+        }
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=commit_env, check=True, capture_output=True, text=True)
+        remote = root / "remote.git"
+        subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+        subprocess.run(["git", f"--git-dir={remote}", "symbolic-ref", "HEAD", "refs/heads/main"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True, capture_output=True, text=True)
+
+        advancer = root / "advancer"
+        subprocess.run(["git", "clone", str(remote), str(advancer)], check=True, capture_output=True, text=True)
+        (advancer / "remote-only.txt").write_text("remote advanced\n", encoding="utf-8")
+        subprocess.run(["git", "add", "remote-only.txt"], cwd=advancer, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", "remote advance"], cwd=advancer, env=commit_env, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=advancer, check=True, capture_output=True, text=True)
+
+        key_path = root / "upstream-key"
+        known_hosts = root / "known_hosts"
+        key_path.write_text("not-a-real-key\n", encoding="utf-8")
+        known_hosts.write_text("", encoding="utf-8")
+        home = root / "empty-home"
+        home.mkdir()
+        env = {
+            **os.environ,
+            "ALMANAC_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
+            "ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
+            "ALMANAC_UPSTREAM_BRANCH": "main",
+            "GIT_CONFIG_GLOBAL": str(root / "missing-global-gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "HOME": str(home),
+            "EMAIL": "",
+        }
+        for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [
+                "bash",
+                str(repo / "bin" / "component-upgrade.sh"),
+                "nvm",
+                "apply",
+                "--version",
+                "v99.0.0",
+                "--skip-upgrade",
+            ],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        combined = (result.stdout or "") + (result.stderr or "")
+        expect(result.returncode == 0, combined)
+        expect("Rebasing local pins commit onto origin/main before push" in combined, combined)
+
+        remote_pins = subprocess.check_output(
+            ["git", f"--git-dir={remote}", "show", "refs/heads/main:config/pins.json"],
+            text=True,
+        )
+        remote_data = json.loads(remote_pins)
+        expect(remote_data["components"]["nvm"]["version"] == "v99.0.0", remote_data)
+        remote_note = subprocess.check_output(
+            ["git", f"--git-dir={remote}", "show", "refs/heads/main:remote-only.txt"],
+            text=True,
+        ).strip()
+        expect(remote_note == "remote advanced", remote_note)
+    print("PASS test_component_upgrade_rebases_pin_commit_when_remote_main_advances")
+
+
 def test_component_upgrade_requires_deploy_key_before_writing_pin() -> None:
     """A canonical upgrade must not silently become a local-only dirty pin.
 
@@ -512,8 +619,9 @@ def main() -> int:
     test_component_upgrade_resolves_reachable_raw_sha_after_branch_advances()
     test_component_upgrade_check_reports_status_when_git_resolver_fails()
     test_component_upgrade_commits_pending_pin_bump_without_git_identity()
+    test_component_upgrade_rebases_pin_commit_when_remote_main_advances()
     test_component_upgrade_requires_deploy_key_before_writing_pin()
-    print("PASS all 12 pins regression tests")
+    print("PASS all 13 pins regression tests")
     return 0
 
 

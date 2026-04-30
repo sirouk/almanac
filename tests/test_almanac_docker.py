@@ -27,6 +27,7 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("hermes-agent" in body and "hermes-venv" in body, body)
     expect("poppler-utils" in body and "inotify-tools" in body and "sqlite3" in body, body)
     expect("download.docker.com/linux/debian" in body and "docker-ce-cli" in body, body)
+    expect("docker-compose-plugin" in body, body)
     expect("iproute2" in body, body)
     print("PASS test_dockerfile_installs_pinned_runtime_assets")
 
@@ -73,6 +74,11 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ALMANAC_AGENT_SERVICE_MANAGER: docker-supervisor" in body, body)
     expect("ALMANAC_DOCKER_NETWORK: ${ALMANAC_DOCKER_NETWORK:-almanac_default}" in body, body)
     expect("Intentional trusted-host boundary" in body, body)
+    expect(
+        "- .:/home/almanac/almanac" in body
+        and "${ALMANAC_DOCKER_HOST_REPO_DIR:-.}:${ALMANAC_DOCKER_HOST_REPO_DIR:-/home/almanac/almanac}" in body,
+        "agent-supervisor and curator-refresh must mount the live checkout for Docker operator actions",
+    )
     expect(
         "/var/run/docker.sock:/var/run/docker.sock" in body,
         "agent-supervisor must intentionally mount the Docker socket to reconcile per-agent containers",

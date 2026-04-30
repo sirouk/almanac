@@ -1066,6 +1066,66 @@ def test_run_host_upgrade_seeds_home_when_missing() -> None:
             os.environ.update(old_env)
 
 
+def test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_run_host_upgrade_docker_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_run_host_upgrade_docker_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        host_repo = root / "host-repo"
+        host_priv = root / "host-priv"
+        host_repo.mkdir()
+        (host_repo / "deploy.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ALMANAC_DOCKER_MODE"] = "1"
+        os.environ["ALMANAC_DOCKER_HOST_REPO_DIR"] = str(host_repo)
+        os.environ["ALMANAC_DOCKER_HOST_PRIV_DIR"] = str(host_priv)
+        try:
+            cfg = control.Config.from_env()
+            captured: dict[str, object] = {}
+            resolved_host_repo = host_repo.resolve(strict=False)
+            resolved_host_priv = host_priv.resolve(strict=False)
+
+            def fake_subprocess_run(*args, **kwargs):
+                captured["args"] = list(args[0])
+                captured["cwd"] = str(kwargs.get("cwd") or "")
+                captured["env"] = dict(kwargs.get("env") or {})
+                return subprocess.CompletedProcess(args=args[0], returncode=0)
+
+            original_run = provisioner.subprocess.run
+            provisioner.subprocess.run = fake_subprocess_run
+            try:
+                provisioner._run_host_upgrade(cfg, log_path=root / "upgrade.log")
+            finally:
+                provisioner.subprocess.run = original_run
+
+            expect(
+                captured.get("args") == [str(resolved_host_repo / "deploy.sh"), "docker", "upgrade"],
+                str(captured),
+            )
+            expect(captured.get("cwd") == str(resolved_host_repo), str(captured))
+            env = captured.get("env") or {}
+            expect(isinstance(env, dict), str(captured))
+            expect(env.get("ALMANAC_COMPONENT_UPGRADE_MODE") == "docker", str(env))
+            expect(env.get("ALMANAC_REPO_DIR") == str(resolved_host_repo), str(env))
+            expect(env.get("ALMANAC_PRIV_DIR") == str(resolved_host_priv), str(env))
+            expect(env.get("ALMANAC_CONFIG_FILE") == str(resolved_host_priv / "config" / "docker.env"), str(env))
+            log_text = (root / "upgrade.log").read_text(encoding="utf-8")
+            expected_log_line = "$ " + " ".join(
+                provisioner.shell_quote(arg)
+                for arg in [str(resolved_host_repo / "deploy.sh"), "docker", "upgrade"]
+            )
+            expect(expected_log_line in log_text, log_text)
+            print("PASS test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_install_system_services_seeds_home_in_root_units() -> None:
     install_script = REPO / "bin" / "install-system-services.sh"
     text = install_script.read_text(encoding="utf-8")
@@ -1124,9 +1184,10 @@ def main() -> int:
     test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade()
     test_operator_upgrade_stale_running_action_fails_closed()
     test_run_host_upgrade_seeds_home_when_missing()
+    test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
-    print("PASS all 18 enrollment provisioner regression tests")
+    print("PASS all 19 enrollment provisioner regression tests")
     return 0
 
 

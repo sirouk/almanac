@@ -167,10 +167,13 @@ services:
       ALMANAC_CONTAINER_RUNTIME: docker
       ALMANAC_AGENT_SERVICE_MANAGER: docker-supervisor
     volumes:
+      - .:/home/almanac/almanac
       - ./almanac-priv:/home/almanac/almanac/almanac-priv
       - almanac-qmd:/home/almanac/.qmd
+      - ${ALMANAC_DOCKER_HOST_REPO_DIR:-.}:${ALMANAC_DOCKER_HOST_REPO_DIR:-/home/almanac/almanac}
       # Intentional trusted-host boundary: the supervisor needs Docker API
-      # access to reconcile per-agent containers and dashboard proxies.
+      # access to reconcile per-agent containers, dashboard proxies, and
+      # queued Docker-mode operator upgrades.
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["./bin/docker-agent-supervisor.sh"]
 

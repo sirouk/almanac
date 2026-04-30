@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BOOTSTRAP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -n "${ALMANAC_DEPLOY_BOOTSTRAP_DIR:-}" ]]; then
+  BOOTSTRAP_DIR="$(cd "$ALMANAC_DEPLOY_BOOTSTRAP_DIR" && pwd)"
+else
+  BOOTSTRAP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 SELF_PATH="$BOOTSTRAP_DIR/bin/deploy.sh"
+DEPLOY_EXEC_PATH="${ALMANAC_DEPLOY_EXEC_PATH:-$SELF_PATH}"
+if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" != "1" && "${ALMANAC_DEPLOY_DISABLE_STABLE_COPY:-0}" != "1" ]]; then
+  DEPLOY_EXEC_PATH="$(mktemp /tmp/almanac-deploy.XXXXXX.sh)"
+  cp "$SELF_PATH" "$DEPLOY_EXEC_PATH"
+  chmod 700 "$DEPLOY_EXEC_PATH"
+  export ALMANAC_DEPLOY_BOOTSTRAP_DIR="$BOOTSTRAP_DIR"
+  export ALMANAC_DEPLOY_EXEC_PATH="$DEPLOY_EXEC_PATH"
+  export ALMANAC_DEPLOY_STABLE_COPY=1
+  export ALMANAC_DEPLOY_STABLE_OWNER_PID="$$"
+  exec bash "$DEPLOY_EXEC_PATH" "$@"
+fi
+if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" == "1" && "${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
+  trap 'rm -f "${ALMANAC_DEPLOY_EXEC_PATH:-}"' EXIT
+fi
 ANSWERS_FILE="${ALMANAC_INSTALL_ANSWERS_FILE:-}"
 MODE=""
 PRIVILEGED_MODE=""
@@ -122,7 +140,12 @@ ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
 ALMANAC_EXTRA_MCP_NAME="${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
 ALMANAC_EXTRA_MCP_LABEL="${ALMANAC_EXTRA_MCP_LABEL:-External knowledge rail}"
 ALMANAC_EXTRA_MCP_URL="${ALMANAC_EXTRA_MCP_URL:-}"
-ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+__almanac_upstream_repo_default=""
+if command -v git >/dev/null 2>&1; then
+  __almanac_upstream_repo_default="$(git -C "$BOOTSTRAP_DIR" remote get-url origin 2>/dev/null || true)"
+fi
+ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-${__almanac_upstream_repo_default:-https://github.com/example/almanac.git}}"
+unset __almanac_upstream_repo_default
 ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
 ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
@@ -2159,6 +2182,34 @@ git_origin_url() {
   git -C "$repo_dir" remote get-url origin 2>/dev/null || true
 }
 
+is_placeholder_almanac_upstream_repo_url() {
+  case "${1:-}" in
+    ""|https://github.com/example/almanac|https://github.com/example/almanac.git|git@github.com:example/almanac.git)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+default_almanac_upstream_repo_url() {
+  local origin_url=""
+
+  origin_url="$(git_origin_url "$BOOTSTRAP_DIR")"
+  if [[ -n "$origin_url" ]]; then
+    printf '%s\n' "$origin_url"
+  else
+    printf '%s\n' "https://github.com/example/almanac.git"
+  fi
+}
+
+use_detected_upstream_repo_url_if_placeholder() {
+  if is_placeholder_almanac_upstream_repo_url "${ALMANAC_UPSTREAM_REPO_URL:-}"; then
+    ALMANAC_UPSTREAM_REPO_URL="$(default_almanac_upstream_repo_url)"
+  fi
+}
+
 write_release_state() {
   local source_kind="$1"
   local deployed_commit="$2"
@@ -4079,6 +4130,7 @@ EOF
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  use_detected_upstream_repo_url_if_placeholder
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   collect_upstream_git_answers
   ALMANAC_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
@@ -4253,6 +4305,7 @@ collect_remove_answers() {
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  use_detected_upstream_repo_url_if_placeholder
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
   BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
@@ -4306,6 +4359,7 @@ prepare_deployed_context() {
   CONFIG_TARGET="${DISCOVERED_CONFIG:-${ALMANAC_CONFIG_FILE:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}}"
   ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  use_detected_upstream_repo_url_if_placeholder
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
   ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
@@ -4349,7 +4403,7 @@ maybe_reexec_with_sudo_for_config() {
 
   echo "Switching to sudo to inspect the deployed config..."
   ALMANAC_REEXEC_ATTEMPTED=1
-  cmd=(sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" "$mode")
+  cmd=(sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" "$mode")
   if [[ "$mode" == "enrollment-trace" ]]; then
     if [[ -n "${TRACE_UNIX_USER:-}" ]]; then
       cmd+=(--unix-user "$TRACE_UNIX_USER")
@@ -4389,13 +4443,22 @@ maybe_reexec_install_for_config_defaults() {
   CONFIG_TARGET="$DISCOVERED_CONFIG"
   echo "Switching to sudo before prompting so existing defaults can be loaded from $DISCOVERED_CONFIG ..."
   ALMANAC_REEXEC_ATTEMPTED=1
-  if sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" "$requested_mode"; then
+  if sudo_deploy ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" "$requested_mode"; then
     write_operator_checkout_artifact
     return 0
   else
     local reexec_status="$?"
     return "$reexec_status"
   fi
+}
+
+sudo_deploy() {
+  sudo env \
+    "ALMANAC_DEPLOY_BOOTSTRAP_DIR=$BOOTSTRAP_DIR" \
+    "ALMANAC_DEPLOY_EXEC_PATH=${DEPLOY_EXEC_PATH:-$SELF_PATH}" \
+    "ALMANAC_DEPLOY_STABLE_COPY=1" \
+    "ALMANAC_DEPLOY_STABLE_OWNER_PID=${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" \
+    "$@"
 }
 
 run_root_env_cmd() {
@@ -5827,7 +5890,7 @@ run_enrollment_align() {
   ensure_deployed_config_exists
 
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" enrollment-align
+    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" enrollment-align
     write_operator_checkout_artifact
     return 0
   fi
@@ -5865,7 +5928,7 @@ run_enrollment_reset() {
   ensure_deployed_config_exists
 
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" enrollment-reset
+    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" enrollment-reset
     write_operator_checkout_artifact
     return 0
   fi
@@ -6197,7 +6260,7 @@ run_health_check() {
     status="$(probe_path_status "$DISCOVERED_CONFIG")"
   fi
   if [[ "$status" == "exists-unreadable" ]]; then
-    if ! sudo env ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "$SELF_PATH" health; then
+    if ! sudo_deploy ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" health; then
       return 1
     fi
     write_operator_checkout_artifact
@@ -6274,7 +6337,7 @@ run_rotate_nextcloud_secrets() {
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     local sudo_pg_file="" sudo_admin_file="" sudo_status=0
     local -a cmd=(
-      sudo env
+      sudo_deploy
       "ALMANAC_CONFIG_FILE=$CONFIG_TARGET"
       "NEXTCLOUD_ROTATE_ASSUME_YES=${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
     )
@@ -6290,7 +6353,7 @@ run_rotate_nextcloud_secrets() {
       printf '%s\n' "$NEXTCLOUD_ROTATE_ADMIN_PASSWORD" >"$sudo_admin_file"
       cmd+=("NEXTCLOUD_ROTATE_ADMIN_PASSWORD_FILE=$sudo_admin_file")
     fi
-    cmd+=("$SELF_PATH" rotate-nextcloud-secrets)
+    cmd+=("${DEPLOY_EXEC_PATH:-$SELF_PATH}" rotate-nextcloud-secrets)
 
     echo "Switching to sudo for live Nextcloud credential rotation..."
     "${cmd[@]}" || sudo_status=$?
@@ -6397,7 +6460,7 @@ run_notion_ssot_setup() {
 
   if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
     echo "Switching to sudo for Notion SSOT setup..."
-    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" notion-ssot
+    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" notion-ssot
     write_operator_checkout_artifact
     return 0
   fi
@@ -7021,7 +7084,7 @@ run_notion_migrate_flow() {
 
   if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
     echo "Switching to sudo for Notion workspace migration..."
-    sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$SELF_PATH" notion-migrate
+    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" notion-migrate
     write_operator_checkout_artifact
     return 0
   fi
@@ -7476,7 +7539,7 @@ run_upgrade_flow() {
 
   if [[ ${EUID:-$(id -u)} -ne 0 && -n "${CONFIG_TARGET:-}" && ! -r "$CONFIG_TARGET" ]]; then
     echo "Switching to sudo to inspect the deployed config..."
-    if ! sudo env \
+    if ! sudo_deploy \
       ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
       ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
       ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
@@ -7484,7 +7547,7 @@ run_upgrade_flow() {
       ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
       ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
       ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
-      "$SELF_PATH" --apply-upgrade; then
+      "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-upgrade; then
       return 1
     fi
     write_operator_checkout_artifact
@@ -7512,7 +7575,7 @@ run_upgrade_flow() {
 
   echo
   echo "Switching to sudo for upgrade..."
-  if ! sudo env \
+  if ! sudo_deploy \
     ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
     ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
     ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
@@ -7520,7 +7583,7 @@ run_upgrade_flow() {
     ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
     ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
     ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
-    "$SELF_PATH" --apply-upgrade; then
+    "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-upgrade; then
     return 1
   fi
   write_operator_checkout_artifact
@@ -7766,6 +7829,7 @@ EOF
   ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  use_detected_upstream_repo_url_if_placeholder
   ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
   collect_upstream_git_answers
 
@@ -7975,7 +8039,7 @@ run_install_flow() {
   write_answers_file "$ANSWERS_FILE"
   echo
   echo "Switching to sudo for system setup..."
-  if ! sudo env ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-install; then
+  if ! sudo_deploy ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-install; then
     return 1
   fi
   rm -f "$ANSWERS_FILE"
@@ -7997,7 +8061,7 @@ run_remove_flow() {
   write_answers_file "$ANSWERS_FILE"
   echo
   echo "Switching to sudo for teardown..."
-  if ! sudo env ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-remove; then
+  if ! sudo_deploy ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-remove; then
     return 1
   fi
   rm -f "$ANSWERS_FILE"

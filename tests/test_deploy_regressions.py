@@ -447,6 +447,22 @@ def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
     print("PASS test_deploy_guides_explicit_notion_webhook_event_selection")
 
 
+def test_deploy_uses_stable_copy_for_privileged_reexec() -> None:
+    text = DEPLOY_SH.read_text()
+    expect("ALMANAC_DEPLOY_STABLE_COPY" in text, "expected deploy.sh to support stable self execution")
+    expect('exec bash "$DEPLOY_EXEC_PATH" "$@"' in text, "expected deploy.sh to re-exec from a temp copy")
+    expect("sudo_deploy()" in text, "expected privileged deploy reexecs to preserve stable-copy env")
+    expect(
+        'sudo_deploy ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-install' in text,
+        "expected install apply step to invoke the stable deploy copy",
+    )
+    expect(
+        'sudo env ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-install' not in text,
+        "install apply step must not run the mutable checkout script directly",
+    )
+    print("PASS test_deploy_uses_stable_copy_for_privileged_reexec")
+
+
 def test_json_field_reads_json_payload() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "json_field() {", "notion_webhook_status_json() {")
@@ -2032,6 +2048,7 @@ def test_qmd_refresh_bounds_embedding_work() -> None:
     refresh = QMD_REFRESH_SH.read_text(encoding="utf-8")
     common = (REPO / "bin" / "common.sh").read_text(encoding="utf-8")
     deploy = DEPLOY_SH.read_text(encoding="utf-8")
+    health = HEALTH_SH.read_text(encoding="utf-8")
     example = (REPO / "config" / "almanac.env.example").read_text(encoding="utf-8")
     vault_watch = VAULT_WATCH_SH.read_text(encoding="utf-8")
     expect("timeout --foreground" in refresh, refresh)
@@ -2045,6 +2062,7 @@ def test_qmd_refresh_bounds_embedding_work() -> None:
     expect("QMD_EMBED_TIMEOUT_SECONDS=120" in example, example)
     expect("QMD_EMBED_PROVIDER=local" in example, example)
     expect("QMD embedding endpoint provider selected" in refresh, refresh)
+    expect("qmd remote embedding endpoint config captured" in health, health)
     expect('"$SCRIPT_DIR/qmd-refresh.sh" --embed' in vault_watch, vault_watch)
     expect('qmd --index "$QMD_INDEX_NAME" embed' not in vault_watch, vault_watch)
     print("PASS test_qmd_refresh_bounds_embedding_work")
@@ -2118,6 +2136,27 @@ printf 'local:%s:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD
     expect("endpoint:0:endpoint:https://embed.example.test/v1:text-embedding-3-small:768" in result.stdout, result.stdout)
     expect("local:1:local::::" in result.stdout, result.stdout)
     print("PASS test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint")
+
+
+def test_placeholder_upstream_default_uses_checkout_origin() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "git_origin_url() {", "write_release_state() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        run(["git", "init"], cwd=repo)
+        run(["git", "remote", "add", "origin", "https://github.com/acme/almanac"], cwd=repo)
+        script = f"""
+{snippet}
+BOOTSTRAP_DIR={shlex.quote(str(repo))}
+ALMANAC_UPSTREAM_REPO_URL=https://github.com/example/almanac.git
+use_detected_upstream_repo_url_if_placeholder
+printf '%s\\n' "$ALMANAC_UPSTREAM_REPO_URL"
+"""
+        result = bash(script)
+    expect(result.returncode == 0, f"upstream default probe failed: {result.stderr}\n{result.stdout}")
+    expect(result.stdout.strip() == "https://github.com/acme/almanac", result.stdout)
+    print("PASS test_placeholder_upstream_default_uses_checkout_origin")
 
 
 def test_shell_scripts_avoid_bash4_only_features() -> None:
@@ -2739,9 +2778,11 @@ def main() -> int:
         test_emit_runtime_config_persists_extra_mcp_url,
         test_emit_runtime_config_persists_qmd_embedding_endpoint_fields,
         test_deploy_guides_explicit_notion_webhook_event_selection,
+        test_deploy_uses_stable_copy_for_privileged_reexec,
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,
         test_qmd_refresh_bounds_embedding_work,
         test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected,
+        test_placeholder_upstream_default_uses_checkout_origin,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,
         test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,

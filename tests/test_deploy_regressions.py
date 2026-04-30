@@ -609,7 +609,30 @@ def test_install_and_upgrade_refresh_upgrade_check_before_health() -> None:
         health_index = snippet.index('echo "Running health check..."', refresh_index)
         expect(release_index < refresh_index < health_index, f"{name} must refresh upgrade-check state before health")
     expect("almanac_upgrade_last_seen_sha" in text and "almanac_upgrade_relation" in text, text)
+    expect("Almanac update available:%" in text, "successful deploy should clear stale operator update notifications")
+    expect(
+        "Curator reports an Almanac host update is available:%" in text,
+        "successful deploy should clear stale user-agent update notifications",
+    )
     print("PASS test_install_and_upgrade_refresh_upgrade_check_before_health")
+
+
+def test_install_and_upgrade_mark_deploy_operation_window() -> None:
+    text = DEPLOY_SH.read_text()
+    install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
+    upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    docker_snippet = extract(text, "run_docker_install_flow() {", "run_docker_reconfigure_flow() {")
+    expect("begin_deploy_operation() {" in text, "expected deploy-operation marker helper")
+    expect("almanac-deploy-operation.json" in text, "expected deploy-operation marker file")
+    expect('begin_deploy_operation "install" "$STATE_DIR"' in install_snippet, install_snippet)
+    expect('begin_deploy_operation "upgrade" "$STATE_DIR"' in upgrade_snippet, upgrade_snippet)
+    expect("finish_deploy_operation" in install_snippet, install_snippet)
+    expect("finish_deploy_operation" in upgrade_snippet, upgrade_snippet)
+    expect('operation="docker-install"' in docker_snippet, docker_snippet)
+    expect('operation="docker-upgrade"' in docker_snippet, docker_snippet)
+    expect('begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/almanac-priv/state"' in docker_snippet, docker_snippet)
+    expect("finish_deploy_operation" in docker_snippet, docker_snippet)
+    print("PASS test_install_and_upgrade_mark_deploy_operation_window")
 
 
 def test_install_offers_optional_notion_ssot_setup_before_health() -> None:
@@ -2857,6 +2880,7 @@ def main() -> int:
         test_run_health_check_falls_back_when_user_bus_is_missing,
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_install_and_upgrade_refresh_upgrade_check_before_health,
+        test_install_and_upgrade_mark_deploy_operation_window,
         test_install_offers_optional_notion_ssot_setup_before_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,

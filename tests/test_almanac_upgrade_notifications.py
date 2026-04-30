@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -360,6 +361,93 @@ def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
             os.environ.update(old_env)
 
 
+def test_upgrade_check_suppresses_update_notification_during_deploy_operation() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_upgrade_deploy_suppression_test")
+    ctl = load_module(CTL_PY, "almanac_ctl_upgrade_deploy_suppression_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state_dir = root / "state"
+        release_state_file = state_dir / "almanac-release.json"
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(state_dir),
+                "RUNTIME_DIR": str(state_dir / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(state_dir / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(state_dir / "agents"),
+                "ALMANAC_CURATOR_DIR": str(state_dir / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(state_dir / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(state_dir / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(state_dir / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(release_state_file),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "1000000001",
+            },
+        )
+        release_state_file.parent.mkdir(parents=True, exist_ok=True)
+        release_state_file.write_text(
+            json.dumps(
+                {
+                    "deployed_commit": "aaaaaaaaaaaa1111111111111111111111111111",
+                    "tracked_upstream_repo_url": "https://github.com/example/almanac.git",
+                    "tracked_upstream_branch": "main",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        marker = state_dir / "almanac-deploy-operation.json"
+        marker.write_text(
+            json.dumps(
+                {
+                    "operation": "upgrade",
+                    "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            ctl._query_upstream_head = lambda repo_url, branch, env=None: "bbbbbbbbbbbb2222222222222222222222222222"
+            ctl._classify_upstream_relation = lambda *args, **kwargs: "behind"
+            result = ctl.upgrade_check(conn, cfg, actor="test", notify=True)
+
+            expect(result["update_available"] is True, result)
+            expect(result["notification_sent"] is False, result)
+            expect(result["notification_suppressed"] is True, result)
+            expect(result["notification_suppressed_reason"] == "deploy-operation-active", result)
+            expect(result["deploy_operation_active"] is True, result)
+            expect(result["deploy_operation"]["operation"] == "upgrade", result)
+
+            outbox_count = conn.execute("SELECT COUNT(*) AS count FROM notification_outbox").fetchone()["count"]
+            expect(outbox_count == 0, f"expected deploy operation marker to suppress update notification, found {outbox_count}")
+            last_notified = control.get_setting(conn, "almanac_upgrade_last_notified_sha", "")
+            expect(last_notified == "", f"suppressed notifications must not advance dedupe state, got {last_notified!r}")
+            print("PASS test_upgrade_check_suppresses_update_notification_during_deploy_operation")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -585,11 +673,12 @@ def main() -> int:
     test_upgrade_check_adds_discord_buttons_for_operator_channel()
     test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs()
     test_upgrade_check_does_not_notify_when_deployed_is_ahead()
+    test_upgrade_check_suppresses_update_notification_during_deploy_operation()
     test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes()
     test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_service_readable()
     test_query_upstream_head_uses_safe_working_directory()
     test_upgrade_check_git_run_disables_interactive_auth_prompts()
-    print("PASS all 8 upgrade notification regression tests")
+    print("PASS all 9 upgrade notification regression tests")
     return 0
 
 

@@ -19,7 +19,7 @@ if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" != "1" && "${ALMANAC_DEPLOY_DISABLE_STA
   exec bash "$DEPLOY_EXEC_PATH" "$@"
 fi
 if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" == "1" && "${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
-  trap 'rm -f "${ALMANAC_DEPLOY_EXEC_PATH:-}"' EXIT
+  trap 'almanac_deploy_stable_copy_cleanup' EXIT
 fi
 ANSWERS_FILE="${ALMANAC_INSTALL_ANSWERS_FILE:-}"
 MODE=""
@@ -159,6 +159,14 @@ ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR
 NEXTCLOUD_ROTATE_POSTGRES_PASSWORD="${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-}"
 NEXTCLOUD_ROTATE_ADMIN_PASSWORD="${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-}"
 NEXTCLOUD_ROTATE_ASSUME_YES="${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
+ALMANAC_DEPLOY_OPERATION_TTL_SECONDS="${ALMANAC_DEPLOY_OPERATION_TTL_SECONDS:-21600}"
+ALMANAC_DEPLOY_OPERATION_MARKER=""
+
+almanac_deploy_stable_copy_cleanup() {
+  if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" == "1" && "${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
+    rm -f "${ALMANAC_DEPLOY_EXEC_PATH:-}"
+  fi
+}
 
 normalize_vault_qmd_collection_mask() {
   local mask="${1:-}"
@@ -2232,6 +2240,53 @@ use_detected_upstream_repo_url_if_placeholder() {
   fi
 }
 
+begin_deploy_operation() {
+  local operation="$1"
+  local state_dir="${2:-${STATE_DIR:-}}"
+  local marker=""
+  local state_parent=""
+
+  if [[ -z "$state_dir" ]]; then
+    return 0
+  fi
+  state_parent="$(dirname "$state_dir")"
+  if [[ ! -d "$state_dir" && ! -d "$state_parent" ]]; then
+    return 0
+  fi
+
+  marker="$state_dir/almanac-deploy-operation.json"
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  if python3 - "$marker" "$operation" "$$" "$ALMANAC_DEPLOY_OPERATION_TTL_SECONDS" <<'PY'
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+target = Path(sys.argv[1])
+operation = sys.argv[2]
+pid = sys.argv[3]
+ttl = max(60, int(sys.argv[4] or "21600"))
+now = datetime.now(timezone.utc).replace(microsecond=0)
+payload = {
+    "operation": operation,
+    "pid": pid,
+    "started_at": now.isoformat().replace("+00:00", "Z"),
+    "expires_at": (now + timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z"),
+}
+target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  then
+    ALMANAC_DEPLOY_OPERATION_MARKER="$marker"
+  fi
+}
+
+finish_deploy_operation() {
+  if [[ -n "${ALMANAC_DEPLOY_OPERATION_MARKER:-}" ]]; then
+    rm -f "$ALMANAC_DEPLOY_OPERATION_MARKER"
+    ALMANAC_DEPLOY_OPERATION_MARKER=""
+  fi
+}
+
 write_release_state() {
   local source_kind="$1"
   local deployed_commit="$2"
@@ -2411,6 +2466,32 @@ conn.execute(
     """,
     (now, note),
 )
+table = conn.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_outbox'"
+).fetchone()
+if table is not None:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(notification_outbox)").fetchall()
+    }
+    if {"target_kind", "channel_kind", "message", "delivered_at"}.issubset(columns):
+        # A successful deploy makes any earlier "update available" nudge stale.
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET delivered_at = ?
+            WHERE delivered_at IS NULL
+              AND (
+                (target_kind = 'operator' AND message LIKE 'Almanac update available:%')
+                OR (
+                  target_kind = 'user-agent'
+                  AND channel_kind = 'almanac-upgrade'
+                  AND message LIKE 'Curator reports an Almanac host update is available:%'
+                )
+              )
+            """,
+            (now,),
+        )
 conn.commit()
 conn.close()
 PY
@@ -4900,6 +4981,9 @@ run_root_install() {
   local hermes_runtime_after=""
   local gateway_restart_policy="defer"
 
+  begin_deploy_operation "install" "$STATE_DIR"
+  trap 'finish_deploy_operation; almanac_deploy_stable_copy_cleanup' EXIT
+
   env \
     ALMANAC_USER="$ALMANAC_USER" \
     ALMANAC_HOME="$ALMANAC_HOME" \
@@ -5009,6 +5093,8 @@ run_root_install() {
     chown "$ALMANAC_USER:$ALMANAC_USER" "$agent_payload_file" >/dev/null 2>&1 || true
   fi
   print_post_install_guide
+  finish_deploy_operation
+  trap 'almanac_deploy_stable_copy_cleanup' EXIT
 }
 
 run_root_upgrade() {
@@ -5023,7 +5109,8 @@ run_root_upgrade() {
 
   tmp_dir="$(mktemp -d /tmp/almanac-upgrade.XXXXXX)"
   checkout_dir="$tmp_dir/repo"
-  trap 'rm -rf "${tmp_dir:-}"' EXIT
+  begin_deploy_operation "upgrade" "$STATE_DIR"
+  trap 'finish_deploy_operation; rm -rf "${tmp_dir:-}"; almanac_deploy_stable_copy_cleanup' EXIT
 
   require_main_upstream_branch_for_upgrade
   ensure_upstream_git_deploy_key_material_root
@@ -5136,7 +5223,8 @@ run_root_upgrade() {
     chown "$ALMANAC_USER:$ALMANAC_USER" "$agent_payload_file" >/dev/null 2>&1 || true
   fi
   rm -rf "$tmp_dir"
-  trap - EXIT
+  finish_deploy_operation
+  trap 'almanac_deploy_stable_copy_cleanup' EXIT
   echo
   echo "Manual upstream check:"
   echo "  $ALMANAC_REPO_DIR/bin/almanac-ctl upgrade check"
@@ -8002,6 +8090,13 @@ EOF
 
 run_docker_install_flow() {
   local run_curator_setup="${1:-1}"
+  local operation="docker-upgrade"
+
+  if [[ "$run_curator_setup" == "1" ]]; then
+    operation="docker-install"
+  fi
+  begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/almanac-priv/state"
+  trap 'finish_deploy_operation; almanac_deploy_stable_copy_cleanup' EXIT
 
   echo "Installing or repairing Almanac Docker stack from this checkout..."
   run_almanac_docker bootstrap
@@ -8018,6 +8113,8 @@ run_docker_install_flow() {
   run_almanac_docker ports
   run_almanac_docker health
   run_almanac_docker live-smoke
+  finish_deploy_operation
+  trap 'almanac_deploy_stable_copy_cleanup' EXIT
 }
 
 run_docker_reconfigure_flow() {

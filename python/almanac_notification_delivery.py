@@ -19,6 +19,7 @@ from typing import Any
 
 from almanac_control import (
     Config,
+    active_deploy_operation,
     config_env_value,
     connect_db,
     consume_curator_brief_fanout,
@@ -229,6 +230,13 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
     return f"unknown target_kind: {target_kind}"
 
 
+def _is_operator_upgrade_notification(row: dict[str, Any]) -> bool:
+    return (
+        str(row.get("target_kind") or "").lower() == "operator"
+        and str(row.get("message") or "").startswith("Almanac update available:")
+    )
+
+
 def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str, Any]:
     summary = {
         "processed": 0,
@@ -238,6 +246,7 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
         "curator_fanout_batches": 0,
         "curator_fanout_agents": 0,
         "deferred_to_agent": 0,
+        "deferred_during_deploy": 0,
     }
     with connect_db(cfg) as conn:
         if has_pending_curator_brief_fanout(conn):
@@ -257,9 +266,18 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
             include_user_agent=False,
             include_curator=False,
         )
+        deploy_operation = active_deploy_operation(cfg)
 
         for row in rows:
             summary["processed"] += 1
+            if deploy_operation is not None and _is_operator_upgrade_notification(row):
+                summary["deferred_during_deploy"] += 1
+                if verbose:
+                    sys.stderr.write(
+                        f"[deliver] id={row['id']} deferred during "
+                        f"{deploy_operation.get('operation', 'deploy')}\n"
+                    )
+                continue
             try:
                 error = deliver_row(cfg, row)
             except Exception as exc:  # noqa: BLE001

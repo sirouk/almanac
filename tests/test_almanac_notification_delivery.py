@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -111,9 +112,81 @@ def test_discord_operator_delivery_supports_channel_ids() -> None:
             os.environ.update(old_env)
 
 
+def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_notification_delivery_deploy_test")
+    delivery = load_module(DELIVERY_PY, "almanac_notification_delivery_deploy_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state_dir = root / "state"
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(state_dir),
+                "RUNTIME_DIR": str(state_dir / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(state_dir / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(state_dir / "agents"),
+                "ALMANAC_CURATOR_DIR": str(state_dir / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(state_dir / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(state_dir / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(state_dir / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(state_dir / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "tui-only",
+            },
+        )
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-deploy-operation.json").write_text(
+            json.dumps(
+                {
+                    "operation": "docker-upgrade",
+                    "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                control.queue_notification(
+                    conn,
+                    target_kind="operator",
+                    target_id="operator",
+                    channel_kind="tui-only",
+                    message="Almanac update available: deployed aaa -> upstream bbb.",
+                )
+
+            summary = delivery.run_once(cfg)
+            expect(summary["processed"] == 1, summary)
+            expect(summary["delivered"] == 0, summary)
+            expect(summary["deferred_during_deploy"] == 1, summary)
+            with control.connect_db(cfg) as conn:
+                row = conn.execute("SELECT delivered_at FROM notification_outbox").fetchone()
+            expect(row["delivered_at"] is None, dict(row))
+            print("PASS test_upgrade_notification_delivery_defers_during_deploy_operation")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
-    print("PASS all 1 notification delivery regression tests")
+    test_upgrade_notification_delivery_defers_during_deploy_operation()
+    print("PASS all 2 notification delivery regression tests")
     return 0
 
 

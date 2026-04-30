@@ -31,6 +31,7 @@ from almanac_notion_webhook import (
 from almanac_onboarding_flow import notify_session_state, send_session_message
 from almanac_control import (
     Config,
+    active_deploy_operation,
     approve_ssot_pending_write,
     approve_request,
     archive_agent_files,
@@ -1758,62 +1759,71 @@ def upgrade_check(
         result["upstream_transport_fallback"] = upstream_transport_fallback
         result["upstream_transport_warning"] = upstream_transport_warning
 
+    deploy_operation = active_deploy_operation(cfg)
+    if deploy_operation is not None:
+        result["deploy_operation_active"] = True
+        result["deploy_operation"] = deploy_operation
+
     upsert_setting(conn, "almanac_upgrade_last_seen_sha", upstream_commit)
     upsert_setting(conn, "almanac_upgrade_relation", relation)
 
     if notify and update_available:
         last_notified_sha = get_setting(conn, "almanac_upgrade_last_notified_sha", "")
         if upstream_commit != last_notified_sha:
-            operator_extra = operator_upgrade_action_extra(cfg, upstream_commit=upstream_commit)
-            operator_tail = (
-                "Review with Curator using almanac-upgrade-orchestrator, then run ./deploy.sh upgrade on the host."
-            )
-            if operator_extra is not None:
-                operator_tail += " You can also use the Dismiss / Install buttons below."
-            queue_notification(
-                conn,
-                target_kind="operator",
-                target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
-                channel_kind=cfg.operator_notify_platform or "tui-only",
-                message=(
-                    "Almanac update available: "
-                    f"deployed {_short_sha(deployed_commit)} -> upstream {_short_sha(upstream_commit)} "
-                    f"on {upstream_repo_url}#{upstream_branch}. "
-                    f"{operator_tail}"
-                ),
-                extra=operator_extra,
-            )
-            for row in conn.execute(
-                "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active' ORDER BY agent_id"
-            ).fetchall():
-                agent_id = str(row["agent_id"] or "")
-                if not agent_id:
-                    continue
+            if deploy_operation is not None:
+                result["notification_suppressed"] = True
+                result["notification_suppressed_reason"] = "deploy-operation-active"
+            else:
+                operator_extra = operator_upgrade_action_extra(cfg, upstream_commit=upstream_commit)
+                operator_tail = (
+                    "Review with Curator using almanac-upgrade-orchestrator, then run ./deploy.sh upgrade on the host."
+                )
+                if operator_extra is not None:
+                    operator_tail += " You can also use the Dismiss / Install buttons below."
                 queue_notification(
                     conn,
-                    target_kind="user-agent",
-                    target_id=agent_id,
-                    channel_kind="almanac-upgrade",
+                    target_kind="operator",
+                    target_id=cfg.operator_notify_channel_id or cfg.operator_notify_platform or "operator",
+                    channel_kind=cfg.operator_notify_platform or "tui-only",
                     message=(
-                        "Curator reports an Almanac host update is available: "
-                        f"{_short_sha(deployed_commit)} -> {_short_sha(upstream_commit)}. "
-                        "Let your user know shared infrastructure will be refreshed once the operator runs ./deploy.sh upgrade."
+                        "Almanac update available: "
+                        f"deployed {_short_sha(deployed_commit)} -> upstream {_short_sha(upstream_commit)} "
+                        f"on {upstream_repo_url}#{upstream_branch}. "
+                        f"{operator_tail}"
                     ),
-                    extra={
-                        "deployed_commit": deployed_commit,
-                        "upstream_commit": upstream_commit,
-                        "tracked_upstream_repo_url": upstream_repo_url,
-                        "tracked_upstream_branch": upstream_branch,
-                    },
+                    extra=operator_extra,
                 )
-                signal_agent_refresh_from_curator(
-                    conn,
-                    cfg,
-                    agent_id=agent_id,
-                    note="curator upgrade notification ready",
-                )
-            upsert_setting(conn, "almanac_upgrade_last_notified_sha", upstream_commit)
-            result["notification_sent"] = True
+                for row in conn.execute(
+                    "SELECT agent_id FROM agents WHERE role = 'user' AND status = 'active' ORDER BY agent_id"
+                ).fetchall():
+                    agent_id = str(row["agent_id"] or "")
+                    if not agent_id:
+                        continue
+                    queue_notification(
+                        conn,
+                        target_kind="user-agent",
+                        target_id=agent_id,
+                        channel_kind="almanac-upgrade",
+                        message=(
+                            "Curator reports an Almanac host update is available: "
+                            f"{_short_sha(deployed_commit)} -> {_short_sha(upstream_commit)}. "
+                            "Let your user know shared infrastructure will be refreshed once the operator runs ./deploy.sh upgrade."
+                        ),
+                        extra={
+                            "deployed_commit": deployed_commit,
+                            "upstream_commit": upstream_commit,
+                            "tracked_upstream_repo_url": upstream_repo_url,
+                            "tracked_upstream_branch": upstream_branch,
+                        },
+                    )
+                    signal_agent_refresh_from_curator(
+                        conn,
+                        cfg,
+                        agent_id=agent_id,
+                        note="curator upgrade notification ready",
+                    )
+                upsert_setting(conn, "almanac_upgrade_last_notified_sha", upstream_commit)
+                result["notification_sent"] = True
 
     note_refresh_job(
         conn,

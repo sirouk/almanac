@@ -97,6 +97,38 @@ def expiry_from_iso(value: str | None, *, ttl_seconds: int) -> str:
     return (base + dt.timedelta(seconds=max(1, int(ttl_seconds)))).replace(microsecond=0).isoformat()
 
 
+def active_deploy_operation(cfg: "Config") -> dict[str, str] | None:
+    marker = cfg.state_dir / "almanac-deploy-operation.json"
+    if not marker.is_file():
+        return None
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    operation = str(payload.get("operation") or "").strip()
+    if operation not in {"install", "upgrade", "docker-install", "docker-upgrade"}:
+        return None
+
+    now = utc_now()
+    expires_at = parse_utc_iso(str(payload.get("expires_at") or ""))
+    if expires_at is not None:
+        if expires_at <= now:
+            return None
+    else:
+        try:
+            marker_mtime = dt.datetime.fromtimestamp(marker.stat().st_mtime, dt.timezone.utc)
+        except OSError:
+            return None
+        if marker_mtime + dt.timedelta(hours=6) <= now:
+            return None
+
+    return {
+        "operation": operation,
+        "path": str(marker),
+        "expires_at": str(payload.get("expires_at") or ""),
+    }
+
+
 def auto_provision_stale_before_iso(seconds: int = 300) -> str:
     return (utc_now() - dt.timedelta(seconds=seconds)).replace(microsecond=0).isoformat()
 

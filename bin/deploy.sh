@@ -42,6 +42,7 @@ QMD_EMBED_DIMENSIONS="${QMD_EMBED_DIMENSIONS:-}"
 QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-120}"
 QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"
 QMD_EMBED_MAX_BATCH_MB="${QMD_EMBED_MAX_BATCH_MB:-16}"
+QMD_EMBED_FORCE_ON_NEXT_REFRESH="${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"
 PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
 PDF_INGEST_EXTRACTOR="${PDF_INGEST_EXTRACTOR:-auto}"
 PDF_INGEST_COLLECTION_NAME="${PDF_INGEST_COLLECTION_NAME:-vault-pdf-ingest}"
@@ -1591,6 +1592,22 @@ normalize_qmd_embed_provider() {
   esac
 }
 
+remember_qmd_embed_provider_transition() {
+  local previous_provider="$1"
+  local next_provider="$2"
+
+  if [[ "$next_provider" == "local" ]]; then
+    if [[ "$previous_provider" != "local" ]]; then
+      QMD_EMBED_FORCE_ON_NEXT_REFRESH=1
+      echo "Switching to local qmd embeddings; the next qmd refresh will rebuild local vectors."
+    else
+      QMD_EMBED_FORCE_ON_NEXT_REFRESH="${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"
+    fi
+  else
+    QMD_EMBED_FORCE_ON_NEXT_REFRESH=0
+  fi
+}
+
 collect_qmd_embedding_answers() {
   local default_provider="" provider_answer="" provider=""
   local default_endpoint="" default_model="" default_api_key="" default_dimensions=""
@@ -1634,12 +1651,14 @@ EOF
         QMD_EMBED_API_KEY=""
         QMD_EMBED_DIMENSIONS=""
         QMD_RUN_EMBED="1"
+        remember_qmd_embed_provider_transition "$default_provider" "$QMD_EMBED_PROVIDER"
         return 0
       fi
       QMD_EMBED_ENDPOINT_MODEL="$(normalize_optional_answer "$(ask "Embedding endpoint model name (type none to leave unset)" "${default_model:-text-embedding-3-small}")")"
       QMD_EMBED_DIMENSIONS="$(normalize_optional_answer "$(ask "Embedding dimensions (optional; type none to omit)" "$default_dimensions")")"
       QMD_EMBED_API_KEY="$(ask_secret_with_default "Embedding API key (ENTER keeps current, type none to clear)" "$default_api_key")"
       QMD_RUN_EMBED="0"
+      remember_qmd_embed_provider_transition "$default_provider" "$QMD_EMBED_PROVIDER"
       ;;
     none)
       QMD_EMBED_PROVIDER="none"
@@ -1648,6 +1667,7 @@ EOF
       QMD_EMBED_API_KEY=""
       QMD_EMBED_DIMENSIONS=""
       QMD_RUN_EMBED="0"
+      remember_qmd_embed_provider_transition "$default_provider" "$QMD_EMBED_PROVIDER"
       ;;
     *)
       QMD_EMBED_PROVIDER="local"
@@ -1656,6 +1676,7 @@ EOF
       QMD_EMBED_API_KEY=""
       QMD_EMBED_DIMENSIONS=""
       QMD_RUN_EMBED="1"
+      remember_qmd_embed_provider_transition "$default_provider" "$QMD_EMBED_PROVIDER"
       ;;
   esac
 }
@@ -1869,6 +1890,7 @@ emit_runtime_config() {
     write_kv QMD_EMBED_TIMEOUT_SECONDS "$QMD_EMBED_TIMEOUT_SECONDS"
     write_kv QMD_EMBED_MAX_DOCS_PER_BATCH "$QMD_EMBED_MAX_DOCS_PER_BATCH"
     write_kv QMD_EMBED_MAX_BATCH_MB "$QMD_EMBED_MAX_BATCH_MB"
+    write_kv QMD_EMBED_FORCE_ON_NEXT_REFRESH "${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"
     write_kv QMD_MCP_PORT "$QMD_MCP_PORT"
     write_kv ALMANAC_MCP_HOST "$ALMANAC_MCP_HOST"
     write_kv ALMANAC_MCP_PORT "$ALMANAC_MCP_PORT"

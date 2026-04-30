@@ -27,6 +27,42 @@ require_real_layout "qmd refresh"
 ensure_layout
 ensure_nvm
 
+clear_qmd_embed_force_flag() {
+  local config="${CONFIG_FILE:-}"
+  local old_umask=""
+  local temp=""
+
+  if [[ "${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}" != "1" || -z "$config" || ! -f "$config" || ! -w "$config" ]]; then
+    return 0
+  fi
+
+  temp="${config}.tmp.$$"
+  old_umask="$(umask)"
+  umask 077
+  if awk '
+    BEGIN { cleared = 0 }
+    /^QMD_EMBED_FORCE_ON_NEXT_REFRESH=/ {
+      print "QMD_EMBED_FORCE_ON_NEXT_REFRESH=0"
+      cleared = 1
+      next
+    }
+    { print }
+    END {
+      if (!cleared) {
+        print "QMD_EMBED_FORCE_ON_NEXT_REFRESH=0"
+      }
+    }
+  ' "$config" >"$temp"; then
+    umask "$old_umask"
+    if cat "$temp" >"$config"; then
+      QMD_EMBED_FORCE_ON_NEXT_REFRESH=0
+    fi
+  else
+    umask "$old_umask"
+  fi
+  rm -f "$temp"
+}
+
 run_qmd_embed() {
   local timeout_seconds="${QMD_EMBED_TIMEOUT_SECONDS:-0}"
   local rc=0
@@ -43,6 +79,11 @@ run_qmd_embed() {
       ;;
   esac
 
+  if [[ "${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}" == "1" ]]; then
+    echo "QMD local embedding force refresh requested; rebuilding local vectors." >&2
+    embed_cmd+=(-f)
+  fi
+
   if [[ -n "${QMD_EMBED_MAX_DOCS_PER_BATCH:-}" ]]; then
     embed_cmd+=(--max-docs-per-batch "$QMD_EMBED_MAX_DOCS_PER_BATCH")
   fi
@@ -52,6 +93,7 @@ run_qmd_embed() {
 
   if [[ "$timeout_seconds" =~ ^[0-9]+$ ]] && (( timeout_seconds > 0 )) && command -v timeout >/dev/null 2>&1; then
     if timeout --foreground "${timeout_seconds}s" "${embed_cmd[@]}"; then
+      clear_qmd_embed_force_flag
       return 0
     else
       rc=$?
@@ -65,6 +107,7 @@ run_qmd_embed() {
   fi
 
   if "${embed_cmd[@]}"; then
+    clear_qmd_embed_force_flag
     return 0
   else
     rc=$?

@@ -126,6 +126,7 @@ def render_runtime_config(
     qmd_embed_endpoint_model: str = "",
     qmd_embed_api_key: str = "",
     qmd_embed_dimensions: str = "",
+    qmd_embed_force_on_next_refresh: str = "0",
 ) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
@@ -150,6 +151,7 @@ QMD_EMBED_ENDPOINT={shlex.quote(qmd_embed_endpoint)}
 QMD_EMBED_ENDPOINT_MODEL={shlex.quote(qmd_embed_endpoint_model)}
 QMD_EMBED_API_KEY={shlex.quote(qmd_embed_api_key)}
 QMD_EMBED_DIMENSIONS={shlex.quote(qmd_embed_dimensions)}
+QMD_EMBED_FORCE_ON_NEXT_REFRESH={shlex.quote(qmd_embed_force_on_next_refresh)}
 BACKUP_GIT_BRANCH=main
 NEXTCLOUD_PORT=18080
 NEXTCLOUD_TRUSTED_DOMAIN=almanac.example.ts.net
@@ -420,12 +422,14 @@ def test_emit_runtime_config_persists_qmd_embedding_endpoint_fields() -> None:
         qmd_embed_endpoint_model="text-embedding-3-small",
         qmd_embed_api_key="embed-secret",
         qmd_embed_dimensions="768",
+        qmd_embed_force_on_next_refresh="1",
     )
     expect(source_value(config, "QMD_EMBED_PROVIDER") == "endpoint", config)
     expect(source_value(config, "QMD_EMBED_ENDPOINT") == "https://embed.example.test/v1", config)
     expect(source_value(config, "QMD_EMBED_ENDPOINT_MODEL") == "text-embedding-3-small", config)
     expect(source_value(config, "QMD_EMBED_API_KEY") == "embed-secret", config)
     expect(source_value(config, "QMD_EMBED_DIMENSIONS") == "768", config)
+    expect(source_value(config, "QMD_EMBED_FORCE_ON_NEXT_REFRESH") == "1", config)
     print("PASS test_emit_runtime_config_persists_qmd_embedding_endpoint_fields")
 
 
@@ -2054,13 +2058,18 @@ def test_qmd_refresh_bounds_embedding_work() -> None:
     expect("timeout --foreground" in refresh, refresh)
     expect("--max-docs-per-batch" in refresh and "--max-batch-mb" in refresh, refresh)
     expect("embeddings will retry on the next refresh" in refresh, refresh)
+    expect("QMD local embedding force refresh requested" in refresh, refresh)
+    expect("clear_qmd_embed_force_flag" in refresh, refresh)
     expect('QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-120}"' in common, common)
     expect('QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"' in common, common)
     expect('QMD_EMBED_PROVIDER="${QMD_EMBED_PROVIDER:-local}"' in common, common)
+    expect('QMD_EMBED_FORCE_ON_NEXT_REFRESH="${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"' in common, common)
     expect('write_kv QMD_EMBED_TIMEOUT_SECONDS "$QMD_EMBED_TIMEOUT_SECONDS"' in deploy, deploy)
     expect('write_kv QMD_EMBED_PROVIDER "${QMD_EMBED_PROVIDER:-local}"' in deploy, deploy)
+    expect('write_kv QMD_EMBED_FORCE_ON_NEXT_REFRESH "${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"' in deploy, deploy)
     expect("QMD_EMBED_TIMEOUT_SECONDS=120" in example, example)
     expect("QMD_EMBED_PROVIDER=local" in example, example)
+    expect("QMD_EMBED_FORCE_ON_NEXT_REFRESH=0" in example, example)
     expect("QMD embedding endpoint provider selected" in refresh, refresh)
     expect("qmd remote embedding endpoint config captured" in health, health)
     expect('"$SCRIPT_DIR/qmd-refresh.sh" --embed' in vault_watch, vault_watch)
@@ -2085,6 +2094,41 @@ run_qmd_embed
     expect(result.returncode == 0, f"qmd endpoint skip failed: {result.stderr}\n{result.stdout}")
     expect("local qmd embedding is skipped" in result.stderr, result.stderr)
     print("PASS test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected")
+
+
+def test_qmd_refresh_forces_and_consumes_local_rebuild_flag() -> None:
+    text = QMD_REFRESH_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "clear_qmd_embed_force_flag() {", "exec 9>")
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "almanac.env"
+        log_path = Path(tmp) / "qmd.log"
+        config_path.write_text("QMD_EMBED_FORCE_ON_NEXT_REFRESH=1\nKEEP=ok\n", encoding="utf-8")
+        script = f"""
+set -euo pipefail
+QMD_INDEX_NAME=almanac
+QMD_EMBED_PROVIDER=local
+QMD_EMBED_FORCE_ON_NEXT_REFRESH=1
+QMD_EMBED_TIMEOUT_SECONDS=0
+QMD_EMBED_MAX_DOCS_PER_BATCH=8
+QMD_EMBED_MAX_BATCH_MB=16
+CONFIG_FILE={shlex.quote(str(config_path))}
+LOG_FILE={shlex.quote(str(log_path))}
+qmd() {{
+  printf '%s\\n' "$*" >>"$LOG_FILE"
+}}
+{snippet}
+run_qmd_embed
+printf 'flag:%s\\n' "$(grep '^QMD_EMBED_FORCE_ON_NEXT_REFRESH=' "$CONFIG_FILE")"
+printf 'keep:%s\\n' "$(grep '^KEEP=' "$CONFIG_FILE")"
+printf 'qmd:%s\\n' "$(cat "$LOG_FILE")"
+"""
+        result = bash(script)
+    expect(result.returncode == 0, f"qmd force rebuild failed: {result.stderr}\n{result.stdout}")
+    expect("QMD local embedding force refresh requested" in result.stderr, result.stderr)
+    expect("flag:QMD_EMBED_FORCE_ON_NEXT_REFRESH=0" in result.stdout, result.stdout)
+    expect("keep:KEEP=ok" in result.stdout, result.stdout)
+    expect("qmd:--index almanac embed -f --max-docs-per-batch 8 --max-batch-mb 16" in result.stdout, result.stdout)
+    print("PASS test_qmd_refresh_forces_and_consumes_local_rebuild_flag")
 
 
 def test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint() -> None:
@@ -2118,8 +2162,9 @@ QMD_EMBED_ENDPOINT=
 QMD_EMBED_ENDPOINT_MODEL=
 QMD_EMBED_API_KEY=
 QMD_EMBED_DIMENSIONS=
+QMD_EMBED_FORCE_ON_NEXT_REFRESH=0
 collect_qmd_embedding_answers
-printf 'endpoint:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD_EMBED_ENDPOINT" "$QMD_EMBED_ENDPOINT_MODEL" "$QMD_EMBED_DIMENSIONS"
+printf 'endpoint:%s:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD_EMBED_ENDPOINT" "$QMD_EMBED_ENDPOINT_MODEL" "$QMD_EMBED_DIMENSIONS" "$QMD_EMBED_FORCE_ON_NEXT_REFRESH"
 
 ASK_MODE=local
 QMD_RUN_EMBED=0
@@ -2128,13 +2173,15 @@ QMD_EMBED_ENDPOINT=https://old.example/v1
 QMD_EMBED_ENDPOINT_MODEL=old-model
 QMD_EMBED_API_KEY=old-key
 QMD_EMBED_DIMENSIONS=1024
+QMD_EMBED_FORCE_ON_NEXT_REFRESH=0
 collect_qmd_embedding_answers
-printf 'local:%s:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD_EMBED_ENDPOINT" "$QMD_EMBED_ENDPOINT_MODEL" "$QMD_EMBED_API_KEY" "$QMD_EMBED_DIMENSIONS"
+printf 'local:%s:%s:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD_EMBED_ENDPOINT" "$QMD_EMBED_ENDPOINT_MODEL" "$QMD_EMBED_API_KEY" "$QMD_EMBED_DIMENSIONS" "$QMD_EMBED_FORCE_ON_NEXT_REFRESH"
 """
     result = bash(script)
     expect(result.returncode == 0, f"qmd embedding answer reconfigure failed: {result.stderr}\n{result.stdout}")
-    expect("endpoint:0:endpoint:https://embed.example.test/v1:text-embedding-3-small:768" in result.stdout, result.stdout)
-    expect("local:1:local::::" in result.stdout, result.stdout)
+    expect("endpoint:0:endpoint:https://embed.example.test/v1:text-embedding-3-small:768:0" in result.stdout, result.stdout)
+    expect("Switching to local qmd embeddings; the next qmd refresh will rebuild local vectors." in result.stdout, result.stdout)
+    expect("local:1:local:::::1" in result.stdout, result.stdout)
     print("PASS test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint")
 
 
@@ -2782,6 +2829,7 @@ def main() -> int:
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,
         test_qmd_refresh_bounds_embedding_work,
         test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected,
+        test_qmd_refresh_forces_and_consumes_local_rebuild_flag,
         test_placeholder_upstream_default_uses_checkout_origin,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,

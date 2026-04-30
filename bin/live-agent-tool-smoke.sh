@@ -13,6 +13,7 @@ TARGET_UNIX_USER=""
 TARGET_AGENT_SELECTOR=""
 TAIL_LINES=40
 SMOKE_RETRY_ATTEMPT="${ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT:-0}"
+SMOKE_TIMEOUT_SECONDS="${ALMANAC_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS:-300}"
 PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, local scripts, raw MCP protocol, or secrets files.}"
 
 usage() {
@@ -77,6 +78,11 @@ done
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is unavailable; cannot run live agent tool smoke." >&2
   exit 1
+fi
+
+if [[ ! "$SMOKE_TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$SMOKE_TIMEOUT_SECONDS" -lt 30 ]]; then
+  echo "ALMANAC_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS must be an integer >= 30." >&2
+  exit 2
 fi
 
 if [[ ! -x "$RUNTIME_DIR/hermes-venv/bin/hermes" ]]; then
@@ -162,11 +168,17 @@ trap 'rm -f "$output_file"' EXIT
 
 before_latest_session="$(run_as_target_user bash -lc 'find "$HERMES_HOME/sessions" -maxdepth 1 -type f -name "session_*.json" -printf "%f\n" 2>/dev/null | sort | tail -1' || true)"
 
-if ! run_as_target_user env TARGET_PROMPT="$PROMPT" TARGET_HERMES_BIN="$RUNTIME_DIR/hermes-venv/bin/hermes" \
-  bash -lc 'cd "$HOME" && timeout 90 "$TARGET_HERMES_BIN" chat -q "$TARGET_PROMPT"' >"$output_file" 2>&1; then
-  echo "Live agent tool smoke failed for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}. Recent output:" >&2
-  tail -"$TAIL_LINES" "$output_file" >&2 || true
-  exit 1
+smoke_command_status=0
+set +e
+run_as_target_user env \
+  TARGET_PROMPT="$PROMPT" \
+  TARGET_HERMES_BIN="$RUNTIME_DIR/hermes-venv/bin/hermes" \
+  TARGET_TIMEOUT_SECONDS="$SMOKE_TIMEOUT_SECONDS" \
+  bash -lc 'cd "$HOME" && timeout --foreground --kill-after=30s "${TARGET_TIMEOUT_SECONDS}s" "$TARGET_HERMES_BIN" chat -q "$TARGET_PROMPT"' >"$output_file" 2>&1
+smoke_command_status=$?
+set -e
+if [[ "$smoke_command_status" != "0" ]]; then
+  echo "Live agent tool smoke command exited with status $smoke_command_status for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}; inspecting any captured session." >&2
 fi
 if [[ "$(id -u)" -eq 0 ]]; then
   chown "$TARGET_UNIX_USER" "$output_file"
@@ -202,6 +214,9 @@ fi
 if [[ -z "$session_id" ]]; then
   echo "Could not determine the live smoke session id for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}" >&2
   tail -"$TAIL_LINES" "$output_file" >&2 || true
+  if [[ "$smoke_command_status" != "0" ]]; then
+    exit "$smoke_command_status"
+  fi
   exit 1
 fi
 
@@ -214,7 +229,7 @@ fi
 validation_status=0
 set +e
 validation_result="$(
-run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id" "$output_file" "$agent_log_path" <<'PY'
+run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id" "$output_file" "$agent_log_path" "$smoke_command_status" <<'PY'
 import json
 import re
 import sys
@@ -226,6 +241,7 @@ telemetry_path = Path(sys.argv[2])
 session_id = sys.argv[3]
 output_path = Path(sys.argv[4])
 agent_log_path = Path(sys.argv[5])
+command_status = int(sys.argv[6])
 
 
 def read_text(path: Path) -> str:
@@ -339,6 +355,7 @@ joined = "\n".join(texts)
 assistant_joined = "\n".join(assistant_texts)
 non_user_joined = "\n".join(non_user_texts)
 tool_result_joined = "\n".join(tool_result_texts)
+output_joined = read_text(output_path)
 errors: list[str] = []
 stale_transport_session_seen = "missing or invalid mcp-session-id" in tool_result_joined
 brokered_almanac_tool_seen = any(
@@ -348,6 +365,12 @@ brokered_almanac_tool_seen = any(
         "mcp_almanac_mcp_knowledge_search_and_fetch",
     }
     for name in functions
+)
+brokered_tool_returned = brokered_almanac_tool_seen and bool(tool_result_joined.strip())
+command_timed_out = command_status in {124, 137, 143} or (
+    command_status != 0
+    and "interrupted during api call" in output_joined.lower()
+    and "keyboardinterrupt" in output_joined.lower()
 )
 brokered_tool_succeeded = (
     brokered_almanac_tool_seen
@@ -375,6 +398,8 @@ if stale_transport_session_seen and not stale_transport_recovered:
     errors.append("session leaked a stale MCP transport-session error to the agent")
 if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", assistant_joined, re.IGNORECASE | re.DOTALL):
     errors.append("session attempted raw curl/MCP debugging instead of brokered Almanac tools")
+if command_status != 0 and not (command_timed_out and brokered_tool_returned):
+    errors.append(f"hermes chat exited with status {command_status}")
 
 if errors:
     if stale_transport_session_seen and not stale_transport_recovered:
@@ -416,6 +441,9 @@ if errors:
     raise SystemExit("\n".join(errors))
 
 result = {"session_id": session_id, "functions": functions}
+if command_timed_out and brokered_tool_returned:
+    result["smoke"] = "timed_out_after_brokered_tool_returned"
+    result["command_status"] = command_status
 if telemetry_missing_but_brokered_tool_succeeded:
     result["telemetry"] = "missing_tool_token_injected_but_brokered_tool_succeeded"
 if stale_transport_recovered:

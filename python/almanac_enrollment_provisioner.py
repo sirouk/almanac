@@ -67,7 +67,12 @@ from almanac_control import (
     mark_operator_action_running,
 )
 from almanac_discord import discord_create_dm_channel, discord_send_message
-from almanac_onboarding_flow import begin_onboarding_provisioning, send_session_message, session_prompt
+from almanac_onboarding_flow import (
+    begin_onboarding_provisioning,
+    send_session_message,
+    session_prompt,
+    session_prompt_telegram_parse_mode,
+)
 from almanac_onboarding_completion import (
     completion_bundle_for_session,
     completion_followup_discord_components,
@@ -1017,7 +1022,12 @@ def _begin_agent_backup_onboarding_phase(conn, cfg: Config, session: dict[str, A
             "agent_backup_skipped": False,
         },
     )
-    _notify_user_via_curator(cfg, session=updated_session, message=session_prompt(cfg, updated_session))
+    _notify_user_via_curator(
+        cfg,
+        session=updated_session,
+        message=session_prompt(cfg, updated_session),
+        telegram_parse_mode=session_prompt_telegram_parse_mode(updated_session),
+    )
 
 
 def _continue_after_agent_backup(conn, cfg: Config, session: dict[str, Any], *, notify_completed: bool = True) -> None:
@@ -1059,7 +1069,12 @@ def _begin_notion_onboarding_phase(conn, cfg: Config, session: dict[str, Any]) -
             "notion_claim_expires_at": "",
         },
     )
-    _notify_user_via_curator(cfg, session=updated_session, message=session_prompt(cfg, updated_session))
+    _notify_user_via_curator(
+        cfg,
+        session=updated_session,
+        message=session_prompt(cfg, updated_session),
+        telegram_parse_mode=session_prompt_telegram_parse_mode(updated_session),
+    )
 
 
 def _stage_provider_secret_for_user(
@@ -1452,7 +1467,12 @@ def _migrate_legacy_onboarding_session(conn, cfg: Config, session: dict[str, Any
         answers=update_answers,
         provision_error="",
     )
-    _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+    _notify_user_via_curator(
+        cfg,
+        session=updated,
+        message=session_prompt(cfg, updated),
+        telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+    )
     note_refresh_job(
         conn,
         job_name=f"onboarding-{session['session_id']}",
@@ -1789,7 +1809,12 @@ def _run_pending_onboarding_gateway_configs(conn, cfg: Config) -> None:
             )
             previous_error = str(session.get("provision_error") or "").strip()
             if message != previous_error:
-                _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+                _notify_user_via_curator(
+                    cfg,
+                    session=updated,
+                    message=session_prompt(cfg, updated),
+                    telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+                )
 
 
 def _run_pending_onboarding_notion_verifications(conn, cfg: Config) -> None:
@@ -1830,7 +1855,12 @@ def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> No
                 },
                 provision_error="",
             )
-            _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+            _notify_user_via_curator(
+                cfg,
+                session=updated,
+                message=session_prompt(cfg, updated),
+                telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+            )
             continue
         claim = get_notion_identity_claim(conn, claim_id=claim_id)
         if claim is None:
@@ -1846,7 +1876,12 @@ def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> No
                 },
                 provision_error="",
             )
-            _notify_user_via_curator(cfg, session=updated, message=session_prompt(cfg, updated))
+            _notify_user_via_curator(
+                cfg,
+                session=updated,
+                message=session_prompt(cfg, updated),
+                telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+            )
             continue
         status = str(claim.get("status") or "").strip()
         if status == "expired":
@@ -2656,7 +2691,12 @@ def _run_pending_agent_backup_actions(conn, cfg: Config) -> None:
                     },
                     provision_error="",
                 )
-                send_session_message(cfg, updated, session_prompt(cfg, updated))
+                send_session_message(
+                    cfg,
+                    updated,
+                    session_prompt(cfg, updated),
+                    telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+                )
             elif session is not None:
                 updated = save_onboarding_session(
                     conn,

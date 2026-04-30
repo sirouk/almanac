@@ -19,6 +19,12 @@ injection, Discord completion handoff with a confirmation code, Telegram
 dashboard/code/vault resource messages, Nextcloud vault access, and the
 `~/Almanac` workspace alias.
 
+Current onboarding copy follows a "why / do this / reply with this" rhythm so
+chat messages stay scannable on Discord and Telegram. Dense setup steps, such
+as bot-token creation, backup deploy keys, and Notion verification, should be
+chunked with blank lines and explicit reply words rather than explained as one
+large paragraph.
+
 Still not shipped as a complete pipeline: automatic ingestion of an operator
 profile into control-plane rows, profile-driven SOUL/plugin-managed-context
 distribution, profile-sourced resource manifests, web-search backend setup, and
@@ -118,6 +124,8 @@ Expected behavior:
       access.
 - [ ] Do not ask for the user's name again if onboarding already collected or
       resolved it.
+- [x] Keep Curator prompts compact and action-oriented: short context first,
+      then exact steps or the exact reply the user should send.
 - [ ] Use first contact to introduce the agent to its user, tools, source of
       truth, purpose, and boundaries.
 - [ ] Load doctrine before or during first contact.
@@ -136,11 +144,14 @@ Expected behavior:
 
 ### Discord Onboarding Instructions
 
-- [ ] Keep the Discord Developer Portal instructions current.
-- [ ] Make DM-oriented setup the primary path when supported.
+- [x] Keep the Discord Developer Portal instructions focused on the DM-oriented
+      path: create app, open Bot page, enable Message Content Intent, reset
+      token, paste token.
+- [x] Make DM-oriented setup the primary path when supported.
 - [ ] Put guild/server installation steps in a separate optional section.
-- [ ] State the minimal required intents and permissions.
-- [ ] Tell the user how to start talking to their bot after setup.
+- [x] State the minimal required intents and permissions.
+- [x] Tell the user how to start talking to their bot after setup with a
+      confirmation-code handoff.
 
 ### Notion Access
 

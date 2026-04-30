@@ -239,7 +239,6 @@ def _shared_resource_lines(cfg: Config) -> list[str]:
 def _discord_handoff_followup_lines(code: str) -> list[str]:
     code = str(code or "").strip()
     return [
-        "",
         "Discord handoff:",
         f"- Your agent bot will DM you directly now with confirmation code `{code}`." if code else "- Your agent bot will DM you directly now.",
         "- If the code matches here and in the bot DM, that DM is your private agent lane.",
@@ -250,7 +249,6 @@ def _discord_handoff_followup_lines(code: str) -> list[str]:
 def _telegram_handoff_followup_lines(bot_reference: str) -> list[str]:
     bot_reference = str(bot_reference or "").strip()
     return [
-        "",
         "Telegram handoff:",
         f"- Tap {bot_reference} and press Start to open your private agent chat." if bot_reference.startswith("@") else "- Open your agent bot and press Start to open your private agent chat.",
         "- Use that bot chat from here on out.",
@@ -289,6 +287,23 @@ def _telegram_followup_html(lines: list[str], *, remote_setup_command: str = "")
     return "\n".join(html_lines)
 
 
+def _compact_message_lines(lines: list[str]) -> list[str]:
+    compact: list[str] = []
+    previous_blank = True
+    for raw_line in lines:
+        line = str(raw_line or "").rstrip()
+        if not line:
+            if compact and not previous_blank:
+                compact.append("")
+            previous_blank = True
+            continue
+        compact.append(line)
+        previous_blank = False
+    while compact and compact[-1] == "":
+        compact.pop()
+    return compact
+
+
 def completion_message_bundle(
     cfg: Config,
     *,
@@ -320,19 +335,29 @@ def completion_message_bundle(
     ]
     if agent_backup_verified:
         backup_line = (
-            f"Private Hermes-home backup: active for `{agent_backup_owner_repo}`; sessions, soul, config, memories, skills/plugins, and selected Almanac state back up through Hermes cron every 4 hours."
+            f"Private backup: active for `{agent_backup_owner_repo}`. Hermes-home state backs up every 4 hours."
             if agent_backup_owner_repo
-            else "Private Hermes-home backup: active; sessions, soul, config, memories, skills/plugins, and selected Almanac state back up through Hermes cron every 4 hours."
+            else "Private backup: active. Hermes-home state backs up every 4 hours."
         )
     else:
-        backup_line = "Private Hermes-home backup: Curator can set this up with `/setup-backup`; the host also installs ~/.local/bin/almanac-agent-configure-backup as a shell fallback."
+        backup_line = "Private backup: Curator can set this up with `/setup-backup`; shell fallback: ~/.local/bin/almanac-agent-configure-backup."
+    handoff_lines: list[str] = []
+    if discord_note:
+        handoff_lines = _discord_handoff_followup_lines(discord_dm_confirmation_code)
+    elif platform == "telegram":
+        handoff_lines = _telegram_handoff_followup_lines(bot_reference)
     followup_lines = [
         "────────",
+        "Start here:",
+        *handoff_lines,
+        "",
         "Web access:",
         f"- Hermes dashboard: {access.get('dashboard_url')}",
         f"- Dashboard username: {access.get('username')}",
         f"- Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
         f"- Code workspace: {access.get('code_url')}",
+        "",
+        "Files:",
         f"- Workspace root: {home}",
         f"- Almanac vault: {home / 'Almanac'}",
         "",
@@ -341,7 +366,7 @@ def completion_message_bundle(
         "",
         "Backups:",
         backup_line,
-        "Do not reuse the Almanac code-push deploy key or shared almanac-priv backup key for your agent backup.",
+        "- Use a separate agent-backup deploy key. Do not reuse the Almanac code-push key or shared almanac-priv backup key.",
         "",
         *_shared_resource_lines(cfg),
         "- The shared Vault and control rails are already wired into your agent by default.",
@@ -383,12 +408,8 @@ def completion_message_bundle(
             followup_lines.append(
                 "Optional tailnet-only remote CLI: unavailable until this host has a Tailscale DNS name and your Unix user is recorded."
             )
-    first_lines = [line for line in first_lines if line]
-    followup_lines = [line for line in followup_lines if line]
-    if discord_note:
-        followup_lines.extend(_discord_handoff_followup_lines(discord_dm_confirmation_code))
-    elif platform == "telegram":
-        followup_lines.extend(_telegram_handoff_followup_lines(bot_reference))
+    first_lines = _compact_message_lines(first_lines)
+    followup_lines = _compact_message_lines(followup_lines)
     password = str(access.get("password") or "")
     ack_line = "After you record it safely, click the button below. I’ll remove the password from this message and then send the rest of your links."
     followup_telegram_parse_mode = "HTML" if platform == "telegram" else ""

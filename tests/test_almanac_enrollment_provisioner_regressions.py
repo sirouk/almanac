@@ -683,7 +683,7 @@ def test_gateway_failures_notify_user_with_provision_error_status() -> None:
             provisioner._migrate_legacy_onboarding_session = lambda conn, cfg, session: session
             provisioner._configure_user_telegram_gateway = lambda conn, cfg, session: (_ for _ in ()).throw(RuntimeError("gateway startup failed"))
             notifications: list[str] = []
-            provisioner._notify_user_via_curator = lambda cfg, *, session, message, telegram_reply_markup=None, discord_components=None: notifications.append(message) or {"message_id": "1"}
+            provisioner._notify_user_via_curator = lambda cfg, *, session, message, telegram_reply_markup=None, telegram_parse_mode="", discord_components=None: notifications.append(message) or {"message_id": "1"}
 
             provisioner._run_pending_onboarding_gateway_configs(conn, cfg)
 

@@ -6,6 +6,7 @@ import json
 import pwd
 import re
 from dataclasses import dataclass
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any, Callable
 
@@ -81,10 +82,10 @@ MODEL_PROVIDER_LABELS = {
     "codex": "OpenAI Codex",
 }
 MODEL_PROVIDER_DESCRIPTIONS = {
-    ORG_PROVIDED_PRESET: "organization default provider and model; no personal provider credential needed",
-    "chutes": "recommended; Chutes API key + model id, wired as a custom OpenAI-compatible Hermes provider",
-    "opus": "Claude account OAuth; best for long, careful collaboration",
-    "codex": "OpenAI Codex sign-in; best for code-heavy lanes",
+    ORG_PROVIDED_PRESET: "team default; no personal model key needed",
+    "chutes": "recommended default; bring a Chutes key, or use the team key when available",
+    "opus": "Claude browser sign-in; good for long, careful collaboration",
+    "codex": "OpenAI Codex sign-in; good for code-heavy work",
 }
 CHUTES_DEFAULT_MODEL = provider_default_model("chutes") or "moonshotai/Kimi-K2.6-TEE"
 CHUTES_LEGACY_DEFAULT_MODELS = {"auto-failover", "model-router"}
@@ -246,13 +247,15 @@ def session_prompt_telegram_parse_mode(session: dict[str, Any]) -> str:
     if platform != "telegram":
         return ""
     state = str(session.get("state") or "")
-    if state != "awaiting-model-id":
-        return ""
-    answers = session.get("answers", {})
-    if not isinstance(answers, dict):
-        answers = {}
-    model_preset = str(answers.get("model_preset") or "chutes").strip().lower() or "chutes"
-    if model_preset == "chutes":
+    if state == "awaiting-agent-backup-key-install":
+        return "HTML"
+    if state in {
+        "awaiting-model-id",
+        "awaiting-thinking-level",
+        "awaiting-bot-token",
+        "awaiting-provider-credential",
+        "awaiting-agent-backup-repo",
+    }:
         return "Markdown"
     return ""
 
@@ -306,6 +309,23 @@ def _as_strings(value: object) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _join_prompt_lines(lines: list[str]) -> str:
+    compact: list[str] = []
+    previous_blank = True
+    for raw_line in lines:
+        line = str(raw_line or "").rstrip()
+        if not line:
+            if compact and not previous_blank:
+                compact.append("")
+            previous_blank = True
+            continue
+        compact.append(line)
+        previous_blank = False
+    while compact and compact[-1] == "":
+        compact.pop()
+    return "\n".join(compact)
 
 
 def _profile_match_norm(value: str) -> str:
@@ -574,8 +594,7 @@ def _model_provider_description(cfg: Config, preset: str) -> str:
         if spec is not None:
             model_id = _configured_model_id(cfg, ORG_PROVIDED_PRESET) or spec.model_id
             return (
-                f"organization default: {spec.display_name} with `{model_id}`; "
-                "no personal provider credential needed"
+                f"team default: {spec.display_name} with `{model_id}`; no personal model key needed"
             )
     return MODEL_PROVIDER_DESCRIPTIONS.get(preset, str(cfg.model_presets.get(preset) or ""))
 
@@ -598,7 +617,9 @@ def _model_option_rows(cfg: Config) -> list[tuple[str, str, str]]:
 def _model_options(cfg: Config) -> str:
     lines = []
     for index, (key, label, description) in enumerate(_model_option_rows(cfg), start=1):
-        lines.append(f"{index}. {label} (`{key}`) - {description}")
+        lines.append(f"{index}. {label} (`{key}`)")
+        if description:
+            lines.append(f"   {description}")
     return "\n".join(lines)
 
 
@@ -1136,15 +1157,16 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
         return (
-            "Hi, I’m Almanac’s Curator. I’ll help get your private agent lane set up and keep the handoff tidy.\n\n"
+            "Hi, I’m Almanac’s Curator. I’ll help set up your private agent lane one step at a time.\n\n"
             "First up: what should I call you?"
         )
     if state == "awaiting-profile-match":
         candidates = answers.get("org_profile_candidates") if isinstance(answers, dict) else []
         lines = [
-            "I found prepared operating-profile entries that are not linked to a live agent yet.",
+            "I found a few prepared profile entries that are not linked to an agent yet.",
             "",
-            "If one of these is you, reply with its number. Reply `none` to continue without linking a profile entry.",
+            "If one is you, reply with its number.",
+            "If not, reply `none` and we’ll keep going.",
             "",
         ]
         for index, candidate in enumerate(candidates if isinstance(candidates, list) else [], start=1):
@@ -1153,7 +1175,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "This only orients your agent from the operator-authored profile. It is not identity verification, and it does not grant permissions by itself.",
+                "This only gives your agent helpful starting context. It is not identity verification, and it does not grant permissions by itself.",
             ]
         )
         return "\n".join(lines)
@@ -1168,10 +1190,10 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                     "Reply `default` to use it, or type any available username you prefer."
                 )
         return (
-            "Now let’s pick your host username.\n"
-            "Almanac runs on a shared host. Each enrolled user gets a private Unix account, home directory, Hermes state, and code workspace.\n\n"
-            "What Unix username should I create for you?\n"
-            "Use lowercase letters, digits, `_`, or `-`; start with a letter or `_`."
+            "Now let’s choose your host username.\n\n"
+            "Almanac creates a private Unix account for your agent lane. That gives you a home directory, Hermes state, and code workspace on the shared host.\n\n"
+            "Reply with the username you want.\n"
+            "Use lowercase letters, digits, `_`, or `-`. Start with a letter or `_`."
             f"{suggestion}"
         )
     if state == "awaiting-purpose":
@@ -1183,14 +1205,14 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         return "I can only wire the same platform you're onboarding from right now. Reply with `telegram` or `discord` to match this DM."
     if state == "awaiting-bot-name":
         return (
-            f"Now name your {bot_platform or 'chat'} bot.\n"
-            "This will be the bot you talk to after onboarding.\n\n"
-            "What should it be called? A short plain-English name is perfect."
+            f"Now name your {bot_platform or 'chat'} agent bot.\n\n"
+            "This is the bot you’ll talk to after onboarding. A short plain-English name is perfect.\n\n"
+            "What should it be called?"
         )
     if state == "awaiting-model-preset":
         return (
-            "Now let’s pick the model provider.\n"
-            "Choose what should power this agent. Reply with the number or provider name.\n\n"
+            "Now choose what should power this agent.\n\n"
+            "Reply with a number or provider name. If you are unsure, choose the recommended or team default option.\n\n"
             f"{_model_options(cfg)}"
         )
     if state == "awaiting-model-id":
@@ -1200,11 +1222,11 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         if model_preset == "chutes":
             examples = "\n".join(f"- `{model}`" for model in _recommended_models(cfg, "chutes"))
             return (
-                "Great, Chutes it is. Which model should this agent use?\n\n"
-                f"Reply with a model id, or `default` for `{default_model}`.\n"
+                "Great, Chutes it is. Now pick the model.\n\n"
+                f"Reply with a model id, or reply `default` to use `{default_model}`.\n\n"
                 "Good starting points:\n"
                 f"{examples}\n\n"
-                "I’ll wire Chutes through Hermes as an OpenAI-compatible provider at `https://llm.chutes.ai/v1`."
+                "I’ll wire the Chutes endpoint for you."
             )
         return (
             f"Which {label} model should this agent use?\n\n"
@@ -1222,8 +1244,8 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             for index, (effort, description) in enumerate(REASONING_EFFORT_OPTIONS, start=1)
         )
         return (
-            "How much thinking room should this agent use by default?\n"
-            "Pick the default reasoning depth for this agent. Reply with the number or name.\n\n"
+            "How much thinking room should this agent use by default?\n\n"
+            "Reply with a number or name. `medium` is a good default; `high` or `xhigh` is better for slower, deeper work.\n\n"
             f"{options}"
             f"{chutes_note}"
         )
@@ -1242,32 +1264,35 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
                 waiting_note = ""
         prefix = f"{org_provider_note}\n\n" if org_provider_note else ""
         return prefix + (
-            "Thanks. I sent this onboarding request to the operator for approval.\n\n"
-            "I’ll keep watch and continue here automatically once it is approved."
+            "Thanks. I sent your onboarding request to the operator.\n\n"
+            "You can leave this chat open. I’ll continue here automatically once it is approved."
             + waiting_note
         )
     if state == "awaiting-bot-token":
         if bot_platform == "discord":
             return (
-                "Approved. Next I need the Discord bot token for your private agent lane.\n\n"
+                "Approved. Next, create the Discord bot for your private agent lane.\n\n"
+                "You do not need to add this bot to a server. Just create it and send me its token.\n\n"
                 "Discord setup steps:\n"
-                "1. Go to https://discord.com/developers/applications and click `New Application`.\n"
+                "1. Open https://discord.com/developers/applications and click `New Application`.\n"
                 f"2. Name the app `{preferred_bot_name}` or any bot name you prefer.\n"
                 "3. Open the app’s `Bot` page.\n"
                 "4. Turn `Message Content Intent` on.\n"
-                "5. Click `Reset Token`, copy the bot token, and paste that token here.\n\n"
-                "Important: send the token for the new agent bot only, not Curator’s Discord token. You do not need to add this bot to a server; after setup, Curator will show a confirmation code and the bot will DM you directly with the same code."
+                "5. Click `Reset Token` and copy the bot token.\n\n"
+                "Then paste that token here.\n\n"
+                "Important: send the token for the new agent bot only, not Curator’s Discord token. After setup, Curator will show a confirmation code and the agent bot will DM you with the same code."
             )
         return (
-            "Approved. Next I need the Telegram bot token for your private agent lane.\n\n"
+            "Approved. Next, create the Telegram bot for your private agent lane.\n\n"
+            "You’ll use this bot after onboarding. BotFather will give you the token to paste here.\n\n"
             "Telegram setup steps:\n"
             "1. Open Telegram and message @BotFather.\n"
             "2. Send `/newbot`.\n"
             f"3. Give it the display name `{preferred_bot_name}` or any bot name you prefer.\n"
             "4. Choose a username that ends in `bot`.\n"
-            "5. Copy the API token BotFather prints.\n"
-            "6. Paste that token here.\n\n"
-            "Important: send the token for the new agent bot only, not Curator’s Telegram token. After I receive it, I’ll ask for the model credential and finish the handoff."
+            "5. Copy the API token BotFather prints.\n\n"
+            "Then paste that token here.\n\n"
+            "Important: send the token for the new agent bot only, not Curator’s Telegram token."
         )
     if state == "awaiting-provider-credential" and provider_setup is not None:
         return provider_credential_prompt(
@@ -1290,11 +1315,11 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         bot_slug = re.sub(r"[^a-z0-9]+", "-", str(answers.get("preferred_bot_name") or answers.get("bot_display_name") or "agent").strip().lower()).strip("-") or "agent"
         example = f"{unix_user}/almanac-{bot_slug}"
         return (
-            "Your agent lane is live. Next, let’s set up its private backup repo.\n\n"
-            "Create or choose a private GitHub repository for this agent’s Hermes home. "
-            "I’ll refuse public repositories, generate a separate per-user deploy key, and only activate the backup after GitHub proves the key has write access.\n\n"
-            f"Reply with the GitHub `owner/repo` path, for example `{example}`.\n"
-            "Reply `skip` to finish without the private agent backup for now."
+            "Your agent lane is live.\n\n"
+            "Optional next step: private backup repo.\n\n"
+            "Create or choose a private GitHub repository for this agent’s Hermes home. I’ll generate a separate deploy key and activate backups only after GitHub confirms the repo is private and writable.\n\n"
+            f"Reply with the GitHub `owner/repo` path, for example `{example}`.\n\n"
+            "Reply `skip` to finish now and set this up later."
         )
     if state == "agent-backup-prepare-pending":
         owner_repo = str(answers.get("agent_backup_owner_repo") or "").strip()
@@ -1304,20 +1329,46 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         owner_repo = str(answers.get("agent_backup_owner_repo") or "").strip()
         public_key = str(answers.get("agent_backup_public_key") or "").strip()
         settings_url = f"https://github.com/{owner_repo}/settings/keys" if owner_repo else "the repository deploy-key settings"
+        if str(session.get("platform") or "").strip().lower() == "telegram":
+            safe_owner_repo = html_escape(owner_repo, quote=False)
+            safe_settings_url = html_escape(settings_url, quote=True)
+            safe_public_key = html_escape(public_key, quote=False)
+            lines = [
+                "Private backup key is ready.",
+                "",
+                f"Repository: <code>{safe_owner_repo}</code>" if owner_repo else "",
+                "In GitHub:",
+                f'1. Open <a href="{safe_settings_url}">deploy key settings</a>' if owner_repo else f"1. Open {html_escape(settings_url, quote=False)}",
+                "2. Add a new deploy key.",
+                "3. Paste the key below.",
+                "4. Enable <code>Allow write access</code>.",
+                "",
+                "Deploy key:",
+                f"<code>{safe_public_key}</code>" if public_key else "(the host prepared the key, but I could not read the public half; ask the operator to check the backup setup log)",
+                "",
+                "Reply <code>done</code> after the key is installed. I’ll verify the repo and then turn on the backup job.",
+                "Reply <code>skip</code> to finish without activating backup now.",
+            ]
+            return _join_prompt_lines(lines)
         lines = [
             "Private backup key is ready.",
             "",
             f"Repository: `{owner_repo}`" if owner_repo else "",
-            f"Add this deploy key in GitHub: {settings_url}",
-            "Enable `Allow write access`.",
+            "In GitHub:",
+            f"1. Open {settings_url}",
+            "2. Add a new deploy key.",
+            "3. Paste the key below.",
+            "4. Enable `Allow write access`.",
             "",
             "Deploy key:",
-            f"`{public_key}`" if public_key else "(the host prepared the key, but I could not read the public half; ask the operator to check the backup setup log)",
+            "```text" if public_key else "",
+            public_key if public_key else "(the host prepared the key, but I could not read the public half; ask the operator to check the backup setup log)",
+            "```" if public_key else "",
             "",
-            "Reply `done` after the key is installed. I’ll re-check that the repo is not public and verify read plus dry-run write access before activating the Hermes cron backup job.",
-            "Reply `skip` to finish without activating this backup now.",
+            "Reply `done` after the key is installed. I’ll verify the repo and then turn on the backup job.",
+            "Reply `skip` to finish without activating backup now.",
         ]
-        return "\n".join(line for line in lines if line)
+        return _join_prompt_lines(lines)
     if state == "agent-backup-verify-pending":
         owner_repo = str(answers.get("agent_backup_owner_repo") or "").strip()
         suffix = f" for `{owner_repo}`" if owner_repo else ""
@@ -1325,24 +1376,26 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     if state == "awaiting-notion-access":
         shared_page_url = shared_notion_home_url().strip()
         lines = [
-            "Your agent lane is live. Optional final step: shared Notion access.",
+            "Your agent lane is live.",
             "",
-            "First, make sure you can open the shared Almanac page in this Notion workspace:",
+            "Optional final step: shared Notion writes.",
+            "",
+            "First, make sure you can open the shared Almanac page:",
         ]
         if shared_page_url:
             lines.append(shared_page_url)
         lines.append("")
         lines.append(
-            "If Notion says `Request access`, tell the operator you need edit access to the shared Almanac page. "
-            "On free Notion that usually means `Full access`, plus the operator may need to invite you into the workspace or teamspace first."
+            "If Notion says `Request access`, ask the operator for edit access to that page. On free Notion, that usually means `Full access`, and they may need to invite you into the workspace or teamspace first."
         )
         lines.append("")
-        lines.append("Reply `ready` once you can open it. Reply `skip` to finish now with shared Notion writes disabled.")
+        lines.append("Reply `ready` once you can open it.")
+        lines.append("Reply `skip` to finish now with shared Notion writes disabled.")
         return "\n".join(lines)
     if state == "awaiting-notion-email":
         return (
-            "Shared Notion verification, step 2 of 3.\n"
-            "Reply with the Notion email you use in this organization’s workspace.\n\n"
+            "Shared Notion writes, step 2 of 3.\n\n"
+            "Reply with the Notion email you use in this workspace.\n\n"
             "Reply `skip` to finish now with shared Notion writes disabled."
         )
     if state == "awaiting-notion-verification":
@@ -1367,8 +1420,9 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             except ValueError:
                 expiry_note = ""
         lines = [
-            "Shared Notion verification, step 3 of 3.",
-            "Open your Almanac verification page in Notion and make any small edit there. A keystroke or property change is enough.",
+            "Shared Notion writes, step 3 of 3.",
+            "",
+            "Open your verification page in Notion and make any tiny edit. A keystroke or property change is enough.",
         ]
         if claim_url:
             lines.append(claim_url)
@@ -1377,10 +1431,9 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         else:
             lines.append("I’m watching for your verification edit and will finish automatically once it lands." + expiry_note)
         lines.append(
-            "If Notion says `Request access`, tell the operator you need edit access to the shared Almanac page. "
-            "On free Notion that usually means `Full access`. Once they fix it, reply `/verify-notion` here to reissue the claim."
+            "If Notion says `Request access`, ask the operator for `Full access` to the shared Almanac page. Once they fix it, reply `/verify-notion` here to reissue the claim."
         )
-        lines.append("If you want to finish now and leave shared Notion writes disabled, reply `skip`.")
+        lines.append("Reply `skip` to finish now with shared Notion writes disabled.")
         return "\n".join(lines)
     if state == "denied":
         reason = str(session.get("denial_reason") or "").strip()

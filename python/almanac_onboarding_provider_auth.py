@@ -229,31 +229,34 @@ def provider_credential_prompt(spec: ProviderSetupSpec, *, shared_credential_ava
     if spec.auth_flow == "anthropic-credential":
         return (
             f"One more thing for {spec.display_name}: this lane uses Claude Code OAuth, not an Anthropic API key.\n\n"
-            "Reply `oauth` and I’ll create the Claude authorization link. After you authorize in the browser, paste the callback code string back here. "
-            "Almanac will store the refreshable Claude Code credentials privately for this agent."
+            "Reply `oauth` and I’ll create a browser sign-in link.\n\n"
+            "After you authorize, Claude will show a callback code string. Paste that whole string back here and I’ll store the refreshable Claude Code credentials privately for this agent."
         )
     if spec.auth_flow == "api-key":
         if shared_credential_available:
             if spec.provider_id == "chutes":
                 return (
                     "Your team already provided a Chutes API key for this lane.\n\n"
-                    "Reply `default` to use it, or paste a different Chutes API key if you prefer. "
-                    f"I’ll configure Hermes with endpoint `{CHUTES_BASE_URL}` and use model `{spec.model_id}`."
+                    "Reply `default` to use it.\n"
+                    "Or paste a different Chutes API key if you prefer.\n\n"
+                    f"I’ll use model `{spec.model_id}`."
                 )
             return (
-                f"Your team already provided a {spec.display_name} API key for this lane. "
+                f"Your team already provided a {spec.display_name} API key for this lane.\n\n"
                 "Reply `default` to use it, or paste a different key if you prefer."
             )
         if spec.provider_id == "chutes":
             return (
                 "One more thing for Chutes: send the Chutes API key for this agent lane.\n\n"
-                f"I’ll store it privately, configure Hermes with endpoint `{CHUTES_BASE_URL}`, and use model `{spec.model_id}`."
+                "I’ll store it privately and wire it into Hermes.\n\n"
+                f"Model: `{spec.model_id}`"
             )
         return (
-            f"One more thing for {spec.display_name}: send the API key for this agent lane. I’ll store it privately and wire it into Hermes."
+            f"One more thing for {spec.display_name}: send the API key for this agent lane.\n\n"
+            "I’ll store it privately and wire it into Hermes."
         )
     if spec.auth_flow == "codex-device":
-        return "One more thing for OpenAI Codex: I’m minting a sign-in code for you now."
+        return "One more thing for OpenAI Codex: I’m creating a sign-in code for you now."
     return f"Send the credential for {spec.display_name} now."
 
 
@@ -271,16 +274,16 @@ def provider_browser_auth_prompt(spec: ProviderSetupSpec, auth_state: dict[str, 
             "OpenAI Codex sign-in:\n"
             f"1. Open {auth_state.get('verification_url') or f'{CODEX_ISSUER}/codex/device'}\n"
             f"2. Enter this code: `{auth_state.get('user_code') or '(missing)'}`\n\n"
-            "I’ll keep watching and I’ll continue automatically once OpenAI approves it."
+            "You do not need to paste anything here. I’ll keep watching and continue automatically once OpenAI approves it."
         )
 
     if spec.provider_id == "anthropic":
         return (
-            f"Claude Code OAuth for {spec.display_name}:\n"
-            "Open this link with the Claude account and plan you want tied to this lane, such as Claude Max:\n"
+            f"Claude Code OAuth for {spec.display_name}:\n\n"
+            "Open this link with the Claude account you want tied to this lane, such as Claude Max:\n"
             f"{auth_state.get('auth_url') or '(missing auth url)'}\n"
-            "\nWhen the Claude callback page shows the authorization code, paste that whole callback code string back here.\n"
-            "No Anthropic API key or setup token is needed; Almanac exchanges the callback code and stores refreshable Claude Code credentials privately.\n"
+            "\nWhen Claude shows the callback code, paste the whole code string back here.\n\n"
+            "No Anthropic API key or setup token is needed. Almanac stores Claude Code credentials privately for this agent.\n"
             "If the link goes stale, reply `restart` and I’ll mint a fresh one."
         )
 

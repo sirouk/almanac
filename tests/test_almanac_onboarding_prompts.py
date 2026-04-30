@@ -174,6 +174,35 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
             expect("Request access" in notion_verify_prompt, notion_verify_prompt)
             expect("Full access" in notion_verify_prompt, notion_verify_prompt)
 
+            backup_key = "ssh-ed25519 AAAAC3NzaAgentBackupKey almanac-agent-backup@test"
+            telegram_backup_key_prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "platform": "telegram",
+                    "state": "awaiting-agent-backup-key-install",
+                    "answers": {
+                        "agent_backup_owner_repo": "example/almanac_guide",
+                        "agent_backup_public_key": backup_key,
+                    },
+                },
+            )
+            expect(onboarding.session_prompt_telegram_parse_mode({"platform": "telegram", "state": "awaiting-agent-backup-key-install"}) == "HTML", telegram_backup_key_prompt)
+            expect("<code>ssh-ed25519 AAAAC3NzaAgentBackupKey almanac-agent-backup@test</code>" in telegram_backup_key_prompt, telegram_backup_key_prompt)
+            expect('href="https://github.com/example/almanac_guide/settings/keys"' in telegram_backup_key_prompt, telegram_backup_key_prompt)
+
+            discord_backup_key_prompt = onboarding.session_prompt(
+                cfg,
+                {
+                    "platform": "discord",
+                    "state": "awaiting-agent-backup-key-install",
+                    "answers": {
+                        "agent_backup_owner_repo": "example/almanac-guide",
+                        "agent_backup_public_key": backup_key,
+                    },
+                },
+            )
+            expect("```text\nssh-ed25519 AAAAC3NzaAgentBackupKey almanac-agent-backup@test\n```" in discord_backup_key_prompt, discord_backup_key_prompt)
+
             provisioning_error_prompt = onboarding.session_prompt(
                 cfg,
                 {
@@ -486,7 +515,7 @@ def test_onboarding_offers_safe_org_profile_match_without_forcing_names() -> Non
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("prepared operating-profile entries" in replies[0].text, replies[0].text)
+            expect("prepared profile entries" in replies[0].text, replies[0].text)
             expect("Blair Stone" in replies[0].text, replies[0].text)
             expect("not identity verification" in replies[0].text, replies[0].text)
 
@@ -537,7 +566,7 @@ def test_onboarding_offers_safe_org_profile_match_without_forcing_names() -> Non
                 ),
                 validate_bot_token=fake_validate,
             )
-            expect("Now name your discord bot." in replies[0].text, replies[0].text)
+            expect("Now name your discord agent bot." in replies[0].text, replies[0].text)
             with control.connect_db(cfg) as conn:
                 session = control.find_active_onboarding_session(conn, platform="discord", sender_id="user-1")
             expect((session.get("answers") or {}).get("unix_user") == "almanac-profile-blair", str(session))
@@ -1063,7 +1092,7 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             send("Build impossible things calmly")
             send(desired_unix_user)
             model_prompt = send("Guide")[0].text
-            expect("Now let’s pick the model provider" in model_prompt, model_prompt)
+            expect("Now choose what should power this agent" in model_prompt, model_prompt)
             expect(model_prompt.index("1. Chutes") < model_prompt.index("2. Claude Opus"), model_prompt)
             expect(model_prompt.index("2. Claude Opus") < model_prompt.index("3. OpenAI Codex"), model_prompt)
 
@@ -1075,7 +1104,7 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
 
             thinking_prompt = send("zai-org/GLM-5.1-TEE")[0].text
             expect("How much thinking room" in thinking_prompt, thinking_prompt)
-            expect("Pick the default reasoning depth" in thinking_prompt, thinking_prompt)
+            expect("medium` is a good default" in thinking_prompt, thinking_prompt)
             expect("1. xhigh" in thinking_prompt, thinking_prompt)
             expect("2. high" in thinking_prompt, thinking_prompt)
             expect("3. medium" in thinking_prompt, thinking_prompt)
@@ -1083,7 +1112,7 @@ def test_onboarding_model_picker_is_chutes_first_and_collects_reasoning() -> Non
             expect("Chutes thinking mode" in thinking_prompt, thinking_prompt)
 
             approval_prompt = send("1")[0].text
-            expect("operator for approval" in approval_prompt, approval_prompt)
+            expect("onboarding request to the operator" in approval_prompt, approval_prompt)
             session = control.find_active_onboarding_session(
                 conn,
                 platform="discord",
@@ -1192,7 +1221,7 @@ def test_org_provided_model_choice_skips_user_model_and_credential_prompts() -> 
             expect("moonshotai/Kimi-K2.6-TEE" in approval_prompt, approval_prompt)
             expect("hermes-exampleorg-remote-orgtest setup model" in approval_prompt, approval_prompt)
             expect("does not switch Chutes" in approval_prompt, approval_prompt)
-            expect("operator for approval" in approval_prompt, approval_prompt)
+            expect("onboarding request to the operator" in approval_prompt, approval_prompt)
 
             session = control.find_active_onboarding_session(conn, platform="telegram", sender_id="123")
             answers = session.get("answers") or {}

@@ -13682,8 +13682,9 @@ def _grant_managed_payload_read_access(conn: sqlite3.Connection, cfg: Config, pa
         if resolved not in dirs:
             dirs.append(resolved)
     for directory in dirs:
+        perms = "rX" if directory == cfg.private_dir.resolve() else "x"
         subprocess.run(
-            ["setfacl", "-m", f"u:{unix_user}:x", str(directory)],
+            ["setfacl", "-m", f"u:{unix_user}:{perms}", str(directory)],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

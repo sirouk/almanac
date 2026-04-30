@@ -375,6 +375,10 @@ def test_central_managed_payload_is_acl_private_not_world_readable() -> None:
     expect("path.chmod(0o640)" in grant_source, "central managed payload should not be world-readable")
     expect("path.chmod(0o644)" not in grant_source, "central managed payload must not use world-readable permissions")
     expect("setfacl" in grant_source and "cfg.private_dir" in grant_source and "cfg.agents_state_dir" in grant_source, "enrolled user access should use narrow ACLs")
+    expect(
+        'perms = "rX" if directory == cfg.private_dir.resolve() else "x"' in grant_source,
+        "managed-memory ACL publishing must not clobber the private-dir rX ACL needed by rootless Podman vault mounts",
+    )
     print("PASS test_central_managed_payload_is_acl_private_not_world_readable")
 
 

@@ -57,6 +57,9 @@ from almanac_rpc_client import mcp_call
 from almanac_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host
 
 
+AUTO_PROVISION_UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
+
+
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -5930,6 +5933,71 @@ def find_pending_bootstrap_request(
     ).fetchone()
 
 
+def auto_provision_unix_user_available(
+    conn: sqlite3.Connection,
+    unix_user: str,
+    *,
+    exclude_session_id: str = "",
+    exclude_request_id: str = "",
+) -> tuple[bool, str]:
+    candidate = str(unix_user or "").strip().lower()
+    if not AUTO_PROVISION_UNIX_USER_PATTERN.fullmatch(candidate):
+        return False, "Use 1-31 chars: lowercase letters, digits, `_`, or `-`, starting with a letter or `_`."
+    try:
+        pwd.getpwnam(candidate)
+        return False, f"`{candidate}` already exists on the host. Pick another Unix username."
+    except KeyError:
+        pass
+
+    agent = conn.execute(
+        """
+        SELECT agent_id
+        FROM agents
+        WHERE lower(unix_user) = ?
+        LIMIT 1
+        """,
+        (candidate,),
+    ).fetchone()
+    if agent is not None:
+        return False, f"`{candidate}` is already registered to an Almanac agent. Pick another Unix username."
+
+    request = conn.execute(
+        """
+        SELECT request_id
+        FROM bootstrap_requests
+        WHERE lower(unix_user) = ?
+          AND request_id != ?
+          AND auto_provision = 1
+          AND status IN ('pending', 'approved')
+          AND COALESCE(cancelled_at, '') = ''
+          AND COALESCE(denied_at, '') = ''
+          AND COALESCE(provisioned_at, '') = ''
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (candidate, exclude_request_id),
+    ).fetchone()
+    if request is not None:
+        return False, f"`{candidate}` is already reserved by an active enrollment request. Pick another Unix username."
+
+    sessions = conn.execute(
+        """
+        SELECT session_id, answers_json
+        FROM onboarding_sessions
+        WHERE session_id != ?
+          AND state NOT IN ('denied', 'completed', 'cancelled')
+        ORDER BY updated_at DESC
+        """,
+        (exclude_session_id,),
+    ).fetchall()
+    for session in sessions:
+        answers = json_loads(session["answers_json"], {})
+        if str(answers.get("unix_user") or "").strip().lower() == candidate:
+            return False, f"`{candidate}` is already being used by an active onboarding session. Pick another Unix username."
+
+    return True, ""
+
+
 def _issue_bootstrap_token(
     conn: sqlite3.Connection,
     *,
@@ -6272,6 +6340,7 @@ def request_bootstrap(
     requested_model_preset: str = "",
     requested_channels: list[str] | None = None,
     notify_operator: bool = True,
+    exclude_onboarding_session_id: str = "",
 ) -> dict[str, Any]:
     tailnet_identity = tailnet_identity or {}
     # When Tailscale Serve forwards the request, the raw source_ip is always
@@ -6363,6 +6432,15 @@ def request_bootstrap(
                 "auto_provision": False,
                 "message": "A pending bootstrap handshake already exists for this user and source. A fresh local token was minted for this client; it will activate automatically once the operator approves the request.",
             }
+
+    if auto_provision:
+        available, reason = auto_provision_unix_user_available(
+            conn,
+            unix_user,
+            exclude_session_id=exclude_onboarding_session_id,
+        )
+        if not available:
+            raise ValueError(reason)
 
     now = utc_now()
     window_start = (now - dt.timedelta(seconds=cfg.bootstrap_window_seconds)).replace(microsecond=0).isoformat()

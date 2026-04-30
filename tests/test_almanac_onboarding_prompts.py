@@ -310,6 +310,85 @@ def test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question(
             os.environ.update(old_env)
 
 
+def test_chat_onboarding_reserves_unix_user_before_provisioning() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_onboarding_unix_reservation_test")
+    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_unix_reservation_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(
+            config_path,
+            {
+                "ALMANAC_USER": "almanac",
+                "ALMANAC_HOME": str(root / "home-almanac"),
+                "ALMANAC_REPO_DIR": str(REPO),
+                "ALMANAC_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+                "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+                "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+                "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ALMANAC_MCP_HOST": "127.0.0.1",
+                "ALMANAC_MCP_PORT": "8282",
+                "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
+                "ALMANAC_CURATOR_CHANNELS": "telegram",
+                "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
+                "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+            },
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            reserved_unix_user = "almanac-reserve-test"
+            try:
+                pwd.getpwnam(reserved_unix_user)
+            except KeyError:
+                pass
+            else:
+                reserved_unix_user = "almanac-reserve-01"
+
+            def fake_validate(_token: str):
+                raise AssertionError("bot token validation should not run in unix-reservation test")
+
+            def send(sender_id: str, text: str, display_name: str) -> list[object]:
+                return onboarding.process_onboarding_message(
+                    cfg,
+                    onboarding.IncomingMessage(
+                        platform="telegram",
+                        chat_id=sender_id,
+                        sender_id=sender_id,
+                        text=text,
+                        sender_username=f"user{sender_id}",
+                        sender_display_name=display_name,
+                    ),
+                    validate_bot_token=fake_validate,
+                )
+
+            send("101", "/start", "Alex")
+            send("101", "Keep the org moving", "Alex")
+            first_reply = send("101", reserved_unix_user, "Alex")[0]
+            expect("Now name your" in first_reply.text, first_reply.text)
+
+            send("202", "/start", "Blair")
+            send("202", "Build useful habits", "Blair")
+            second_reply = send("202", reserved_unix_user, "Blair")[0]
+            expect("already being used by an active onboarding session" in second_reply.text, second_reply.text)
+            print("PASS test_chat_onboarding_reserves_unix_user_before_provisioning")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_onboarding_offers_safe_org_profile_match_without_forcing_names() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1461,6 +1540,7 @@ def main() -> int:
                 os.environ.pop(key, None)
         test_discord_prompt_and_operator_review_reflect_primary_control_channel()
         test_onboarding_intake_asks_purpose_before_unix_and_skips_platform_question()
+        test_chat_onboarding_reserves_unix_user_before_provisioning()
         test_onboarding_offers_safe_org_profile_match_without_forcing_names()
         test_onboarding_respects_disabled_org_profile_roster_prompt()
         test_onboarding_uses_resolved_sender_display_name_without_reasking()
@@ -1473,7 +1553,7 @@ def main() -> int:
         test_org_provided_secret_auto_stages_after_bot_token()
         test_telegram_chutes_model_prompt_uses_copyable_code_entities()
         test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval()
-        print("PASS all 14 onboarding prompt regression tests")
+        print("PASS all 15 onboarding prompt regression tests")
         return 0
     finally:
         os.environ.clear()

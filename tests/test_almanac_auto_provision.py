@@ -168,6 +168,41 @@ def test_stale_auto_provision_claims_are_reclaimable() -> None:
             os.environ.update(old_env)
 
 
+def test_auto_provision_bootstrap_rejects_reserved_unix_user() -> None:
+    mod = load_module(CONTROL_PY, "almanac_control_auto_provision_reserved_unix_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_auto_provision_request(mod, conn, "req_reserved", unix_user="reserved-lane")
+
+            try:
+                mod.request_bootstrap(
+                    conn,
+                    cfg,
+                    requester_identity="Second User",
+                    unix_user="reserved-lane",
+                    source_ip="telegram:222",
+                    auto_provision=True,
+                    requested_model_preset="codex",
+                    requested_channels=["telegram"],
+                    notify_operator=False,
+                )
+            except ValueError as exc:
+                expect("already reserved by an active enrollment request" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected auto-provision request to reject an already reserved Unix username")
+            print("PASS test_auto_provision_bootstrap_rejects_reserved_unix_user")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -264,9 +299,10 @@ def test_run_as_user_scrubs_ambient_env() -> None:
 def main() -> int:
     test_mark_auto_provision_started_claims_only_once_until_finished()
     test_stale_auto_provision_claims_are_reclaimable()
+    test_auto_provision_bootstrap_rejects_reserved_unix_user()
     test_run_one_uses_devnull_stdin_for_headless_init()
     test_run_as_user_scrubs_ambient_env()
-    print("PASS all 4 auto-provision regression tests")
+    print("PASS all 5 auto-provision regression tests")
     return 0
 
 

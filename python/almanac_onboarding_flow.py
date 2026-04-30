@@ -14,6 +14,7 @@ from almanac_control import (
     Config,
     RateLimitError,
     approve_request,
+    auto_provision_unix_user_available,
     cancel_onboarding_session,
     config_env_value,
     connect_db,
@@ -1057,6 +1058,7 @@ def begin_onboarding_provisioning(
         requested_model_preset=str(answers.get("model_preset") or "codex"),
         requested_channels=[bot_platform],
         notify_operator=False,
+        exclude_onboarding_session_id=str(session.get("session_id") or ""),
     )
     approve_request(
         conn,
@@ -1718,7 +1720,11 @@ def process_onboarding_message(
                 candidate = suggested_unix_user
             else:
                 candidate = text.lower()
-            ok, reason = desired_unix_user_available(candidate)
+            ok, reason = auto_provision_unix_user_available(
+                conn,
+                candidate,
+                exclude_session_id=str(session.get("session_id") or ""),
+            )
             if not ok:
                 return [OutboundMessage(incoming.chat_id, reason)]
             updated = save_onboarding_session(

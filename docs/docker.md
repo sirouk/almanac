@@ -172,8 +172,9 @@ managed-context refresh, and validates or repairs each agent's private Almanac
 MCP bootstrap token before starting gateways or agent web surfaces.
 
 Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
-pin bump, so a Docker operator does not accidentally fall back into the
-baremetal upgrade path.
+pin bump and load upstream push/deploy-key settings from the Docker runtime
+config, so a Docker operator does not accidentally fall back into the baremetal
+upgrade path.
 
 Host/systemd-only commands remain explicit baremetal operations. `./deploy.sh
 remove` tears down a host install; `./deploy.sh docker remove` is an alias for

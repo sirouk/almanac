@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -173,6 +175,82 @@ def test_docker_operator_commands_are_present() -> None:
     print("PASS test_docker_operator_commands_are_present")
 
 
+def test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        (repo / "bin").mkdir(parents=True)
+        (repo / "almanac-priv" / "config").mkdir(parents=True)
+        shutil.copy(REPO / "bin" / "almanac-docker.sh", repo / "bin" / "almanac-docker.sh")
+        fake_component_upgrade = repo / "bin" / "component-upgrade.sh"
+        capture = root / "capture.txt"
+        fake_component_upgrade.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    "{",
+                    '  printf "mode=%s\\n" "${ALMANAC_COMPONENT_UPGRADE_MODE:-}"',
+                    '  printf "config=%s\\n" "${ALMANAC_CONFIG_FILE:-}"',
+                    '  printf "repo=%s\\n" "${ALMANAC_UPSTREAM_REPO_URL:-}"',
+                    '  printf "branch=%s\\n" "${ALMANAC_UPSTREAM_BRANCH:-}"',
+                    '  printf "key_enabled=%s\\n" "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}"',
+                    '  printf "key_user=%s\\n" "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"',
+                    '  printf "key_path=%s\\n" "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"',
+                    '  printf "known_hosts=%s\\n" "${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"',
+                    '  printf "args=%s\\n" "$*"',
+                    '} >"$CAPTURE"',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        fake_component_upgrade.chmod(0o755)
+        docker_env = repo / "almanac-priv" / "config" / "docker.env"
+        docker_env.write_text(
+            "\n".join(
+                [
+                    "ALMANAC_UPSTREAM_REPO_URL=git@github.com:example/almanac.git",
+                    "ALMANAC_UPSTREAM_BRANCH=main",
+                    "ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=1",
+                    "ALMANAC_UPSTREAM_DEPLOY_KEY_USER=operator",
+                    f"ALMANAC_UPSTREAM_DEPLOY_KEY_PATH={root}/almanac-upstream-ed25519",
+                    f"ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE={root}/known_hosts",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                "bash",
+                str(repo / "bin" / "almanac-docker.sh"),
+                "hermes-upgrade",
+                "--ref",
+                "abc123",
+                "--skip-upgrade",
+            ],
+            cwd=repo,
+            env={**os.environ, "CAPTURE": str(capture)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        combined = (result.stdout or "") + (result.stderr or "")
+        expect(result.returncode == 0, combined)
+        captured = capture.read_text(encoding="utf-8")
+        expect("mode=docker" in captured, captured)
+        expect(f"config={docker_env}" in captured, captured)
+        expect("repo=git@github.com:example/almanac.git" in captured, captured)
+        expect("branch=main" in captured, captured)
+        expect("key_enabled=1" in captured, captured)
+        expect("key_user=operator" in captured, captured)
+        expect(f"key_path={root}/almanac-upstream-ed25519" in captured, captured)
+        expect(f"known_hosts={root}/known_hosts" in captured, captured)
+        expect("args=hermes-agent apply --ref abc123 --skip-upgrade" in captured, captured)
+    print("PASS test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config")
+
+
 def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     supervisor = read("python/almanac_docker_agent_supervisor.py")
     installer = read("bin/install-agent-user-services.sh")
@@ -299,6 +377,7 @@ def main() -> int:
     test_dockerfile_installs_pinned_runtime_assets()
     test_compose_defines_full_stack_services()
     test_docker_operator_commands_are_present()
+    test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
     test_docker_agent_supervisor_replaces_user_systemd_units()
     test_docker_entrypoint_generates_fresh_secrets()
     test_docker_health_script_checks_container_runtime()
@@ -306,7 +385,7 @@ def main() -> int:
     test_readme_keeps_canonical_host_layout_root()
     test_readme_distinguishes_baremetal_and_containerized_paths()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 10 Almanac Docker regression tests")
+    print("PASS all 11 Almanac Docker regression tests")
     return 0
 
 

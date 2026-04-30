@@ -1161,13 +1161,27 @@ docker_component_upgrade_check() {
 docker_component_upgrade_apply() {
   local command="$1"
   shift
-  local component=""
+  local component="" origin_url="" branch="" upstream_url="" upstream_branch=""
   component="$(component_for_upgrade_command "$command")"
   if [[ -z "$component" ]]; then
     echo "Unsupported Docker component command: $command" >&2
     return 2
   fi
-  env ALMANAC_COMPONENT_UPGRADE_MODE=docker "$SCRIPT_DIR/component-upgrade.sh" "$component" apply "$@"
+  origin_url="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
+  branch="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [[ "$branch" == "HEAD" ]] && branch=""
+  upstream_url="$(configured_or_default ALMANAC_UPSTREAM_REPO_URL "$origin_url")"
+  upstream_branch="$(configured_or_default ALMANAC_UPSTREAM_BRANCH "${branch:-main}")"
+  env \
+    ALMANAC_COMPONENT_UPGRADE_MODE=docker \
+    ALMANAC_CONFIG_FILE="$DOCKER_ENV_FILE" \
+    ALMANAC_UPSTREAM_REPO_URL="$upstream_url" \
+    ALMANAC_UPSTREAM_BRANCH="$upstream_branch" \
+    ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="$(configured_or_default ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED "")" \
+    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$(configured_or_default ALMANAC_UPSTREAM_DEPLOY_KEY_USER "")" \
+    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="$(configured_or_default ALMANAC_UPSTREAM_DEPLOY_KEY_PATH "")" \
+    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="$(configured_or_default ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE "")" \
+    "$SCRIPT_DIR/component-upgrade.sh" "$component" apply "$@"
 }
 
 main() {

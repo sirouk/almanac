@@ -314,7 +314,8 @@ The Docker path keeps the same operator vocabulary for container-native work:
 ```
 
 Pinned-component Docker upgrades re-enter `./deploy.sh docker upgrade` after
-the pin bump. Baremetal commands remain baremetal unless the command includes
+the pin bump and load upstream push/deploy-key settings from the Docker runtime
+config. Baremetal commands remain baremetal unless the command includes
 `docker`.
 
 The Docker submenu is available with:

@@ -3920,6 +3920,11 @@ Tailscale Serve/Funnel prerequisite
   In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
   Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
   consent URL or fail before Almanac can publish the routes.
+  If the installer prints a Tailscale approval URL later:
+    https://login.tailscale.com/f/funnel?...  for the public Notion webhook
+    https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
+  open it as a tailnet admin, approve the feature for this node, then return
+  to this terminal and press ENTER so Almanac can retry the route.
 
 EOF
   }
@@ -7612,6 +7617,11 @@ Tailscale Serve/Funnel prerequisite
   In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
   Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
   consent URL or fail before Almanac can publish the routes.
+  If the installer prints a Tailscale approval URL later:
+    https://login.tailscale.com/f/funnel?...  for the public Notion webhook
+    https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
+  open it as a tailnet admin, approve the feature for this node, then return
+  to this terminal and press ENTER so Almanac can retry the route.
 
 EOF
   }

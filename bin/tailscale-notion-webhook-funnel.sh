@@ -38,6 +38,40 @@ if dns:
   [[ -n "$TAILSCALE_DNS_NAME" ]]
 }
 
+extract_tailscale_enable_url() {
+  printf '%s\n' "${1:-}" \
+    | grep -Eo 'https://login\.tailscale\.com/f/(serve|funnel)\?[^[:space:]]+' \
+    | head -n 1 \
+    | sed 's/[).,;]*$//' || true
+}
+
+maybe_wait_for_tailscale_funnel_enablement() {
+  local output="${1:-}"
+  local enable_url=""
+  local answer=""
+
+  enable_url="$(extract_tailscale_enable_url "$output")"
+  if [[ -z "$enable_url" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$output" >&2
+  echo >&2
+  echo "Tailscale Funnel is not enabled for this tailnet/node yet." >&2
+  echo "Open this approval URL as a tailnet admin:" >&2
+  echo "  $enable_url" >&2
+  echo "This public Funnel is only for the Notion webhook; Nextcloud and MCP stay tailnet-only through Tailscale Serve." >&2
+  echo "If the approval page asks for DNS prerequisites, enable MagicDNS and HTTPS Certificates at:" >&2
+  echo "  https://login.tailscale.com/admin/dns" >&2
+  echo "Press ENTER after enabling Tailscale Funnel to retry, or Ctrl+C to stop." >&2
+  if [[ "${ALMANAC_TAILSCALE_INTERACTIVE_ENABLE:-1}" == "1" && -t 0 ]]; then
+    read -r -p "> " answer
+    return 0
+  fi
+  echo "After enabling Funnel, rerun ./deploy.sh install." >&2
+  return 1
+}
+
 run_funnel_cmd() {
   local output=""
   local status=0
@@ -56,14 +90,22 @@ run_funnel_cmd() {
     fi
 
     if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
-      printf '%s\n' "$output" >&2
+      if maybe_wait_for_tailscale_funnel_enablement "$output"; then
+        continue
+      fi
+      [[ -n "$output" ]] && printf '%s\n' "$output" >&2
       echo "tailscale funnel command did not complete within ${timeout_duration}." >&2
-      echo "If Tailscale says Funnel or Serve is not enabled, open https://login.tailscale.com/admin/dns in the same tailnet, enable MagicDNS and HTTPS Certificates, then rerun ./deploy.sh install." >&2
+      echo "If Tailscale says Funnel is not enabled, open the printed https://login.tailscale.com/f/funnel?... URL as a tailnet admin." >&2
+      echo "If it asks for DNS prerequisites, open https://login.tailscale.com/admin/dns in the same tailnet, enable MagicDNS and HTTPS Certificates, then rerun ./deploy.sh install." >&2
       return "$status"
     fi
 
     if printf '%s\n' "$output" | grep -Eqi 'etag mismatch|another client is changing the serve config|preconditions failed'; then
       sleep 1
+      continue
+    fi
+
+    if maybe_wait_for_tailscale_funnel_enablement "$output"; then
       continue
     fi
 

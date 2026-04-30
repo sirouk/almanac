@@ -1164,6 +1164,14 @@ def test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and
             "MagicDNS and HTTPS Certificates" in snippet,
             f"expected {label} onboarding to name the required Tailscale settings",
         )
+        expect(
+            "https://login.tailscale.com/f/funnel" in snippet,
+            f"expected {label} onboarding to explain the Tailscale Funnel approval URL",
+        )
+        expect(
+            "tailnet-only Nextcloud/MCP" in snippet,
+            f"expected {label} onboarding to distinguish public Funnel from tailnet-only Serve",
+        )
     print("PASS test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows")
 
 
@@ -2229,7 +2237,7 @@ cat "$SYSTEMCTL_LOG"
 
 def test_tailscale_serve_command_timeout_surfaces_enablement_guidance() -> None:
     text = TAILSCALE_NEXTCLOUD_SERVE_SH.read_text(encoding="utf-8")
-    snippet = extract(text, "run_serve_cmd() {", "print_serve_summary() {")
+    snippet = extract(text, "extract_tailscale_enable_url() {", "print_serve_summary() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         fake_cmd = tmp_path / "fake-tailscale-serve"
@@ -2256,13 +2264,15 @@ fi
         combined = result.stdout + result.stderr
         expect("STATUS=124" in result.stdout, result.stdout)
         expect("Serve is not enabled on your tailnet" in combined, combined)
+        expect("https://login.tailscale.com/f/serve?node=testnode" in combined, combined)
+        expect("Press ENTER after enabling Tailscale Serve" in combined, combined)
         expect("rerun ./deploy.sh install" in combined, combined)
     print("PASS test_tailscale_serve_command_timeout_surfaces_enablement_guidance")
 
 
 def test_tailscale_funnel_command_timeout_surfaces_enablement_guidance() -> None:
     text = TAILSCALE_NOTION_FUNNEL_SH.read_text(encoding="utf-8")
-    snippet = extract(text, "run_funnel_cmd() {", "ensure_no_conflicting_funnel_service() {")
+    snippet = extract(text, "extract_tailscale_enable_url() {", "ensure_no_conflicting_funnel_service() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         fake_cmd = tmp_path / "fake-tailscale-funnel"
@@ -2289,6 +2299,8 @@ fi
         combined = result.stdout + result.stderr
         expect("STATUS=124" in result.stdout, result.stdout)
         expect("Funnel is not enabled on your tailnet" in combined, combined)
+        expect("https://login.tailscale.com/f/funnel?node=testnode" in combined, combined)
+        expect("Press ENTER after enabling Tailscale Funnel" in combined, combined)
         expect("rerun ./deploy.sh install" in combined, combined)
     print("PASS test_tailscale_funnel_command_timeout_surfaces_enablement_guidance")
 

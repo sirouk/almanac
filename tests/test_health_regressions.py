@@ -659,6 +659,151 @@ check_active_agent_state
     print("PASS test_active_agent_health_fails_when_shared_vault_acl_is_missing")
 
 
+def test_active_agent_health_fails_when_shared_vault_parent_acl_is_mount_hostile() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_active_agent_state() {", "check_auto_provision_state() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        db_path = root / "control.sqlite3"
+        service_home = root / "service-home"
+        private_dir = service_home / "almanac" / "almanac-priv"
+        manifest_path = root / "agent-manifest.json"
+        hermes_home = root / "hermes-home"
+        vault_dir = private_dir / "vault"
+        fakebin = root / "fakebin"
+        subuid_file = root / "subuid"
+        required_skill_names = [
+            "almanac-qmd-mcp",
+            "almanac-vault-reconciler",
+            "almanac-first-contact",
+            "almanac-vaults",
+            "almanac-ssot",
+            "almanac-notion-knowledge",
+            "almanac-ssot-connect",
+            "almanac-notion-mcp",
+            "almanac-resources",
+        ]
+        hermes_home.mkdir(parents=True)
+        (vault_dir / "Projects").mkdir(parents=True)
+        fakebin.mkdir()
+        subuid_file.write_text("alice:165536:65536\n", encoding="utf-8")
+        manifest_path.write_text('{"agent_id":"agent-private"}\n', encoding="utf-8")
+        for skill_name in required_skill_names:
+            skill_dir = hermes_home / "skills" / skill_name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+        for rel_path in ("email/himalaya", "productivity/google-workspace"):
+            skill_dir = hermes_home / "skills" / rel_path
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(f"# {rel_path}\n", encoding="utf-8")
+        (fakebin / "getfacl").write_text(
+            f"""#!/usr/bin/env bash
+path="${{@: -1}}"
+case "$path" in
+  {str(vault_dir)!r}|{str(vault_dir / "Projects")!r})
+    cat <<'ACL'
+user::rwx
+user:alice:rwx
+user:165536:rwx
+group::r-x
+mask::rwx
+other::---
+default:user::rwx
+default:user:alice:rwx
+default:user:165536:rwx
+default:group::r-x
+default:mask::rwx
+default:other::---
+ACL
+    ;;
+  *)
+    cat <<'ACL'
+user::rwx
+user:alice:r-x
+user:165536:--x
+group::r-x
+mask::rwx
+other::---
+ACL
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        (fakebin / "getfacl").chmod(0o755)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE agents (
+              agent_id TEXT,
+              unix_user TEXT,
+              display_name TEXT,
+              hermes_home TEXT,
+              manifest_path TEXT,
+              channels_json TEXT,
+              role TEXT,
+              status TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO agents (
+              agent_id, unix_user, display_name, hermes_home, manifest_path,
+              channels_json, role, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "agent-private",
+                "alice",
+                "Alice",
+                str(hermes_home),
+                str(manifest_path),
+                '["telegram"]',
+                "user",
+                "active",
+            ),
+        )
+        conn.execute("CREATE TABLE refresh_jobs (job_name TEXT, last_run_at TEXT, last_status TEXT)")
+        conn.execute(
+            "INSERT INTO refresh_jobs (job_name, last_run_at, last_status) VALUES (?, ?, ?)",
+            (
+                "agent-private-refresh",
+                dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                "ok",
+            ),
+        )
+        install_active_mcp_token_row(conn, "agent-private")
+        conn.commit()
+        conn.close()
+
+        script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+ALMANAC_DB_PATH={str(db_path)!r}
+ALMANAC_HOME={str(service_home)!r}
+export ALMANAC_ROOTLESS_SUBUID_FILE={str(subuid_file)!r}
+VAULT_DIR={str(vault_dir)!r}
+PATH={str(fakebin)!r}:$PATH
+{snippet}
+check_active_agent_state
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"mount-hostile vault parent ACL health case crashed: {result.stderr}")
+        expect(
+            f"FAIL:agent-private: shared vault mount-source ACL for rootless Podman subuid 165536 for alice is missing rX on {private_dir}" in result.stdout,
+            f"expected missing mount-source parent ACL failure, got: {result.stdout!r}",
+        )
+    print("PASS test_active_agent_health_fails_when_shared_vault_parent_acl_is_mount_hostile")
+
+
 def test_active_agent_health_fails_when_agent_backup_cron_last_run_failed() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, "check_active_agent_state() {", "check_auto_provision_state() {")
@@ -858,9 +1003,10 @@ def main() -> int:
     test_nextcloud_health_uses_rootless_podman_runtime_dir()
     test_active_agent_health_treats_private_user_runtime_as_ok()
     test_active_agent_health_fails_when_shared_vault_acl_is_missing()
+    test_active_agent_health_fails_when_shared_vault_parent_acl_is_mount_hostile()
     test_active_agent_health_fails_when_agent_backup_cron_last_run_failed()
     test_active_agent_health_allows_clean_zero_user_enrollment_state()
-    print("PASS all 14 health regression tests")
+    print("PASS all 15 health regression tests")
     return 0
 
 

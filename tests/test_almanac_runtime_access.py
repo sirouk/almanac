@@ -82,8 +82,10 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
         os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
         original_which = control.shutil.which
         original_run = control.subprocess.run
+        original_first_subuid = control._first_subuid_for_user
         try:
             control.shutil.which = lambda name: "/usr/bin/setfacl" if name == "setfacl" else original_which(name)
+            control._first_subuid_for_user = lambda unix_user: "165536" if unix_user == "alice" else ""
 
             def fake_run(cmd, check=False, **kwargs):  # type: ignore[no-untyped-def]
                 commands.append([str(part) for part in cmd])
@@ -99,6 +101,7 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
         finally:
             control.shutil.which = original_which
             control.subprocess.run = original_run
+            control._first_subuid_for_user = original_first_subuid
             os.environ.clear()
             os.environ.update(old_env)
 
@@ -131,8 +134,36 @@ def test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls() -> N
             f"expected shared vault default ACL on root, saw: {joined}",
         )
         expect(
-            any(cmd[:4] == ["/usr/bin/setfacl", "-m", "u:alice:--x", str(almanac_home)] for cmd in commands),
-            f"expected traverse ACL for almanac home, saw: {joined}",
+            any(cmd[:4] == ["/usr/bin/setfacl", "-m", "u:alice:rX", str(almanac_home)] for cmd in commands),
+            f"expected non-recursive rX ACL for Podman mount-source parent {almanac_home}, saw: {joined}",
+        )
+        expect(
+            any(cmd[:4] == ["/usr/bin/setfacl", "-m", "u:alice:rX", str(private_dir)] for cmd in commands),
+            f"expected non-recursive rX ACL for Podman mount-source parent {private_dir}, saw: {joined}",
+        )
+        expect(
+            any(cmd[:4] == ["/usr/bin/setfacl", "-m", "u:165536:rX", str(private_dir)] for cmd in commands),
+            f"expected non-recursive rX ACL for rootless Podman subuid on {private_dir}, saw: {joined}",
+        )
+        expect(
+            result["podman_mount_sources"],
+            f"expected reported Podman mount-source ACLs, saw: {result}",
+        )
+        expect(
+            result["podman_mount_source_subjects"] == ["alice", "165536"],
+            f"expected user plus rootless Podman subuid subjects, saw: {result}",
+        )
+        expect(
+            not any(cmd[:5] == ["/usr/bin/setfacl", "-R", "-m", "u:alice:rX", str(private_dir)] for cmd in commands),
+            f"private repo root must not be recursively readable, saw: {joined}",
+        )
+        expect(
+            any(cmd[:5] == ["/usr/bin/setfacl", "-R", "-m", "u:165536:rwX", str(private_dir / "vault")] for cmd in commands),
+            f"expected shared vault rw ACL for rootless Podman subuid, saw: {joined}",
+        )
+        expect(
+            any(cmd[:4] == ["/usr/bin/setfacl", "-m", "d:u:165536:rwX", str(private_dir / "vault")] for cmd in commands),
+            f"expected shared vault default ACL for rootless Podman subuid, saw: {joined}",
         )
         print("PASS test_grant_agent_runtime_access_sets_repo_runtime_and_activation_acls")
 

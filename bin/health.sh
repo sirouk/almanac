@@ -770,7 +770,7 @@ check_active_agent_state() {
     return 0
   fi
 
-if output="$(python3 - "$ALMANAC_DB_PATH" "$VAULT_DIR" <<'PY'
+if output="$(python3 - "$ALMANAC_DB_PATH" "$VAULT_DIR" "${ALMANAC_HOME:-}" <<'PY'
 import datetime as dt
 import json
 import os
@@ -782,6 +782,7 @@ from pathlib import Path
 
 db_path = sys.argv[1]
 vault_dir_raw = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("VAULT_DIR", "").strip()
+almanac_home_raw = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ALMANAC_HOME", "").strip()
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 
@@ -842,6 +843,47 @@ def acl_has_rwx(text, prefix):
     return False
 
 
+def acl_has_perms(text, prefix, required):
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(prefix + ":"):
+            continue
+        perms = acl_effective_perms(line)
+        return all(char in perms for char in required)
+    return False
+
+
+def first_subuid_for_user(unix_user):
+    subuid_file = Path(os.environ.get("ALMANAC_ROOTLESS_SUBUID_FILE", "/etc/subuid"))
+    try:
+        lines = subuid_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(":")
+        if len(parts) < 3 or parts[0] != unix_user:
+            continue
+        try:
+            start = int(parts[1])
+            count = int(parts[2])
+        except ValueError:
+            continue
+        if start > 0 and count > 0:
+            return str(start)
+    return ""
+
+
+def acl_subjects_for_user(unix_user):
+    subjects = [(unix_user, unix_user)]
+    subuid = first_subuid_for_user(unix_user)
+    if subuid:
+        subjects.append((subuid, f"rootless Podman subuid {subuid} for {unix_user}"))
+    return subjects
+
+
 def shared_vault_acl_dirs(vault_dir):
     dirs = [vault_dir]
     warnings = []
@@ -857,6 +899,24 @@ def shared_vault_acl_dirs(vault_dir):
         except OSError:
             continue
     return dirs, warnings
+
+
+def shared_vault_mount_source_dirs(vault_dir, almanac_home):
+    if not almanac_home:
+        return []
+    try:
+        almanac_home_path = Path(almanac_home)
+    except TypeError:
+        return []
+    dirs = []
+    for parent in vault_dir.parents:
+        try:
+            under_almanac_home = parent == almanac_home_path or parent.is_relative_to(almanac_home_path)
+        except ValueError:
+            under_almanac_home = False
+        if under_almanac_home:
+            dirs.append(parent)
+    return dirs
 
 
 def check_shared_vault_acl(vault_dir_raw, unix_user):
@@ -875,6 +935,7 @@ def check_shared_vault_acl(vault_dir_raw, unix_user):
 
     failures = []
     warnings = []
+    subjects = acl_subjects_for_user(unix_user)
     dirs, list_warnings = shared_vault_acl_dirs(vault_dir)
     warnings.extend(list_warnings)
     for path in dirs:
@@ -883,10 +944,21 @@ def check_shared_vault_acl(vault_dir_raw, unix_user):
             detail = (result.stderr or result.stdout or "unknown getfacl error").strip()
             failures.append(f"could not inspect shared vault ACL at {path}: {detail}")
             continue
-        if not acl_has_rwx(result.stdout, f"user:{unix_user}"):
-            failures.append(f"shared vault ACL for {unix_user} is missing rwx on {path}")
-        if not acl_has_rwx(result.stdout, f"default:user:{unix_user}"):
-            failures.append(f"shared vault default ACL for {unix_user} is missing rwx on {path}")
+        for subject, label in subjects:
+            if not acl_has_rwx(result.stdout, f"user:{subject}"):
+                failures.append(f"shared vault ACL for {label} is missing rwx on {path}")
+            if not acl_has_rwx(result.stdout, f"default:user:{subject}"):
+                failures.append(f"shared vault default ACL for {label} is missing rwx on {path}")
+
+    for path in shared_vault_mount_source_dirs(vault_dir, almanac_home_raw):
+        result = subprocess.run([getfacl, "-cp", str(path)], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "unknown getfacl error").strip()
+            failures.append(f"could not inspect shared vault mount-source ACL at {path}: {detail}")
+            continue
+        for subject, label in subjects:
+            if not acl_has_perms(result.stdout, f"user:{subject}", "rx"):
+                failures.append(f"shared vault mount-source ACL for {label} is missing rX on {path}")
 
     if len(failures) > 5:
         failures = failures[:5] + [f"{len(failures) - 5} additional shared vault ACL issue(s) omitted"]

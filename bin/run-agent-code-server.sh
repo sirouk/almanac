@@ -241,7 +241,7 @@ run_code_server_container() {
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     run_args=(run --rm --name "$CONTAINER_NAME" --pull missing)
   else
-    run_args=(run --rm --replace --name "$CONTAINER_NAME" --pull=missing)
+    run_args=(run --rm --replace --name "$CONTAINER_NAME" --pull=missing --userns=keep-id)
   fi
 
   run_args+=(

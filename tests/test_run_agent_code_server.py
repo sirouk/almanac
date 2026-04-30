@@ -102,6 +102,7 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect(f"{vault_dir}:/almanac-vault:rw" in podman_args, podman_args)
         expect(f"{vault_dir}:{vault_dir}:rw" in podman_args, podman_args)
         expect("--user 0:0" not in podman_args, podman_args)
+        expect("--userns=keep-id" in podman_args, podman_args)
         expect(f"--user {workspace_home.stat().st_uid}:{workspace_home.stat().st_gid}" in podman_args, podman_args)
         expect("/almanac-workspace" not in podman_args, podman_args)
         expect("/workspace\n" in podman_args or podman_args.rstrip().endswith(" /workspace"), podman_args)
@@ -164,6 +165,7 @@ def test_run_agent_code_server_supports_docker_runtime_without_podman() -> None:
         expect("rm -f almanac-agent-docker-code" in docker_args, docker_args)
         expect("run --rm --name almanac-agent-docker-code --pull missing" in docker_args, docker_args)
         expect("--replace" not in docker_args, docker_args)
+        expect("--userns=keep-id" not in docker_args, docker_args)
         expect(f"{workspace_home}:/workspace:rw" in docker_args, docker_args)
         print("PASS test_run_agent_code_server_supports_docker_runtime_without_podman")
 

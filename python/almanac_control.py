@@ -6068,6 +6068,28 @@ def activation_trigger_path(cfg: Config, agent_id: str) -> Path:
     return activation_trigger_dir(cfg) / f"{agent_id}.json"
 
 
+def _first_subuid_for_user(unix_user: str, *, subuid_file: Path = Path("/etc/subuid")) -> str:
+    try:
+        lines = subuid_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(":")
+        if len(parts) < 3 or parts[0] != unix_user:
+            continue
+        try:
+            start = int(parts[1])
+            count = int(parts[2])
+        except ValueError:
+            continue
+        if start > 0 and count > 0:
+            return str(start)
+    return ""
+
+
 def grant_agent_runtime_access(
     cfg: Config,
     *,
@@ -6113,6 +6135,23 @@ def grant_agent_runtime_access(
         cfg.runtime_dir,
         *extra_traverse,
     ]
+    # Rootless Podman/libcrun resolves bind-mount sources from the enrolled
+    # user's namespace. Execute-only ACLs are enough for normal path traversal,
+    # but libcrun may still fail with EACCES while stat'ing a shared vault under
+    # the service user's private tree. Grant non-recursive rX on just the mount
+    # source parent chain, while keeping private repo contents protected below.
+    podman_mount_source_dirs: list[Path] = []
+    for parent in cfg.vault_dir.parents:
+        try:
+            under_almanac_home = parent == cfg.almanac_home or parent.is_relative_to(cfg.almanac_home)
+        except ValueError:
+            under_almanac_home = False
+        if under_almanac_home:
+            podman_mount_source_dirs.append(parent)
+    podman_mount_source_subjects = [unix_user]
+    podman_root_subuid = _first_subuid_for_user(unix_user)
+    if podman_root_subuid:
+        podman_mount_source_subjects.append(podman_root_subuid)
     readable_trees = [
         cfg.repo_dir / "bin",
         cfg.repo_dir / "compose",
@@ -6134,6 +6173,7 @@ def grant_agent_runtime_access(
     ]
 
     applied_traverse: list[str] = []
+    applied_podman_mount_sources: list[str] = []
     applied_readable: list[str] = []
     applied_writable: list[str] = []
     applied_default_acl_dirs: list[str] = []
@@ -6141,17 +6181,24 @@ def grant_agent_runtime_access(
         if target.exists():
             subprocess.run([setfacl_bin, "-m", f"u:{unix_user}:--x", str(target)], check=True)
             applied_traverse.append(str(target))
+    for target in podman_mount_source_dirs:
+        if target.exists():
+            for subject in podman_mount_source_subjects:
+                subprocess.run([setfacl_bin, "-m", f"u:{subject}:rX", str(target)], check=True)
+            applied_podman_mount_sources.append(str(target))
     for target in readable_trees:
         if target.exists():
             subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rX", str(target)], check=True)
             applied_readable.append(str(target))
     for target in writable_trees:
         if target.exists():
-            subprocess.run([setfacl_bin, "-R", "-m", f"u:{unix_user}:rwX", str(target)], check=True)
+            for subject in podman_mount_source_subjects:
+                subprocess.run([setfacl_bin, "-R", "-m", f"u:{subject}:rwX", str(target)], check=True)
             applied_writable.append(str(target))
             for root, dirs, _files in os.walk(target):
                 root_path = Path(root)
-                subprocess.run([setfacl_bin, "-m", f"d:u:{unix_user}:rwX", str(root_path)], check=True)
+                for subject in podman_mount_source_subjects:
+                    subprocess.run([setfacl_bin, "-m", f"d:u:{subject}:rwX", str(root_path)], check=True)
                 applied_default_acl_dirs.append(str(root_path))
                 dirs[:] = [name for name in dirs if not (root_path / name).is_symlink()]
 
@@ -6159,6 +6206,8 @@ def grant_agent_runtime_access(
         "unix_user": unix_user,
         "agent_id": agent_id,
         "traverse_only": applied_traverse,
+        "podman_mount_sources": applied_podman_mount_sources,
+        "podman_mount_source_subjects": podman_mount_source_subjects,
         "readable_trees": applied_readable,
         "writable_trees": applied_writable,
         "default_acl_dirs": applied_default_acl_dirs,

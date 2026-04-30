@@ -500,7 +500,7 @@ check_notion_webhook_funnel() {
 
   if output="$(
     TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
-      "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+      "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
       "$funnel_path" \
       "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" \
       "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" <<'PY'

@@ -16,7 +16,7 @@ fi
 
 owned_config="$(
   tailscale funnel status --json 2>/dev/null | python3 - \
-    "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+    "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
     "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import sys
@@ -49,5 +49,5 @@ PY
 )"
 
 if [[ "$owned_config" == "1" ]]; then
-  tailscale funnel --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" off >/dev/null 2>&1 || true
+  tailscale funnel --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" off >/dev/null 2>&1 || true
 fi

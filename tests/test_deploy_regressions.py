@@ -91,7 +91,7 @@ def render_runtime_config(
     tailscale_serve_port: str = "443",
     enable_tailscale_notion_webhook_funnel: str = "0",
     agent_enable_tailscale_serve: str = "",
-    tailscale_notion_webhook_funnel_port: str = "8443",
+    tailscale_notion_webhook_funnel_port: str = "443",
     tailscale_notion_webhook_funnel_path: str = "/notion/webhook",
     notion_root_page_url: str = "",
     notion_root_page_id: str = "",
@@ -293,8 +293,8 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
         "tui-only",
         "tui-only",
         enable_tailscale_notion_webhook_funnel="1",
-        tailscale_serve_port="8445",
-        tailscale_notion_webhook_funnel_port="8443",
+        tailscale_serve_port="8443",
+        tailscale_notion_webhook_funnel_port="443",
         tailscale_notion_webhook_funnel_path="/notion/webhook",
         notion_root_page_url="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
         notion_root_page_id="aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
@@ -323,8 +323,8 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
     expect(source_value(config, "ALMANAC_SSOT_NOTION_API_VERSION") == "2026-03-11", config)
     expect(source_value(config, "ALMANAC_SSOT_NOTION_TOKEN") == "secret_test", config)
     expect(source_value(config, "ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL") == "1", config)
-    expect(source_value(config, "TAILSCALE_SERVE_PORT") == "8445", config)
-    expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT") == "8443", config)
+    expect(source_value(config, "TAILSCALE_SERVE_PORT") == "8443", config)
+    expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT") == "443", config)
     expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH") == "/notion/webhook", config)
     expect(
         source_value(config, "ALMANAC_NOTION_WEBHOOK_PUBLIC_URL") == "https://hooks.example.com/notion/webhook",
@@ -1063,6 +1063,88 @@ printf 'ALMANAC_PRIV_DIR=%s\\n' "$ALMANAC_PRIV_DIR"
     expect("ALMANAC_REPO_DIR=/srv/operator-svc/almanac" in result.stdout, f"expected detected repo default, got: {result.stdout!r}")
     expect("ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv" in result.stdout, f"expected detected priv default, got: {result.stdout!r}")
     print("PASS test_collect_install_answers_defaults_to_detected_service_user")
+
+
+def test_collect_install_answers_moves_tailnet_serve_when_public_notion_funnel_uses_443() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt_log = tmp_path / "prompts.log"
+        script = f"""
+PROMPT_LOG={shlex.quote(str(prompt_log))}
+{snippet}
+ask() {{
+  printf '%s|%s\\n' "$1" "${{2:-}}" >> "$PROMPT_LOG"
+  printf '%s' "${{2:-}}"
+}}
+ask_yes_no() {{
+  case "$1" in
+    Enable\\ Nextcloud*) printf '%s' 1 ;;
+    Enable\\ Tailscale\\ HTTPS\\ proxy*) printf '%s' 1 ;;
+    Enable\\ public\\ Tailscale\\ Funnel*) printf '%s' 1 ;;
+    *) printf '%s' "${{2:-0}}" ;;
+  esac
+}}
+ask_validated_optional() {{ printf '%s' "${{2:-}}"; }}
+ask_secret() {{ printf '%s' ""; }}
+ask_secret_with_default() {{ printf '%s' "${{2:-}}"; }}
+ask_secret_keep_default() {{ printf '%s' "${{2:-}}"; }}
+normalize_optional_answer() {{ printf '%s' "${{1:-}}"; }}
+normalize_http_path() {{
+  case "${{1:-/}}" in
+    "") printf '%s\\n' "/" ;;
+    /*) printf '%s\\n' "$1" ;;
+    *) printf '/%s\\n' "$1" ;;
+  esac
+}}
+random_secret() {{ printf '%s' "generated-secret"; }}
+collect_org_provider_answers() {{ ALMANAC_ORG_PROVIDER_ENABLED=0; }}
+detect_tailscale() {{
+  TAILSCALE_DNS_NAME="operator.example.ts.net"
+  TAILSCALE_IPV4="100.64.0.10"
+  TAILSCALE_TAILNET=""
+}}
+nextcloud_state_has_existing_data() {{ return 1; }}
+read_operator_artifact_hints() {{ return 1; }}
+resolve_user_home() {{ return 1; }}
+collect_upstream_git_answers() {{ ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0; }}
+collect_backup_git_answers() {{
+  BACKUP_GIT_REMOTE=""
+  BACKUP_GIT_DEPLOY_KEY_PATH=""
+  BACKUP_GIT_KNOWN_HOSTS_FILE=""
+}}
+load_detected_config() {{
+  ALMANAC_USER=operator-svc
+  ALMANAC_HOME=/srv/operator-svc
+  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
+  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  NEXTCLOUD_ADMIN_USER='operator'
+  NEXTCLOUD_ADMIN_PASSWORD='keep-me'
+  return 0
+}}
+MODE=write-config
+collect_install_answers
+printf 'TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT=%s\\n' "$TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT"
+printf 'TAILSCALE_SERVE_PORT=%s\\n' "$TAILSCALE_SERVE_PORT"
+printf 'PROMPTS_BEGIN\\n'
+cat "$PROMPT_LOG"
+printf 'PROMPTS_END\\n'
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"tailscale default split case failed: {result.stderr}\n{result.stdout}")
+        expect("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT=443" in result.stdout, result.stdout)
+        expect("TAILSCALE_SERVE_PORT=8443" in result.stdout, result.stdout)
+        prompts = result.stdout.split("PROMPTS_BEGIN\n", 1)[1].split("\nPROMPTS_END", 1)[0]
+        expect(
+            "Public Tailscale Funnel HTTPS port for the Notion webhook|443" in prompts,
+            f"expected public Notion webhook default 443, got: {prompts!r}",
+        )
+        expect(
+            "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes|8443" in prompts,
+            f"expected tailnet Serve default to move to 8443 when public Funnel uses 443, got: {prompts!r}",
+        )
+    print("PASS test_collect_install_answers_moves_tailnet_serve_when_public_notion_funnel_uses_443")
 
 
 def test_collect_install_answers_does_not_prompt_for_telegram_token_up_front() -> None:
@@ -2401,6 +2483,7 @@ def main() -> int:
         test_write_operator_artifact_falls_back_to_discovered_config,
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,
+        test_collect_install_answers_moves_tailnet_serve_when_public_notion_funnel_uses_443,
         test_collect_install_answers_does_not_prompt_for_telegram_token_up_front,
         test_secret_prompt_helpers_do_not_prefix_newlines,
         test_collect_install_answers_randomizes_placeholder_passwords,

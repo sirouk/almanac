@@ -46,7 +46,7 @@ TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
 TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
 ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
-TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
 VAULT_WATCH_DEBOUNCE_SECONDS="${VAULT_WATCH_DEBOUNCE_SECONDS:-0.5}"
 VAULT_WATCH_MAX_BATCH_SECONDS="${VAULT_WATCH_MAX_BATCH_SECONDS:-10}"
@@ -1219,7 +1219,7 @@ refresh_notion_webhook_public_url_from_tailscale() {
 
   detect_tailscale
   if [[ -n "${TAILSCALE_DNS_NAME:-}" ]]; then
-    derived_url="$(build_public_https_url "$TAILSCALE_DNS_NAME" "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" "$funnel_path" || true)"
+    derived_url="$(build_public_https_url "$TAILSCALE_DNS_NAME" "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "$funnel_path" || true)"
   fi
 
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
@@ -1251,7 +1251,7 @@ detect_tailscale_notion_webhook_funnel() {
 
   local ts_info=""
   ts_info="$(
-    TAILSCALE_FUNNEL_JSON="$ts_json" python3 - "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" "$funnel_path" "$ALMANAC_NOTION_WEBHOOK_PORT" <<'PY'
+    TAILSCALE_FUNNEL_JSON="$ts_json" python3 - "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "$funnel_path" "$ALMANAC_NOTION_WEBHOOK_PORT" <<'PY'
 import json
 import os
 import sys
@@ -1296,7 +1296,7 @@ PY
     TAILSCALE_FUNNEL_WEBHOOK_URL="$(
       build_public_https_url \
         "$TAILSCALE_FUNNEL_WEBHOOK_HOST" \
-        "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+        "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
         "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}" || true
     )"
   fi
@@ -1747,7 +1747,7 @@ emit_runtime_config() {
     write_kv ALMANAC_NOTION_WEBHOOK_PORT "$ALMANAC_NOTION_WEBHOOK_PORT"
     write_kv ALMANAC_NOTION_WEBHOOK_PUBLIC_URL "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
     write_kv ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
-    write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+    write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
     write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH "$notion_funnel_path"
     write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_URL "${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
     write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_ID "${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
@@ -2443,7 +2443,7 @@ print_post_install_guide() {
     echo "    ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
     if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
       echo "  Exposure:"
-      echo "    public internet via Tailscale Funnel on port ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+      echo "    public internet via Tailscale Funnel on port ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
       if [[ "$TAILSCALE_FUNNEL_HAS_NOTION_WEBHOOK" != "1" ]]; then
         echo "  Funnel route note:"
         echo "    config expects ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}, but current tailscale funnel status does not show it yet"
@@ -3889,7 +3889,7 @@ collect_install_answers() {
   default_tailscale_serve_port="${TAILSCALE_SERVE_PORT:-443}"
   default_enable_tailscale_notion_webhook_funnel="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
   default_tailscale_operator_user="${TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
-  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
   default_tailscale_notion_webhook_funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
   if [[ -z "$default_tailscale_operator_user" || "$default_tailscale_operator_user" == "root" ]]; then
     default_tailscale_operator_user="$(id -un)"
@@ -3987,8 +3987,8 @@ collect_install_answers() {
     TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
   fi
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" == "$default_tailscale_serve_port" ]]; then
-      default_tailscale_serve_port="8445"
+    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" == "$default_tailscale_serve_port" ]]; then
+      default_tailscale_serve_port="8443"
     fi
     TAILSCALE_SERVE_PORT="$(ask "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes" "$default_tailscale_serve_port")"
   else
@@ -7540,7 +7540,7 @@ collect_docker_install_answers() {
   default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
   default_tailscale_serve_port="${TAILSCALE_SERVE_PORT:-443}"
   default_enable_tailscale_notion_webhook_funnel="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
-  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
   default_tailscale_notion_webhook_funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
   default_tailscale_operator_user="${TAILSCALE_OPERATOR_USER:-$(id -un)}"
   default_enable_private_git="${ENABLE_PRIVATE_GIT:-1}"
@@ -7620,9 +7620,17 @@ collect_docker_install_answers() {
     TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
   fi
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" == "$default_tailscale_serve_port" ]]; then
+      default_tailscale_serve_port="8443"
+    fi
     TAILSCALE_SERVE_PORT="$(ask "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes" "$default_tailscale_serve_port")"
   else
     TAILSCALE_SERVE_PORT="$default_tailscale_serve_port"
+  fi
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" && "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_SERVE_PORT:-443}" == "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" ]]; then
+    echo "Tailscale Serve and the public Notion webhook Funnel cannot share the same HTTPS port." >&2
+    echo "Choose different values for the private tailnet port and the public webhook port." >&2
+    return 1
   fi
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     TAILSCALE_OPERATOR_USER="$(ask "Tailscale operator user for serve/funnel management" "$default_tailscale_operator_user")"

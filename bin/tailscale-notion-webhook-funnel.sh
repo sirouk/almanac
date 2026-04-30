@@ -74,7 +74,7 @@ ensure_no_conflicting_funnel_service() {
 
   result="$(
     TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
-      "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+      "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
       "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
@@ -114,7 +114,7 @@ PY
   )"
 
   if [[ "$result" == conflict:* ]]; then
-    echo "tailscale Funnel port ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443} is already in use by another public service; refusing to overwrite it." >&2
+    echo "tailscale Funnel port ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443} is already in use by another public service; refusing to overwrite it." >&2
     echo "$result" >&2
     exit 1
   fi
@@ -130,7 +130,7 @@ verify_funnel_config() {
   fi
 
   if TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
-    "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" \
+    "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
     "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
@@ -204,7 +204,7 @@ detect_tailscale_runtime || {
   exit 1
 }
 ensure_no_conflicting_funnel_service
-run_funnel_cmd tailscale funnel --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" off >/dev/null 2>&1 || true
-run_funnel_cmd tailscale funnel --bg --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}" "http://127.0.0.1:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" >/dev/null
+run_funnel_cmd tailscale funnel --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" off >/dev/null 2>&1 || true
+run_funnel_cmd tailscale funnel --bg --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "http://127.0.0.1:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" >/dev/null
 verify_funnel_config
 print_funnel_summary

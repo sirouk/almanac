@@ -374,11 +374,11 @@ warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
 ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL=1
-TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT=8443
+TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT=443
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH=/notion/webhook
 ALMANAC_NOTION_WEBHOOK_PORT=8283
 ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://almanac.example.test:8443/notion/webhook"
+ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://almanac.example.test/notion/webhook"
 ALMANAC_DB_PATH="$(mktemp)"
 FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/sqlite3" <<'EOF'
@@ -391,7 +391,7 @@ if [[ "$1" == "funnel" && "$2" == "status" && "$3" == "--json" ]]; then
   cat <<'JSON'
 {{
   "Web": {{
-    "almanac.example.test:8443": {{
+    "almanac.example.test:443": {{
       "Handlers": {{
         "/": {{
           "Proxy": "http://127.0.0.1:8283"
@@ -400,7 +400,7 @@ if [[ "$1" == "funnel" && "$2" == "status" && "$3" == "--json" ]]; then
     }}
   }},
   "AllowFunnel": {{
-    "almanac.example.test:8443": true
+    "almanac.example.test:443": true
   }}
 }}
 JSON
@@ -416,7 +416,7 @@ PATH="$FAKEBIN:$PATH"
     result = bash(script)
     expect(result.returncode == 0, f"shared notion funnel case failed: {result.stderr}")
     expect(
-        "PASS:Tailscale Funnel publishes only the configured Notion webhook route: https://almanac.example.test:8443/notion/webhook" in result.stdout,
+        "PASS:Tailscale Funnel publishes only the configured Notion webhook route: https://almanac.example.test/notion/webhook" in result.stdout,
         f"expected PASS about live webhook funnel route, got: {result.stdout!r}",
     )
     expect(

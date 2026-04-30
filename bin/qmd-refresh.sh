@@ -27,6 +27,40 @@ require_real_layout "qmd refresh"
 ensure_layout
 ensure_nvm
 
+run_qmd_embed() {
+  local timeout_seconds="${QMD_EMBED_TIMEOUT_SECONDS:-0}"
+  local rc=0
+  local -a embed_cmd=(qmd --index "$QMD_INDEX_NAME" embed)
+
+  if [[ -n "${QMD_EMBED_MAX_DOCS_PER_BATCH:-}" ]]; then
+    embed_cmd+=(--max-docs-per-batch "$QMD_EMBED_MAX_DOCS_PER_BATCH")
+  fi
+  if [[ -n "${QMD_EMBED_MAX_BATCH_MB:-}" ]]; then
+    embed_cmd+=(--max-batch-mb "$QMD_EMBED_MAX_BATCH_MB")
+  fi
+
+  if [[ "$timeout_seconds" =~ ^[0-9]+$ ]] && (( timeout_seconds > 0 )) && command -v timeout >/dev/null 2>&1; then
+    if timeout --foreground "${timeout_seconds}s" "${embed_cmd[@]}"; then
+      return 0
+    else
+      rc=$?
+    fi
+    if [[ "$rc" == "124" || "$rc" == "137" ]]; then
+      echo "QMD embedding timed out after ${timeout_seconds}s; text index is updated and embeddings will retry on the next refresh." >&2
+      return 0
+    fi
+    echo "QMD embedding exited with status $rc; text index is updated and embeddings will retry on the next refresh." >&2
+    return 0
+  fi
+
+  if "${embed_cmd[@]}"; then
+    return 0
+  else
+    rc=$?
+    echo "QMD embedding exited with status $rc; text index is updated and embeddings will retry on the next refresh." >&2
+  fi
+}
+
 exec 9>"$QMD_REFRESH_LOCK_FILE"
 flock 9
 
@@ -34,5 +68,5 @@ configure_qmd_collections
 qmd --index "$QMD_INDEX_NAME" update
 
 if [[ "$run_embed" == "1" ]]; then
-  qmd --index "$QMD_INDEX_NAME" embed
+  run_qmd_embed
 fi

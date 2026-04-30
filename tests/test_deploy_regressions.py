@@ -1989,6 +1989,21 @@ def test_nextcloud_rotation_uses_secret_files_instead_of_password_argv() -> None
     print("PASS test_nextcloud_rotation_uses_secret_files_instead_of_password_argv")
 
 
+def test_qmd_refresh_bounds_embedding_work() -> None:
+    refresh = (REPO / "bin" / "qmd-refresh.sh").read_text(encoding="utf-8")
+    common = (REPO / "bin" / "common.sh").read_text(encoding="utf-8")
+    deploy = DEPLOY_SH.read_text(encoding="utf-8")
+    example = (REPO / "config" / "almanac.env.example").read_text(encoding="utf-8")
+    expect("timeout --foreground" in refresh, refresh)
+    expect("--max-docs-per-batch" in refresh and "--max-batch-mb" in refresh, refresh)
+    expect("embeddings will retry on the next refresh" in refresh, refresh)
+    expect('QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-300}"' in common, common)
+    expect('QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"' in common, common)
+    expect('write_kv QMD_EMBED_TIMEOUT_SECONDS "$QMD_EMBED_TIMEOUT_SECONDS"' in deploy, deploy)
+    expect("QMD_EMBED_TIMEOUT_SECONDS=300" in example, example)
+    print("PASS test_qmd_refresh_bounds_embedding_work")
+
+
 def test_shell_scripts_avoid_bash4_only_features() -> None:
     case_mod = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]+\])?(?:,{1,2}|\^{1,2})\}")
     for path in sorted((REPO / "bin").glob("*.sh")):
@@ -2604,6 +2619,7 @@ def main() -> int:
         test_emit_runtime_config_persists_extra_mcp_url,
         test_deploy_guides_explicit_notion_webhook_event_selection,
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,
+        test_qmd_refresh_bounds_embedding_work,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,
         test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,

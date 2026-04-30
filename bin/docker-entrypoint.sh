@@ -24,6 +24,7 @@ ensure_docker_state_dirs() {
     "$PRIV_DIR/state/nextcloud/db"
     "$PRIV_DIR/state/nextcloud/redis"
     "$PRIV_DIR/state/nextcloud/html"
+    "$PRIV_DIR/state/nextcloud/html/data"
     "$PRIV_DIR/state/nextcloud/data"
     "$PRIV_DIR/state/nextcloud/hooks/pre-installation"
     "$PRIV_DIR/state/nextcloud/hooks/post-installation"
@@ -245,6 +246,39 @@ $CONFIG = [
 EOF
 }
 
+copy_legacy_nextcloud_data_if_needed() {
+  local legacy_data="$PRIV_DIR/state/nextcloud/data"
+  local live_data="$PRIV_DIR/state/nextcloud/html/data"
+
+  if [[ -f "$live_data/.ncdata" || ! -f "$legacy_data/.ncdata" ]]; then
+    return 0
+  fi
+
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --ignore-existing "$legacy_data"/ "$live_data"/
+  else
+    cp -Rpn "$legacy_data"/. "$live_data"/
+  fi
+}
+
+ensure_nextcloud_data_dir() {
+  local live_data="$PRIV_DIR/state/nextcloud/html/data"
+
+  mkdir -p "$live_data"
+  copy_legacy_nextcloud_data_if_needed
+  if [[ ! -f "$live_data/.ncdata" ]]; then
+    cat >"$live_data/.ncdata" <<'EOF'
+# Nextcloud data directory
+# Do not change this file
+EOF
+  fi
+  if [[ ! -f "$live_data/index.html" ]]; then
+    : >"$live_data/index.html"
+  fi
+  chmod 0770 "$live_data" 2>/dev/null || true
+  chmod 0644 "$live_data/.ncdata" "$live_data/index.html" 2>/dev/null || true
+}
+
 if [[ ! -f "$CONFIG_FILE" || "${ALMANAC_DOCKER_REWRITE_CONFIG:-0}" == "1" ]]; then
   write_default_docker_config
 fi
@@ -253,6 +287,7 @@ repair_placeholder_secret POSTGRES_PASSWORD "$PRIV_DIR/state/nextcloud/db/PG_VER
 repair_placeholder_secret NEXTCLOUD_ADMIN_PASSWORD "$PRIV_DIR/state/nextcloud/html/config/config.php"
 
 ensure_nextcloud_config
+ensure_nextcloud_data_dir
 
 export ALMANAC_CONFIG_FILE="$CONFIG_FILE"
 exec "$@"

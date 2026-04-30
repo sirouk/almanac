@@ -9,6 +9,10 @@ ask_default() {
   local prompt="$1"
   local default="${2:-}"
   local answer=""
+  if [[ ! -t 0 ]]; then
+    printf '%s' "$default"
+    return 0
+  fi
   if [[ -n "$default" ]]; then
     read -r -p "$prompt [$default]: " answer
   else
@@ -25,6 +29,11 @@ confirm_default() {
   local normalized_answer=""
 
   [[ "$default" == "no" ]] && hint="y/N"
+  if [[ ! -t 0 ]]; then
+    normalized_answer="$(printf '%s' "$default" | tr '[:upper:]' '[:lower:]')"
+    [[ "$normalized_answer" =~ ^(y|yes|1)$ ]]
+    return
+  fi
   read -r -p "$prompt [$hint]: " answer
   answer="${answer:-$default}"
   normalized_answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
@@ -135,7 +144,7 @@ print_notify_channel_guidance() {
 
   case "$platform" in
     discord)
-      cat <<'EOF'
+      cat >&2 <<'EOF'
 Discord operator notifications accept a channel ID or webhook URL, not a user ID.
   - Enable Developer Mode in Discord settings.
   - Right-click the destination channel and choose Copy Channel ID.
@@ -144,7 +153,7 @@ Discord operator notifications accept a channel ID or webhook URL, not a user ID
 EOF
       ;;
     telegram)
-      cat <<'EOF'
+      cat >&2 <<'EOF'
 Telegram operator notifications use the numeric chat ID for the destination chat.
   - Open a DM with the bot and press Start first.
   - For a 1:1 operator DM, use the numeric ID from that chat.
@@ -349,6 +358,7 @@ configure_operator_notify_channel() {
   local requested_platform="${1:-tui-only}"
   local requested_channel_id="${2:-}"
 
+  requested_platform="$(printf '%s' "$requested_platform" | tr '[:upper:]' '[:lower:]')"
   if "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$requested_platform" --channel-id "$requested_channel_id" >/dev/null; then
     printf '%s\n%s\n' "$requested_platform" "$requested_channel_id"
     return 0
@@ -440,7 +450,7 @@ resolve_notify_channel() {
 set_config_value() {
   local key="$1"
   local value="$2"
-  local config_file="${ALMANAC_PRIV_CONFIG_DIR}/almanac.env"
+  local config_file="${ALMANAC_CONFIG_FILE:-${ALMANAC_PRIV_CONFIG_DIR}/almanac.env}"
 
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
     python3 - "$config_file" "$key" "$value" <<'PY'
@@ -452,6 +462,61 @@ from almanac_control import ensure_config_file_update
 path = Path(sys.argv[1])
 ensure_config_file_update(path, {sys.argv[2]: sys.argv[3]})
 PY
+}
+
+sync_org_provider_from_curator_codex() {
+  local auth_file="$ALMANAC_CURATOR_HERMES_HOME/auth.json"
+  local secret_json=""
+
+  if [[ "${ALMANAC_ORG_PROVIDER_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ "${ALMANAC_ORG_PROVIDER_PRESET:-}" != "codex" ]]; then
+    return 0
+  fi
+  if [[ -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; then
+    return 0
+  fi
+  if [[ ! -r "$auth_file" ]]; then
+    echo "Org-provided Codex is pending: Curator has not saved a Codex sign-in yet." >&2
+    return 0
+  fi
+
+  if ! secret_json="$(python3 - "$auth_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    data = json.load(open(path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+provider = (data.get("providers") or {}).get("openai-codex") or {}
+tokens = provider.get("tokens") or {}
+access_token = str(tokens.get("access_token") or "").strip()
+refresh_token = str(tokens.get("refresh_token") or "").strip()
+if not access_token or not refresh_token:
+    raise SystemExit(1)
+
+print(json.dumps(
+    {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "last_refresh": str(provider.get("last_refresh") or "").strip(),
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    },
+    sort_keys=True,
+))
+PY
+)"; then
+    echo "Org-provided Codex is pending: Curator auth.json does not contain Codex tokens." >&2
+    return 0
+  fi
+
+  set_config_value "ALMANAC_ORG_PROVIDER_SECRET_PROVIDER" "codex"
+  set_config_value "ALMANAC_ORG_PROVIDER_SECRET" "$secret_json"
+  echo "Org-provided Codex credential captured from Curator Codex sign-in."
 }
 
 ensure_hermes_agent_defaults() {
@@ -847,6 +912,7 @@ PY
   ALMANAC_CURATOR_CHANNELS="$channels_csv"
   set_config_value "ALMANAC_CURATOR_MODEL_PRESET" "$model_preset"
   set_config_value "ALMANAC_CURATOR_CHANNELS" "$channels_csv"
+  sync_org_provider_from_curator_codex
   notify_values=()
   while IFS= read -r line; do
     notify_values+=("$line")

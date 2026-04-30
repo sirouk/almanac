@@ -113,7 +113,6 @@ services:
     volumes:
       - ./almanac-priv/state/nextcloud/config/almanac.config.php:/almanac-config/almanac.config.php:ro
       - ./almanac-priv/state/nextcloud/html:/var/www/html
-      - ./almanac-priv/state/nextcloud/data:/var/www/html/data
       - ./almanac-priv/state/nextcloud/hooks/pre-installation:/docker-entrypoint-hooks.d/pre-installation
       - ./almanac-priv/state/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation
       - ./almanac-priv/state/nextcloud/hooks/before-starting:/docker-entrypoint-hooks.d/before-starting
@@ -223,16 +222,19 @@ services:
   curator-gateway:
     <<: *almanac-app
     profiles: ["curator"]
+    restart: on-failure
     command: ["./bin/curator-gateway.sh"]
 
   curator-onboarding:
     <<: *almanac-app
     profiles: ["curator"]
+    restart: on-failure
     command: ["./bin/almanac-curator-onboarding.sh"]
 
   curator-discord-onboarding:
     <<: *almanac-app
     profiles: ["curator"]
+    restart: on-failure
     command: ["./bin/almanac-curator-discord-onboarding.sh"]
 
 volumes:

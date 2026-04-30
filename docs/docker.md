@@ -115,6 +115,21 @@ Optional profiles are available for `curator`, `quarto`, and `backup`:
 COMPOSE_PROFILES=curator ./deploy.sh docker install
 ```
 
+`./deploy.sh docker install` asks the operator-facing Docker configuration
+questions before the build/up step, then runs Curator setup interactively when a
+terminal is available. That matches the baremetal operator flow for organization
+context, provider defaults, Nextcloud, backup, PDF vision, Curator model, chat
+channels, and operator notifications while keeping host-systemd-only questions
+out of Docker mode. If OpenAI Codex is selected as the org-wide provider, the
+shared org credential is captured from the later Curator Codex sign-in instead
+of using a separate first-questionnaire auth flow. It then starts
+Curator-profile services when their configured credentials allow them to run.
+For scripted base stack refreshes that should skip operator setup, set:
+
+```bash
+ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG=1 ALMANAC_DOCKER_SKIP_CURATOR_SETUP=1 ./deploy.sh docker install
+```
+
 ## Health
 
 ```bash

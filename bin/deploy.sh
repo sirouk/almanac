@@ -381,7 +381,7 @@ Usage:
   deploy.sh health
 
 Docker control center:
-  deploy.sh docker install        # idempotent bootstrap + build + up + reconcile + health + smoke
+  deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
   deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
   deploy.sh docker reconfigure    # refresh generated Docker config/ports only
   deploy.sh docker health
@@ -951,7 +951,7 @@ EOF
 docker_usage() {
   cat <<'EOF'
 Usage:
-  deploy.sh docker install        # idempotent bootstrap + build + up + reconcile + health + smoke
+  deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
   deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
   deploy.sh docker reconfigure    # refresh generated Docker config/ports only
   deploy.sh docker bootstrap
@@ -1907,9 +1907,32 @@ write_answers_file() {
   chmod 600 "$target"
 }
 
+org_profile_builder_python() {
+  local repo_dir="${1:-$BOOTSTRAP_DIR}"
+  local venv_dir="" python_bin=""
+
+  if python3 -c 'import yaml' >/dev/null 2>&1; then
+    printf '%s\n' "python3"
+    return 0
+  fi
+
+  venv_dir="${ALMANAC_ORG_PROFILE_BUILDER_VENV:-${ALMANAC_PRIV_DIR:-$repo_dir/almanac-priv}/state/runtime/org-profile-builder-venv}"
+  python_bin="$venv_dir/bin/python3"
+  if [[ ! -x "$python_bin" ]]; then
+    mkdir -p "$(dirname "$venv_dir")"
+    python3 -m venv "$venv_dir"
+  fi
+  if ! "$python_bin" -c 'import yaml' >/dev/null 2>&1; then
+    "$python_bin" -m pip install --upgrade --quiet PyYAML
+  fi
+  "$python_bin" -c 'import yaml' >/dev/null
+  printf '%s\n' "$python_bin"
+}
+
 maybe_run_org_profile_builder() {
   local repo_dir="${1:-$BOOTSTRAP_DIR}"
   local profile_path="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/org-profile.yaml"
+  local builder_python=""
 
   if [[ "${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-0}" != "1" ]]; then
     return 0
@@ -1926,7 +1949,11 @@ maybe_run_org_profile_builder() {
   mkdir -p "$(dirname "$profile_path")"
   echo
   echo "Launching private operating profile builder..."
-  "$repo_dir/bin/org-profile-builder.sh" --file "$profile_path"
+  if ! builder_python="$(org_profile_builder_python "$repo_dir")"; then
+    echo "Could not prepare Python dependencies for the operating profile builder." >&2
+    return 1
+  fi
+  ALMANAC_ORG_PROFILE_BUILDER_PYTHON="$builder_python" "$repo_dir/bin/org-profile-builder.sh" --file "$profile_path"
   chmod 600 "$profile_path" >/dev/null 2>&1 || true
   if [[ ${EUID:-$(id -u)} -eq 0 && -n "${ALMANAC_USER:-}" ]]; then
     chown "$ALMANAC_USER:$ALMANAC_USER" "$profile_path" >/dev/null 2>&1 || true
@@ -3439,7 +3466,12 @@ import time
 
 from almanac_onboarding_provider_auth import poll_codex_device_authorization, start_codex_device_authorization
 
-state = start_codex_device_authorization()
+try:
+    state = start_codex_device_authorization()
+except Exception as exc:
+    print(f"OpenAI Codex sign-in could not start: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
 print("OpenAI Codex sign-in for the organization-provided default:", file=sys.stderr)
 print(f"1. Open {state.get('verification_url')}", file=sys.stderr)
 print(f"2. Enter this code: {state.get('user_code')}", file=sys.stderr)
@@ -3447,7 +3479,11 @@ print("Waiting for approval...", file=sys.stderr)
 
 while True:
     time.sleep(max(3, int(state.get("poll_interval") or 5)))
-    token_payload, state = poll_codex_device_authorization(state)
+    try:
+        token_payload, state = poll_codex_device_authorization(state)
+    except Exception as exc:
+        print(f"OpenAI Codex sign-in polling failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
     if token_payload is not None:
         print(json.dumps(token_payload, sort_keys=True))
         raise SystemExit(0)
@@ -3464,37 +3500,108 @@ import sys
 
 from almanac_onboarding_provider_auth import complete_anthropic_pkce_authorization, start_anthropic_pkce_authorization
 
-state = start_anthropic_pkce_authorization()
+try:
+    state = start_anthropic_pkce_authorization()
+except Exception as exc:
+    print(f"Claude Opus OAuth could not start: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
 print("Claude Code OAuth for the organization-provided default:", file=sys.stderr)
 print("Open this link with the Claude account and plan to share with onboarded lanes:", file=sys.stderr)
 print(state.get("auth_url") or "", file=sys.stderr)
 callback = input("Paste the Claude callback code string here: ").strip()
-secret, _updated_state = complete_anthropic_pkce_authorization(state, callback)
+try:
+    secret, _updated_state = complete_anthropic_pkce_authorization(state, callback)
+except Exception as exc:
+    print(f"Claude Opus OAuth failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
 print(secret)
 PY
+}
+
+disable_org_provider_answers() {
+  ALMANAC_ORG_PROVIDER_ENABLED="0"
+  ALMANAC_ORG_PROVIDER_PRESET=""
+  ALMANAC_ORG_PROVIDER_MODEL_ID=""
+  ALMANAC_ORG_PROVIDER_REASONING_EFFORT="medium"
+  ALMANAC_ORG_PROVIDER_SECRET_PROVIDER=""
+  ALMANAC_ORG_PROVIDER_SECRET=""
+}
+
+ask_org_provider_auth_failure_action() {
+  local provider_label="$1"
+  local default_action="${2:-change}"
+  local allow_retry="${3:-1}"
+  local answer="" normalized_answer=""
+  local choices="retry/change/skip"
+
+  default_action="$(printf '%s' "$default_action" | tr '[:upper:]' '[:lower:]')"
+  case "$default_action" in
+    retry|change|skip) ;;
+    *) default_action="change" ;;
+  esac
+  if [[ "$allow_retry" != "1" ]]; then
+    choices="change/skip"
+    [[ "$default_action" == "retry" ]] && default_action="change"
+  fi
+
+  if [[ ! -t 0 ]]; then
+    printf '%s\n' "skip"
+    return 0
+  fi
+
+  while true; do
+    answer="$(ask "$provider_label credential setup failed. Action ($choices)" "$default_action")"
+    normalized_answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+    normalized_answer="${normalized_answer//[ _-]/}"
+    case "$normalized_answer" in
+      r|retry|again)
+        if [[ "$allow_retry" != "1" ]]; then
+          echo "Retry limit reached for this provider. Choose change or skip."
+          continue
+        fi
+        printf '%s\n' "retry"
+        return 0
+        ;;
+      c|change|provider|chooseanother|another)
+        printf '%s\n' "change"
+        return 0
+        ;;
+      s|skip|none|without|disable)
+        printf '%s\n' "skip"
+        return 0
+        ;;
+    esac
+    echo "Choose $choices."
+  done
 }
 
 collect_org_provider_answers() {
   local default_enabled="${ALMANAC_ORG_PROVIDER_ENABLED:-1}"
   local provider_answer="" provider_preset="" default_model="" reasoning_answer=""
   local existing_secret_provider="${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
-  local reuse_secret="0"
+  local reuse_secret="0" auth_action="" provider_label=""
+  local auth_attempts=0 max_auth_attempts="${ALMANAC_ORG_PROVIDER_AUTH_MAX_ATTEMPTS:-2}"
+  local default_auth_action="retry" allow_auth_retry="1"
+
+  case "$max_auth_attempts" in
+    ""|*[!0-9]*) max_auth_attempts="2" ;;
+  esac
+  if (( max_auth_attempts < 1 )); then
+    max_auth_attempts="1"
+  fi
 
   if [[ ! -t 0 && "${ALMANAC_ORG_PROVIDER_PROMPT_NONINTERACTIVE:-0}" != "1" ]]; then
     if [[ "${ALMANAC_ORG_PROVIDER_ENABLED:-0}" == "1" && -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; then
       return 0
     fi
-    ALMANAC_ORG_PROVIDER_ENABLED="0"
+    disable_org_provider_answers
     return 0
   fi
 
   ALMANAC_ORG_PROVIDER_ENABLED="$(ask_yes_no "Provide an organization-wide inference provider/default model for onboarded users" "$default_enabled")"
   if [[ "$ALMANAC_ORG_PROVIDER_ENABLED" != "1" ]]; then
-    ALMANAC_ORG_PROVIDER_PRESET=""
-    ALMANAC_ORG_PROVIDER_MODEL_ID=""
-    ALMANAC_ORG_PROVIDER_REASONING_EFFORT="medium"
-    ALMANAC_ORG_PROVIDER_SECRET_PROVIDER=""
-    ALMANAC_ORG_PROVIDER_SECRET=""
+    disable_org_provider_answers
     return 0
   fi
 
@@ -3543,10 +3650,76 @@ EOF
       done
       ;;
     codex)
-      ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_codex_secret)"
+      if [[ "${ALMANAC_ORG_PROVIDER_CODEX_AUTH_MODE:-curator}" != "direct" ]]; then
+        echo
+        echo "OpenAI Codex org provider will use the Curator Codex sign-in later in setup."
+        echo "If Curator is configured with a different provider, org-provided Codex will stay disabled until reconfigured."
+        ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="curator-codex-pending"
+        ALMANAC_ORG_PROVIDER_SECRET=""
+      else
+        provider_label="OpenAI Codex"
+        auth_attempts=0
+        while [[ -z "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; do
+          auth_attempts=$((auth_attempts + 1))
+          if ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_codex_secret)"; then
+            break
+          fi
+          if [[ "$auth_attempts" -ge "$max_auth_attempts" ]]; then
+            default_auth_action="change"
+            allow_auth_retry="0"
+          else
+            default_auth_action="change"
+            allow_auth_retry="1"
+          fi
+          auth_action="$(ask_org_provider_auth_failure_action "$provider_label" "$default_auth_action" "$allow_auth_retry")"
+          case "$auth_action" in
+            retry)
+              continue
+              ;;
+            change)
+              ALMANAC_ORG_PROVIDER_PRESET=""
+              collect_org_provider_answers
+              return 0
+              ;;
+            skip)
+              disable_org_provider_answers
+              return 0
+              ;;
+          esac
+        done
+      fi
       ;;
     opus)
-      ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_opus_secret)"
+      provider_label="Claude Opus"
+      auth_attempts=0
+      while [[ -z "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; do
+        auth_attempts=$((auth_attempts + 1))
+        if ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_opus_secret)"; then
+          break
+        fi
+        if [[ "$auth_attempts" -ge "$max_auth_attempts" ]]; then
+          default_auth_action="change"
+          allow_auth_retry="0"
+        else
+          default_auth_action="change"
+          allow_auth_retry="1"
+        fi
+        auth_action="$(ask_org_provider_auth_failure_action "$provider_label" "$default_auth_action" "$allow_auth_retry")"
+        case "$auth_action" in
+          retry)
+            continue
+            ;;
+          change)
+            ALMANAC_ORG_PROVIDER_PRESET=""
+            collect_org_provider_answers
+            return 0
+            ;;
+          skip)
+            disable_org_provider_answers
+            return 0
+            ;;
+        esac
+      done
       ;;
   esac
   ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
@@ -7259,11 +7432,256 @@ run_almanac_docker() {
   "$helper" "$@"
 }
 
+docker_env_file_path() {
+  printf '%s\n' "$BOOTSTRAP_DIR/almanac-priv/config/docker.env"
+}
+
+load_docker_runtime_config() {
+  local docker_env=""
+
+  docker_env="$(docker_env_file_path)"
+  if [[ -f "$docker_env" && -r "$docker_env" ]]; then
+    # shellcheck disable=SC1090
+    source "$docker_env"
+    VAULT_QMD_COLLECTION_MASK="$(normalize_vault_qmd_collection_mask "${VAULT_QMD_COLLECTION_MASK:-}")"
+    resolve_model_provider_presets
+  fi
+}
+
+docker_nextcloud_state_has_existing_data() {
+  local host_nextcloud_state="$BOOTSTRAP_DIR/almanac-priv/state/nextcloud"
+
+  if [[ ! -d "$host_nextcloud_state" ]]; then
+    return 1
+  fi
+
+  find "$host_nextcloud_state" -mindepth 1 -print -quit 2>/dev/null | grep -q .
+}
+
+write_docker_runtime_config() {
+  local target="${1:-$(docker_env_file_path)}"
+  local container_repo_dir="/home/almanac/almanac"
+  local container_priv_dir="/home/almanac/almanac/almanac-priv"
+  local container_state_dir="$container_priv_dir/state"
+  local container_runtime_dir="/opt/almanac/runtime"
+
+  ALMANAC_NAME="almanac"
+  ALMANAC_USER="almanac"
+  ALMANAC_HOME="/home/almanac"
+  ALMANAC_REPO_DIR="$container_repo_dir"
+  ALMANAC_PRIV_DIR="$container_priv_dir"
+  ALMANAC_PRIV_CONFIG_DIR="$container_priv_dir/config"
+  VAULT_DIR="$container_priv_dir/vault"
+  STATE_DIR="$container_state_dir"
+  NEXTCLOUD_STATE_DIR="$container_state_dir/nextcloud"
+  RUNTIME_DIR="$container_runtime_dir"
+  PUBLISHED_DIR="$container_priv_dir/published"
+  QUARTO_PROJECT_DIR="$container_priv_dir/quarto"
+  QUARTO_OUTPUT_DIR="$container_priv_dir/published"
+  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$container_state_dir/almanac-release.json}"
+  ALMANAC_MCP_HOST="0.0.0.0"
+  ALMANAC_NOTION_WEBHOOK_HOST="0.0.0.0"
+  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$container_priv_dir/secrets/almanac-backup-ed25519}"
+  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$container_priv_dir/secrets/almanac-backup-known_hosts}"
+
+  mkdir -p "$(dirname "$target")"
+  {
+    emit_runtime_config
+    write_kv ALMANAC_BACKEND_ALLOWED_CIDRS "${ALMANAC_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}"
+    write_kv ALMANAC_MCP_URL "http://almanac-mcp:8282/mcp"
+    write_kv ALMANAC_BOOTSTRAP_URL "http://almanac-mcp:8282/mcp"
+    write_kv ALMANAC_QMD_URL "http://qmd-mcp:8181/mcp"
+    write_kv ALMANAC_NOTION_INDEX_DIR "$container_state_dir/notion-index"
+    write_kv ALMANAC_NOTION_INDEX_MARKDOWN_DIR "$container_state_dir/notion-index/markdown"
+    write_kv ALMANAC_DOCKER_AGENT_HOME_ROOT "$container_state_dir/docker/users"
+    write_kv ALMANAC_DOCKER_CONTAINER_PRIV_DIR "$container_priv_dir"
+    write_kv ALMANAC_DOCKER_HOST_REPO_DIR "$BOOTSTRAP_DIR"
+    write_kv ALMANAC_DOCKER_HOST_PRIV_DIR "$BOOTSTRAP_DIR/almanac-priv"
+  } >"$target"
+  chmod 600 "$target"
+}
+
+maybe_run_docker_org_profile_builder() {
+  local saved_priv_config_dir="${ALMANAC_PRIV_CONFIG_DIR:-}"
+  local saved_priv_dir="${ALMANAC_PRIV_DIR:-}"
+
+  ALMANAC_PRIV_DIR="$BOOTSTRAP_DIR/almanac-priv"
+  ALMANAC_PRIV_CONFIG_DIR="$BOOTSTRAP_DIR/almanac-priv/config"
+  maybe_run_org_profile_builder "$BOOTSTRAP_DIR"
+  ALMANAC_PRIV_DIR="$saved_priv_dir"
+  ALMANAC_PRIV_CONFIG_DIR="$saved_priv_config_dir"
+}
+
+collect_docker_install_answers() {
+  local docker_env="" default_domain="" default_nextcloud_port="" default_nextcloud_admin_user=""
+  local default_enable_nextcloud="" default_enable_private_git="" default_enable_quarto="" default_seed_vault=""
+  local default_enable_tailscale_serve="" default_tailscale_serve_port=""
+  local default_enable_tailscale_notion_webhook_funnel="" default_tailscale_notion_webhook_funnel_port=""
+  local default_tailscale_notion_webhook_funnel_path="" default_tailscale_operator_user=""
+  local default_pdf_vision_endpoint="" default_pdf_vision_model="" default_pdf_vision_api_key=""
+  local default_git_name="" default_git_email="" current_postgres_password="" current_nextcloud_admin_password=""
+  local nextcloud_state_present="0" nextcloud_admin_password_input="" default_org_profile_builder="0"
+
+  docker_env="$(docker_env_file_path)"
+  load_docker_runtime_config
+
+  echo "Almanac deploy: Docker install / repair from current checkout"
+  echo
+  echo "Docker mode uses fixed container paths and the current checkout as the host bind mount:"
+  echo "  host repo:    $BOOTSTRAP_DIR"
+  echo "  host private: $BOOTSTRAP_DIR/almanac-priv"
+  echo "  container:    /home/almanac/almanac"
+  echo
+
+  default_nextcloud_port="${NEXTCLOUD_PORT:-18080}"
+  default_git_name="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
+  default_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-almanac@localhost}"
+  default_enable_nextcloud="${ENABLE_NEXTCLOUD:-1}"
+  default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
+  default_tailscale_serve_port="${TAILSCALE_SERVE_PORT:-443}"
+  default_enable_tailscale_notion_webhook_funnel="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
+  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-8443}"
+  default_tailscale_notion_webhook_funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
+  default_tailscale_operator_user="${TAILSCALE_OPERATOR_USER:-$(id -un)}"
+  default_enable_private_git="${ENABLE_PRIVATE_GIT:-1}"
+  default_enable_quarto="${ENABLE_QUARTO:-0}"
+  default_seed_vault="${SEED_SAMPLE_VAULT:-1}"
+  default_nextcloud_admin_user="${NEXTCLOUD_ADMIN_USER:-admin}"
+  default_pdf_vision_endpoint="${PDF_VISION_ENDPOINT:-}"
+  default_pdf_vision_model="${PDF_VISION_MODEL:-}"
+  default_pdf_vision_api_key="${PDF_VISION_API_KEY:-}"
+
+  ALMANAC_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ALMANAC_ORG_NAME:-}")")"
+  ALMANAC_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ALMANAC_ORG_MISSION:-}")")"
+  ALMANAC_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ALMANAC_ORG_PRIMARY_PROJECT:-}")")"
+  ALMANAC_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
+  ALMANAC_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ALMANAC_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
+  collect_org_provider_answers
+
+  if [[ ! -f "$BOOTSTRAP_DIR/almanac-priv/config/org-profile.yaml" ]]; then
+    default_org_profile_builder="1"
+  fi
+  ALMANAC_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
+
+  QMD_INDEX_NAME="${QMD_INDEX_NAME:-almanac}"
+  QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
+  QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
+  QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
+  ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
+  ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
+  BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
+  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  collect_upstream_git_answers
+
+  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/almanac/almanac/almanac-priv/secrets/almanac-backup-ed25519}"
+  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-/home/almanac/almanac/almanac-priv/secrets/almanac-backup-known_hosts}"
+  collect_backup_git_answers
+  BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
+  BACKUP_GIT_AUTHOR_EMAIL="$(ask "Git author email" "$default_git_email")"
+  NEXTCLOUD_PORT="$(ask "Nextcloud local port" "$default_nextcloud_port")"
+
+  detect_tailscale
+  default_domain="${NEXTCLOUD_TRUSTED_DOMAIN:-localhost}"
+  if [[ -n "$TAILSCALE_DNS_NAME" ]]; then
+    default_domain="$TAILSCALE_DNS_NAME"
+    default_enable_tailscale_serve="1"
+    echo "Detected Tailscale DNS name: $TAILSCALE_DNS_NAME"
+    echo
+  elif [[ -n "$TAILSCALE_TAILNET" ]]; then
+    default_domain="$TAILSCALE_TAILNET"
+    default_enable_tailscale_serve="1"
+    echo "Detected Tailscale tailnet:  $TAILSCALE_TAILNET"
+    echo
+  fi
+
+  NEXTCLOUD_TRUSTED_DOMAIN="$(ask "Nextcloud trusted domain / Tailscale hostname" "$default_domain")"
+  POSTGRES_DB="${POSTGRES_DB:-nextcloud}"
+  POSTGRES_USER="${POSTGRES_USER:-nextcloud}"
+  NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
+  ENABLE_NEXTCLOUD="$(ask_yes_no "Enable Nextcloud" "$default_enable_nextcloud")"
+  if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+    ENABLE_TAILSCALE_SERVE="$(ask_yes_no "Enable Tailscale HTTPS proxy for Nextcloud (tailnet only)" "$default_enable_tailscale_serve")"
+  else
+    ENABLE_TAILSCALE_SERVE="0"
+  fi
+  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
+    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
+    else
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
+    fi
+  else
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="0"
+    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
+    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
+  fi
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+    TAILSCALE_SERVE_PORT="$(ask "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes" "$default_tailscale_serve_port")"
+  else
+    TAILSCALE_SERVE_PORT="$default_tailscale_serve_port"
+  fi
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+    TAILSCALE_OPERATOR_USER="$(ask "Tailscale operator user for serve/funnel management" "$default_tailscale_operator_user")"
+  else
+    TAILSCALE_OPERATOR_USER=""
+  fi
+
+  if docker_nextcloud_state_has_existing_data; then
+    nextcloud_state_present="1"
+  fi
+  current_postgres_password="${POSTGRES_PASSWORD:-}"
+  if [[ -z "$current_postgres_password" || "$nextcloud_state_present" != "1" ]]; then
+    POSTGRES_PASSWORD="$(preserve_or_randomize_secret "$current_postgres_password")"
+  else
+    POSTGRES_PASSWORD="$current_postgres_password"
+  fi
+  NEXTCLOUD_ADMIN_USER="$(ask "Nextcloud admin user" "$default_nextcloud_admin_user")"
+  current_nextcloud_admin_password="${NEXTCLOUD_ADMIN_PASSWORD:-}"
+  if [[ -z "$current_nextcloud_admin_password" || "$nextcloud_state_present" != "1" ]]; then
+    NEXTCLOUD_ADMIN_PASSWORD="$(preserve_or_randomize_secret "$current_nextcloud_admin_password")"
+  else
+    NEXTCLOUD_ADMIN_PASSWORD="$current_nextcloud_admin_password"
+  fi
+  nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
+  NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
+
+  ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize almanac-priv as a git repo" "$default_enable_private_git")"
+  ENABLE_QUARTO="$(ask_yes_no "Enable Quarto job container" "$default_enable_quarto")"
+  SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"
+  PDF_VISION_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible vision endpoint for PDF page captions (base /v1 or full /v1/chat/completions; type none to disable)" "$default_pdf_vision_endpoint")")"
+  PDF_VISION_MODEL="$(normalize_optional_answer "$(ask "Vision model name for PDF page captions (type none to disable)" "$default_pdf_vision_model")")"
+  PDF_VISION_API_KEY="$(ask_secret_with_default "Vision API key for PDF page captions (ENTER keeps current, type none to clear)" "$default_pdf_vision_api_key")"
+  PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
+  if [[ -z "$PDF_VISION_ENDPOINT" && -z "$PDF_VISION_MODEL" && -z "$PDF_VISION_API_KEY" ]]; then
+    PDF_VISION_ENDPOINT=""
+    PDF_VISION_MODEL=""
+    PDF_VISION_API_KEY=""
+  fi
+
+  write_docker_runtime_config "$docker_env"
+  maybe_run_docker_org_profile_builder
+  CONFIG_TARGET="$docker_env"
+  echo
+  echo "Wrote Docker config to: $docker_env"
+}
+
 run_docker_install_flow() {
+  local run_curator_setup="${1:-1}"
+
   echo "Installing or repairing Almanac Docker stack from this checkout..."
   run_almanac_docker bootstrap
+  if [[ "$run_curator_setup" == "1" && "${ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG:-0}" != "1" && -t 0 ]]; then
+    collect_docker_install_answers
+  fi
   run_almanac_docker build
   run_almanac_docker up
+  if [[ "$run_curator_setup" == "1" && "${ALMANAC_DOCKER_SKIP_CURATOR_SETUP:-0}" != "1" ]]; then
+    run_almanac_docker curator-setup
+  fi
   run_almanac_docker reconcile
   run_almanac_docker record-release
   run_almanac_docker ports
@@ -7293,8 +7711,11 @@ run_docker_deploy_flow() {
     help|-h|--help)
       docker_usage
       ;;
-    install|upgrade)
-      run_docker_install_flow
+    install)
+      run_docker_install_flow 1
+      ;;
+    upgrade)
+      run_docker_install_flow 0
       ;;
     reconfigure)
       run_docker_reconfigure_flow

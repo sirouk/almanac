@@ -377,7 +377,7 @@ require_running_service() {
 compose_exec_quiet() {
   local service="$1"
   shift
-  compose exec -T "$service" "$@" >/dev/null
+  compose exec -T "$service" "$@" >/dev/null 2>&1
 }
 
 retry_compose_exec_quiet() {
@@ -392,7 +392,48 @@ retry_compose_exec_quiet() {
     sleep 2
   done
 
-  compose_exec_quiet "$service" "$@"
+  return 1
+}
+
+repair_running_nextcloud_data_dir() {
+  if ! compose_service_running nextcloud; then
+    return 0
+  fi
+
+  compose exec -T nextcloud sh -lc '
+    set -eu
+    mkdir -p /var/www/html/data
+    if [ ! -f /var/www/html/data/.ncdata ]; then
+      {
+        printf "%s\n" "# Nextcloud data directory"
+        printf "%s\n" "# Do not change this file"
+      } > /var/www/html/data/.ncdata
+    fi
+    [ -f /var/www/html/data/index.html ] || : > /var/www/html/data/index.html
+    chown -R www-data:www-data /var/www/html/data 2>/dev/null || true
+    chmod 0770 /var/www/html/data 2>/dev/null || true
+    chmod 0644 /var/www/html/data/.ncdata /var/www/html/data/index.html 2>/dev/null || true
+  ' >/dev/null 2>&1 || true
+}
+
+diagnose_nextcloud_health_failure() {
+  local http_status=""
+
+  echo "FAIL Nextcloud did not respond at http://127.0.0.1/status.php" >&2
+  http_status="$(
+    compose exec -T nextcloud sh -lc \
+      'curl -sS -o /tmp/almanac-nextcloud-status.out -w "%{http_code}" http://127.0.0.1/status.php' \
+      2>/dev/null || true
+  )"
+  if [[ -n "$http_status" ]]; then
+    echo "Nextcloud HTTP status: $http_status" >&2
+  fi
+  compose exec -T nextcloud sh -lc '
+    if [ ! -f /var/www/html/data/.ncdata ]; then
+      echo "Nextcloud data marker is missing at /var/www/html/data/.ncdata"
+    fi
+    php /var/www/html/occ status 2>&1 | sed -n "1,12p"
+  ' >&2 || true
 }
 
 health() {
@@ -427,7 +468,11 @@ health() {
 
   retry_compose_exec_quiet almanac-mcp curl -fsS http://127.0.0.1:8282/health
   retry_compose_exec_quiet notion-webhook curl -fsS http://127.0.0.1:8283/health
-  retry_compose_exec_quiet nextcloud curl -fsS http://127.0.0.1/status.php
+  repair_running_nextcloud_data_dir
+  retry_compose_exec_quiet nextcloud curl -fsS http://127.0.0.1/status.php || {
+    diagnose_nextcloud_health_failure
+    return 1
+  }
   retry_compose_exec_quiet qmd-mcp qmd --version
   retry_compose_exec_quiet redis redis-cli ping
   # shellcheck disable=SC2016
@@ -992,7 +1037,7 @@ docker_enrollment_reset() {
 
 docker_curator_setup() {
   prepare_compose
-  compose_app_command ./bin/bootstrap-curator.sh
+  compose_app_interactive ./bin/bootstrap-curator.sh
   compose up -d --no-build curator-refresh
   COMPOSE_PROFILES="${COMPOSE_PROFILES:-curator}" compose up -d --no-build curator-gateway curator-onboarding curator-discord-onboarding || true
   echo "Docker Curator runtime assets refreshed. Curator-profile services were started when their configured credentials allow them to run."

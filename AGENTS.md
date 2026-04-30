@@ -103,7 +103,7 @@ control center:
 
 ```bash
 ./deploy.sh docker                  # Docker submenu
-./deploy.sh docker install          # bootstrap, build, up, reconcile, release state, health, smoke
+./deploy.sh docker install          # bootstrap, operator config, build, up, Curator setup, reconcile, release state, health, smoke
 ./deploy.sh docker upgrade          # rebuild/recreate from current checkout + reconcile, health, smoke
 ./deploy.sh docker reconfigure      # refresh generated config and ports
 ./deploy.sh docker reconcile        # apply profile and restart Docker agent supervisor

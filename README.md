@@ -248,10 +248,12 @@ notification delivery, curator refresh, qmd refresh, enrolled-agent
 supervision, and Docker-native health watch containers under Docker Compose.
 
 Optional Docker profiles cover Curator chat services, Quarto rendering, and
-backup jobs when their credentials/config are present. Enrolled agents run under
-the Docker agent supervisor instead of per-user systemd units: refresh, Hermes
-gateway, dashboard, authenticated dashboard proxy, cron ticks, and code-server
-workspace processes are reconciled from the same control-plane state.
+backup jobs when their credentials/config are present. Docker install starts the
+Curator profile services after operator setup when the configured credentials
+allow them to run. Enrolled agents run under the Docker agent supervisor instead
+of per-user systemd units: refresh, Hermes gateway, dashboard, authenticated
+dashboard proxy, cron ticks, and code-server workspace processes are reconciled
+from the same control-plane state.
 
 ### Containerized Requirements
 
@@ -276,10 +278,18 @@ The selected ports are persisted in `almanac-priv/state/docker/ports.json`.
 Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
-Docker install/upgrade also applies the private operating profile when present,
-records the release state, runs strict Docker health, and runs the live agent
-MCP tool smoke so the containerized path stays aligned with the baremetal
-operator contract.
+Docker install asks the operator-facing configuration questions, writes
+`almanac-priv/config/docker.env`, applies the private operating profile when
+present, records the release state, runs strict Docker health, and runs the live
+agent MCP tool smoke so the containerized path stays aligned with the baremetal
+operator contract. It also runs the Curator setup flow from the container so the
+operator gets the same model, channel, and notification questions as a
+baremetal install. If OpenAI Codex is selected as the org-wide provider, Docker
+install captures that shared credential from the Curator Codex sign-in instead
+of starting a separate auth flow during the first questionnaire. Set
+`ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG=1` or
+`ALMANAC_DOCKER_SKIP_CURATOR_SETUP=1` for scripted installs that should skip
+those interactive phases.
 
 Docker agent homes are stored under `almanac-priv/state/docker/users/`, so
 container recreation does not erase enrolled-agent Hermes homes. Agent dashboard

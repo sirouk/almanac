@@ -517,6 +517,22 @@ def _discord_error_suggests_target_retry(error: str, *, target_kind: str = "") -
     )
 
 
+def _telegram_error_suggests_start_retry(error: str) -> bool:
+    normalized = error.strip().lower()
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "chat not found",
+            "bot can't initiate conversation",
+            "bot was blocked by the user",
+            "forbidden",
+            "telegram chat_id is empty",
+        )
+    )
+
+
 def _user_home(unix_user: str) -> Path:
     return Path(pwd.getpwnam(unix_user).pw_dir)
 
@@ -2256,7 +2272,7 @@ def main() -> None:
         if args.domain == "channel" and args.action == "reconfigure":
             if args.scope != "operator":
                 raise SystemExit("only operator channel reconfiguration is supported")
-            platform = args.platform or input("Operator notification platform [discord|telegram|tui-only]: ").strip() or "tui-only"
+            platform = (args.platform or input("Operator notification platform [discord|telegram|tui-only]: ").strip() or "tui-only").strip().lower()
             channel_id = args.channel_id or ""
             telegram_bot_token = ""
             discord_bot_token = ""
@@ -2431,6 +2447,62 @@ def main() -> None:
                             break
                     if err and sys.stdin.isatty():
                         while True:
+                            if _telegram_error_suggests_start_retry(err):
+                                print(
+                                    "Telegram test ping failed because Telegram could not reach that chat "
+                                    f"({err}).",
+                                    file=sys.stderr,
+                                )
+                                print(
+                                    "Open a DM with the bot, press Start, then press ENTER here to retry. "
+                                    "For a group destination, add the bot to the group and use that group's chat_id.",
+                                    file=sys.stderr,
+                                )
+                                try:
+                                    action = input(
+                                        "Press ENTER after Start, enter a new chat ID, type token for a new token, "
+                                        "or type abort: "
+                                    ).strip()
+                                except (EOFError, KeyboardInterrupt):
+                                    action = "abort"
+                                lowered_action = action.lower()
+                                if lowered_action in {"abort", "cancel", "quit", "q"}:
+                                    break
+                                if lowered_action in {"token", "new token", "change token"}:
+                                    try:
+                                        candidate_token = getpass.getpass(
+                                            "Telegram bot token (leave blank to abort): "
+                                        ).strip()
+                                    except (EOFError, KeyboardInterrupt):
+                                        candidate_token = ""
+                                    if not candidate_token:
+                                        break
+                                    err = deliver_telegram(
+                                        test_msg,
+                                        bot_token=candidate_token,
+                                        chat_id=channel_id,
+                                    ) or ""
+                                    if not err:
+                                        telegram_bot_token = candidate_token
+                                        telegram_candidates = [("prompt", candidate_token)]
+                                        break
+                                    continue
+                                if action:
+                                    channel_id = action
+                                err = ""
+                                for source_name, candidate_token in telegram_candidates:
+                                    err = deliver_telegram(
+                                        test_msg,
+                                        bot_token=candidate_token,
+                                        chat_id=channel_id,
+                                    ) or ""
+                                    if not err:
+                                        telegram_bot_token = candidate_token
+                                        break
+                                if not err:
+                                    break
+                                continue
+
                             print(
                                 f"Telegram test ping failed using the saved token ({err}).",
                                 file=sys.stderr,
@@ -2452,12 +2524,18 @@ def main() -> None:
                                 telegram_bot_token = candidate_token
                                 break
                 if err:
+                    extra = ""
+                    if platform == "telegram" and _telegram_error_suggests_start_retry(err):
+                        extra = (
+                            " For Telegram DMs, open the bot, press Start, and retry with the numeric chat ID."
+                        )
                     raise SystemExit(
                         f"channel test ping failed ({err}); not persisting configuration. "
-                        "Fix the credentials/URL and retry."
+                        f"Fix the credentials/URL and retry.{extra}"
                     )
 
-            config_path = cfg.private_dir / "config" / "almanac.env"
+            configured_path = str(os.environ.get("ALMANAC_CONFIG_FILE") or "").strip()
+            config_path = Path(configured_path) if configured_path else cfg.private_dir / "config" / "almanac.env"
             config_updates = {
                 "OPERATOR_NOTIFY_CHANNEL_PLATFORM": platform,
                 "OPERATOR_NOTIFY_CHANNEL_ID": channel_id,

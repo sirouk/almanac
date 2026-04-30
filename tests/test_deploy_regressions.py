@@ -2135,8 +2135,28 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "scoped ownership repair should tolerate transient SQLite sidecar files during live upgrades",
     )
     expect(
-        "chown -hR" in chown_helper and "-exec chown -h" in chown_helper and "chown -hR" in bootstrap_system,
+        "-exec chown -h" in chown_helper and "chown -hR" not in chown_helper,
         "install ownership repair should not dereference stale or broken vault symlinks",
+    )
+    expect(
+        '-path "$ALMANAC_PRIV_DIR" -prune' in chown_helper
+        and '-path "$NEXTCLOUD_STATE_DIR" -prune' in chown_helper,
+        "scoped ownership repair should preserve rootless Nextcloud bind-mount ownership",
+    )
+    expect(
+        'chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"' not in install
+        and 'chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"' not in upgrade,
+        "install/upgrade should not blanket-chown private state after Nextcloud normalizes rootless bind mounts",
+    )
+    expect(
+        "chown_tree_excluding_path" in bootstrap_system
+        and 'chown_tree_excluding_path "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"' in bootstrap_system
+        and 'chown_tree_excluding_path "$ALMANAC_PRIV_DIR" "$NEXTCLOUD_STATE_DIR"' in bootstrap_system,
+        "system bootstrap should preserve rootless Nextcloud state ownership while repairing managed paths",
+    )
+    expect(
+        'chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"' not in bootstrap_system,
+        "system bootstrap should not blanket-chown private Nextcloud runtime state",
     )
     expect(
         "realign_active_enrolled_agents_root" in enrollment_align,

@@ -4458,14 +4458,17 @@ PY
 }
 
 chown_managed_paths() {
-  chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR"
+  if [[ -d "$ALMANAC_REPO_DIR" ]]; then
+    find "$ALMANAC_REPO_DIR" -ignore_readdir_race \
+      -path "$ALMANAC_PRIV_DIR" -prune -o \
+      -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+  fi
 
   if [[ ! -d "$ALMANAC_PRIV_DIR" ]]; then
     return 0
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && -n "${NEXTCLOUD_STATE_DIR:-}" && -d "$NEXTCLOUD_STATE_DIR" ]]; then
-    chown -h "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
     find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
       -path "$NEXTCLOUD_STATE_DIR" -prune -o \
       -name "*.sqlite3-shm" -prune -o \
@@ -4680,7 +4683,7 @@ run_root_install() {
     gateway_restart_policy="restart"
   fi
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+  chown_managed_paths
   run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   ensure_upstream_git_deploy_key_material_root
@@ -4812,7 +4815,7 @@ run_root_upgrade() {
     gateway_restart_policy="restart"
   fi
   run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-  chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"
+  chown_managed_paths
   run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   ensure_upstream_git_deploy_key_material_root

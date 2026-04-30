@@ -196,6 +196,25 @@ ensure_service_user() {
   useradd -m -s /bin/bash "$ALMANAC_USER"
 }
 
+chown_tree_excluding_path() {
+  local root="$1"
+  local excluded="${2:-}"
+
+  if [[ ! -e "$root" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$excluded" && -e "$excluded" ]]; then
+    find "$root" -ignore_readdir_race \
+      -path "$excluded" -prune -o \
+      -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+    return 0
+  fi
+
+  find "$root" -ignore_readdir_race \
+    -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+}
+
 require_supported_host
 install_base_linux_packages
 install_podman_if_requested
@@ -224,7 +243,8 @@ rsync -a --delete \
   --exclude "almanac-priv/" \
   --exclude "config/almanac.env" \
   "$BOOTSTRAP_DIR/" "$ALMANAC_REPO_DIR/"
-chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+chown_tree_excluding_path "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
+chown_tree_excluding_path "$ALMANAC_PRIV_DIR" "$NEXTCLOUD_STATE_DIR"
 chmod 0755 "$ALMANAC_REPO_DIR"
 
 loginctl enable-linger "$ALMANAC_USER" || true

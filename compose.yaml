@@ -191,6 +191,14 @@ services:
 
   curator-refresh:
     <<: *almanac-job
+    volumes:
+      - .:/home/almanac/almanac
+      - ./almanac-priv:/home/almanac/almanac/almanac-priv
+      - almanac-qmd:/home/almanac/.qmd
+      - ${ALMANAC_DOCKER_HOST_REPO_DIR:-.}:${ALMANAC_DOCKER_HOST_REPO_DIR:-/home/almanac/almanac}
+      # Trusted operator-action boundary: Curator refresh consumes queued
+      # operator upgrade requests and needs to run Docker Compose on the host.
+      - /var/run/docker.sock:/var/run/docker.sock
     command: ["./bin/docker-job-loop.sh", "curator-refresh", "900", "./bin/curator-refresh.sh"]
 
   qmd-refresh:

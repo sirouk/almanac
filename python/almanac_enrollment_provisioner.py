@@ -159,6 +159,33 @@ def _config_file_for_child_process(cfg: Config) -> str:
     return str(cfg.private_dir / "config" / "almanac.env")
 
 
+def _docker_host_repo_dir(cfg: Config) -> Path:
+    configured = str(os.environ.get("ALMANAC_DOCKER_HOST_REPO_DIR") or "").strip()
+    if configured:
+        return Path(configured).resolve(strict=False)
+    return cfg.repo_dir
+
+
+def _docker_host_private_dir(cfg: Config, repo_dir: Path) -> Path:
+    configured = str(os.environ.get("ALMANAC_DOCKER_HOST_PRIV_DIR") or "").strip()
+    if configured:
+        return Path(configured).resolve(strict=False)
+    return repo_dir / "almanac-priv"
+
+
+def _operator_action_repo_dir(cfg: Config) -> Path:
+    if _docker_mode():
+        return _docker_host_repo_dir(cfg)
+    return cfg.repo_dir
+
+
+def _operator_action_deploy_args(cfg: Config) -> tuple[list[str], Path]:
+    repo_dir = _operator_action_repo_dir(cfg)
+    if _docker_mode():
+        return [str(repo_dir / "deploy.sh"), "docker", "upgrade"], repo_dir
+    return [str(repo_dir / "deploy.sh"), "upgrade"], repo_dir
+
+
 def _tail_text(path: Path, *, max_lines: int = 16) -> str:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -176,6 +203,17 @@ def _tail_text(path: Path, *, max_lines: int = 16) -> str:
 def _operator_child_env(cfg: Config) -> dict[str, str]:
     env = os.environ.copy()
     env["ALMANAC_CONFIG_FILE"] = _config_file_for_child_process(cfg)
+    if _docker_mode():
+        repo_dir = _docker_host_repo_dir(cfg)
+        private_dir = _docker_host_private_dir(cfg, repo_dir)
+        env["ALMANAC_DOCKER_MODE"] = "1"
+        env["ALMANAC_CONTAINER_RUNTIME"] = "docker"
+        env["ALMANAC_COMPONENT_UPGRADE_MODE"] = "docker"
+        env["ALMANAC_REPO_DIR"] = str(repo_dir)
+        env["ALMANAC_PRIV_DIR"] = str(private_dir)
+        env["ALMANAC_PRIV_CONFIG_DIR"] = str(private_dir / "config")
+        env["STATE_DIR"] = str(private_dir / "state")
+        env["ALMANAC_CONFIG_FILE"] = str(private_dir / "config" / "docker.env")
     if not env.get("HOME"):
         try:
             env["HOME"] = pwd.getpwuid(os.geteuid()).pw_dir
@@ -196,11 +234,14 @@ def _operator_child_env(cfg: Config) -> dict[str, str]:
 
 def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedProcess[str]:
     env = _operator_child_env(cfg)
+    args, cwd = _operator_action_deploy_args(cfg)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as handle:
+        handle.write(f"$ {' '.join(shell_quote(arg) for arg in args)}\n")
+        handle.flush()
         return subprocess.run(
-            [str(cfg.repo_dir / "deploy.sh"), "upgrade"],
-            cwd=str(cfg.repo_dir),
+            args,
+            cwd=str(cwd),
             env=env,
             text=True,
             stdout=handle,
@@ -225,7 +266,9 @@ def _pin_upgrade_command_args(
     item: dict[str, Any],
     *,
     skip_upgrade: bool,
+    repo_dir: Path | None = None,
 ) -> list[str]:
+    command_repo_dir = repo_dir or cfg.repo_dir
     component = str(item.get("component") or "").strip()
     kind = str(item.get("kind") or "").strip()
     target = str(item.get("target") or "").strip()
@@ -237,7 +280,7 @@ def _pin_upgrade_command_args(
     if not flag:
         raise ValueError(f"pin upgrade action for {component} has unsupported kind {kind!r}")
     args = [
-        str(cfg.repo_dir / "bin" / "component-upgrade.sh"),
+        str(command_repo_dir / "bin" / "component-upgrade.sh"),
         component,
         "apply",
         flag,
@@ -255,6 +298,7 @@ def _run_pin_upgrade_action(
     log_path: Path,
 ) -> subprocess.CompletedProcess[str]:
     env = _operator_child_env(cfg)
+    repo_dir = _operator_action_repo_dir(cfg)
     install_items = list(payload.get("install_items") or [])
     if not install_items:
         return subprocess.CompletedProcess(args=["pin-upgrade"], returncode=2, stdout="", stderr="no install items")
@@ -267,12 +311,13 @@ def _run_pin_upgrade_action(
                 cfg,
                 item,
                 skip_upgrade=True,
+                repo_dir=repo_dir,
             )
             handle.write(f"$ {' '.join(shell_quote(arg) for arg in args)}\n")
             handle.flush()
             last_result = subprocess.run(
                 args,
-                cwd=str(cfg.repo_dir),
+                cwd=str(repo_dir),
                 env=env,
                 text=True,
                 stdin=subprocess.DEVNULL,
@@ -284,12 +329,12 @@ def _run_pin_upgrade_action(
             handle.flush()
             if last_result.returncode != 0:
                 return last_result
-        upgrade_args = [str(cfg.repo_dir / "deploy.sh"), "upgrade"]
+        upgrade_args, upgrade_cwd = _operator_action_deploy_args(cfg)
         handle.write(f"$ {' '.join(shell_quote(arg) for arg in upgrade_args)}\n")
         handle.flush()
         last_result = subprocess.run(
             upgrade_args,
-            cwd=str(cfg.repo_dir),
+            cwd=str(upgrade_cwd),
             env=env,
             text=True,
             stdin=subprocess.DEVNULL,

@@ -21,6 +21,7 @@ RUN apt-get update \
     acl \
     bash \
     docker-ce-cli \
+    docker-compose-plugin \
     file \
     git \
     inotify-tools \

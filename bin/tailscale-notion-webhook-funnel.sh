@@ -42,12 +42,24 @@ run_funnel_cmd() {
   local output=""
   local status=0
   local attempt=0
+  local timeout_duration="${ALMANAC_TAILSCALE_COMMAND_TIMEOUT:-60s}"
 
   for attempt in 1 2 3 4 5; do
-    output="$("$@" 2>&1)" && status=0 || status=$?
+    if command -v timeout >/dev/null 2>&1; then
+      output="$(timeout --kill-after=5s "$timeout_duration" "$@" 2>&1)" && status=0 || status=$?
+    else
+      output="$("$@" 2>&1)" && status=0 || status=$?
+    fi
     if [[ "$status" -eq 0 ]]; then
       [[ -n "$output" ]] && printf '%s\n' "$output"
       return 0
+    fi
+
+    if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+      printf '%s\n' "$output" >&2
+      echo "tailscale funnel command did not complete within ${timeout_duration}." >&2
+      echo "If Tailscale says Funnel or Serve is not enabled, open the URL it printed, enable it for the tailnet, then rerun ./deploy.sh install." >&2
+      return "$status"
     fi
 
     if printf '%s\n' "$output" | grep -Eqi 'etag mismatch|another client is changing the serve config|preconditions failed'; then

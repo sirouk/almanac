@@ -16,6 +16,8 @@ DEPLOY_SH = REPO / "bin" / "deploy.sh"
 HEALTH_SH = REPO / "bin" / "health.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
 CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
+TAILSCALE_NEXTCLOUD_SERVE_SH = REPO / "bin" / "tailscale-nextcloud-serve.sh"
+TAILSCALE_NOTION_FUNNEL_SH = REPO / "bin" / "tailscale-notion-webhook-funnel.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
 BOOTSTRAP_SYSTEM_SH = REPO / "bin" / "bootstrap-system.sh"
 
@@ -2172,6 +2174,72 @@ cat "$SYSTEMCTL_LOG"
     print("PASS test_restart_services_disables_only_curator_native_system_gateway_unit")
 
 
+def test_tailscale_serve_command_timeout_surfaces_enablement_guidance() -> None:
+    text = TAILSCALE_NEXTCLOUD_SERVE_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "run_serve_cmd() {", "print_serve_summary() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fake_cmd = tmp_path / "fake-tailscale-serve"
+        fake_cmd.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' 'Serve is not enabled on your tailnet.'\n"
+            "printf '%s\\n' 'https://login.tailscale.com/f/serve?node=testnode'\n"
+            "sleep 10\n",
+            encoding="utf-8",
+        )
+        fake_cmd.chmod(0o755)
+        script = f"""
+set -euo pipefail
+ALMANAC_TAILSCALE_COMMAND_TIMEOUT=0.2s
+{snippet}
+if run_serve_cmd {shlex.quote(str(fake_cmd))}; then
+  echo unexpected-success
+else
+  echo "STATUS=$?"
+fi
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"tailscale serve timeout test shell failed: {result.stderr}")
+        combined = result.stdout + result.stderr
+        expect("STATUS=124" in result.stdout, result.stdout)
+        expect("Serve is not enabled on your tailnet" in combined, combined)
+        expect("rerun ./deploy.sh install" in combined, combined)
+    print("PASS test_tailscale_serve_command_timeout_surfaces_enablement_guidance")
+
+
+def test_tailscale_funnel_command_timeout_surfaces_enablement_guidance() -> None:
+    text = TAILSCALE_NOTION_FUNNEL_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "run_funnel_cmd() {", "ensure_no_conflicting_funnel_service() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fake_cmd = tmp_path / "fake-tailscale-funnel"
+        fake_cmd.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' 'Funnel is not enabled on your tailnet.'\n"
+            "printf '%s\\n' 'https://login.tailscale.com/f/funnel?node=testnode'\n"
+            "sleep 10\n",
+            encoding="utf-8",
+        )
+        fake_cmd.chmod(0o755)
+        script = f"""
+set -euo pipefail
+ALMANAC_TAILSCALE_COMMAND_TIMEOUT=0.2s
+{snippet}
+if run_funnel_cmd {shlex.quote(str(fake_cmd))}; then
+  echo unexpected-success
+else
+  echo "STATUS=$?"
+fi
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"tailscale funnel timeout test shell failed: {result.stderr}")
+        combined = result.stdout + result.stderr
+        expect("STATUS=124" in result.stdout, result.stdout)
+        expect("Funnel is not enabled on your tailnet" in combined, combined)
+        expect("rerun ./deploy.sh install" in combined, combined)
+    print("PASS test_tailscale_funnel_command_timeout_surfaces_enablement_guidance")
+
+
 def test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools() -> None:
     server_text = (REPO / "python" / "almanac_mcp_server.py").read_text(encoding="utf-8")
     expect('"ssot.preflight"' in server_text, "agents should be able to check Notion writeability before writing")
@@ -2544,6 +2612,8 @@ def main() -> int:
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_curator_gateway_defaults_reactions_on,
         test_restart_services_disables_only_curator_native_system_gateway_unit,
+        test_tailscale_serve_command_timeout_surfaces_enablement_guidance,
+        test_tailscale_funnel_command_timeout_surfaces_enablement_guidance,
         test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,

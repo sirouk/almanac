@@ -478,8 +478,10 @@ new agent bot. Curator must reject Curator's own token.
 Telegram registered command menus must use underscore names because Telegram
 rejects hyphens in BotCommand entries. Keep aliases such as `/retry-contact`
 working when useful, but register menu commands as `/retry_contact`,
-`/setup_backup`, `/verify_notion`, and `/ssh_key`. Curator startup refreshes
-Telegram command menus, and Discord startup syncs app commands.
+`/setup_backup`, `/verify_notion`, and `/ssh_key`. Operator Curator channels
+also expose `/upgrade` to queue an idempotent host upgrade/repair. Curator
+startup refreshes Telegram command menus, and Discord startup syncs app
+commands.
 Discord contact retries must reuse the stored Curator confirmation code from
 the onboarding session; do not mint a fresh code during retry outreach.
 

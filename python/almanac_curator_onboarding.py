@@ -72,6 +72,7 @@ TELEGRAM_USER_COMMANDS = [
 TELEGRAM_OPERATOR_COMMANDS = [
     {"command": "approve", "description": "Approve onboarding/request/write"},
     {"command": "deny", "description": "Deny onboarding/request/write"},
+    {"command": "upgrade", "description": "Queue Almanac host upgrade"},
     {"command": "retry_contact", "description": "Retry Discord agent-bot handoff"},
 ]
 TELEGRAM_USER_COMMAND_NAMES = {
@@ -219,7 +220,7 @@ def operator_message_allowed(cfg: Config, message: dict[str, Any]) -> bool:
 def _operator_command_requested(text: str) -> bool:
     parts = text.strip().split(maxsplit=1)
     command = _telegram_command_token(parts[0] if parts else "")
-    return command in {"/approve", "/deny", "/retry-contact", "/retry_contact"} or command.startswith("/retry")
+    return command in {"/approve", "/deny", "/upgrade", "/retry-contact", "/retry_contact"} or command.startswith("/retry")
 
 
 def _user_command_requested(text: str) -> bool:
@@ -253,6 +254,32 @@ def _handle_operator_command(
     parts = text.strip().split(maxsplit=2)
     command = _telegram_command_token(parts[0] if parts else "")
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
+    if command == "/upgrade":
+        actor = _format_actor_label(message)
+        try:
+            with connect_db(cfg) as conn:
+                action_row, created = request_operator_action(
+                    conn,
+                    action_kind="upgrade",
+                    requested_by=actor,
+                    request_source="telegram-command",
+                    requested_target="",
+                )
+            status = str(action_row.get("status") or "pending")
+            if created:
+                send_text(
+                    bot_token,
+                    operator_chat_id,
+                    "Queued Almanac upgrade/repair. The root maintenance loop will pick it up within about a minute.",
+                )
+            elif status == "running":
+                send_text(bot_token, operator_chat_id, "Almanac upgrade is already running.")
+            else:
+                send_text(bot_token, operator_chat_id, "Almanac upgrade is already queued.")
+        except Exception as exc:  # noqa: BLE001
+            send_text(bot_token, operator_chat_id, f"Could not queue Almanac upgrade: {exc}")
+        return
+
     if command in {"/retry-contact", "/retry_contact"}:
         retry_parts = text.strip().split(maxsplit=1)
         if len(retry_parts) < 2 or not retry_parts[1].strip():
@@ -278,7 +305,7 @@ def _handle_operator_command(
             send_text(
                 bot_token,
                 operator_chat_id,
-                "Use /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, /deny ssotw_xxx optional reason, or /retry_contact <unixusername|discordname>.",
+                "Use /upgrade, /approve onb_xxx, /deny onb_xxx optional reason, /approve req_xxx, /deny req_xxx, /approve ssotw_xxx, /deny ssotw_xxx optional reason, or /retry_contact <unixusername|discordname>.",
             )
         return
     target_id = parts[1].strip()

@@ -125,6 +125,22 @@ async def main() -> None:
             conn.commit()
             return cursor.rowcount == 1
 
+    def _queue_upgrade_operator_action(*, actor: str, request_source: str) -> str:
+        with connect_db(cfg) as conn:
+            action_row, created = request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by=actor,
+                request_source=request_source,
+                requested_target="",
+            )
+        status = str(action_row.get("status") or "pending")
+        if created:
+            return "Queued Almanac upgrade/repair. The root maintenance loop will pick it up within about a minute."
+        if status == "running":
+            return "Almanac upgrade is already running."
+        return "Almanac upgrade is already queued."
+
     def _run_operator_action(*, target_id: str, action: str, actor: str, reason: str = "", scope: str = "") -> str:
         normalized_action = action.strip().lower()
         normalized_scope = scope.strip().lower()
@@ -343,6 +359,13 @@ async def main() -> None:
 
         parts = content.strip().split(maxsplit=2)
         command = parts[0].lower() if parts else ""
+        if command == "/upgrade":
+            actor = _format_actor_label(message.author)
+            await message.channel.send(
+                _queue_upgrade_operator_action(actor=actor, request_source="discord-command")
+            )
+            return True
+
         if command in {"/retry-contact", "/retry_contact"}:
             retry_parts = content.strip().split(maxsplit=1)
             if len(retry_parts) < 2 or not retry_parts[1].strip():
@@ -448,6 +471,15 @@ async def main() -> None:
             reason=reason,
         )
         await interaction.response.send_message(response)
+
+    @tree.command(name="upgrade", description="Queue an Almanac host upgrade or repair.")
+    async def upgrade_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        await interaction.response.send_message(
+            _queue_upgrade_operator_action(actor=actor, request_source="discord-command")
+        )
 
     @tree.command(name="retry-contact", description="Retry a Discord agent-bot contact handoff.")
     @app_commands.describe(target="Operator use: Unix username, onboarding session id, Discord user id, username, or display name")

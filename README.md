@@ -841,10 +841,12 @@ Useful operator commands:
 
 Telegram bot command menus use Telegram-compatible underscores for multiword
 commands, such as `/setup_backup`, `/verify_notion`, `/ssh_key`, and
-operator-only `/retry_contact`. The older typed hyphen aliases continue to
-work when sent as plain messages. Discord app commands include `/retry-contact`;
-in the operator channel it accepts a target, while in an onboarding DM it
-retries that user's own Discord agent-bot handoff.
+operator-only `/retry_contact`. Operators can also use `/upgrade` in the
+configured Curator operator channel to queue an idempotent host upgrade/repair.
+The older typed hyphen aliases continue to work when sent as plain messages.
+Discord app commands include `/upgrade` and `/retry-contact`; `/retry-contact`
+accepts a target in the operator channel, while in an onboarding DM it retries
+that user's own Discord agent-bot handoff.
 
 For deliberate cleanup and re-testing of a user lane:
 

@@ -382,6 +382,42 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
             os.environ.update(old_env)
 
 
+def test_telegram_operator_upgrade_command_queues_upgrade_action() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_curator_upgrade_command_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "almanac_curator_upgrade_command_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            outbound: list[str] = []
+            curator.send_text = lambda bot_token, chat_id, text, **kwargs: outbound.append(text)
+
+            curator._handle_operator_command(
+                cfg=cfg,
+                bot_token="test-token",
+                text="/upgrade",
+                message={"chat": {"id": "42"}, "from": {"id": "42", "username": "operator"}},
+            )
+
+            row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'upgrade'").fetchone()
+            expect(row is not None, "expected /upgrade to queue an operator upgrade action")
+            expect(row["requested_target"] == "", str(dict(row)))
+            expect(row["requested_by"] == "@operator", str(dict(row)))
+            expect(row["request_source"] == "telegram-command", str(dict(row)))
+            expect(outbound and "Queued Almanac upgrade/repair" in outbound[0], str(outbound))
+            print("PASS test_telegram_operator_upgrade_command_queues_upgrade_action")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_telegram_operator_private_chat_can_start_personal_onboarding() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -608,7 +644,9 @@ def test_telegram_command_registration_includes_user_and_operator_commands() -> 
             expect("verify_notion" in command_sets["default"], str(command_sets))
             expect("ssh_key" in command_sets["default"], str(command_sets))
             expect("retry_contact" not in command_sets["default"], str(command_sets))
+            expect("upgrade" not in command_sets["default"], str(command_sets))
             expect("retry_contact" in command_sets["chat"], str(command_sets))
+            expect("upgrade" in command_sets["chat"], str(command_sets))
             expect("approve" in command_sets["chat"], str(command_sets))
             expect(calls[-1]["scope"]["chat_id"] == "42", str(calls[-1]))
             print("PASS test_telegram_command_registration_includes_user_and_operator_commands")
@@ -622,11 +660,12 @@ def main() -> int:
     test_stale_telegram_request_callback_clears_buttons_with_status()
     test_telegram_backup_callback_reopens_completed_lane_backup_setup()
     test_telegram_operator_retry_contact_queues_discord_handoff()
+    test_telegram_operator_upgrade_command_queues_upgrade_action()
     test_telegram_operator_private_chat_can_start_personal_onboarding()
     test_retry_contact_refuses_missing_confirmation_code()
     test_discord_onboarding_user_retry_contact_queues_own_handoff()
     test_telegram_command_registration_includes_user_and_operator_commands()
-    print("PASS all 8 curator onboarding regression tests")
+    print("PASS all 9 curator onboarding regression tests")
     return 0
 
 

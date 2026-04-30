@@ -692,6 +692,18 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     print("PASS test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants")
 
 
+def test_hermes_config_migration_is_unattended() -> None:
+    migrate = (REPO / "bin" / "migrate-hermes-config.sh").read_text(encoding="utf-8")
+    refresh = (REPO / "bin" / "refresh-agent-install.sh").read_text(encoding="utf-8")
+    curator = (REPO / "bin" / "bootstrap-curator.sh").read_text(encoding="utf-8")
+    expect("migrate_config(interactive=False" in migrate, migrate)
+    expect("quiet=True" in migrate, migrate)
+    expect("Would you like" not in migrate and "input(" not in migrate, migrate)
+    expect("migrate-hermes-config.sh" in refresh, refresh)
+    expect("migrate-hermes-config.sh" in curator, curator)
+    print("PASS test_hermes_config_migration_is_unattended")
+
+
 def test_live_agent_tool_smoke_inspects_private_home_as_target_user() -> None:
     body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
     expect("run_as_target_user()" in body, "live smoke should centralize target-user execution")
@@ -2907,6 +2919,7 @@ def main() -> int:
         test_install_and_upgrade_run_user_agent_refresh_before_health,
         test_install_offers_optional_notion_ssot_setup_before_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
+        test_hermes_config_migration_is_unattended,
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,
         test_discord_onboarding_dedupes_message_ids_before_state_transitions,
         test_live_agent_tool_smoke_parses_explicit_selectors,

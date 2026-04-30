@@ -486,6 +486,9 @@ if target_can_access_repo; then
   run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_as_target "$SOURCE_REPO_DIR/bin/upsert-hermes-mcps.sh" "$TARGET_HERMES_HOME"
+  if [[ -x "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" ]]; then
+    run_as_target "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" "$TARGET_HERMES_HOME" "$RUNTIME_DIR"
+  fi
   install_almanac_cron_jobs
   run_as_target \
     "$RUNTIME_PYTHON" \
@@ -503,6 +506,9 @@ else
   run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-almanac-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/upsert-hermes-mcps.sh" "$TARGET_HERMES_HOME"
+  if [[ -x "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" ]]; then
+    run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" "$TARGET_HERMES_HOME" "$RUNTIME_DIR"
+  fi
   if [[ -x "$SOURCE_REPO_DIR/bin/install-agent-cron-jobs.sh" ]]; then
     run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-agent-cron-jobs.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME" >/dev/null
   fi

@@ -1006,6 +1006,10 @@ PY
     "$ALMANAC_CURATOR_HERMES_HOME" \
     almanac-managed-context
 
+  if [[ -x "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" ]]; then
+    "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" "$ALMANAC_CURATOR_HERMES_HOME" "$RUNTIME_DIR"
+  fi
+
   if set_user_systemd_bus_env; then
     systemctl --user daemon-reload
     disable_curator_native_gateway_unit

@@ -254,7 +254,7 @@ def test_main_runs_curator_defaults_when_setup_is_skipped() -> None:
         bootstrap_dir = tmp_path / "bootstrap"
         (bootstrap_dir / "bin").mkdir(parents=True)
         (bootstrap_dir / "python").mkdir()
-        for name in ("sync-hermes-bundled-skills.sh", "install-almanac-skills.sh", "install-almanac-plugins.sh"):
+        for name in ("sync-hermes-bundled-skills.sh", "install-almanac-skills.sh", "install-almanac-plugins.sh", "migrate-hermes-config.sh"):
             script_path = bootstrap_dir / "bin" / name
             script_path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             script_path.chmod(0o755)

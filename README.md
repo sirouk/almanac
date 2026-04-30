@@ -869,6 +869,8 @@ Most operators should use `deploy.sh`, but the pieces are intentionally plain:
 - `bin/install-user-services.sh`: service-user timers/services.
 - `bin/install-agent-user-services.sh`: per-user agent services.
 - `bin/refresh-agent-install.sh`: repair a user's Hermes install and links.
+- `bin/migrate-hermes-config.sh`: noninteractive Hermes config schema
+  migration for managed Curator and user-agent homes.
 - `bin/vault-watch.sh`: filesystem watcher for vault updates.
 - `bin/pdf-ingest.sh`: PDF-to-markdown reconciliation.
 - `bin/sync-hermes-docs-into-vault.sh`: pinned Hermes docs sync.

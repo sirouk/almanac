@@ -188,6 +188,7 @@ def test_generated_web_service_units_follow_access_state() -> None:
         expect(f"Environment=HERMES_BUNDLED_SKILLS={(runtime_dir / 'hermes-agent-src' / 'skills').resolve()}" in gateway_text, gateway_text)
         install_text = SCRIPT.read_text(encoding="utf-8")
         expect("sync-hermes-bundled-skills.sh" in install_text, install_text)
+        expect("migrate-hermes-config.sh" in install_text, install_text)
         expect('dirname "$HERMES_BIN")/../..' in install_text, install_text)
         expect('RUNTIME_DIR="$runtime_dir" "$mcps_script" "$HERMES_HOME"' in install_text, install_text)
         expect(f'HERMES_HOME="${{HERMES_HOME:-{hermes_home}}}"' in local_wrapper_text, local_wrapper_text)

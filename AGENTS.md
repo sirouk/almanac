@@ -496,6 +496,10 @@ New and refreshed agents should get these defaults from the outset:
   `~/Almanac/Agents_Skills/*/skills` and wired into
   `skills.external_dirs` during install/refresh so shared skill repos become
   read-only active skills for each agent.
+- Hermes config schemas migrated non-interactively via
+  `bin/migrate-hermes-config.sh` during Curator bootstrap and user-agent
+  install/refresh. Do not run `hermes update` inside unattended deploys; keep
+  upgrades on Almanac's pinned shared-runtime path.
 - Telegram `/start` support through Almanac's Hermes hook, not core Hermes.
 - `almanac-managed-context` plugin installed and enabled.
 - Per-agent Almanac MCP bootstrap token installed at

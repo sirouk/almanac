@@ -113,6 +113,7 @@ install_almanac_runtime_assets() {
   local skills_script="$SHARED_REPO_DIR/bin/install-almanac-skills.sh"
   local plugins_script="$SHARED_REPO_DIR/bin/install-almanac-plugins.sh"
   local mcps_script="$SHARED_REPO_DIR/bin/upsert-hermes-mcps.sh"
+  local migrate_script="$SHARED_REPO_DIR/bin/migrate-hermes-config.sh"
   local runtime_dir=""
 
   if [[ -x "$bundled_skills_script" ]]; then
@@ -129,6 +130,9 @@ install_almanac_runtime_assets() {
     if [[ -x "$runtime_dir/hermes-venv/bin/python3" ]]; then
       RUNTIME_DIR="$runtime_dir" "$mcps_script" "$HERMES_HOME"
     fi
+  fi
+  if [[ -x "$migrate_script" ]]; then
+    "$migrate_script" "$HERMES_HOME" "$HERMES_RUNTIME_DIR"
   fi
 }
 

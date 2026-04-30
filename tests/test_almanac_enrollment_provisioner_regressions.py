@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1028,6 +1029,61 @@ def test_operator_upgrade_stale_running_action_fails_closed() -> None:
             os.environ.update(old_env)
 
 
+def test_operator_action_finish_retries_transient_sqlite_lock() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_operator_finish_retry_test")
+    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_operator_finish_retry_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ALMANAC_OPERATOR_SQLITE_RETRY_SECONDS"] = "5"
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            action_row, created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@alex",
+                request_source="telegram-command",
+            )
+            expect(created is True, str(action_row))
+            calls = {"count": 0}
+            original_finish = provisioner._finish_operator_action_once
+            original_sleep = provisioner.time.sleep
+
+            def flaky_finish(conn, **kwargs):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise sqlite3.OperationalError("database is locked")
+                return original_finish(conn, **kwargs)
+
+            provisioner._finish_operator_action_once = flaky_finish
+            provisioner.time.sleep = lambda _seconds: None
+            try:
+                provisioner.finish_operator_action(
+                    conn,
+                    action_id=int(action_row["id"]),
+                    status="failed",
+                    note="transient lock recovered",
+                )
+            finally:
+                provisioner._finish_operator_action_once = original_finish
+                provisioner.time.sleep = original_sleep
+
+            refreshed = conn.execute("SELECT status, note FROM operator_actions WHERE id = ?", (int(action_row["id"]),)).fetchone()
+            expect(calls["count"] == 2, str(calls))
+            expect(refreshed is not None and refreshed["status"] == "failed", str(dict(refreshed) if refreshed else {}))
+            expect("transient lock recovered" in str(refreshed["note"] or ""), str(dict(refreshed)))
+            print("PASS test_operator_action_finish_retries_transient_sqlite_lock")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_run_host_upgrade_seeds_home_when_missing() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1183,6 +1239,7 @@ def main() -> int:
     test_operator_pin_upgrade_actions_run_component_upgrade_and_notify_operator()
     test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade()
     test_operator_upgrade_stale_running_action_fails_closed()
+    test_operator_action_finish_retries_transient_sqlite_lock()
     test_run_host_upgrade_seeds_home_when_missing()
     test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode()
     test_install_system_services_seeds_home_in_root_units()

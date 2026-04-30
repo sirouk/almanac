@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import shlex
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -32,7 +33,7 @@ from almanac_control import (
     delete_onboarding_secret,
     ensure_unix_user_ready,
     expire_stale_notion_identity_claims,
-    finish_operator_action,
+    finish_operator_action as _finish_operator_action_once,
     grant_agent_runtime_access,
     get_agent,
     get_agent_identity,
@@ -95,6 +96,40 @@ _DEFAULT_USER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 # Deliberately limited to locale and terminal quality-of-life values. Do not add secrets here.
 _SAFE_USER_ENV_KEYS = ("LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR")
 AGENT_BACKUP_SETUP_PROMPT_VERSION = "2026-04-27-backup-button-v1"
+
+
+def _operator_sqlite_retry_seconds() -> float:
+    raw = str(os.environ.get("ALMANAC_OPERATOR_SQLITE_RETRY_SECONDS") or "180").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 180.0
+    return max(0.0, value)
+
+
+def _sqlite_database_locked(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "database is locked" in str(exc).lower()
+
+
+def _retry_sqlite_lock(operation):  # type: ignore[no-untyped-def]
+    deadline = time.monotonic() + _operator_sqlite_retry_seconds()
+    delay = 0.25
+    while True:
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if not _sqlite_database_locked(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(2.0, delay * 2)
+
+
+def connect_db_with_retry(cfg: Config):
+    return _retry_sqlite_lock(lambda: connect_db(cfg))
+
+
+def finish_operator_action(conn, **kwargs):  # type: ignore[no-untyped-def]
+    return _retry_sqlite_lock(lambda: _finish_operator_action_once(conn, **kwargs))
 
 
 def parse_args() -> argparse.Namespace:
@@ -2068,7 +2103,7 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
         cfg,
         action_kind="upgrade",
         label="Almanac upgrade",
-        stale_seconds=6 * 60 * 60,
+        stale_seconds=30 * 60,
     )
     action = get_pending_operator_action(conn, action_kind="upgrade")
     if action is None:
@@ -2182,7 +2217,7 @@ def _run_pending_pin_upgrade_actions(conn, cfg: Config) -> None:
         cfg,
         action_kind="pin-upgrade",
         label="Pinned-component upgrade",
-        stale_seconds=6 * 60 * 60,
+        stale_seconds=30 * 60,
     )
     action = get_pending_operator_action(conn, action_kind="pin-upgrade", reclaim_stale_running_seconds=0)
     if action is None:
@@ -3020,7 +3055,7 @@ def main() -> None:
     if os.geteuid() != 0:
         raise SystemExit("Run this as root.")
     cfg = Config.from_env()
-    with connect_db(cfg) as conn:
+    with connect_db_with_retry(cfg) as conn:
         if args.claims_only:
             _run_pending_onboarding_notion_verifications(conn, cfg)
             return

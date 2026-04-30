@@ -612,6 +612,21 @@ def test_install_and_upgrade_refresh_upgrade_check_before_health() -> None:
     print("PASS test_install_and_upgrade_refresh_upgrade_check_before_health")
 
 
+def test_install_offers_optional_notion_ssot_setup_before_health() -> None:
+    text = DEPLOY_SH.read_text()
+    helper = extract(text, "maybe_offer_notion_ssot_setup_root() {", "print_post_install_guide() {")
+    install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
+    offer_index = install_snippet.index("maybe_offer_notion_ssot_setup_root")
+    health_index = install_snippet.index('echo "Running health check..."')
+    expect(offer_index < health_index, install_snippet)
+    expect("Shared Notion SSOT is not configured yet." in helper, helper)
+    expect('ask_yes_no "Configure the shared Notion SSOT page now" "0"' in helper, helper)
+    expect("run_notion_ssot_setup" in helper, helper)
+    expect("Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot" in helper, helper)
+    expect("ALMANAC_INSTALL_OFFER_NOTION_SSOT" in helper, helper)
+    print("PASS test_install_offers_optional_notion_ssot_setup_before_health")
+
+
 def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
     expect("import re" in body, body)
@@ -626,6 +641,10 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("provider_unavailable" in body, body)
     expect("no instances available" in body, body)
     expect("authentication_error" in body, body)
+    expect("stale_mcp_transport_session" in body, body)
+    expect("tool_result_texts" in body, body)
+    expect("ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT" in body, body)
+    expect("retrying once with a fresh chat session" in body, body)
     expect("Live agent tool smoke skipped" in body, body)
     expect("almanac-bootstrap-token" in body, body)
     print("PASS test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants")
@@ -2838,6 +2857,7 @@ def main() -> int:
         test_run_health_check_falls_back_when_user_bus_is_missing,
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_install_and_upgrade_refresh_upgrade_check_before_health,
+        test_install_offers_optional_notion_ssot_setup_before_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,
         test_discord_onboarding_dedupes_message_ids_before_state_transitions,

@@ -2505,6 +2505,43 @@ print_qmd_embedding_summary() {
   esac
 }
 
+maybe_offer_notion_ssot_setup_root() {
+  if [[ "${ALMANAC_INSTALL_OFFER_NOTION_SSOT:-1}" != "1" || ! -t 0 ]]; then
+    return 0
+  fi
+
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" || -n "${ALMANAC_SSOT_NOTION_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "Shared Notion SSOT is not configured yet."
+  echo "This optional walkthrough asks for the normal Notion page Almanac should use,"
+  echo "the internal integration secret, and the webhook verification if public ingress is enabled."
+  if [[ "$(ask_yes_no "Configure the shared Notion SSOT page now" "0")" != "1" ]]; then
+    echo "Skipping shared Notion setup. Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot when the page and integration are ready."
+    return 0
+  fi
+
+  if ! ( run_notion_ssot_setup ); then
+    echo "Optional shared Notion setup did not complete; continuing with the core Almanac install." >&2
+    return 0
+  fi
+
+  reload_runtime_config_from_file "$CONFIG_TARGET" || true
+  if [[ -z "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+    return 0
+  fi
+
+  notion_migration_restart_services || true
+  if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
+    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh" || true
+  fi
+  wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 20 1 || true
+  wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 20 1 || true
+}
+
 print_post_install_guide() {
   local watch_embed_mode=""
 
@@ -4932,6 +4969,7 @@ run_root_install() {
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
+  maybe_offer_notion_ssot_setup_root
 
   # Record the release state before health so the check_upgrade_state probe
   # doesn't false-warn about a missing release file on a first install.

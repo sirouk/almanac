@@ -8,9 +8,11 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "live agent tool smoke"
 ensure_layout
 
+ORIGINAL_ARGS=("$@")
 TARGET_UNIX_USER=""
 TARGET_AGENT_SELECTOR=""
 TAIL_LINES=40
+SMOKE_RETRY_ATTEMPT="${ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT:-0}"
 PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, local scripts, raw MCP protocol, or secrets files.}"
 
 usage() {
@@ -209,6 +211,8 @@ if ! run_as_target_user test -f "$session_file"; then
   exit 1
 fi
 
+validation_status=0
+set +e
 validation_result="$(
 run_as_target_user python3 - "$session_file" "$telemetry_path" "$session_id" "$output_file" "$agent_log_path" <<'PY'
 import json
@@ -302,6 +306,7 @@ functions: list[str] = []
 texts: list[str] = []
 assistant_texts: list[str] = []
 non_user_texts: list[str] = []
+tool_result_texts: list[str] = []
 for message in session.get("messages", []):
     role = str(message.get("role") or "")
     for call in message.get("tool_calls") or []:
@@ -311,6 +316,8 @@ for message in session.get("messages", []):
     content = message.get("content")
     if isinstance(content, str):
         texts.append(content)
+        if role in {"tool", "function"}:
+            tool_result_texts.append(content)
     elif isinstance(content, list):
         for item in content:
             if isinstance(item, dict) and isinstance(item.get("text"), str):
@@ -319,6 +326,8 @@ for message in session.get("messages", []):
                     assistant_texts.append(item["text"])
                 if role != "user":
                     non_user_texts.append(item["text"])
+                if role in {"tool", "function"} or str(item.get("type") or "") in {"tool_result", "function_call_output"}:
+                    tool_result_texts.append(item["text"])
         continue
     if isinstance(content, str):
         if role == "assistant":
@@ -329,7 +338,9 @@ for message in session.get("messages", []):
 joined = "\n".join(texts)
 assistant_joined = "\n".join(assistant_texts)
 non_user_joined = "\n".join(non_user_texts)
+tool_result_joined = "\n".join(tool_result_texts)
 errors: list[str] = []
+stale_transport_session_seen = "missing or invalid mcp-session-id" in tool_result_joined
 if not tool_token_event:
     errors.append("no tool_token_injected telemetry event was recorded for the smoke session")
 if re.search(r"python(?:3)?\s*-\s*<<\s*\S+", assistant_joined):
@@ -347,12 +358,24 @@ if not any(
     for name in functions
 ):
     errors.append(f"session did not invoke the brokered Almanac knowledge/vault MCP rail: {functions}")
-if "missing or invalid mcp-session-id" in non_user_joined:
+if stale_transport_session_seen:
     errors.append("session leaked a stale MCP transport-session error to the agent")
 if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", assistant_joined, re.IGNORECASE | re.DOTALL):
     errors.append("session attempted raw curl/MCP debugging instead of brokered Almanac tools")
 
 if errors:
+    if stale_transport_session_seen:
+        print(
+            json.dumps(
+                {
+                    "retry": "stale_mcp_transport_session",
+                    "session_id": session_id,
+                    "reason": "a brokered MCP call saw a stale transport session; retry the smoke with a fresh Hermes chat session",
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(0)
     if not tool_token_event and not functions and provider_auth_failure_seen():
         print(
             json.dumps(
@@ -382,6 +405,32 @@ if errors:
 print(json.dumps({"session_id": session_id, "functions": functions}, sort_keys=True))
 PY
 )"
+validation_status=$?
+set -e
+
+if [[ "$validation_status" != "0" ]]; then
+  echo "Live agent tool smoke failed for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER} during session validation." >&2
+  if [[ -n "$validation_result" ]]; then
+    echo "$validation_result" >&2
+  fi
+  echo "Recent output:" >&2
+  tail -"$TAIL_LINES" "$output_file" >&2 || true
+  exit "$validation_status"
+fi
+
+if [[ "$validation_result" == *'"retry": "stale_mcp_transport_session"'* ]]; then
+  if [[ "$SMOKE_RETRY_ATTEMPT" == "0" ]]; then
+    echo "Live agent tool smoke saw a stale MCP transport session for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}; retrying once with a fresh chat session."
+    rm -f "$output_file"
+    export ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT=1
+    exec "$SCRIPT_DIR/live-agent-tool-smoke.sh" "${ORIGINAL_ARGS[@]}"
+  fi
+  echo "Live agent tool smoke failed for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: stale MCP transport session repeated after one retry." >&2
+  echo "$validation_result" >&2
+  echo "Recent output:" >&2
+  tail -"$TAIL_LINES" "$output_file" >&2 || true
+  exit 1
+fi
 
 if [[ "$validation_result" == *'"skipped": "provider_auth_failed"'* ]]; then
   echo "Live agent tool smoke skipped for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: model provider credentials were rejected before any tool call; ask the user to reauthorize their provider credential."

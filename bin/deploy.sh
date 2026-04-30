@@ -9,7 +9,7 @@ fi
 SELF_PATH="$BOOTSTRAP_DIR/bin/deploy.sh"
 DEPLOY_EXEC_PATH="${ALMANAC_DEPLOY_EXEC_PATH:-$SELF_PATH}"
 if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" != "1" && "${ALMANAC_DEPLOY_DISABLE_STABLE_COPY:-0}" != "1" ]]; then
-  DEPLOY_EXEC_PATH="$(mktemp /tmp/almanac-deploy.XXXXXX.sh)"
+  DEPLOY_EXEC_PATH="$(mktemp "${TMPDIR:-/tmp}/almanac-deploy.XXXXXX")"
   cp "$SELF_PATH" "$DEPLOY_EXEC_PATH"
   chmod 700 "$DEPLOY_EXEC_PATH"
   export ALMANAC_DEPLOY_BOOTSTRAP_DIR="$BOOTSTRAP_DIR"

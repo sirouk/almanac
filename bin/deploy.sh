@@ -4547,8 +4547,37 @@ print(json.dumps(payload, sort_keys=True))
 PY
 }
 
+curator_native_gateway_system_unit_name_root() {
+  local python_bin="$RUNTIME_DIR/hermes-venv/bin/python3"
+  if [[ ! -x "$python_bin" ]]; then
+    return 1
+  fi
+
+  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$python_bin" <<'PY'
+try:
+    from hermes_cli.gateway import get_service_name
+except Exception:
+    raise SystemExit(1)
+
+print(f"{get_service_name()}.service")
+PY
+}
+
+disable_curator_native_gateway_system_unit_root() {
+  local unit=""
+
+  unit="$(curator_native_gateway_system_unit_name_root 2>/dev/null || true)"
+  if [[ -z "$unit" ]]; then
+    return 0
+  fi
+
+  systemctl disable --now "$unit" >/dev/null 2>&1 || true
+}
+
 restart_shared_user_services_root() {
   local uid=""
+
+  disable_curator_native_gateway_system_unit_root
 
   uid="$(id -u "$ALMANAC_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true

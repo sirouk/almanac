@@ -170,6 +170,7 @@ printf 'TELEGRAM_GUIDANCE_END\\n'
 """
     result = bash(script)
     expect(result.returncode == 0, f"notify guidance case failed: {result.stderr}")
+    combined_output = result.stdout + result.stderr
     expect(
         "DISCORD_PROMPT=Operator notification Discord channel ID or webhook URL" in result.stdout,
         f"expected Discord-specific prompt label, got: {result.stdout!r}",
@@ -178,8 +179,8 @@ printf 'TELEGRAM_GUIDANCE_END\\n'
         "TELEGRAM_PROMPT=Operator notification Telegram chat ID" in result.stdout,
         f"expected Telegram-specific prompt label, got: {result.stdout!r}",
     )
-    expect("not a user ID" in result.stdout, f"expected Discord guidance to reject user IDs, got: {result.stdout!r}")
-    expect("message.chat.id" in result.stdout, f"expected Telegram guidance to mention message.chat.id, got: {result.stdout!r}")
+    expect("not a user ID" in combined_output, f"expected Discord guidance to reject user IDs, got: {combined_output!r}")
+    expect("message.chat.id" in combined_output, f"expected Telegram guidance to mention message.chat.id, got: {combined_output!r}")
     print("PASS test_notify_channel_guidance_clarifies_platform_specific_ids")
 
 
@@ -288,6 +289,7 @@ configure_operator_notify_channel() {{ printf '%s\\n\\n' "${{1:-tui-only}}"; }}
 set_config_value() {{ :; }}
 probe_hermes_state_json() {{ return 1; }}
 ensure_hermes_agent_defaults() {{ defaults_calls=$((defaults_calls + 1)); }}
+sync_org_provider_from_curator_codex() {{ :; }}
 set_user_systemd_bus_env() {{ return 1; }}
 describe_operator_channel() {{ printf '%s\\n' "${{1:-tui-only}}"; }}
 {snippet}
@@ -374,7 +376,7 @@ fi
         expect(result.returncode == 0, f"gateway soft-success case failed: {result.stderr}")
         expect("RESULT=success" in result.stdout, f"expected soft success, got: {result.stdout!r}")
         expect(
-            "could not restart the service itself without root" in result.stderr,
+            "Almanac will restart the configured gateway service below" in result.stderr,
             f"expected root-restart soft-success warning, got: {result.stderr!r}",
         )
     print("PASS test_run_curator_gateway_setup_treats_root_restart_as_soft_success")

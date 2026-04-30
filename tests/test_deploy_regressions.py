@@ -2132,6 +2132,46 @@ def test_curator_gateway_defaults_reactions_on() -> None:
     print("PASS test_curator_gateway_defaults_reactions_on")
 
 
+def test_restart_services_disables_only_curator_native_system_gateway_unit() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "curator_native_gateway_system_unit_name_root() {", "restart_shared_user_services_root() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        runtime_dir = tmp_path / "runtime"
+        python_bin = runtime_dir / "hermes-venv" / "bin" / "python3"
+        python_bin.parent.mkdir(parents=True)
+        python_bin.symlink_to(sys.executable)
+        package = tmp_path / "hermes_cli"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "gateway.py").write_text(
+            "def get_service_name():\n"
+            "    return 'hermes-gateway-curatorhash'\n",
+            encoding="utf-8",
+        )
+        systemctl_log = tmp_path / "systemctl.log"
+        script = f"""
+set -euo pipefail
+export PYTHONPATH={shlex.quote(str(tmp_path))}
+RUNTIME_DIR={shlex.quote(str(runtime_dir))}
+ALMANAC_CURATOR_HERMES_HOME={shlex.quote(str(tmp_path / "curator-home"))}
+SYSTEMCTL_LOG={shlex.quote(str(systemctl_log))}
+systemctl() {{
+  printf '%s\\n' "$*" >> "$SYSTEMCTL_LOG"
+}}
+{snippet}
+disable_curator_native_gateway_system_unit_root
+cat "$SYSTEMCTL_LOG"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"native curator gateway disable case failed: {result.stderr}")
+        expect(
+            "disable --now hermes-gateway-curatorhash.service" in result.stdout,
+            f"expected exact native curator gateway unit disable, got: {result.stdout!r}",
+        )
+    print("PASS test_restart_services_disables_only_curator_native_system_gateway_unit")
+
+
 def test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools() -> None:
     server_text = (REPO / "python" / "almanac_mcp_server.py").read_text(encoding="utf-8")
     expect('"ssot.preflight"' in server_text, "agents should be able to check Notion writeability before writing")
@@ -2503,6 +2543,7 @@ def main() -> int:
         test_shell_scripts_avoid_bash4_only_features,
         test_deploy_reapplies_runtime_access_after_repo_sync,
         test_curator_gateway_defaults_reactions_on,
+        test_restart_services_disables_only_curator_native_system_gateway_unit,
         test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
         test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,

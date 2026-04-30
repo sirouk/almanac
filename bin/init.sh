@@ -508,7 +508,15 @@ PY
     read -r -p "Configure Hermes gateway for Discord/Telegram? [y/N]: " want_gateway_answer
     if is_yes "$want_gateway_answer"; then
       want_gateway="yes"
-      if ! HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup; then
+      gateway_setup_cmd="$SHARED_REPO_DIR/bin/almanac-hermes-gateway-setup.sh"
+      if [[ -x "$gateway_setup_cmd" ]]; then
+        gateway_setup_status=0
+        "$gateway_setup_cmd" "$hermes_bin" "$hermes_home" || gateway_setup_status=$?
+      else
+        gateway_setup_status=0
+        HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup || gateway_setup_status=$?
+      fi
+      if [[ "$gateway_setup_status" -ne 0 ]]; then
         echo "Hermes gateway setup returned non-zero; Almanac will continue and install the gateway service from the saved Hermes config." >&2
       fi
     fi

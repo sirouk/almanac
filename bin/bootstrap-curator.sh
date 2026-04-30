@@ -214,6 +214,8 @@ Curator chat gateway notes:
   - The operator notification channel is separate from Curator's user-facing chat
     gateway. A Discord webhook or Telegram operator chat ID only delivers
     operator notices; it does not make Curator reachable to users.
+  - Almanac manages the Curator gateway as an Almanac systemd user service.
+    Hermes-native service install prompts are skipped during setup.
 
 EOF
 
@@ -327,10 +329,15 @@ run_curator_gateway_setup() {
   local hermes_home="$3"
   local detected_channels_csv=""
   local state_file=""
+  local setup_cmd="$BOOTSTRAP_DIR/bin/almanac-hermes-gateway-setup.sh"
 
   print_gateway_setup_guidance "$requested_channels_csv"
   echo "Running curator Hermes gateway setup ..."
-  if HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup; then
+  if [[ -x "$setup_cmd" ]]; then
+    if "$setup_cmd" "$hermes_bin" "$hermes_home"; then
+      return 0
+    fi
+  elif HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup; then
     return 0
   fi
 
@@ -346,7 +353,7 @@ PY
   rm -f "$state_file"
 
   if channels_csv_covers_requested "$detected_channels_csv" "$requested_channels_csv"; then
-    echo "Hermes saved the gateway config but could not restart the service itself without root; Almanac will restart the configured gateway service below." >&2
+    echo "Hermes saved the gateway config; Almanac will restart the configured gateway service below." >&2
     return 0
   fi
 
@@ -797,6 +804,33 @@ ensure_curator_hermes() {
   exit 1
 }
 
+curator_native_gateway_unit_name() {
+  local python_bin="$RUNTIME_DIR/hermes-venv/bin/python3"
+  if [[ ! -x "$python_bin" ]]; then
+    return 1
+  fi
+
+  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$python_bin" <<'PY'
+try:
+    from hermes_cli.gateway import get_service_name
+except Exception:
+    raise SystemExit(1)
+
+print(f"{get_service_name()}.service")
+PY
+}
+
+disable_curator_native_gateway_unit() {
+  local unit=""
+
+  unit="$(curator_native_gateway_unit_name 2>/dev/null || true)"
+  if [[ -z "$unit" ]]; then
+    return 0
+  fi
+
+  systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+}
+
 main() {
   require_real_layout "curator bootstrap"
   ensure_layout
@@ -973,6 +1007,7 @@ PY
 
   if set_user_systemd_bus_env; then
     systemctl --user daemon-reload
+    disable_curator_native_gateway_unit
     systemctl --user enable almanac-curator-refresh.timer >/dev/null
     systemctl --user restart almanac-curator-refresh.timer >/dev/null || true
     if has_curator_telegram_onboarding; then

@@ -19,6 +19,7 @@ from almanac_control import (
     deny_ssot_pending_write,
     deny_onboarding_session,
     dismiss_pin_upgrade_action,
+    find_active_onboarding_session,
     get_pin_upgrade_action_payload,
     get_onboarding_session,
     request_operator_action,
@@ -73,6 +74,11 @@ TELEGRAM_OPERATOR_COMMANDS = [
     {"command": "deny", "description": "Deny onboarding/request/write"},
     {"command": "retry_contact", "description": "Retry Discord agent-bot handoff"},
 ]
+TELEGRAM_USER_COMMAND_NAMES = {
+    str(item.get("command") or "").strip().lower()
+    for item in TELEGRAM_USER_COMMANDS
+    if str(item.get("command") or "").strip()
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -208,6 +214,33 @@ def operator_message_allowed(cfg: Config, message: dict[str, Any]) -> bool:
         sender_id=str(sender.get("id") or ""),
         chat_type=str(chat.get("type") or ""),
     )
+
+
+def _operator_command_requested(text: str) -> bool:
+    parts = text.strip().split(maxsplit=1)
+    command = _telegram_command_token(parts[0] if parts else "")
+    return command in {"/approve", "/deny", "/retry-contact", "/retry_contact"} or command.startswith("/retry")
+
+
+def _user_command_requested(text: str) -> bool:
+    parts = text.strip().split(maxsplit=1)
+    command = _telegram_command_token(parts[0] if parts else "").lstrip("/")
+    if not command:
+        return False
+    normalized = command.replace("-", "_")
+    return normalized in TELEGRAM_USER_COMMAND_NAMES
+
+
+def _operator_private_chat_has_active_onboarding(cfg: Config, message: dict[str, Any]) -> bool:
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    if str(chat.get("type") or "") != "private":
+        return False
+    sender_id = str(sender.get("id") or "")
+    if not sender_id:
+        return False
+    with connect_db(cfg) as conn:
+        return find_active_onboarding_session(conn, platform="telegram", sender_id=sender_id) is not None
 
 
 def _handle_operator_command(
@@ -807,7 +840,21 @@ def process_update(*, cfg: Config, bot_token: str, curator_bot_id: str, update: 
     if not text:
         return
     if operator_message_allowed(cfg, message):
-        _handle_operator_command(cfg=cfg, bot_token=bot_token, text=text, message=message)
+        if _operator_command_requested(text):
+            _handle_operator_command(cfg=cfg, bot_token=bot_token, text=text, message=message)
+            return
+        if not _user_command_requested(text) and not _operator_private_chat_has_active_onboarding(cfg, message):
+            return
+        # A private operator DM can also be that operator's personal onboarding
+        # lane. Let user onboarding commands and active-session replies through
+        # while keeping operator control commands above.
+        _handle_user_message(
+            cfg=cfg,
+            bot_token=bot_token,
+            curator_bot_id=curator_bot_id,
+            text=text,
+            message=message,
+        )
         return
     _handle_user_message(
         cfg=cfg,

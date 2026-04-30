@@ -382,6 +382,78 @@ def test_telegram_operator_retry_contact_queues_discord_handoff() -> None:
             os.environ.update(old_env)
 
 
+def test_telegram_operator_private_chat_can_start_personal_onboarding() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_operator_self_onboard_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "almanac_curator_operator_self_onboard_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            outbound: list[tuple[str, str]] = []
+            curator.send_text = (
+                lambda bot_token, chat_id, text, **kwargs: outbound.append((str(chat_id), str(text)))
+            )
+
+            curator.process_update(
+                cfg=cfg,
+                bot_token="test-token",
+                curator_bot_id="curator-bot-id",
+                update={
+                    "update_id": 1,
+                    "message": {
+                        "chat": {"id": "42", "type": "private"},
+                        "from": {"id": "42", "username": "operator", "first_name": "Op"},
+                        "message_id": 9,
+                        "text": "/start",
+                    },
+                },
+            )
+
+            with control.connect_db(cfg) as conn:
+                session = control.find_active_onboarding_session(
+                    conn,
+                    platform="telegram",
+                    sender_id="42",
+                )
+            expect(session is not None, "expected operator private DM to open onboarding")
+            expect(session["state"] in {"awaiting-name", "awaiting-purpose"}, str(session))
+            expect(outbound and outbound[0][0] == "42", str(outbound))
+            expect("onboarding" in outbound[0][1].lower() or "agent" in outbound[0][1].lower(), outbound[0][1])
+
+            curator.process_update(
+                cfg=cfg,
+                bot_token="test-token",
+                curator_bot_id="curator-bot-id",
+                update={
+                    "update_id": 2,
+                    "message": {
+                        "chat": {"id": "42", "type": "private"},
+                        "from": {"id": "42", "username": "operator", "first_name": "Op"},
+                        "message_id": 10,
+                        "text": "Help me approve and monitor Almanac without losing my own work lane.",
+                    },
+                },
+            )
+            with control.connect_db(cfg) as conn:
+                session = control.find_active_onboarding_session(
+                    conn,
+                    platform="telegram",
+                    sender_id="42",
+                )
+            expect(session is not None, "expected operator onboarding to remain active")
+            expect(session["state"] == "awaiting-unix-user", str(session))
+            print("PASS test_telegram_operator_private_chat_can_start_personal_onboarding")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_retry_contact_refuses_missing_confirmation_code() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -550,10 +622,11 @@ def main() -> int:
     test_stale_telegram_request_callback_clears_buttons_with_status()
     test_telegram_backup_callback_reopens_completed_lane_backup_setup()
     test_telegram_operator_retry_contact_queues_discord_handoff()
+    test_telegram_operator_private_chat_can_start_personal_onboarding()
     test_retry_contact_refuses_missing_confirmation_code()
     test_discord_onboarding_user_retry_contact_queues_own_handoff()
     test_telegram_command_registration_includes_user_and_operator_commands()
-    print("PASS all 7 curator onboarding regression tests")
+    print("PASS all 8 curator onboarding regression tests")
     return 0
 
 

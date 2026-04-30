@@ -1200,6 +1200,124 @@ def agent_context_for_person(profile: dict[str, Any], person: dict[str, Any], *,
     }
 
 
+def _global_lineage_modules(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    modules = _lineage_modules(_lineage(profile))
+    global_markers = {"all", "all_agents", "everyone", "organization", "org"}
+    global_modules: list[dict[str, Any]] = []
+    targeted_keys = {"applies_to", "serves", "human_liaison", "owner"}
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        applies_to = {str(value).strip() for value in _as_list(module.get("applies_to")) if str(value).strip()}
+        if applies_to & global_markers:
+            global_modules.append(module)
+            continue
+        if not any(str(module.get(key) or "").strip() for key in targeted_keys):
+            global_modules.append(module)
+    return global_modules
+
+
+def _global_operational_items(profile: dict[str, Any], section: str, *, agent_id: str = "") -> list[dict[str, Any]]:
+    global_markers = {"all", "all_agents", "everyone", "organization", "org"}
+    items: list[dict[str, Any]] = []
+    targeted_keys = ("owner", "serves", "human_owner", "applies_to", "people", "persons", "teams", "roles", "target_agents", "agent")
+    for item in _as_list(profile.get(section)):
+        if not isinstance(item, dict):
+            continue
+        matched = False
+        for key in ("applies_to", "people", "persons", "teams", "roles", "target_agents"):
+            values = {str(value).strip() for value in _as_list(item.get(key)) if str(value).strip()}
+            if values & global_markers:
+                matched = True
+            if agent_id and agent_id in values:
+                matched = True
+        item_agent = str(item.get("agent") or "").strip()
+        if agent_id and item_agent == agent_id:
+            matched = True
+        if matched or not any(item.get(key) for key in targeted_keys):
+            items.append(item)
+    return items
+
+
+def org_baseline_context_for_agent(
+    profile: dict[str, Any],
+    *,
+    agent_id: str = "",
+    unix_user: str = "",
+    display_name: str = "",
+    human_display_name: str = "",
+) -> dict[str, Any]:
+    org = _organization(profile)
+    policies = _policies(profile)
+    lineage = _lineage(profile)
+    baseline = lineage.get("baseline") if isinstance(lineage.get("baseline"), dict) else {}
+    agent_name = display_name or agent_id or unix_user
+    return {
+        "revision": profile_checksum(profile),
+        "profile_scope": "org_baseline",
+        "agent_id": agent_id,
+        "unix_user": unix_user,
+        "person_id": "",
+        "human_display_name": human_display_name,
+        "preferred_name": "",
+        "role_id": "",
+        "role": {},
+        "title": "",
+        "teams": [],
+        "primary_team": "",
+        "contact": {},
+        "public_context": {},
+        "github": {},
+        "organization": {
+            "id": org.get("id", ""),
+            "name": org.get("name", ""),
+            "profile_kind": org.get("profile_kind", ""),
+            "scope": org.get("scope", ""),
+            "mission": org.get("mission", ""),
+            "primary_project": org.get("primary_project", ""),
+            "timezone": org.get("timezone", ""),
+            "quiet_hours": org.get("quiet_hours", ""),
+            "operating_principles": _strings(org.get("operating_principles")),
+            "glossary": org.get("glossary", []),
+        },
+        "agent": {
+            "name": agent_name,
+            "purpose": "Serve the enrolled user through the shared organization rails until a person-specific org-profile slice is linked.",
+            "serves": "",
+            "operating_mode": "org_member_unmatched",
+            "may_do": [],
+            "should_proactively_watch": [],
+            "must_ask_before": [],
+            "must_not_do": [],
+            "handoff_rules": [],
+            "success_criteria": [],
+            "default_surfaces": [],
+        },
+        "responsibilities": [],
+        "decision_authority": [],
+        "human_accountability": {},
+        "baseline": {
+            "doctrine": _strings(baseline.get("doctrine")),
+            "product_facts": _strings(baseline.get("product_facts")),
+            "fact_caveats": _strings(baseline.get("fact_caveats")),
+            "source_of_truth_discipline": _strings(baseline.get("source_of_truth_discipline")),
+            "security_rules": _strings(baseline.get("security_rules")),
+            "communication_style": _strings(baseline.get("communication_style")),
+            "tool_use_expectations": _strings(baseline.get("tool_use_expectations")),
+        },
+        "modules": _global_lineage_modules(profile),
+        "authority": _dict(profile.get("authority")),
+        "identity_verification": _dict(profile.get("identity_verification")),
+        "distribution": _dict(profile.get("distribution")),
+        "workflows": _global_operational_items(profile, "workflows", agent_id=agent_id),
+        "automations": _global_operational_items(profile, "automations", agent_id=agent_id),
+        "benchmarks": _global_operational_items(profile, "benchmarks", agent_id=agent_id),
+        "teams_summary": [],
+        "global_agent_policy": policies.get("agent_behavior", {}) if isinstance(policies.get("agent_behavior"), dict) else {},
+        "work_surfaces": _work_surfaces(profile),
+    }
+
+
 def _row_value(row: dict[str, Any] | sqlite3.Row, key: str, default: str = "") -> str:
     if hasattr(row, "keys"):
         try:
@@ -1334,6 +1452,24 @@ def _managed_org_profile_section(context: dict[str, Any]) -> str:
 def _managed_user_responsibilities_section(context: dict[str, Any]) -> str:
     agent = context.get("agent") if isinstance(context.get("agent"), dict) else {}
     role = context.get("role") if isinstance(context.get("role"), dict) else {}
+    if not str(context.get("person_id") or "").strip():
+        lines = [
+            "User responsibility and authority:",
+            "- Org-profile person slice: not linked. Use shared organization rails and first-contact/user-provided preferences; do not infer role, authority, team, or identity from the org roster.",
+        ]
+        if context.get("human_display_name"):
+            lines.append(f"- Human served: {context.get('human_display_name')}")
+        lines.extend(
+            [
+                "- Role: not specified by org profile",
+                "- Teams: not specified by org profile",
+                "Agent delegation:",
+                f"- Agent name: {agent.get('name') or '(unset)'}",
+                f"- Purpose: {agent.get('purpose') or '(unset)'}",
+                f"- Operating mode: {agent.get('operating_mode') or 'org_member_unmatched'}",
+            ]
+        )
+        return "\n".join(lines)
     lines = [
         "User responsibility and authority:",
         f"- Human served: {context.get('human_display_name') or context.get('person_id')}",
@@ -1421,6 +1557,7 @@ def build_managed_sections_for_agent(
     unix_user: str,
     display_name: str,
     org_profile_person_id: str = "",
+    human_display_name: str = "",
 ) -> dict[str, Any]:
     profile = load_applied_profile(cfg)
     if not profile:
@@ -1433,7 +1570,13 @@ def build_managed_sections_for_agent(
     }
     context = build_agent_context_for_row(profile, row)
     if not context:
-        return {}
+        context = org_baseline_context_for_agent(
+            profile,
+            agent_id=agent_id,
+            unix_user=unix_user,
+            display_name=display_name,
+            human_display_name=human_display_name,
+        )
     return {
         "org-profile": _managed_org_profile_section(context),
         "user-responsibilities": _managed_user_responsibilities_section(context),
@@ -1488,14 +1631,30 @@ def render_soul_overlay(context: dict[str, Any]) -> str:
         f"- Context: {org.get('name') or '(unset)'}",
         f"- Kind: {org.get('profile_kind') or 'organization'}",
         f"- Mission: {org.get('mission') or '(unset)'}",
-        f"- Human served: {context.get('human_display_name') or context.get('person_id')}",
-        f"- Role: {context.get('role_id') or '(unset)'}",
-        f"- Teams: {_safe_join(context.get('teams'))}",
-        f"- Agent name: {agent.get('name') or '(unset)'}",
-        f"- Agent purpose: {agent.get('purpose') or '(unset)'}",
-        "",
-        "Responsibilities:",
     ]
+    if str(context.get("person_id") or "").strip():
+        lines.extend(
+            [
+                f"- Human served: {context.get('human_display_name') or context.get('person_id')}",
+                f"- Role: {context.get('role_id') or '(unset)'}",
+                f"- Teams: {_safe_join(context.get('teams'))}",
+                f"- Agent name: {agent.get('name') or '(unset)'}",
+                f"- Agent purpose: {agent.get('purpose') or '(unset)'}",
+                "",
+                "Responsibilities:",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "- Org-profile person slice: not linked; use shared org context, first-contact preferences, and live retrieval without inferring this user's role/team from the roster.",
+                f"- Human served: {context.get('human_display_name') or '(captured outside org profile)'}",
+                f"- Agent name: {agent.get('name') or '(unset)'}",
+                f"- Agent purpose: {agent.get('purpose') or '(unset)'}",
+                "",
+                "Responsibilities:",
+            ]
+        )
     responsibilities = _strings(context.get("responsibilities"))
     lines.extend(f"- {item}" for item in (responsibilities or ["Confirm responsibilities during onboarding."]))
     authority = _strings(context.get("decision_authority"))

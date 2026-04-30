@@ -12729,6 +12729,7 @@ def build_managed_memory_payload(
             unix_user=agent_unix_user,
             display_name=display_name,
             org_profile_person_id=str((identity or {}).get("org_profile_person_id") or ""),
+            human_display_name=str((identity or {}).get("human_display_name") or ""),
         )
     except Exception:
         org_profile_sections = {}

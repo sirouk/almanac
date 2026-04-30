@@ -319,6 +319,86 @@ def test_explicit_identity_profile_link_orients_arbitrary_agent_names() -> None:
     print("PASS test_explicit_identity_profile_link_orients_arbitrary_agent_names")
 
 
+def test_unmatched_agent_receives_org_baseline_without_personalization() -> None:
+    control = load_module(REPO / "python" / "almanac_control.py", "almanac_control_org_profile_unmatched_baseline_test")
+    org_profile = load_module(REPO / "python" / "almanac_org_profile.py", "almanac_org_profile_unmatched_baseline_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        values = {
+            "ALMANAC_USER": "almanac",
+            "ALMANAC_HOME": str(root / "home-almanac"),
+            "ALMANAC_REPO_DIR": str(REPO),
+            "ALMANAC_PRIV_DIR": str(root / "priv"),
+            "STATE_DIR": str(root / "state"),
+            "RUNTIME_DIR": str(root / "state" / "runtime"),
+            "VAULT_DIR": str(root / "vault"),
+            "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
+            "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+            "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
+            "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+            "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+            "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+            "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+            "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+            "ALMANAC_MCP_HOST": "127.0.0.1",
+            "ALMANAC_MCP_PORT": "8282",
+        }
+        write_config(config_path, values)
+
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            now = control.utc_now_iso()
+            hermes_home = root / "home-new" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home.mkdir(parents=True)
+            insert_agent(
+                conn,
+                agent_id="agent-new",
+                unix_user="newlane",
+                display_name="FreshBot",
+                hermes_home=hermes_home,
+                now=now,
+            )
+            control.upsert_agent_identity(
+                conn,
+                agent_id="agent-new",
+                unix_user="newlane",
+                human_display_name="Taylor New",
+                agent_name="FreshBot",
+            )
+
+            source_path = REPO / "config" / "org-profile.ultimate.example.yaml"
+            profile = org_profile.load_profile(source_path)
+            applied = org_profile.apply_profile(conn, cfg, profile=profile, source_path=source_path, actor="test")
+            expect(applied["applied"], applied)
+            expect([row["agent_id"] for row in applied["unmatched_active_agents"]] == ["agent-new"], applied)
+
+            payload = control.build_managed_memory_payload(conn, cfg, agent_id="agent-new")
+            expect("Operating profile:" in payload["org-profile"], payload["org-profile"])
+            expect("Org-profile person slice: not linked" in payload["user-responsibilities"], payload["user-responsibilities"])
+            expect("Human served: Taylor New" in payload["user-responsibilities"], payload["user-responsibilities"])
+            expect("Human served: Alex Rivera" not in payload["user-responsibilities"], payload["user-responsibilities"])
+            expect("No team context is configured" in payload["team-map"], payload["team-map"])
+            expect(payload["org_profile_revision"], payload)
+            expect(payload["org_profile_agent_context"]["profile_scope"] == "org_baseline", payload["org_profile_agent_context"])
+            expect(payload["org_profile_agent_context"]["person_id"] == "", payload["org_profile_agent_context"])
+            expect(payload["org_profile_agent_context"]["human_display_name"] == "Taylor New", payload["org_profile_agent_context"])
+
+            paths = control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
+            expect(paths["changed"], paths)
+            soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
+            expect("Org-profile person slice: not linked" in soul, soul)
+            expect("Taylor New" in soul, soul)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    print("PASS test_unmatched_agent_receives_org_baseline_without_personalization")
+
+
 def test_agent_identity_rejects_duplicate_org_profile_person_links() -> None:
     control = load_module(REPO / "python" / "almanac_control.py", "almanac_control_duplicate_profile_link_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -518,13 +598,14 @@ def main() -> int:
     test_ultimate_example_profile_applies_to_state_vault_and_agent_memory()
     test_human_owner_modules_and_seed_checksums_are_distributed()
     test_explicit_identity_profile_link_orients_arbitrary_agent_names()
+    test_unmatched_agent_receives_org_baseline_without_personalization()
     test_agent_identity_rejects_duplicate_org_profile_person_links()
     test_builder_starter_profile_covers_operational_rails()
     test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized()
     test_org_profile_rejects_ambiguous_identity_match_tokens()
     test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visible()
     test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched()
-    print("PASS all 9 org-profile tests")
+    print("PASS all 10 org-profile tests")
     return 0
 
 

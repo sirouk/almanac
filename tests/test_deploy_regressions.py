@@ -16,6 +16,8 @@ DEPLOY_SH = REPO / "bin" / "deploy.sh"
 HEALTH_SH = REPO / "bin" / "health.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
 CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
+QMD_REFRESH_SH = REPO / "bin" / "qmd-refresh.sh"
+VAULT_WATCH_SH = REPO / "bin" / "vault-watch.sh"
 TAILSCALE_NEXTCLOUD_SERVE_SH = REPO / "bin" / "tailscale-nextcloud-serve.sh"
 TAILSCALE_NOTION_FUNNEL_SH = REPO / "bin" / "tailscale-notion-webhook-funnel.sh"
 CONTROL_PY = REPO / "python" / "almanac_control.py"
@@ -119,6 +121,11 @@ def render_runtime_config(
     vault_watch_debounce_seconds: str = "",
     vault_watch_max_batch_seconds: str = "",
     extra_mcp_url: str = "",
+    qmd_embed_provider: str = "local",
+    qmd_embed_endpoint: str = "",
+    qmd_embed_endpoint_model: str = "",
+    qmd_embed_api_key: str = "",
+    qmd_embed_dimensions: str = "",
 ) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
@@ -137,6 +144,12 @@ RUNTIME_DIR=/home/almanac/almanac/almanac-priv/state/runtime
 PUBLISHED_DIR=/home/almanac/almanac/almanac-priv/published
 QMD_INDEX_NAME=almanac
 QMD_COLLECTION_NAME=vault
+QMD_RUN_EMBED=1
+QMD_EMBED_PROVIDER={shlex.quote(qmd_embed_provider)}
+QMD_EMBED_ENDPOINT={shlex.quote(qmd_embed_endpoint)}
+QMD_EMBED_ENDPOINT_MODEL={shlex.quote(qmd_embed_endpoint_model)}
+QMD_EMBED_API_KEY={shlex.quote(qmd_embed_api_key)}
+QMD_EMBED_DIMENSIONS={shlex.quote(qmd_embed_dimensions)}
 BACKUP_GIT_BRANCH=main
 NEXTCLOUD_PORT=18080
 NEXTCLOUD_TRUSTED_DOMAIN=almanac.example.ts.net
@@ -396,6 +409,24 @@ def test_emit_runtime_config_persists_extra_mcp_url() -> None:
         config,
     )
     print("PASS test_emit_runtime_config_persists_extra_mcp_url")
+
+
+def test_emit_runtime_config_persists_qmd_embedding_endpoint_fields() -> None:
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        qmd_embed_provider="endpoint",
+        qmd_embed_endpoint="https://embed.example.test/v1",
+        qmd_embed_endpoint_model="text-embedding-3-small",
+        qmd_embed_api_key="embed-secret",
+        qmd_embed_dimensions="768",
+    )
+    expect(source_value(config, "QMD_EMBED_PROVIDER") == "endpoint", config)
+    expect(source_value(config, "QMD_EMBED_ENDPOINT") == "https://embed.example.test/v1", config)
+    expect(source_value(config, "QMD_EMBED_ENDPOINT_MODEL") == "text-embedding-3-small", config)
+    expect(source_value(config, "QMD_EMBED_API_KEY") == "embed-secret", config)
+    expect(source_value(config, "QMD_EMBED_DIMENSIONS") == "768", config)
+    print("PASS test_emit_runtime_config_persists_qmd_embedding_endpoint_fields")
 
 
 def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
@@ -1998,18 +2029,95 @@ def test_nextcloud_rotation_uses_secret_files_instead_of_password_argv() -> None
 
 
 def test_qmd_refresh_bounds_embedding_work() -> None:
-    refresh = (REPO / "bin" / "qmd-refresh.sh").read_text(encoding="utf-8")
+    refresh = QMD_REFRESH_SH.read_text(encoding="utf-8")
     common = (REPO / "bin" / "common.sh").read_text(encoding="utf-8")
     deploy = DEPLOY_SH.read_text(encoding="utf-8")
     example = (REPO / "config" / "almanac.env.example").read_text(encoding="utf-8")
+    vault_watch = VAULT_WATCH_SH.read_text(encoding="utf-8")
     expect("timeout --foreground" in refresh, refresh)
     expect("--max-docs-per-batch" in refresh and "--max-batch-mb" in refresh, refresh)
     expect("embeddings will retry on the next refresh" in refresh, refresh)
     expect('QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-120}"' in common, common)
     expect('QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"' in common, common)
+    expect('QMD_EMBED_PROVIDER="${QMD_EMBED_PROVIDER:-local}"' in common, common)
     expect('write_kv QMD_EMBED_TIMEOUT_SECONDS "$QMD_EMBED_TIMEOUT_SECONDS"' in deploy, deploy)
+    expect('write_kv QMD_EMBED_PROVIDER "${QMD_EMBED_PROVIDER:-local}"' in deploy, deploy)
     expect("QMD_EMBED_TIMEOUT_SECONDS=120" in example, example)
+    expect("QMD_EMBED_PROVIDER=local" in example, example)
+    expect("QMD embedding endpoint provider selected" in refresh, refresh)
+    expect('"$SCRIPT_DIR/qmd-refresh.sh" --embed' in vault_watch, vault_watch)
+    expect('qmd --index "$QMD_INDEX_NAME" embed' not in vault_watch, vault_watch)
     print("PASS test_qmd_refresh_bounds_embedding_work")
+
+
+def test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected() -> None:
+    text = QMD_REFRESH_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "run_qmd_embed() {", "exec 9>")
+    script = f"""
+set -euo pipefail
+QMD_INDEX_NAME=almanac
+QMD_EMBED_PROVIDER=endpoint
+QMD_EMBED_ENDPOINT=https://embed.example.test/v1
+QMD_EMBED_ENDPOINT_MODEL=text-embedding-3-small
+QMD_EMBED_API_KEY=secret
+{snippet}
+run_qmd_embed
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"qmd endpoint skip failed: {result.stderr}\n{result.stdout}")
+    expect("local qmd embedding is skipped" in result.stderr, result.stderr)
+    print("PASS test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected")
+
+
+def test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "normalize_qmd_embed_provider() {", "random_secret() {")
+    script = f"""
+set -euo pipefail
+{snippet}
+lowercase() {{ printf '%s' "${{1:-}}" | tr '[:upper:]' '[:lower:]'; }}
+normalize_optional_answer() {{
+  case "${{1:-}}" in
+    none|NONE|off|OFF|-) printf '%s' "" ;;
+    *) printf '%s' "${{1:-}}" ;;
+  esac
+}}
+ask_secret_with_default() {{ printf '%s' "endpoint-key"; }}
+ASK_MODE=endpoint
+ask() {{
+  case "$1" in
+    "QMD semantic embedding backend"*) printf '%s' "$ASK_MODE" ;;
+    "OpenAI-compatible embeddings endpoint"*) printf '%s' "https://embed.example.test/v1" ;;
+    "Embedding endpoint model name"*) printf '%s' "text-embedding-3-small" ;;
+    "Embedding dimensions"*) printf '%s' "768" ;;
+    *) printf '%s' "${{2:-}}" ;;
+  esac
+}}
+
+QMD_RUN_EMBED=1
+QMD_EMBED_PROVIDER=local
+QMD_EMBED_ENDPOINT=
+QMD_EMBED_ENDPOINT_MODEL=
+QMD_EMBED_API_KEY=
+QMD_EMBED_DIMENSIONS=
+collect_qmd_embedding_answers
+printf 'endpoint:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD_EMBED_ENDPOINT" "$QMD_EMBED_ENDPOINT_MODEL" "$QMD_EMBED_DIMENSIONS"
+
+ASK_MODE=local
+QMD_RUN_EMBED=0
+QMD_EMBED_PROVIDER=endpoint
+QMD_EMBED_ENDPOINT=https://old.example/v1
+QMD_EMBED_ENDPOINT_MODEL=old-model
+QMD_EMBED_API_KEY=old-key
+QMD_EMBED_DIMENSIONS=1024
+collect_qmd_embedding_answers
+printf 'local:%s:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$QMD_EMBED_ENDPOINT" "$QMD_EMBED_ENDPOINT_MODEL" "$QMD_EMBED_API_KEY" "$QMD_EMBED_DIMENSIONS"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"qmd embedding answer reconfigure failed: {result.stderr}\n{result.stdout}")
+    expect("endpoint:0:endpoint:https://embed.example.test/v1:text-embedding-3-small:768" in result.stdout, result.stdout)
+    expect("local:1:local::::" in result.stdout, result.stdout)
+    print("PASS test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint")
 
 
 def test_shell_scripts_avoid_bash4_only_features() -> None:
@@ -2629,9 +2737,11 @@ def main() -> int:
         test_emit_runtime_config_persists_hermes_docs_sync_fields,
         test_emit_runtime_config_preserves_custom_hermes_docs_ref,
         test_emit_runtime_config_persists_extra_mcp_url,
+        test_emit_runtime_config_persists_qmd_embedding_endpoint_fields,
         test_deploy_guides_explicit_notion_webhook_event_selection,
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,
         test_qmd_refresh_bounds_embedding_work,
+        test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,
         test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,
@@ -2658,6 +2768,7 @@ def main() -> int:
         test_discover_existing_config_uses_artifact_priv_dir_hint,
         test_collect_install_answers_defaults_to_detected_service_user,
         test_collect_install_answers_moves_tailnet_serve_when_public_notion_funnel_uses_443,
+        test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint,
         test_collect_install_answers_does_not_prompt_for_telegram_token_up_front,
         test_secret_prompt_helpers_do_not_prefix_newlines,
         test_collect_install_answers_randomizes_placeholder_passwords,

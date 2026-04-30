@@ -1923,11 +1923,25 @@ fi
 check_pdf_ingest_status
 check_memory_synth_status
 
-if [[ "$QMD_RUN_EMBED" == "1" ]]; then
-  pass "qmd refresh will run embeddings"
-else
-  warn "qmd refresh will not run embeddings; set QMD_RUN_EMBED=1"
-fi
+case "${QMD_EMBED_PROVIDER:-local}" in
+  endpoint|openai-compatible|remote|api)
+    if [[ -n "${QMD_EMBED_ENDPOINT:-}" && -n "${QMD_EMBED_ENDPOINT_MODEL:-}" && -n "${QMD_EMBED_API_KEY:-}" ]]; then
+      warn "qmd remote embedding endpoint is configured but endpoint-backed qmd vector search is not active yet; local embedding is skipped"
+    else
+      warn_or_fail "qmd remote embedding endpoint config is incomplete; set QMD_EMBED_ENDPOINT, QMD_EMBED_ENDPOINT_MODEL, and QMD_EMBED_API_KEY together"
+    fi
+    ;;
+  none|off|disabled)
+    warn "qmd embeddings are disabled; text index search remains available"
+    ;;
+  *)
+    if [[ "$QMD_RUN_EMBED" == "1" ]]; then
+      pass "qmd refresh will run local embeddings"
+    else
+      warn "qmd local embeddings are disabled; set QMD_RUN_EMBED=1"
+    fi
+    ;;
+esac
 
 if [[ -d "$ALMANAC_PRIV_DIR/.git" ]]; then
   pass "private git repo initialized"

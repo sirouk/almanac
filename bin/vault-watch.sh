@@ -178,10 +178,7 @@ run_qmd_refresh() {
 
 run_qmd_embed() {
   echo "Vault watcher: embedding pending qmd updates..."
-  ensure_nvm
-  exec 8>"$QMD_REFRESH_LOCK_FILE"
-  flock 8
-  qmd --index "$QMD_INDEX_NAME" embed
+  "$SCRIPT_DIR/qmd-refresh.sh" --embed
 }
 
 maybe_run_qmd_embed() {

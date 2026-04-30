@@ -16,6 +16,11 @@ TRACE_SESSION_ID="${TRACE_SESSION_ID:-}"
 TRACE_REQUEST_ID="${TRACE_REQUEST_ID:-}"
 TRACE_LOG_LINES="${TRACE_LOG_LINES:-12}"
 QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
+QMD_EMBED_PROVIDER="${QMD_EMBED_PROVIDER:-local}"
+QMD_EMBED_ENDPOINT="${QMD_EMBED_ENDPOINT:-}"
+QMD_EMBED_ENDPOINT_MODEL="${QMD_EMBED_ENDPOINT_MODEL:-}"
+QMD_EMBED_API_KEY="${QMD_EMBED_API_KEY:-}"
+QMD_EMBED_DIMENSIONS="${QMD_EMBED_DIMENSIONS:-}"
 QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-120}"
 QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"
 QMD_EMBED_MAX_BATCH_MB="${QMD_EMBED_MAX_BATCH_MB:-16}"
@@ -1542,6 +1547,96 @@ resolve_pdf_vision_endpoint() {
   esac
 }
 
+normalize_qmd_embed_provider() {
+  local value=""
+
+  value="$(lowercase "${1:-}")"
+  value="${value//[ _-]/}"
+  case "$value" in
+    ""|l|local|gguf|qmd)
+      printf '%s\n' "local"
+      ;;
+    e|endpoint|remote|api|openai|openaicompatible|openaiapi)
+      printf '%s\n' "endpoint"
+      ;;
+    none|off|disable|disabled)
+      printf '%s\n' "none"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+collect_qmd_embedding_answers() {
+  local default_provider="" provider_answer="" provider=""
+  local default_endpoint="" default_model="" default_api_key="" default_dimensions=""
+
+  default_provider="$(normalize_qmd_embed_provider "${QMD_EMBED_PROVIDER:-local}" || printf '%s\n' "local")"
+  default_endpoint="${QMD_EMBED_ENDPOINT:-}"
+  default_model="${QMD_EMBED_ENDPOINT_MODEL:-}"
+  if [[ -z "$default_model" && "$default_provider" == "endpoint" ]]; then
+    # Compatibility with short-lived pre-release installer builds that wrote
+    # the endpoint model into qmd's local-model env name.
+    default_model="${QMD_EMBED_MODEL:-}"
+  fi
+  default_api_key="${QMD_EMBED_API_KEY:-}"
+  default_dimensions="${QMD_EMBED_DIMENSIONS:-}"
+  if [[ "$default_provider" == "endpoint" && -z "$default_model" ]]; then
+    default_model="text-embedding-3-small"
+  fi
+
+  cat <<'EOF'
+QMD semantic embeddings
+  local    - qmd local GGUF embeddings; private and offline, but can be slow on CPU
+  endpoint - OpenAI-compatible /v1/embeddings credentials; skips slow local embedding until endpoint-backed qmd search is available
+EOF
+
+  while true; do
+    provider_answer="$(ask "QMD semantic embedding backend (local/endpoint)" "$default_provider")"
+    if provider="$(normalize_qmd_embed_provider "$provider_answer")"; then
+      break
+    fi
+    echo "Choose local or endpoint."
+  done
+
+  case "$provider" in
+    endpoint)
+      QMD_EMBED_PROVIDER="endpoint"
+      QMD_EMBED_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible embeddings endpoint (base /v1 or full /v1/embeddings; type none to use local)" "$default_endpoint")")"
+      if [[ -z "$QMD_EMBED_ENDPOINT" ]]; then
+        echo "No embeddings endpoint provided; using local qmd embeddings."
+        QMD_EMBED_PROVIDER="local"
+        QMD_EMBED_ENDPOINT_MODEL=""
+        QMD_EMBED_API_KEY=""
+        QMD_EMBED_DIMENSIONS=""
+        QMD_RUN_EMBED="1"
+        return 0
+      fi
+      QMD_EMBED_ENDPOINT_MODEL="$(normalize_optional_answer "$(ask "Embedding endpoint model name (type none to leave unset)" "${default_model:-text-embedding-3-small}")")"
+      QMD_EMBED_DIMENSIONS="$(normalize_optional_answer "$(ask "Embedding dimensions (optional; type none to omit)" "$default_dimensions")")"
+      QMD_EMBED_API_KEY="$(ask_secret_with_default "Embedding API key (ENTER keeps current, type none to clear)" "$default_api_key")"
+      QMD_RUN_EMBED="0"
+      ;;
+    none)
+      QMD_EMBED_PROVIDER="none"
+      QMD_EMBED_ENDPOINT=""
+      QMD_EMBED_ENDPOINT_MODEL=""
+      QMD_EMBED_API_KEY=""
+      QMD_EMBED_DIMENSIONS=""
+      QMD_RUN_EMBED="0"
+      ;;
+    *)
+      QMD_EMBED_PROVIDER="local"
+      QMD_EMBED_ENDPOINT=""
+      QMD_EMBED_ENDPOINT_MODEL=""
+      QMD_EMBED_API_KEY=""
+      QMD_EMBED_DIMENSIONS=""
+      QMD_RUN_EMBED="1"
+      ;;
+  esac
+}
+
 random_secret() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 16
@@ -1743,6 +1838,11 @@ emit_runtime_config() {
     write_kv VAULT_QMD_COLLECTION_MASK "$(normalize_vault_qmd_collection_mask "${VAULT_QMD_COLLECTION_MASK:-}")"
     write_kv PDF_INGEST_COLLECTION_NAME "$PDF_INGEST_COLLECTION_NAME"
     write_kv QMD_RUN_EMBED "$QMD_RUN_EMBED"
+    write_kv QMD_EMBED_PROVIDER "${QMD_EMBED_PROVIDER:-local}"
+    write_kv QMD_EMBED_ENDPOINT "${QMD_EMBED_ENDPOINT:-}"
+    write_kv QMD_EMBED_ENDPOINT_MODEL "${QMD_EMBED_ENDPOINT_MODEL:-}"
+    write_kv QMD_EMBED_API_KEY "${QMD_EMBED_API_KEY:-}"
+    write_kv QMD_EMBED_DIMENSIONS "${QMD_EMBED_DIMENSIONS:-}"
     write_kv QMD_EMBED_TIMEOUT_SECONDS "$QMD_EMBED_TIMEOUT_SECONDS"
     write_kv QMD_EMBED_MAX_DOCS_PER_BATCH "$QMD_EMBED_MAX_DOCS_PER_BATCH"
     write_kv QMD_EMBED_MAX_BATCH_MB "$QMD_EMBED_MAX_BATCH_MB"
@@ -2317,6 +2417,21 @@ PY
   return 1
 }
 
+print_qmd_embedding_summary() {
+  echo "  Semantic embeddings:"
+  case "$(lowercase "${QMD_EMBED_PROVIDER:-local}")" in
+    endpoint|openai-compatible|remote|api)
+      echo "    endpoint requested (${QMD_EMBED_ENDPOINT_MODEL:-model unset} via ${QMD_EMBED_ENDPOINT:-endpoint unset}); local qmd embedding is skipped for now"
+      ;;
+    none|off|disabled)
+      echo "    disabled"
+      ;;
+    *)
+      echo "    local qmd GGUF backend"
+      ;;
+  esac
+}
+
 print_post_install_guide() {
   local watch_embed_mode=""
 
@@ -2350,6 +2465,7 @@ print_post_install_guide() {
       echo "  PDF vision captions:"
       echo "    disabled"
     fi
+    print_qmd_embedding_summary
     if [[ "$watch_embed_mode" == "1" ]]; then
       echo "  Watcher embeddings:"
       echo "    enabled"
@@ -2361,12 +2477,15 @@ print_post_install_guide() {
       echo "    deferred to scheduled/manual qmd refresh"
     fi
   elif [[ "$watch_embed_mode" == "1" ]]; then
+    print_qmd_embedding_summary
     echo "  Watcher embeddings:"
     echo "    enabled"
   elif [[ "$watch_embed_mode" == "auto" ]]; then
+    print_qmd_embedding_summary
     echo "  Watcher embeddings:"
     echo "    auto (embed only when qmd reports new pending work)"
   else
+    print_qmd_embedding_summary
     echo "  Watcher embeddings:"
     echo "    deferred to scheduled/manual qmd refresh"
   fi
@@ -3956,7 +4075,7 @@ EOF
   ALMANAC_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
   QMD_INDEX_NAME="almanac"
   QMD_COLLECTION_NAME="vault"
-  QMD_RUN_EMBED="1"
+  QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
@@ -4061,6 +4180,7 @@ EOF
   ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize almanac-priv as a git repo" "$default_enable_private_git")"
   ENABLE_QUARTO="$(ask_yes_no "Enable Quarto timer/hooks" "$default_enable_quarto")"
   SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"
+  collect_qmd_embedding_answers
   PDF_VISION_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible vision endpoint for PDF page captions (base /v1 or full /v1/chat/completions; type none to disable)" "$default_pdf_vision_endpoint")")"
   PDF_VISION_MODEL="$(normalize_optional_answer "$(ask "Vision model name for PDF page captions (type none to disable)" "$default_pdf_vision_model")")"
   PDF_VISION_API_KEY="$(ask_secret_with_default "Vision API key for PDF page captions (ENTER keeps current, type none to clear)" "$default_pdf_vision_api_key")"
@@ -7738,6 +7858,7 @@ EOF
   ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize almanac-priv as a git repo" "$default_enable_private_git")"
   ENABLE_QUARTO="$(ask_yes_no "Enable Quarto job container" "$default_enable_quarto")"
   SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"
+  collect_qmd_embedding_answers
   PDF_VISION_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible vision endpoint for PDF page captions (base /v1 or full /v1/chat/completions; type none to disable)" "$default_pdf_vision_endpoint")")"
   PDF_VISION_MODEL="$(normalize_optional_answer "$(ask "Vision model name for PDF page captions (type none to disable)" "$default_pdf_vision_model")")"
   PDF_VISION_API_KEY="$(ask_secret_with_default "Vision API key for PDF page captions (ENTER keeps current, type none to clear)" "$default_pdf_vision_api_key")"

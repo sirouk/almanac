@@ -32,6 +32,17 @@ run_qmd_embed() {
   local rc=0
   local -a embed_cmd=(qmd --index "$QMD_INDEX_NAME" embed)
 
+  case "${QMD_EMBED_PROVIDER:-local}" in
+    endpoint|openai-compatible|remote|api)
+      echo "QMD embedding endpoint provider selected; local qmd embedding is skipped. Text index is updated, and endpoint-backed qmd vector search can use QMD_EMBED_ENDPOINT/QMD_EMBED_ENDPOINT_MODEL when available." >&2
+      return 0
+      ;;
+    none|off|disabled)
+      echo "QMD embeddings are disabled; text index is updated." >&2
+      return 0
+      ;;
+  esac
+
   if [[ -n "${QMD_EMBED_MAX_DOCS_PER_BATCH:-}" ]]; then
     embed_cmd+=(--max-docs-per-batch "$QMD_EMBED_MAX_DOCS_PER_BATCH")
   fi

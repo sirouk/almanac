@@ -2005,10 +2005,10 @@ def test_qmd_refresh_bounds_embedding_work() -> None:
     expect("timeout --foreground" in refresh, refresh)
     expect("--max-docs-per-batch" in refresh and "--max-batch-mb" in refresh, refresh)
     expect("embeddings will retry on the next refresh" in refresh, refresh)
-    expect('QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-300}"' in common, common)
+    expect('QMD_EMBED_TIMEOUT_SECONDS="${QMD_EMBED_TIMEOUT_SECONDS:-120}"' in common, common)
     expect('QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"' in common, common)
     expect('write_kv QMD_EMBED_TIMEOUT_SECONDS "$QMD_EMBED_TIMEOUT_SECONDS"' in deploy, deploy)
-    expect("QMD_EMBED_TIMEOUT_SECONDS=300" in example, example)
+    expect("QMD_EMBED_TIMEOUT_SECONDS=120" in example, example)
     print("PASS test_qmd_refresh_bounds_embedding_work")
 
 

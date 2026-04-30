@@ -672,6 +672,8 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("import re" in body, body)
     expect(r"python(?:3)?\s*-\s*<<\s*\S+" in body, body)
     expect("tool_token_injected" in body, body)
+    expect("missing_tool_token_injected_but_brokered_tool_succeeded" in body, body)
+    expect("telemetry_missing_but_brokered_tool_succeeded" in body, body)
     expect("Hermes quota monitoring" in body, body)
     expect("mcp_almanac_mcp_vault_search_and_fetch" in body, body)
     expect("session did not invoke the brokered Almanac knowledge/vault MCP rail" in body, body)

@@ -126,9 +126,67 @@ def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
             os.environ.update(old_env)
 
 
+def test_health_watch_skips_during_deploy_operation() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "almanac_control_health_watch_deploy_marker_test")
+    health_watch = load_module(HEALTH_WATCH_PY, "almanac_health_watch_deploy_marker_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "almanac.env"
+        health_script = root / "fake-health.sh"
+        ran_marker = root / "health-ran"
+        write_config(config_path, config_values(root))
+        health_script.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    f"touch {json.dumps(str(ran_marker))}",
+                    "printf '[fail] transient deploy failure\\n\\nSummary: 0 ok, 0 warn, 1 fail\\n'",
+                    "exit 1",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        health_script.chmod(0o755)
+        state_dir = root / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "almanac-deploy-operation.json").write_text(
+            json.dumps(
+                {
+                    "operation": "upgrade",
+                    "pid": 12345,
+                    "started_at": "2026-04-30T20:00:00+00:00",
+                    "expires_at": "2999-01-01T00:00:00+00:00",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.copy()
+        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ALMANAC_HEALTH_WATCH_HEALTH_CMD"] = str(health_script)
+        try:
+            cfg = control.Config.from_env()
+            control.connect_db(cfg).close()
+            result = health_watch.run_once(cfg, timeout_seconds=5)
+            expect(result["status"] == "skipped", str(result))
+            expect(result["deploy_operation_active"] is True, str(result))
+            expect(result["notified"] is False, str(result))
+            expect(not ran_marker.exists(), "health-watch should not run health while deploy marker is active")
+            expect(notification_messages(cfg.db_path) == [], str(notification_messages(cfg.db_path)))
+            print("PASS test_health_watch_skips_during_deploy_operation")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_health_watch_notifies_on_changed_failures_and_recovery()
-    print("PASS all 1 health watch regression tests")
+    test_health_watch_skips_during_deploy_operation()
+    print("PASS all 2 health watch regression tests")
     return 0
 
 

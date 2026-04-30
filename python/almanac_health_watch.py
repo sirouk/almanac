@@ -12,7 +12,15 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from almanac_control import Config, connect_db, get_setting, queue_notification, upsert_setting, utc_now_iso
+from almanac_control import (
+    Config,
+    active_deploy_operation,
+    connect_db,
+    get_setting,
+    queue_notification,
+    upsert_setting,
+    utc_now_iso,
+)
 
 
 STATUS_KEY = "almanac_health_watch_last_status"
@@ -168,6 +176,21 @@ def run_once(
     strict: bool = False,
     notify_warnings: bool = False,
 ) -> dict[str, Any]:
+    deploy_operation = active_deploy_operation(cfg)
+    if deploy_operation is not None:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "returncode": 0,
+            "summary": {"ok": 0, "warn": 0, "fail": 0, "line": ""},
+            "fingerprint": "",
+            "notified": False,
+            "failures": 0,
+            "warnings": 0,
+            "deploy_operation_active": True,
+            "deploy_operation": deploy_operation,
+        }
+
     stdout = ""
     stderr = ""
     returncode = 0

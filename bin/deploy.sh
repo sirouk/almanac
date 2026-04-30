@@ -4791,6 +4791,58 @@ PY
   )
 }
 
+refresh_active_agent_context_root() {
+  local agent_id="" unix_user="" hermes_home="" home_dir=""
+  local agents_state_dir="${ALMANAC_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
+  local mcp_url="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp}"
+
+  if [[ ! -f "$ALMANAC_DB_PATH" || ! -x "$ALMANAC_REPO_DIR/bin/user-agent-refresh.sh" ]]; then
+    return 0
+  fi
+
+  while IFS=$'\t' read -r agent_id unix_user hermes_home; do
+    [[ -n "$agent_id" && -n "$unix_user" && -n "$hermes_home" ]] || continue
+    if ! getent passwd "$unix_user" >/dev/null 2>&1; then
+      echo "Skipping immediate user-agent refresh for $agent_id: unix user '$unix_user' is missing."
+      continue
+    fi
+    home_dir="$(resolve_user_home "$unix_user")"
+    echo "Refreshing user-agent managed context for $agent_id ($unix_user)..."
+    if ! runuser -u "$unix_user" -- env \
+      HOME="$home_dir" \
+      HERMES_HOME="$hermes_home" \
+      ALMANAC_AGENT_ID="$agent_id" \
+      ALMANAC_AGENTS_STATE_DIR="$agents_state_dir" \
+      ALMANAC_MCP_URL="$mcp_url" \
+      ALMANAC_MCP_PORT="$ALMANAC_MCP_PORT" \
+      ALMANAC_SHARED_REPO_DIR="$ALMANAC_REPO_DIR" \
+      "$ALMANAC_REPO_DIR/bin/user-agent-refresh.sh" >/dev/null; then
+      echo "Warning: immediate user-agent refresh failed for $agent_id ($unix_user); health will report the remaining state." >&2
+    fi
+  done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+conn.row_factory = sqlite3.Row
+rows = conn.execute(
+    """
+    SELECT agent_id, unix_user, hermes_home
+    FROM agents
+    WHERE role = 'user' AND status = 'active'
+    ORDER BY unix_user
+    """
+).fetchall()
+for row in rows:
+    print("\t".join([
+        str(row["agent_id"] or ""),
+        str(row["unix_user"] or ""),
+        str(row["hermes_home"] or ""),
+    ]))
+PY
+  )
+}
+
 chown_managed_paths() {
   if [[ -d "$ALMANAC_REPO_DIR" ]]; then
     find "$ALMANAC_REPO_DIR" -ignore_readdir_race \
@@ -4924,6 +4976,7 @@ disable_curator_native_gateway_system_unit_root() {
   fi
 
   systemctl disable --now "$unit" >/dev/null 2>&1 || true
+  systemctl reset-failed "$unit" >/dev/null 2>&1 || true
 }
 
 restart_shared_user_services_root() {
@@ -5054,6 +5107,7 @@ run_root_install() {
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
   maybe_offer_notion_ssot_setup_root
+  refresh_active_agent_context_root
 
   # Record the release state before health so the check_upgrade_state probe
   # doesn't false-warn about a missing release file on a first install.
@@ -5188,6 +5242,7 @@ run_root_upgrade() {
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
+  refresh_active_agent_context_root
 
   # Record the release state before health so the check_upgrade_state probe can
   # see the new deployed_commit. Services have already been restarted against

@@ -829,6 +829,7 @@ disable_curator_native_gateway_unit() {
   fi
 
   systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+  systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
 }
 
 main() {

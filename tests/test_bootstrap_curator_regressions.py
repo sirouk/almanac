@@ -428,6 +428,37 @@ printf 'LOG_END\\n'
     print("PASS test_operator_notify_falls_back_to_tui_only_when_target_verification_fails")
 
 
+def test_disable_curator_native_gateway_resets_failed_state() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    snippet = extract(text, "disable_curator_native_gateway_unit() {", "main() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = Path(tmp) / "systemctl.log"
+        script = f"""
+set -euo pipefail
+SYSTEMCTL_LOG={shlex.quote(str(log_path))}
+curator_native_gateway_unit_name() {{
+  printf '%s\\n' "hermes-gateway-curatorhash.service"
+}}
+systemctl() {{
+  printf '%s\\n' "$*" >> "$SYSTEMCTL_LOG"
+}}
+{snippet}
+disable_curator_native_gateway_unit
+cat "$SYSTEMCTL_LOG"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"native gateway reset case failed: {result.stderr}")
+        expect(
+            "--user disable --now hermes-gateway-curatorhash.service" in result.stdout,
+            f"expected disable command, got: {result.stdout!r}",
+        )
+        expect(
+            "--user reset-failed hermes-gateway-curatorhash.service" in result.stdout,
+            f"expected reset-failed command, got: {result.stdout!r}",
+        )
+    print("PASS test_disable_curator_native_gateway_resets_failed_state")
+
+
 def main() -> int:
     tests = [
         test_fresh_install_prompts_for_channels_even_with_tui_only_default,
@@ -440,6 +471,7 @@ def main() -> int:
         test_probe_hermes_state_does_not_override_selected_channels_without_gateway_setup,
         test_run_curator_gateway_setup_treats_root_restart_as_soft_success,
         test_operator_notify_falls_back_to_tui_only_when_target_verification_fails,
+        test_disable_curator_native_gateway_resets_failed_state,
     ]
     for test in tests:
         test()

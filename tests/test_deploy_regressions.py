@@ -635,6 +635,23 @@ def test_install_and_upgrade_mark_deploy_operation_window() -> None:
     print("PASS test_install_and_upgrade_mark_deploy_operation_window")
 
 
+def test_install_and_upgrade_run_user_agent_refresh_before_health() -> None:
+    text = DEPLOY_SH.read_text()
+    helper = extract(text, "refresh_active_agent_context_root() {", "chown_managed_paths() {")
+    install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
+    upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
+    expect("runuser -u \"$unix_user\" -- env" in helper, helper)
+    expect('"$ALMANAC_REPO_DIR/bin/user-agent-refresh.sh"' in helper, helper)
+    expect("ALMANAC_AGENT_ID=\"$agent_id\"" in helper, helper)
+    expect("ALMANAC_MCP_URL=\"$mcp_url\"" in helper, helper)
+    for name, snippet in [("install", install_snippet), ("upgrade", upgrade_snippet)]:
+        wait_index = snippet.index('wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT"')
+        refresh_index = snippet.index("refresh_active_agent_context_root", wait_index)
+        health_index = snippet.index('echo "Running health check..."', refresh_index)
+        expect(wait_index < refresh_index < health_index, f"{name} must refresh user-agent context after MCP is up and before health")
+    print("PASS test_install_and_upgrade_run_user_agent_refresh_before_health")
+
+
 def test_install_offers_optional_notion_ssot_setup_before_health() -> None:
     text = DEPLOY_SH.read_text()
     helper = extract(text, "maybe_offer_notion_ssot_setup_root() {", "print_post_install_guide() {")
@@ -2468,6 +2485,10 @@ cat "$SYSTEMCTL_LOG"
             "disable --now hermes-gateway-curatorhash.service" in result.stdout,
             f"expected exact native curator gateway unit disable, got: {result.stdout!r}",
         )
+        expect(
+            "reset-failed hermes-gateway-curatorhash.service" in result.stdout,
+            f"expected exact native curator gateway unit failed state reset, got: {result.stdout!r}",
+        )
     print("PASS test_restart_services_disables_only_curator_native_system_gateway_unit")
 
 
@@ -2881,6 +2902,7 @@ def main() -> int:
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
         test_install_and_upgrade_refresh_upgrade_check_before_health,
         test_install_and_upgrade_mark_deploy_operation_window,
+        test_install_and_upgrade_run_user_agent_refresh_before_health,
         test_install_offers_optional_notion_ssot_setup_before_health,
         test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants,
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,

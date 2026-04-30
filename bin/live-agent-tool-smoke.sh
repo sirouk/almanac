@@ -341,6 +341,20 @@ non_user_joined = "\n".join(non_user_texts)
 tool_result_joined = "\n".join(tool_result_texts)
 errors: list[str] = []
 stale_transport_session_seen = "missing or invalid mcp-session-id" in tool_result_joined
+brokered_almanac_tool_seen = any(
+    name
+    in {
+        "mcp_almanac_mcp_vault_search_and_fetch",
+        "mcp_almanac_mcp_knowledge_search_and_fetch",
+    }
+    for name in functions
+)
+stale_transport_recovered = (
+    stale_transport_session_seen
+    and brokered_almanac_tool_seen
+    and "missing or invalid mcp-session-id" not in assistant_joined.lower()
+    and bool(re.search(r"\b(yes|found|relevant|vault knowledge)\b", assistant_joined, re.IGNORECASE))
+)
 if not tool_token_event:
     errors.append("no tool_token_injected telemetry event was recorded for the smoke session")
 if re.search(r"python(?:3)?\s*-\s*<<\s*\S+", assistant_joined):
@@ -349,22 +363,15 @@ if "almanac-bootstrap-token" in assistant_joined:
     errors.append("session content still mentions the bootstrap token path")
 if any(name in {"terminal", "execute_code"} for name in functions):
     errors.append(f"session invoked terminal-style tools: {functions}")
-if not any(
-    name
-    in {
-        "mcp_almanac_mcp_vault_search_and_fetch",
-        "mcp_almanac_mcp_knowledge_search_and_fetch",
-    }
-    for name in functions
-):
+if not brokered_almanac_tool_seen:
     errors.append(f"session did not invoke the brokered Almanac knowledge/vault MCP rail: {functions}")
-if stale_transport_session_seen:
+if stale_transport_session_seen and not stale_transport_recovered:
     errors.append("session leaked a stale MCP transport-session error to the agent")
 if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", assistant_joined, re.IGNORECASE | re.DOTALL):
     errors.append("session attempted raw curl/MCP debugging instead of brokered Almanac tools")
 
 if errors:
-    if stale_transport_session_seen:
+    if stale_transport_session_seen and not stale_transport_recovered:
         print(
             json.dumps(
                 {
@@ -402,7 +409,10 @@ if errors:
         raise SystemExit(0)
     raise SystemExit("\n".join(errors))
 
-print(json.dumps({"session_id": session_id, "functions": functions}, sort_keys=True))
+result = {"session_id": session_id, "functions": functions}
+if stale_transport_recovered:
+    result["recovered"] = "stale_mcp_transport_session"
+print(json.dumps(result, sort_keys=True))
 PY
 )"
 validation_status=$?

@@ -682,6 +682,12 @@ python3 tests/test_deploy_regressions.py
 python3 tests/test_health_regressions.py
 ```
 
+Install local test and lint dependencies before running ArcLink validation:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 Preflight:
 
 ```bash

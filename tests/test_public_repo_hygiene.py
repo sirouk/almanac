@@ -15,15 +15,20 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def tracked_files() -> list[Path]:
-    output = subprocess.check_output(["git", "ls-files", "-z"], cwd=REPO)
+def public_repo_files() -> list[Path]:
+    output = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=REPO,
+    )
     return [REPO / item.decode("utf-8") for item in output.split(b"\0") if item]
 
 
 def read_text(path: Path) -> str | None:
+    if path.suffix.lower() in {".pdf"}:
+        return None
     try:
         return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+    except (OSError, UnicodeDecodeError):
         return None
 
 
@@ -53,22 +58,46 @@ PROVIDER_TERM_RE = re.compile(PROVIDER_TERM, re.IGNORECASE)
 PROVIDER_CONTEXT_RE = re.compile(
     r"(?i)("
     r"inference|provider|model|preset|api key|key|secret|thinking|openai-compatible|"
-    r"llm\.chutes\.ai|moonshotai|model-router|auto-failover|chutes:|chutes_|"
+    r"llm\.chutes\.ai|moonshotai|model-router|auto-failover|arclink_chutes|chutes:|chutes_|"
     r"chute\b|chutesai|custom-provider"
     r")"
 )
 PROVIDER_CODE_PATHS = {
+    Path("IMPLEMENTATION_PLAN.md"),
+    Path("PROMPT_build.md"),
+    Path("PROMPT_document.md"),
+    Path("PROMPT_lint.md"),
+    Path("PROMPT_plan.md"),
+    Path("PROMPT_refactor.md"),
+    Path("PROMPT_test.md"),
+    Path("ralphie.sh"),
     Path("bin/bootstrap-curator.sh"),
     Path("bin/common.sh"),
     Path("bin/deploy.sh"),
     Path("bin/init.sh"),
     Path("config/model-providers.yaml"),
+    Path("docs/arclink/brand-system.md"),
+    Path("docs/arclink/foundation.md"),
+    Path("docs/arclink/live-e2e-secrets-needed.md"),
+    Path("python/arclink_chutes.py"),
+    Path("python/arclink_dashboard.py"),
+    Path("python/arclink_executor.py"),
+    Path("python/arclink_provisioning.py"),
+    Path("python/arclink_product.py"),
     Path("python/almanac_model_providers.py"),
     Path("python/almanac_onboarding_flow.py"),
     Path("python/almanac_onboarding_provider_auth.py"),
+    Path("tests/test_arclink_chutes_and_adapters.py"),
+    Path("tests/test_arclink_admin_actions.py"),
+    Path("tests/test_arclink_executor.py"),
+    Path("tests/test_arclink_provisioning.py"),
+    Path("tests/test_arclink_product_config.py"),
     Path("tests/test_almanac_onboarding_prompts.py"),
     Path("tests/test_deploy_regressions.py"),
     Path("tests/test_model_providers.py"),
+}
+PROVIDER_CONTEXT_DIRS = {
+    Path("research"),
 }
 
 DEPLOYMENT_IDENTIFIER_PATTERNS = (
@@ -83,10 +112,32 @@ def relative(path: Path) -> Path:
     return path.relative_to(REPO)
 
 
-def test_no_private_operator_names_in_public_tracked_files() -> None:
+def provider_context_path(rel: Path) -> bool:
+    return rel in PROVIDER_CODE_PATHS or any(rel.is_relative_to(parent) for parent in PROVIDER_CONTEXT_DIRS)
+
+
+def test_public_repo_file_discovery_includes_untracked_text_and_skips_pdf_assets() -> None:
+    files = {relative(path) for path in public_repo_files()}
+    expected = {
+        Path("IMPLEMENTATION_PLAN.md"),
+        Path("docs/arclink/foundation.md"),
+        Path("python/arclink_entitlements.py"),
+        Path("research/RALPHIE_STRIPE_ALLOWLIST_STEERING.md"),
+        Path("specs/project_contracts.md"),
+        Path("tests/test_arclink_entitlements.py"),
+    }
+    missing = sorted(str(path) for path in expected if path not in files)
+    expect(not missing, "public hygiene discovery missed expected ArcLink files:\n" + "\n".join(missing))
+
+    brand_pdf = REPO / "docs" / "arclink" / "brand" / "ArcLink Brandkit.pdf"
+    expect(brand_pdf.exists(), f"missing brand kit source asset: {relative(brand_pdf)}")
+    expect(read_text(brand_pdf) is None, "brand kit PDF should be skipped by text hygiene scans")
+
+
+def test_no_private_operator_names_in_public_files() -> None:
     pattern = private_terms_pattern()
     violations: list[str] = []
-    for path in tracked_files():
+    for path in public_repo_files():
         rel = relative(path)
         if rel.parts and rel.parts[0] == "almanac-priv":
             continue
@@ -96,12 +147,12 @@ def test_no_private_operator_names_in_public_tracked_files() -> None:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if pattern.search(line):
                 violations.append(f"{rel}:{lineno}: {line.strip()}")
-    expect(not violations, "private operator terms found in public tracked files:\n" + "\n".join(violations[:50]))
+    expect(not violations, "private operator terms found in public files:\n" + "\n".join(violations[:50]))
 
 
 def test_provider_name_is_only_used_for_model_provider_context() -> None:
     violations: list[str] = []
-    for path in tracked_files():
+    for path in public_repo_files():
         rel = relative(path)
         if rel.parts and rel.parts[0] == "almanac-priv":
             continue
@@ -111,7 +162,7 @@ def test_provider_name_is_only_used_for_model_provider_context() -> None:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if not PROVIDER_TERM_RE.search(line):
                 continue
-            if rel in PROVIDER_CODE_PATHS or PROVIDER_CONTEXT_RE.search(line):
+            if provider_context_path(rel) or PROVIDER_CONTEXT_RE.search(line):
                 continue
             violations.append(f"{rel}:{lineno}: {line.strip()}")
     expect(
@@ -120,9 +171,9 @@ def test_provider_name_is_only_used_for_model_provider_context() -> None:
     )
 
 
-def test_no_live_deployment_identifiers_in_public_tracked_files() -> None:
+def test_no_live_deployment_identifiers_in_public_files() -> None:
     violations: list[str] = []
-    for path in tracked_files():
+    for path in public_repo_files():
         rel = relative(path)
         if rel.parts and rel.parts[0] == "almanac-priv":
             continue
@@ -135,14 +186,15 @@ def test_no_live_deployment_identifiers_in_public_tracked_files() -> None:
                     violations.append(f"{rel}:{lineno}: {label}: {line.strip()}")
     expect(
         not violations,
-        "live deployment identifiers found in public tracked files:\n" + "\n".join(violations[:50]),
+        "live deployment identifiers found in public files:\n" + "\n".join(violations[:50]),
     )
 
 
 def main() -> int:
-    test_no_private_operator_names_in_public_tracked_files()
+    test_public_repo_file_discovery_includes_untracked_text_and_skips_pdf_assets()
+    test_no_private_operator_names_in_public_files()
     test_provider_name_is_only_used_for_model_provider_context()
-    test_no_live_deployment_identifiers_in_public_tracked_files()
+    test_no_live_deployment_identifiers_in_public_files()
     print("PASS public repo hygiene")
     return 0
 

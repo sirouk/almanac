@@ -20,7 +20,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -29,8 +29,8 @@ _PYTHON_DIR = Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
-from almanac_model_providers import provider_default_model, resolve_preset_target
-from almanac_notion_ssot import (
+from almanac_model_providers import provider_default_model, resolve_preset_target  # noqa: E402
+from almanac_notion_ssot import (  # noqa: E402
     append_notion_block_children,
     create_notion_database,
     create_notion_page,
@@ -49,12 +49,11 @@ from almanac_notion_ssot import (
     retrieve_notion_page_markdown,
     retrieve_notion_user,
     update_notion_data_source,
-    update_notion_database,
     update_notion_page,
     resolve_notion_target,
 )
-from almanac_rpc_client import mcp_call
-from almanac_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host
+from almanac_rpc_client import mcp_call  # noqa: E402
+from almanac_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host  # noqa: E402
 
 
 AUTO_PROVISION_UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
@@ -933,6 +932,178 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS arclink_users (
+          user_id TEXT PRIMARY KEY,
+          email TEXT NOT NULL DEFAULT '',
+          display_name TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          stripe_customer_id TEXT NOT NULL DEFAULT '',
+          entitlement_state TEXT NOT NULL DEFAULT 'none',
+          entitlement_updated_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_webhook_events (
+          provider TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          event_type TEXT NOT NULL DEFAULT '',
+          received_at TEXT NOT NULL,
+          processed_at TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'received',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          PRIMARY KEY (provider, event_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_deployments (
+          deployment_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          prefix TEXT NOT NULL,
+          base_domain TEXT NOT NULL DEFAULT '',
+          agent_id TEXT NOT NULL DEFAULT '',
+          session_id TEXT NOT NULL DEFAULT '',
+          bootstrap_request_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_subscriptions (
+          subscription_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          stripe_customer_id TEXT NOT NULL DEFAULT '',
+          stripe_subscription_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          current_period_end TEXT NOT NULL DEFAULT '',
+          raw_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_provisioning_jobs (
+          job_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL,
+          job_kind TEXT NOT NULL,
+          status TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          idempotency_key TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          requested_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          error TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_dns_records (
+          record_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL,
+          hostname TEXT NOT NULL,
+          record_type TEXT NOT NULL,
+          target TEXT NOT NULL,
+          provider_record_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          last_checked_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_admins (
+          admin_id TEXT PRIMARY KEY,
+          email TEXT NOT NULL,
+          role TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_audit_log (
+          audit_id TEXT PRIMARY KEY,
+          actor_id TEXT NOT NULL DEFAULT '',
+          action TEXT NOT NULL,
+          target_kind TEXT NOT NULL DEFAULT '',
+          target_id TEXT NOT NULL DEFAULT '',
+          reason TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_service_health (
+          deployment_id TEXT NOT NULL,
+          service_name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          checked_at TEXT NOT NULL,
+          detail_json TEXT NOT NULL DEFAULT '{}',
+          PRIMARY KEY (deployment_id, service_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_events (
+          event_id TEXT PRIMARY KEY,
+          subject_kind TEXT NOT NULL,
+          subject_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_model_catalog (
+          provider TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          capabilities_json TEXT NOT NULL DEFAULT '{}',
+          confidential_compute INTEGER NOT NULL DEFAULT 0,
+          raw_json TEXT NOT NULL DEFAULT '{}',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (provider, model_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_onboarding_sessions (
+          session_id TEXT PRIMARY KEY,
+          channel TEXT NOT NULL,
+          channel_identity TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          current_step TEXT NOT NULL DEFAULT '',
+          email_hint TEXT NOT NULL DEFAULT '',
+          display_name_hint TEXT NOT NULL DEFAULT '',
+          selected_plan_id TEXT NOT NULL DEFAULT '',
+          selected_model_id TEXT NOT NULL DEFAULT '',
+          user_id TEXT NOT NULL DEFAULT '',
+          deployment_id TEXT NOT NULL DEFAULT '',
+          checkout_session_id TEXT NOT NULL DEFAULT '',
+          checkout_url TEXT NOT NULL DEFAULT '',
+          checkout_state TEXT NOT NULL DEFAULT '',
+          stripe_customer_id TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_onboarding_events (
+          event_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          channel TEXT NOT NULL DEFAULT '',
+          channel_identity TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_action_intents (
+          action_id TEXT PRIMARY KEY,
+          admin_id TEXT NOT NULL,
+          action_type TEXT NOT NULL,
+          target_kind TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          audit_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
         """
     )
     _migrate_notion_identity_claims_remove_legacy_nonce(conn)
@@ -1094,6 +1265,132 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON notion_webhook_events (batch_status, received_at)
         """
     )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_users_email
+        ON arclink_users (LOWER(email))
+        WHERE email != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_deployments_prefix
+        ON arclink_deployments (LOWER(prefix))
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_deployments_user_status
+        ON arclink_deployments (user_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_subscriptions_stripe_id
+        ON arclink_subscriptions (stripe_subscription_id)
+        WHERE stripe_subscription_id != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_subscriptions_user_status
+        ON arclink_subscriptions (user_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_provisioning_jobs_idempotency
+        ON arclink_provisioning_jobs (idempotency_key)
+        WHERE idempotency_key != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_provisioning_jobs_deployment_status
+        ON arclink_provisioning_jobs (deployment_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_dns_records_host_type
+        ON arclink_dns_records (LOWER(hostname), UPPER(record_type))
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_admins_email
+        ON arclink_admins (LOWER(email))
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_audit_log_target_created
+        ON arclink_audit_log (target_kind, target_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_events_subject_created
+        ON arclink_events (subject_kind, subject_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_webhook_events_received
+        ON arclink_webhook_events (provider, received_at)
+        """
+    )
+    _ensure_column(conn, "arclink_users", "entitlement_state", "TEXT NOT NULL DEFAULT 'none'")
+    _ensure_column(conn, "arclink_users", "entitlement_updated_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_onboarding_sessions", "completed_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_onboarding_active_identity
+        ON arclink_onboarding_sessions (LOWER(channel), LOWER(channel_identity))
+        WHERE channel_identity != ''
+          AND status IN (
+            'started',
+            'collecting',
+            'checkout_open',
+            'payment_pending',
+            'paid',
+            'provisioning_ready',
+            'first_contacted'
+          )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_onboarding_checkout_session
+        ON arclink_onboarding_sessions (checkout_session_id)
+        WHERE checkout_session_id != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_onboarding_events_session_created
+        ON arclink_onboarding_events (session_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_onboarding_events_type_created
+        ON arclink_onboarding_events (event_type, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_action_intents_idempotency
+        ON arclink_action_intents (idempotency_key)
+        WHERE idempotency_key != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_action_intents_target_status
+        ON arclink_action_intents (target_kind, target_id, status, created_at)
+        """
+    )
     conn.commit()
 
 
@@ -1188,6 +1485,666 @@ def upsert_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default
+
+
+ARCLINK_DEPLOYMENT_PREFIX_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
+ARCLINK_DEPLOYMENT_PREFIX_DENYLIST = {
+    "admin",
+    "api",
+    "billing",
+    "cloudflare",
+    "root",
+    "stripe",
+    "support",
+    "ssh",
+    "traefik",
+    "www",
+}
+ARCLINK_PREFIX_ADJECTIVES = (
+    "amber",
+    "brisk",
+    "calm",
+    "clear",
+    "cobalt",
+    "dawn",
+    "ember",
+    "lunar",
+    "novel",
+    "silver",
+)
+ARCLINK_PREFIX_NOUNS = (
+    "anchor",
+    "bridge",
+    "harbor",
+    "lantern",
+    "signal",
+    "summit",
+    "thread",
+    "vault",
+    "vertex",
+    "window",
+)
+ARCLINK_ENTITLEMENT_STATES = {"none", "paid", "comp", "past_due", "cancelled"}
+ARCLINK_PROVISIONING_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
+ARCLINK_PROVISIONING_JOB_TRANSITIONS = {
+    "queued": {"running", "cancelled"},
+    "running": {"succeeded", "failed", "cancelled"},
+    "failed": {"queued"},
+    "succeeded": set(),
+    "cancelled": set(),
+}
+
+
+def _arclink_json(value: Mapping[str, Any] | Sequence[Any] | str | None, *, default: str = "{}") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("ArcLink JSON fields must contain valid JSON") from exc
+        return value
+    return json.dumps(value, sort_keys=True)
+
+
+def _arclink_commit(conn: sqlite3.Connection, *, commit: bool) -> None:
+    if commit:
+        conn.commit()
+
+
+def _arclink_id(prefix: str) -> str:
+    return f"{prefix}_{secrets.token_hex(12)}"
+
+
+def normalize_arclink_deployment_prefix(prefix: str) -> str:
+    normalized = str(prefix or "").strip().lower()
+    if not ARCLINK_DEPLOYMENT_PREFIX_PATTERN.match(normalized):
+        raise ValueError("ArcLink deployment prefix must be 3-32 lowercase letters, numbers, or hyphens")
+    for denied in ARCLINK_DEPLOYMENT_PREFIX_DENYLIST:
+        if denied in normalized:
+            raise ValueError(f"ArcLink deployment prefix contains a reserved substring: {denied}")
+    return normalized
+
+
+def _arclink_rng_choice(values: Sequence[str], rng: Any | None) -> str:
+    if rng is not None and hasattr(rng, "choice"):
+        return str(rng.choice(tuple(values)))
+    return str(secrets.choice(tuple(values)))
+
+
+def _arclink_rng_hex4(rng: Any | None) -> str:
+    if rng is not None and hasattr(rng, "getrandbits"):
+        return f"{int(rng.getrandbits(16)):04x}"
+    return secrets.token_hex(2)
+
+
+def generate_arclink_deployment_prefix(*, rng: Any | None = None) -> str:
+    prefix = "-".join(
+        (
+            _arclink_rng_choice(ARCLINK_PREFIX_ADJECTIVES, rng),
+            _arclink_rng_choice(ARCLINK_PREFIX_NOUNS, rng),
+            _arclink_rng_hex4(rng),
+        )
+    )
+    return normalize_arclink_deployment_prefix(prefix)
+
+
+def reserve_generated_arclink_deployment_prefix(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    user_id: str,
+    base_domain: str = "",
+    agent_id: str = "",
+    session_id: str = "",
+    bootstrap_request_id: str = "",
+    status: str = "reserved",
+    metadata: Mapping[str, Any] | None = None,
+    rng: Any | None = None,
+    max_attempts: int = 8,
+) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for _ in range(max(1, int(max_attempts))):
+        prefix = generate_arclink_deployment_prefix(rng=rng)
+        try:
+            return reserve_arclink_deployment_prefix(
+                conn,
+                deployment_id=deployment_id,
+                user_id=user_id,
+                prefix=prefix,
+                base_domain=base_domain,
+                agent_id=agent_id,
+                session_id=session_id,
+                bootstrap_request_id=bootstrap_request_id,
+                status=status,
+                metadata=metadata,
+            )
+        except ValueError as exc:
+            last_error = exc
+            if "already reserved" not in str(exc):
+                raise
+    raise ValueError("ArcLink could not reserve a unique deployment prefix after retries") from last_error
+
+
+def reserve_arclink_deployment_prefix(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    user_id: str,
+    prefix: str,
+    base_domain: str = "",
+    agent_id: str = "",
+    session_id: str = "",
+    bootstrap_request_id: str = "",
+    status: str = "reserved",
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    clean_prefix = normalize_arclink_deployment_prefix(prefix)
+    now = utc_now_iso()
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_deployments (
+              deployment_id, user_id, prefix, base_domain, agent_id, session_id,
+              bootstrap_request_id, status, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                deployment_id,
+                user_id,
+                clean_prefix,
+                base_domain,
+                agent_id,
+                session_id,
+                bootstrap_request_id,
+                status,
+                _arclink_json(metadata),
+                now,
+                now,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(f"ArcLink deployment prefix is already reserved: {clean_prefix}") from exc
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone())
+
+
+def upsert_arclink_user(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    email: str = "",
+    display_name: str = "",
+    status: str = "active",
+    stripe_customer_id: str = "",
+    entitlement_state: str | None = None,
+    commit: bool = True,
+) -> dict[str, Any]:
+    entitlement_supplied = entitlement_state is not None
+    clean_state = str(entitlement_state if entitlement_supplied else "none").strip().lower()
+    if clean_state not in ARCLINK_ENTITLEMENT_STATES:
+        raise ValueError(f"unsupported ArcLink entitlement state: {clean_state}")
+    now = utc_now_iso()
+    entitlement_updated_at = now if entitlement_supplied else ""
+    conn.execute(
+        """
+        INSERT INTO arclink_users (
+          user_id, email, display_name, status, stripe_customer_id,
+          entitlement_state, entitlement_updated_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          email = CASE WHEN excluded.email != '' THEN excluded.email ELSE arclink_users.email END,
+          display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE arclink_users.display_name END,
+          status = excluded.status,
+          stripe_customer_id = CASE
+            WHEN excluded.stripe_customer_id != '' THEN excluded.stripe_customer_id
+            ELSE arclink_users.stripe_customer_id
+          END,
+          entitlement_state = CASE
+            WHEN ? THEN excluded.entitlement_state
+            ELSE arclink_users.entitlement_state
+          END,
+          entitlement_updated_at = CASE
+            WHEN ? THEN excluded.entitlement_updated_at
+            ELSE arclink_users.entitlement_updated_at
+          END,
+          updated_at = excluded.updated_at
+        """,
+        (
+            user_id,
+            email,
+            display_name,
+            status,
+            stripe_customer_id,
+            clean_state,
+            entitlement_updated_at,
+            now,
+            now,
+            1 if entitlement_supplied else 0,
+            1 if entitlement_supplied else 0,
+        ),
+    )
+    _arclink_commit(conn, commit=commit)
+    return dict(conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone())
+
+
+def set_arclink_user_entitlement(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    entitlement_state: str,
+    stripe_customer_id: str = "",
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_state = str(entitlement_state or "").strip().lower()
+    if clean_state not in ARCLINK_ENTITLEMENT_STATES:
+        raise ValueError(f"unsupported ArcLink entitlement state: {clean_state}")
+    row = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
+    if row is None:
+        return upsert_arclink_user(
+            conn,
+            user_id=user_id,
+            stripe_customer_id=stripe_customer_id,
+            entitlement_state=clean_state,
+            commit=commit,
+        )
+    conn.execute(
+        """
+        UPDATE arclink_users
+        SET entitlement_state = ?,
+            entitlement_updated_at = ?,
+            stripe_customer_id = CASE WHEN ? != '' THEN ? ELSE stripe_customer_id END,
+            updated_at = ?
+        WHERE user_id = ?
+        """,
+        (clean_state, utc_now_iso(), stripe_customer_id, stripe_customer_id, utc_now_iso(), user_id),
+    )
+    _arclink_commit(conn, commit=commit)
+    return dict(conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone())
+
+
+def append_arclink_event(
+    conn: sqlite3.Connection,
+    *,
+    subject_kind: str,
+    subject_id: str,
+    event_type: str,
+    metadata: Mapping[str, Any] | None = None,
+    event_id: str = "",
+    commit: bool = True,
+) -> str:
+    clean_id = event_id or _arclink_id("evt")
+    conn.execute(
+        """
+        INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (clean_id, subject_kind, subject_id, event_type, _arclink_json(metadata), utc_now_iso()),
+    )
+    _arclink_commit(conn, commit=commit)
+    return clean_id
+
+
+def _arclink_comp_audit_exists(conn: sqlite3.Connection, *, user_id: str, deployment_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM arclink_audit_log
+        WHERE action = 'comp_subscription'
+          AND (
+            (target_kind = 'user' AND target_id = ?)
+            OR (target_kind = 'deployment' AND target_id = ?)
+          )
+        LIMIT 1
+        """,
+        (user_id, deployment_id),
+    ).fetchone()
+    return row is not None
+
+
+def arclink_deployment_entitlement_state(conn: sqlite3.Connection, *, deployment_id: str) -> str:
+    row = conn.execute(
+        """
+        SELECT d.deployment_id, d.user_id, u.entitlement_state
+        FROM arclink_deployments d
+        LEFT JOIN arclink_users u ON u.user_id = d.user_id
+        WHERE d.deployment_id = ?
+        """,
+        (deployment_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(deployment_id)
+    user_id = str(row["user_id"] or "")
+    if _arclink_comp_audit_exists(conn, user_id=user_id, deployment_id=deployment_id):
+        return "comp"
+    return str(row["entitlement_state"] or "none")
+
+
+def arclink_deployment_can_provision(conn: sqlite3.Connection, *, deployment_id: str) -> bool:
+    return arclink_deployment_entitlement_state(conn, deployment_id=deployment_id) in {"paid", "comp"}
+
+
+def advance_arclink_entitlement_gate(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    commit: bool = True,
+) -> bool:
+    if not arclink_deployment_can_provision(conn, deployment_id=deployment_id):
+        return False
+    row = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
+    if row is None:
+        raise KeyError(deployment_id)
+    if str(row["status"] or "") != "entitlement_required":
+        return False
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET status = 'provisioning_ready', updated_at = ?
+        WHERE deployment_id = ? AND status = 'entitlement_required'
+        """,
+        (now, deployment_id),
+    )
+    _arclink_commit(conn, commit=commit)
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="entitlement_gate_lifted",
+        metadata={"entitlement_state": arclink_deployment_entitlement_state(conn, deployment_id=deployment_id)},
+        commit=commit,
+    )
+    return True
+
+
+def advance_arclink_entitlement_gates_for_user(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    commit: bool = True,
+) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT deployment_id
+        FROM arclink_deployments
+        WHERE user_id = ? AND status = 'entitlement_required'
+        ORDER BY created_at, deployment_id
+        """,
+        (user_id,),
+    ).fetchall()
+    advanced: list[str] = []
+    for row in rows:
+        deployment_id = str(row["deployment_id"] or "")
+        if advance_arclink_entitlement_gate(conn, deployment_id=deployment_id, commit=commit):
+            advanced.append(deployment_id)
+    return advanced
+
+
+def comp_arclink_subscription(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    actor_id: str,
+    reason: str,
+    deployment_id: str = "",
+) -> dict[str, Any]:
+    clean_reason = str(reason or "").strip()
+    if not clean_reason:
+        raise ValueError("ArcLink comp subscription actions require a reason")
+    clean_deployment_id = str(deployment_id or "").strip()
+    if clean_deployment_id:
+        deployment = conn.execute(
+            "SELECT user_id, status FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment_id,),
+        ).fetchone()
+        if deployment is None:
+            raise KeyError(clean_deployment_id)
+        if str(deployment["user_id"] or "") != user_id:
+            raise ValueError("targeted ArcLink comp deployment does not belong to user")
+    target_kind = "deployment" if clean_deployment_id else "user"
+    target_id = clean_deployment_id or user_id
+    append_arclink_audit(
+        conn,
+        action="comp_subscription",
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+        reason=clean_reason,
+        metadata={"user_id": user_id, "deployment_id": clean_deployment_id},
+    )
+    if clean_deployment_id:
+        user = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
+        if user is None:
+            user = upsert_arclink_user(conn, user_id=user_id, entitlement_state="none")
+        else:
+            user = dict(user)
+        now = utc_now_iso()
+        cursor = conn.execute(
+            """
+            UPDATE arclink_deployments
+            SET status = 'provisioning_ready', updated_at = ?
+            WHERE deployment_id = ? AND user_id = ? AND status = 'entitlement_required'
+            """,
+            (now, clean_deployment_id, user_id),
+        )
+        conn.commit()
+        if cursor.rowcount:
+            append_arclink_event(
+                conn,
+                subject_kind="deployment",
+                subject_id=clean_deployment_id,
+                event_type="entitlement_gate_lifted",
+                metadata={"entitlement_state": "deployment_comp", "comp_scope": "deployment"},
+            )
+        return dict(user)
+    user = set_arclink_user_entitlement(conn, user_id=user_id, entitlement_state="comp")
+    advance_arclink_entitlement_gates_for_user(conn, user_id=user_id)
+    return user
+
+
+def append_arclink_audit(
+    conn: sqlite3.Connection,
+    *,
+    action: str,
+    actor_id: str = "",
+    target_kind: str = "",
+    target_id: str = "",
+    reason: str = "",
+    metadata: Mapping[str, Any] | None = None,
+    audit_id: str = "",
+    commit: bool = True,
+) -> str:
+    clean_id = audit_id or _arclink_id("aud")
+    conn.execute(
+        """
+        INSERT INTO arclink_audit_log (
+          audit_id, actor_id, action, target_kind, target_id, reason, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (clean_id, actor_id, action, target_kind, target_id, reason, _arclink_json(metadata), utc_now_iso()),
+    )
+    _arclink_commit(conn, commit=commit)
+    return clean_id
+
+
+def upsert_arclink_service_health(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    service_name: str,
+    status: str,
+    detail: Mapping[str, Any] | None = None,
+    checked_at: str = "",
+) -> None:
+    checked = checked_at or utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO arclink_service_health (deployment_id, service_name, status, checked_at, detail_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(deployment_id, service_name) DO UPDATE SET
+          status = excluded.status,
+          checked_at = excluded.checked_at,
+          detail_json = excluded.detail_json
+        """,
+        (deployment_id, service_name, status, checked, _arclink_json(detail)),
+    )
+    conn.commit()
+
+
+def upsert_arclink_subscription_mirror(
+    conn: sqlite3.Connection,
+    *,
+    subscription_id: str,
+    user_id: str,
+    status: str,
+    stripe_customer_id: str = "",
+    stripe_subscription_id: str = "",
+    current_period_end: str = "",
+    raw: Mapping[str, Any] | None = None,
+    commit: bool = True,
+) -> None:
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO arclink_subscriptions (
+          subscription_id, user_id, stripe_customer_id, stripe_subscription_id,
+          status, current_period_end, raw_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(subscription_id) DO UPDATE SET
+          user_id = excluded.user_id,
+          stripe_customer_id = excluded.stripe_customer_id,
+          stripe_subscription_id = excluded.stripe_subscription_id,
+          status = excluded.status,
+          current_period_end = excluded.current_period_end,
+          raw_json = excluded.raw_json,
+          updated_at = excluded.updated_at
+        """,
+        (
+            subscription_id,
+            user_id,
+            stripe_customer_id,
+            stripe_subscription_id,
+            status,
+            current_period_end,
+            _arclink_json(raw),
+            now,
+            now,
+        ),
+    )
+    _arclink_commit(conn, commit=commit)
+
+
+def create_arclink_provisioning_job(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    deployment_id: str,
+    job_kind: str,
+    idempotency_key: str = "",
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO arclink_provisioning_jobs (
+          job_id, deployment_id, job_kind, status, idempotency_key, metadata_json, requested_at
+        ) VALUES (?, ?, ?, 'queued', ?, ?, ?)
+        """,
+        (job_id, deployment_id, job_kind, idempotency_key, _arclink_json(metadata), utc_now_iso()),
+    )
+    conn.commit()
+
+
+def transition_arclink_provisioning_job(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    status: str,
+    error: str = "",
+) -> None:
+    clean_status = str(status or "").strip().lower()
+    if clean_status not in ARCLINK_PROVISIONING_JOB_STATUSES:
+        raise ValueError(f"unsupported ArcLink provisioning job status: {clean_status}")
+    row = conn.execute("SELECT status, attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise KeyError(job_id)
+    current = str(row["status"] or "")
+    if clean_status != current and clean_status not in ARCLINK_PROVISIONING_JOB_TRANSITIONS.get(current, set()):
+        raise ValueError(f"invalid ArcLink provisioning job transition: {current} -> {clean_status}")
+    now = utc_now_iso()
+    reset_for_retry = current == "failed" and clean_status == "queued"
+    started_at = now if clean_status == "running" else None
+    finished_at = now if clean_status in {"succeeded", "failed", "cancelled"} else None
+    attempt_increment = 1 if clean_status == "running" and current != "running" else 0
+    conn.execute(
+        """
+        UPDATE arclink_provisioning_jobs
+        SET status = ?,
+            attempt_count = attempt_count + ?,
+            started_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, started_at) END,
+            finished_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, finished_at) END,
+            error = ?
+        WHERE job_id = ?
+        """,
+        (clean_status, attempt_increment, reset_for_retry, started_at, reset_for_retry, finished_at, error, job_id),
+    )
+    conn.commit()
+
+
+def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
+    checks = [
+        (
+            "deployment_agent_missing",
+            "arclink_deployments",
+            "deployment_id",
+            "agent_id",
+            "agents",
+            "agent_id",
+        ),
+        (
+            "deployment_session_missing",
+            "arclink_deployments",
+            "deployment_id",
+            "session_id",
+            "onboarding_sessions",
+            "session_id",
+        ),
+        (
+            "deployment_bootstrap_request_missing",
+            "arclink_deployments",
+            "deployment_id",
+            "bootstrap_request_id",
+            "bootstrap_requests",
+            "request_id",
+        ),
+        (
+            "subscription_user_missing",
+            "arclink_subscriptions",
+            "subscription_id",
+            "user_id",
+            "arclink_users",
+            "user_id",
+        ),
+    ]
+    drift: list[dict[str, str]] = []
+    for kind, source_table, source_id_col, ref_col, target_table, target_col in checks:
+        rows = conn.execute(
+            f"""
+            SELECT s.{source_id_col} AS source_id, s.{ref_col} AS reference_id
+            FROM {source_table} s
+            LEFT JOIN {target_table} t ON t.{target_col} = s.{ref_col}
+            WHERE s.{ref_col} != '' AND t.{target_col} IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            drift.append(
+                {
+                    "kind": kind,
+                    "source_id": str(row["source_id"] or ""),
+                    "reference_id": str(row["reference_id"] or ""),
+                }
+            )
+    return drift
 
 
 def _notion_identity_claim_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -10617,7 +11574,6 @@ def _build_today_plate(
             lines.append("- Live read routing: use notion.fetch for exact page URLs/ids and notion.query only for one exact live structured database target. Do not fan out notion.query across discovered databases during a generic plate check. Use ssot.read only after Notion verification and only for scoped brokered targets; unverified page reads are refused by design.")
             lines.append("- For brokered writes to the SSOT page or its descendants use ssot.write; use ssot.preflight first when scope is uncertain.")
             return "\n".join(lines)
-        db_titles = [str(db.get("title") or "").strip() for db in task_dbs]
         per_db_channels: list[str] = []
         for db in task_dbs[:6]:
             channels = ", ".join(db.get("people_properties") or []) or "—"

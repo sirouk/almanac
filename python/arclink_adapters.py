@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import time
+from dataclasses import dataclass
+from typing import Any
+
+
+class StripeWebhookError(ValueError):
+    pass
+
+
+class FakeStripeClient:
+    def __init__(self) -> None:
+        self.checkout_sessions: dict[str, dict[str, Any]] = {}
+        self.portal_sessions: dict[str, dict[str, Any]] = {}
+
+    def create_checkout_session(
+        self,
+        *,
+        user_id: str,
+        price_id: str,
+        success_url: str,
+        cancel_url: str,
+        client_reference_id: str = "",
+        metadata: dict[str, str] | None = None,
+        idempotency_key: str = "",
+    ) -> dict[str, Any]:
+        if idempotency_key:
+            digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:18]
+            session_id = f"cs_test_{digest}"
+        else:
+            session_id = f"cs_test_{len(self.checkout_sessions) + 1}"
+        session = {
+            "id": session_id,
+            "user_id": user_id,
+            "price_id": price_id,
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "client_reference_id": client_reference_id or user_id,
+            "metadata": dict(metadata or {}),
+            "url": f"https://stripe.test/checkout/{session_id}",
+        }
+        self.checkout_sessions[session_id] = session
+        return dict(session)
+
+    def create_portal_session(self, *, customer_id: str, return_url: str) -> dict[str, Any]:
+        session_id = f"bps_test_{len(self.portal_sessions) + 1}"
+        session = {"id": session_id, "customer_id": customer_id, "return_url": return_url, "url": f"https://stripe.test/portal/{session_id}"}
+        self.portal_sessions[session_id] = session
+        return dict(session)
+
+
+def sign_stripe_webhook(payload: str, secret: str, *, timestamp: int | None = None) -> str:
+    stamp = int(time.time()) if timestamp is None else int(timestamp)
+    signed_payload = f"{stamp}.{payload}".encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return f"t={stamp},v1={digest}"
+
+
+def verify_stripe_webhook(payload: str, signature: str, secret: str, *, tolerance_seconds: int = 300) -> dict[str, Any]:
+    if not str(secret or "").strip():
+        raise StripeWebhookError("Stripe webhook secret must be non-blank")
+    parts: dict[str, str] = {}
+    for item in signature.split(","):
+        key, _, value = item.partition("=")
+        if key and value:
+            parts[key] = value
+    try:
+        timestamp = int(parts["t"])
+    except (KeyError, ValueError) as exc:
+        raise StripeWebhookError("missing Stripe webhook timestamp") from exc
+    if abs(int(time.time()) - timestamp) > tolerance_seconds:
+        raise StripeWebhookError("Stripe webhook timestamp is outside tolerance")
+    expected = sign_stripe_webhook(payload, secret, timestamp=timestamp).split("v1=", 1)[1]
+    if not hmac.compare_digest(parts.get("v1", ""), expected):
+        raise StripeWebhookError("Stripe webhook signature mismatch")
+    parsed = json.loads(payload)
+    if not isinstance(parsed, dict):
+        raise StripeWebhookError("Stripe webhook payload must be an object")
+    return parsed
+
+
+@dataclass(frozen=True)
+class DnsRecord:
+    hostname: str
+    record_type: str
+    target: str
+    proxied: bool = True
+
+
+class FakeCloudflareClient:
+    def __init__(self) -> None:
+        self.records: dict[tuple[str, str], DnsRecord] = {}
+
+    def upsert_record(self, record: DnsRecord) -> DnsRecord:
+        key = (record.hostname, record.record_type.upper())
+        stored = DnsRecord(
+            hostname=record.hostname,
+            record_type=record.record_type.upper(),
+            target=record.target,
+            proxied=record.proxied,
+        )
+        self.records[key] = stored
+        return stored
+
+    def drift(self, desired: list[DnsRecord]) -> list[str]:
+        drift: list[str] = []
+        for record in desired:
+            key = (record.hostname, record.record_type.upper())
+            actual = self.records.get(key)
+            if actual is None:
+                drift.append(f"missing {record.record_type.upper()} {record.hostname}")
+            elif actual.target != record.target or actual.proxied != record.proxied:
+                drift.append(f"changed {record.record_type.upper()} {record.hostname}")
+        return drift
+
+
+def arclink_hostnames(prefix: str, base_domain: str) -> dict[str, str]:
+    clean_prefix = str(prefix or "").strip().lower()
+    clean_domain = str(base_domain or "").strip().lower().strip(".")
+    if not clean_prefix or not clean_domain:
+        raise ValueError("prefix and base_domain are required")
+    return {
+        "dashboard": f"u-{clean_prefix}.{clean_domain}",
+        "files": f"files-{clean_prefix}.{clean_domain}",
+        "code": f"code-{clean_prefix}.{clean_domain}",
+        "hermes": f"hermes-{clean_prefix}.{clean_domain}",
+    }
+
+
+def render_traefik_http_labels(*, service_name: str, hostname: str, port: int) -> dict[str, str]:
+    router = f"arclink-{service_name}"
+    return {
+        "traefik.enable": "true",
+        f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`)",
+        f"traefik.http.routers.{router}.entrypoints": "websecure",
+        f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
+    }

@@ -363,6 +363,53 @@ git diff --check
 
 ## Later Phases
 
+## Next BUILD Slice: ArcLink Product Surface Foundation
+
+The backend foundation is ready for the next product slice. Build the first
+usable ArcLink product surface without live provider mutation:
+
+- Public website onboarding entry point with web form workflow backed by the
+  existing public onboarding contract.
+- User dashboard surface for deployment state, access links, billing state,
+  bot connection state, model/provider state, qmd/memory freshness, service
+  health, events, and skill education.
+- Admin dashboard surface for onboarding funnel, payments/subscriptions,
+  deployments, host/service health, DNS drift, provisioning jobs, audit log,
+  queued actions, failures, and release/maintenance posture.
+- Shared API boundary that reads from existing `arclink_*` helpers and queues
+  audited admin actions instead of executing live mutations directly.
+- Telegram and Discord public bot adapter skeletons that share the same
+  onboarding session semantics as the website.
+- Brand-faithful responsive UI using the ArcLink brand system: dark
+  operational control-room tone, Jet/Carbon surfaces, Signal Orange actions,
+  Space Grotesk/Inter-compatible typography, no generic AI purple gradients,
+  and no marketing-only first screen.
+
+Keep this slice no-secret and locally testable:
+
+- Use fake adapters/fixtures for Stripe, Cloudflare, Chutes, Telegram,
+  Discord, deployment hosts, and dashboard data where live credentials are
+  absent.
+- Do not enable real Docker Compose, Cloudflare, Chutes, Stripe, Hetzner,
+  Telegram, Discord, Notion, OAuth, or host mutation.
+- Add browser/unit/API tests appropriate to the stack Ralphie introduces.
+- Keep live E2E instructions in `docs/arclink/live-e2e-secrets-needed.md`
+  current as each surface lands.
+
+Acceptance for this slice:
+
+- A local developer can start the product surface without secrets and see the
+  public onboarding flow, user dashboard, and admin dashboard using fixture or
+  local control-plane data.
+- Mobile and desktop responsive layouts are usable and match
+  `docs/arclink/brand-system.md`.
+- Admin actions remain reason-required, queued, idempotent, audited, and
+  secret-free.
+- Public bot adapters expose deterministic conversation-state contracts and do
+  not confuse public onboarding bots with private user-agent bots.
+- Documentation clearly separates shipped no-secret behavior from live E2E
+  prerequisites.
+
 ### Phase 9: Live Provisioning Execution
 
 - Enable real Docker Compose execution only in an operator-controlled E2E

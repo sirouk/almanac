@@ -1131,7 +1131,7 @@ printf 'DISCOVERED=%s\\n' "${{DISCOVERED_CONFIG:-}}"
 """
         result = bash(script)
         expect(result.returncode == 0, f"discover_existing_config case failed: {result.stderr}")
-        expect(f"STATUS=0" in result.stdout, f"expected discover_existing_config to succeed, got: {result.stdout!r}")
+        expect("STATUS=0" in result.stdout, f"expected discover_existing_config to succeed, got: {result.stdout!r}")
         expect(
             f"DISCOVERED={config_path}" in result.stdout,
             f"expected artifact priv-dir hint to resolve {config_path}, got: {result.stdout!r}",

@@ -45,10 +45,35 @@ extract_tailscale_enable_url() {
     | sed 's/[).,;]*$//' || true
 }
 
+tailscale_command_timeout_duration() {
+  local requested="${1:-60s}"
+
+  awk -v requested="$requested" '
+    BEGIN {
+      if (requested == "") {
+        requested = "60s"
+      }
+      if (requested !~ /^([0-9]+(\.[0-9]+)?|\.[0-9]+)[smhd]?$/) {
+        print requested
+        exit
+      }
+      unit = substr(requested, length(requested), 1)
+      seconds = requested + 0
+      if (unit == "m") {
+        seconds *= 60
+      } else if (unit == "h") {
+        seconds *= 3600
+      } else if (unit == "d") {
+        seconds *= 86400
+      }
+      print (seconds < 1 ? "1s" : requested)
+    }
+  '
+}
+
 maybe_wait_for_tailscale_serve_enablement() {
   local output="${1:-}"
   local enable_url=""
-  local answer=""
 
   enable_url="$(extract_tailscale_enable_url "$output")"
   if [[ -z "$enable_url" ]]; then
@@ -57,7 +82,7 @@ maybe_wait_for_tailscale_serve_enablement() {
 
   printf '%s\n' "$output" >&2
   echo >&2
-  echo "Tailscale Serve is not enabled for this tailnet/node yet." >&2
+  echo "Serve is not enabled on your tailnet; approve this node before retrying Tailscale Serve." >&2
   echo "Open this approval URL as a tailnet admin:" >&2
   echo "  $enable_url" >&2
   echo "This Serve route is tailnet-only for Nextcloud and internal MCP routes." >&2
@@ -65,7 +90,7 @@ maybe_wait_for_tailscale_serve_enablement() {
   echo "  https://login.tailscale.com/admin/dns" >&2
   echo "Press ENTER after enabling Tailscale Serve to retry, or Ctrl+C to stop." >&2
   if [[ "${ALMANAC_TAILSCALE_INTERACTIVE_ENABLE:-1}" == "1" && -t 0 ]]; then
-    read -r -p "> " answer
+    read -r -p "> "
     return 0
   fi
   echo "After enabling Serve, rerun ./deploy.sh install." >&2
@@ -75,12 +100,19 @@ maybe_wait_for_tailscale_serve_enablement() {
 run_serve_cmd() {
   local output=""
   local status=0
-  local attempt=0
+  local _attempt=""
   local timeout_duration="${ALMANAC_TAILSCALE_COMMAND_TIMEOUT:-60s}"
+  local command_timeout_duration=""
+  local output_file=""
 
-  for attempt in 1 2 3 4 5; do
+  command_timeout_duration="$(tailscale_command_timeout_duration "$timeout_duration")"
+
+  for _attempt in 1 2 3 4 5; do
     if command -v timeout >/dev/null 2>&1; then
-      output="$(timeout --kill-after=5s "$timeout_duration" "$@" 2>&1)" && status=0 || status=$?
+      output_file="$(mktemp)"
+      timeout --kill-after=5s "$command_timeout_duration" "$@" >"$output_file" 2>&1 && status=0 || status=$?
+      output="$(cat "$output_file")"
+      rm -f "$output_file"
     else
       output="$("$@" 2>&1)" && status=0 || status=$?
     fi
@@ -94,7 +126,7 @@ run_serve_cmd() {
       fi
       [[ -n "$output" ]] && printf '%s\n' "$output" >&2
       echo "tailscale serve command did not complete within ${timeout_duration}." >&2
-      echo "If Tailscale says Serve is not enabled, open the printed https://login.tailscale.com/f/serve?... URL as a tailnet admin." >&2
+      echo "If Tailscale says 'Serve is not enabled on your tailnet', open the printed https://login.tailscale.com/f/serve?... URL as a tailnet admin." >&2
       echo "If it asks for DNS prerequisites, open https://login.tailscale.com/admin/dns in the same tailnet, enable MagicDNS and HTTPS Certificates, then rerun ./deploy.sh install." >&2
       return "$status"
     fi

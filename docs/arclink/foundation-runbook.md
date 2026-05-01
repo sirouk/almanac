@@ -12,14 +12,15 @@ surfaces use `ARCLINK_*` configuration, `arclink_*` database tables, and
 Hermes, qmd, vault, memory, Notion, and health paths keep their current names.
 
 The current provisioning layer records and validates intent. Public onboarding
-now has no-secret durable session and checkout contracts. A guarded executor
+has no-secret durable session and checkout contracts. A guarded executor
 boundary exists for Docker Compose, Cloudflare, model-provider, Stripe, and
 rollback operations, but it fails closed unless live/E2E execution is explicitly
-enabled. Dashboard/admin backend read models and queued admin action contracts
-exist, but ArcLink still does not ship production adapters that execute
-customer deployment containers, create live DNS records, mint live model
-provider keys, run live public bots, serve a frontend, authenticate dashboard
-sessions, or execute queued admin actions.
+enabled. ArcLink now ships a local no-secret Python product surface over the
+onboarding, user-dashboard, admin-dashboard, and queued-action contracts. It is
+for development and contract testing, not production hosting. ArcLink still
+does not ship production adapters that execute customer deployment containers,
+create live DNS records, mint live model provider keys, run live public bots,
+authenticate dashboard sessions, or execute queued admin actions.
 
 ## Assumptions
 
@@ -99,6 +100,9 @@ ArcLink owns:
   `python/arclink_onboarding.py`.
 - User/admin dashboard read models and queued admin action intent in
   `python/arclink_dashboard.py`.
+- Local no-secret website/API views in `python/arclink_product_surface.py`.
+- Public Telegram/Discord bot conversation skeletons in
+  `python/arclink_public_bots.py`.
 
 Almanac continues to own the live shared-host substrate: deploy/install/upgrade
 scripts, Docker orchestration wrappers, Hermes runtime installation, qmd,
@@ -234,6 +238,42 @@ Public onboarding:
 - Telegram and Discord identifiers are public channel hints. Private
   user-agent bot tokens remain outside public onboarding rows.
 
+Local product surface:
+
+- `python3 python/arclink_product_surface.py` starts a local stdlib WSGI app
+  without live secrets and seeds a deterministic fixture deployment unless
+  `--no-seed` is supplied.
+- The first screen is the usable onboarding workflow, not a marketing-only
+  page. It starts web sessions, records answers, opens fake checkout, and links
+  to user/admin read models.
+- The local surface also exposes JSON routes for onboarding sessions, user
+  dashboard reads, admin dashboard reads, and queued admin actions.
+- The surface follows the ArcLink brand system and remains a replaceable
+  prototype; production frontend stack, auth, RBAC, CSRF, rate limits, and live
+  action execution are later gates.
+
+API/auth boundary:
+
+- `python/arclink_api_auth.py` stores user/admin session tokens and CSRF tokens
+  as hashes only.
+- Public onboarding API helpers share the same durable onboarding session rows
+  and rate-limit rail as the website and public bot skeletons.
+- Hosted route work must extract session credentials from explicit
+  `X-ArcLink-Session-Id` plus bearer token headers or the matching
+  `arclink_user_*`/`arclink_admin_*` cookies; unsupported session kinds fail
+  before database reads or writes.
+- Admin mutation helpers require an active admin session, CSRF token, elevated
+  role, MFA-ready state when configured, reason, and idempotency key.
+- API error shaping keeps domain-specific `ArcLinkApiAuthError` copy visible
+  while replacing unexpected exception details with generic user-safe text.
+
+Public bot skeletons:
+
+- `python/arclink_public_bots.py` provides deterministic Telegram and Discord
+  conversation turns over the same public onboarding session contract.
+- Supported turns collect email, name, plan, status, and fake checkout. The
+  module does not run live bot clients or store private user-agent bot tokens.
+
 Dashboard and admin contracts:
 
 - User dashboard reads return customer profile, entitlement, deployment,
@@ -340,8 +380,12 @@ python3 tests/test_arclink_provisioning.py
 python3 tests/test_arclink_executor.py
 python3 tests/test_arclink_admin_actions.py
 python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_product_surface.py
+python3 tests/test_arclink_public_bots.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
+python3 -m py_compile python/almanac_control.py python/arclink_*.py
 git diff --check
 ```
 
@@ -377,5 +421,7 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
   checks only.
 - Live model provider key lifecycle is not implemented; the current key manager
   is a fake no-secret adapter.
-- Dashboard/admin backend contracts are not a hosted UI. RBAC, session auth,
-  action execution, and frontend routes still need explicit implementation.
+- The local product surface is not the production hosted UI. Production
+  routing, identity-provider integration, browser-session hardening, RBAC
+  policy, action execution, and frontend framework work still need explicit
+  implementation.

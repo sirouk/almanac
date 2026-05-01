@@ -1,5 +1,216 @@
 # Build Completion Notes
 
+## 2026-05-01 Active Lint-Repair Gate Build
+
+Scope: completed the current BUILD gate from `IMPLEMENTATION_PLAN.md` and
+`research/RALPHIE_LINT_BLOCKER_REPAIR_STEERING.md` without adding hosted
+request signing, production frontend work, live bot clients, or provider/host
+mutation.
+
+Rationale:
+
+- Validated public onboarding channel and identity through the shared
+  onboarding validator before rate limiting so invalid channels fail without
+  writing `rate_limits`.
+- Kept the repair inside the existing Python dashboard, API/auth, product
+  surface, and public-bot helper boundaries because those are the accepted
+  no-secret contracts for this build slice.
+- Preserved domain-specific `ArcLinkApiAuthError` and
+  `ArcLinkDashboardError` responses while keeping the generic product-surface
+  exception path user-safe.
+- Reused the shared onboarding rate-limit helper for public bot turns instead
+  of adding Telegram or Discord client behavior in this pass.
+
+Verification run:
+
+- The invalid-channel acceptance probe printed
+  `ArcLinkOnboardingError unsupported ArcLink onboarding channel: email` and
+  `0`.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+  passed.
+- `python3 -m ruff check python/arclink_dashboard.py python/arclink_api_auth.py python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_dashboard.py tests/test_arclink_api_auth.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py`
+  passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- The API/auth/RBAC layer is still a no-secret helper contract, not hosted
+  production identity.
+- The product surface remains a stdlib WSGI prototype.
+- Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, OAuth, and host
+  execution remain E2E-gated.
+
+## 2026-05-01 Production Dashboard Contract Build
+
+Scope: advanced the Production Dashboard plan without introducing a frontend
+toolchain by making the user/admin dashboard read models explicitly enumerate
+the production sections the future web app must render.
+
+Rationale:
+
+- Extended the existing Python dashboard/API contracts instead of adding
+  Next.js/Tailwind in this slice, because this checkout has no frontend
+  toolchain yet and the implementation plan says the production web app should
+  follow stable API/auth contracts.
+- Added user dashboard section contracts for deployment health, access links,
+  bot setup, files, code, Hermes, qmd/memory freshness, skills, model, billing,
+  security, and support.
+- Added admin dashboard section contracts for onboarding, users, deployments,
+  payments, infrastructure, bots, security/abuse, releases/maintenance,
+  logs/events, audit, and queued actions.
+- Kept the local WSGI product surface as a no-secret prototype that displays
+  those sections, with live provider mutation still gated.
+
+Verification run:
+
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+  passed.
+- `python3 -m ruff check python/arclink_dashboard.py python/arclink_product_surface.py tests/test_arclink_dashboard.py tests/test_arclink_product_surface.py`
+  passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This is still not the production Next.js/Tailwind dashboard.
+- Browser workflow coverage for the final frontend remains a follow-up.
+- Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, and host
+  execution paths remain E2E-gated.
+
+## 2026-05-01 Product Surface Lint-Blocker Repair
+
+Scope: closed the immediate BUILD gate for the local no-secret ArcLink product
+surface without expanding production dashboard, RBAC, live adapter, or host
+mutation work.
+
+Rationale:
+
+- Added a tiny inline SVG favicon response in the existing stdlib WSGI surface
+  instead of introducing static asset plumbing or a frontend framework, because
+  the route only needs to stop browser smoke from reporting a harmless 404.
+- Reconciled coverage notes with the accepted responsive browser-smoke evidence:
+  narrow mobile around 390px and desktop around 1440px for `/`,
+  `/onboarding/onb_surface_fixture`, `/user`, and `/admin`, with no page-level
+  horizontal overflow.
+- Kept the WSGI product surface documented as a replaceable prototype.
+
+Verification run:
+
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+  passed.
+- `python3 -m ruff check python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py`
+  passed.
+- Favicon smoke returned `200 image/svg+xml`.
+- `git diff --check` passed.
+
+Known risks:
+
+- Production browser automation still belongs with the future production
+  frontend.
+- Production API/auth/RBAC, live provider adapters, and host execution remain
+  gated follow-up work.
+
+## 2026-05-01 API/Auth Boundary Build
+
+Scope: completed the next no-secret ArcLink API/auth boundary slice without
+introducing a production web framework or live provider mutation.
+
+Rationale:
+
+- Added Python helper APIs instead of introducing FastAPI/Next.js routing in
+  this pass, because the current repo patterns already expose ArcLink behavior
+  through tested Python boundaries and the plan calls for API/auth contracts to
+  stabilize before the production dashboard.
+- Stored user/admin session tokens and CSRF tokens only as hashes, with
+  explicit rate-limit hooks for public onboarding and MFA-ready admin mutation
+  gating.
+- Kept TOTP enrollment secret material as `secret://` references and masked
+  those references in read output, leaving real TOTP code verification for the
+  production auth provider/E2E phase.
+
+Verification run:
+
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This is still a helper/API contract layer, not hosted production browser
+  authentication, OAuth, or a deployed HTTP API.
+- TOTP is schema- and gate-ready, but real one-time-code validation remains a
+  production auth/E2E follow-up.
+- Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, and host
+  execution paths remain gated.
+
+## 2026-05-01 Product Surface Foundation Build
+
+Scope: completed the first Phase 9 no-secret ArcLink product-surface slice
+without enabling real Docker, Cloudflare, Chutes, Stripe, Telegram, Discord, or
+host mutation.
+
+Rationale:
+
+- Added a small stdlib Python WSGI surface instead of introducing Next.js now,
+  because the current acceptance criteria need a runnable no-secret product
+  workflow and clean API/read-model boundaries before production auth, RBAC,
+  routing, and frontend build tooling are selected.
+- Rendered the first screen as the usable onboarding workflow rather than a
+  marketing-only page, with fake checkout, user dashboard, admin dashboard, and
+  queued admin-action routes backed by existing `arclink_*` helpers.
+- Added deterministic Telegram/Discord public bot adapter skeletons that share
+  the same onboarding session semantics as web onboarding and keep public bot
+  state separate from private user-agent bot tokens.
+
+Verification run:
+
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `python3 -m ruff check python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- The local WSGI product surface is a replaceable prototype, not the production
+  Next.js/Tailwind dashboard.
+- Browser session auth, RBAC, CSRF/rate limits, hosted routes, real Telegram
+  and Discord clients, live Stripe checkout/webhooks, live provider/edge
+  adapters, and action executors remain E2E-gated follow-ups.
+
 ## 2026-05-01 Executor Replay/Dependency Consistency Repair Build
 
 Scope: completed the active `IMPLEMENTATION_PLAN.md` executor

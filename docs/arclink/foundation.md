@@ -194,11 +194,35 @@ lifts the linked deployment does the onboarding session move to
 `provisioning_ready`. Cancelled and expired checkout helpers leave the
 deployment blocked at `entitlement_required` and record funnel events.
 
-## Dashboard And Admin Contracts
+## Product Surface, Dashboard, And Admin Contracts
 
-`python/arclink_dashboard.py` defines the current API-first dashboard contract.
-It does not serve a frontend, authenticate browser sessions, or execute live
-operations.
+`python/arclink_product_surface.py` serves the current local no-secret ArcLink
+product surface. It is a small stdlib WSGI app for development and contract
+testing, not the production web stack. A developer can run it without provider
+secrets:
+
+```bash
+python3 python/arclink_product_surface.py
+```
+
+The first screen is the usable onboarding workflow. It can start or resume a
+web onboarding session, collect customer hints, open deterministic fake Stripe
+checkout, and show the linked entitlement/provisioning state. The same module
+also exposes JSON read routes for local API tests.
+
+The local UI follows the ArcLink brand boundary from
+`docs/arclink/brand-system.md`: jet/carbon surfaces, signal-orange primary
+actions, restrained status colors, and dense operational layouts. The
+rationale for this Python-rendered prototype is to keep the API/read-model
+boundary clean while avoiding a premature frontend framework before auth, RBAC,
+and production routing are designed.
+
+`python/arclink_dashboard.py` defines the API-first dashboard contract consumed
+by the local surface. `python/arclink_api_auth.py` wraps those read models with
+hashed user/admin sessions, CSRF checks, explicit header/cookie credential
+extraction, rate-limit hooks, MFA-ready admin gates, and safe error shapes.
+These helpers are still a no-secret backend contract, not a hosted production
+identity provider, and they do not execute live operations.
 
 User dashboard reads summarize ArcLink-owned rows for a customer: profile,
 entitlement, deployments, access URLs, subscription mirror state, onboarding bot
@@ -219,6 +243,12 @@ must include an admin id, target, reason, and idempotency key; the helper writes
 an audit row and stores safe metadata only. Plaintext-looking secret material is
 rejected before the action intent is persisted.
 
+`python/arclink_public_bots.py` defines Telegram and Discord public onboarding
+bot adapter skeletons. They share the same onboarding session rows and fake
+checkout semantics as the website surface. They intentionally store public
+channel identity only and reject private bot-token-shaped or provider-token
+material in metadata. They do not run live Telegram or Discord clients yet.
+
 ## Local Checks
 
 No live secrets are required for these foundation checks:
@@ -236,8 +266,12 @@ python3 tests/test_arclink_provisioning.py
 python3 tests/test_arclink_executor.py
 python3 tests/test_arclink_admin_actions.py
 python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_product_surface.py
+python3 tests/test_arclink_public_bots.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
+python3 -m py_compile python/almanac_control.py python/arclink_*.py
 bash -n deploy.sh bin/*.sh test.sh
 git diff --check
 ```

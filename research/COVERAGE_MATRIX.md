@@ -1,30 +1,36 @@
 # Coverage Matrix
 
-| Goal / Success Criterion | Existing Coverage | Plan Coverage | Remaining Gap / Risk | Validation |
+| Goal / success criterion | Existing coverage | Plan coverage | Remaining gap / risk | Validation |
 | --- | --- | --- | --- | --- |
-| Transform Almanac into ArcLink identity | `python/arclink_product.py`; ArcLink docs; additive `arclink_*` schema | Continue staged rename after backend/executor contracts | Cosmetic rename could break mature Almanac paths | Product config tests, public hygiene tests, docs review |
-| `ARCLINK_*` / `ALMANAC_*` compatibility | Precedence and blank fallback tests | Maintain for every new env key | Future env additions could skip alias rules | Env precedence and conflict diagnostic tests |
-| Preserve Hermes/qmd/memory | Existing runtime pins, qmd scripts, managed-context plugin, memory synth, tests | Provisioning renderer keeps these lanes in every deployment plan; executor must consume same plan | Renderer/executor drift could omit a maintenance lane | Existing plugin/qmd/memory tests plus render/executor assertions |
-| Chutes-first inference | Chutes defaults, catalog parser, capability validation, fake key manager | Add catalog refresh and real key manager behind executor/E2E boundary | Live Chutes auth/key lifecycle unverified | Fixture catalog tests; live E2E when credentials exist |
-| Stripe self-serve entitlement | Webhook verifier, entitlement handler, idempotent processed events, subscription mirror, gate advancement, invoice success mapping, unsupported event allowlist, atomic failure rollback, nested invoice parent compatibility, caller-transaction rejection, profile-only entitlement preservation | Keep explicit entitlement writers for webhooks and reasoned admin support actions; live checkout adapter later | Live Stripe delivery and hosted checkout callback behavior are unverified | Entitlement suite, live E2E later |
-| Public onboarding | Durable web/Telegram/Discord sessions, active-session uniqueness, fake checkout, funnel events, channel handoff, no-secret metadata guard, returning-user entitlement preservation | Keep as shared contract for future website and public bots | Public bot/web delivery and hosted checkout redirects are not implemented | Onboarding tests plus live E2E later |
-| Cloudflare DNS and subdomains | Fake Cloudflare client, desired DNS persistence, drift events, DNS type allowlist | Add live adapter through executor and E2E flag | Live token/zone unavailable | DNS drift tests, executor fake tests, live E2E later |
-| Traefik ingress | Host planner and role label renderer with golden coverage | Provisioning renderer emits per-deployment labels/config; executor should materialize them | Runtime Traefik service/execution not yet live | Golden render tests, local Compose smoke later |
-| Obscure deployment prefixes | Prefix reservation, generator, denylist, collision retry | Use generator in public onboarding/session creation | Prefix policy may need product tuning | Schema and prefix tests |
-| Nextcloud/files | Existing Nextcloud plus dedicated-per-deployment ArcLink decision | Render isolated Nextcloud plus dedicated DB/Redis services | Dedicated instances increase resource use | Isolation decision test, render tests, access tests |
-| code-server | Existing code-server scripts and access helpers | Route by host in provisioning renderer | Websocket/proxy behavior needs browser smoke later | Access tests, browser smoke later |
-| SSH/TUI | Cloudflare Access TCP strategy guard | Implement tunnel/access records after provisioning executor contract | No live tunnel yet | Raw SSH-over-HTTP rejection tests, live E2E later |
-| Website onboarding | Durable backend session contract exists; no web app yet | Add web API/frontend after executor and auth contracts are explicit | Empty dashboard risk if UI starts too early | Session/API contract tests, Playwright smoke when app exists |
-| Telegram/Discord onboarding | Mature Almanac state machine/workers/tests plus ArcLink public session contract | Add public bot integration after live callback/identity contract | Public bot handoff must stay distinct from private agent bot | Conversation-state and session-contract regression tests |
-| User dashboard | `python/arclink_dashboard.py` returns profile, entitlement, deployments, access URLs, billing, bot contact, model state, qmd/memory freshness, service health, and events | Build Next.js views on top of read model later | Browser app, session auth, and embedding/deep-link behavior missing | Dashboard read-model tests now; Playwright later |
-| Admin dashboard | `python/arclink_dashboard.py` returns funnel, subscriptions, deployments, health, drift, jobs, audit, action intents, and failures | Build admin UI, RBAC, and executor-backed action workflows later | Sensitive actions need strict auth, reason, audit, and executor gating | Admin/dashboard tests now; RBAC/action endpoint tests later |
-| Admin actions | Queued `arclink_action_intents` require reason/idempotency and reject plaintext secrets | Future executor consumes only queued audited intent | Executor could mutate without audit if boundary is bypassed | Admin action tests, future executor tests |
-| Live executor boundary | `python/arclink_executor.py` defines explicit request/result dataclasses, default fail-closed live gating, fake resolver, file materialization contract, fake Docker/provider/edge/rollback behavior, digest/operation replay guards, DNS type validation, and Compose dependency validation | Add audited action-consumer loop and live adapters behind E2E gates | No real Docker/provider execution is enabled; live mutations remain E2E-only | Executor tests, compile checks, public hygiene |
-| Health/fleet operations | Health scripts, health-watch, service health table | Provisioning records service snapshots and timeline; dashboard reads failures | Fleet observability stack deferred | Health tests, service-health render/snapshot tests |
-| Per-tenant isolation | Docker user homes exist; ArcLink access decision pins dedicated Nextcloud | Dedicated state roots per deployment in provisioning | Backup/quota/resource policy not yet implemented | Render tests, isolation tests, rollback tests |
-| No live secrets in unit tests | ArcLink tests use fakes/fixtures; public hygiene covers tracked and untracked text files | Continue fake clients for onboarding, billing, provisioning, ingress, dashboard, executor | Live SDK calls could leak into CI if not guarded | Public hygiene and no-secret tests |
-| SQLite-first with Postgres path | `arclink_*` schema uses stable text ids and helper validation | Maintain schema portability | SQLite-only behavior can creep in | Idempotent migration tests, schema review |
-| Honest E2E docs | `docs/arclink/live-e2e-secrets-needed.md` exists | Keep updated as live adapters land | Passing unit tests may be mistaken for live readiness | Documentation truth checks and E2E checklist |
+| Transform Almanac into ArcLink identity | `python/arclink_product.py`, ArcLink docs, additive `arclink_*` tables | Continue staged identity work after contracts settle | Broad rename could break mature Almanac paths | Product config tests, docs review, public hygiene |
+| Preserve legacy compatibility | Env alias behavior and existing deploy paths | Keep `ALMANAC_*` compatibility where needed | Future env additions could skip alias rules | Product config and deploy regression tests |
+| Preserve Hermes/qmd/memory | Runtime pins, qmd scripts, managed-context plugin, memory synth, tests | Provisioning intent keeps these lanes in every deployment plan | Renderer/executor drift could omit a lane | qmd/plugin/memory tests plus provisioning/executor assertions |
+| Chutes-first inference | Chutes defaults, catalog parser, fake key manager | Add catalog refresh and live key manager behind E2E gate | Live key lifecycle unverified | Chutes tests now; live E2E later |
+| Stripe entitlement gate | Webhook verifier, entitlement handler, subscription mirror, gate advancement | Keep entitlement mutation explicit and idempotent | Live checkout/webhook delivery unverified | Entitlement and onboarding tests; live E2E later |
+| Public onboarding | Durable web/Telegram/Discord sessions, fake checkout, funnel events | Website and public bot adapters share one contract | Hosted redirects and live clients absent | Onboarding, product surface, public bot tests |
+| Cloudflare DNS/subdomains | Fake Cloudflare client, desired DNS persistence, drift events, DNS allowlist | Add live adapter through executor and E2E flag | Token/zone unavailable for unit tests | Ingress/executor tests; live E2E later |
+| Traefik ingress | Host planner and role label renderer with golden coverage | Render per-service host routing for deployments | Runtime Traefik smoke not live | Golden fixture, provisioning tests, later Compose smoke |
+| Obscure deployment prefixes | Prefix reservation, generator, denylist, collision retry | Use in onboarding/provisioning | Product policy may change | Schema and onboarding tests |
+| Nextcloud/files | Existing Nextcloud and dedicated isolation decision | Render isolated Nextcloud plus DB/Redis services | Resource cost may grow | Access and provisioning tests |
+| code-server | Existing code-server scripts/access helpers | Route by host in provisioning intent | Proxy/websocket smoke deferred | Access tests; browser smoke later |
+| SSH/TUI | Cloudflare Access TCP strategy guard | Implement tunnel/access records later | No live tunnel yet | Raw SSH-over-HTTP rejection tests |
+| Website surface | Local WSGI onboarding, fake checkout, dashboards, API, accepted mobile/desktop overflow smoke, favicon response | Keep as replaceable prototype; add production API/auth before production UI | Not production auth or dashboard stack | Product surface tests, accepted browser smoke, favicon smoke |
+| Public Telegram/Discord bots | Deterministic turn handler | Replace skeleton with live SDK clients later | Real callback/bot credentials absent | Public bot tests; live bot E2E later |
+| User dashboard | Dashboard read model and local user view | Move to production UI after auth/API | Sessions and polished frontend absent | Dashboard/product surface tests |
+| Admin dashboard | Admin read model and local admin view | Add auth/RBAC and action API before frontend | Sensitive actions need strict audit and executor gates | Admin/dashboard/executor tests |
+| Active session counts | Admin dashboard security counts enforce active/unrevoked/unexpired filtering | Preserve before broader hosted API work | Future dashboard query changes could overcount expired or revoked sessions | Dashboard regression test |
+| Admin actions | Queued action intents require reason/idempotency and reject secrets | Future worker consumes only audited intent | Executor could bypass audit if not enforced | Admin action and executor tests |
+| API/auth boundary | User/admin sessions, CSRF checks, rate limits, MFA-ready admin factors, scoped reads, and queued mutation helpers | Harden into hosted API service before frontend/live actions | Current slice is not a hosted production identity system | API/auth tests, public hygiene, future browser/API E2E |
+| Public onboarding invalid-input mutation | `start_public_onboarding_api()` validates channel and identity before rate limiting | Preserve this guard before hosted API work | Future transport routes could bypass the shared validator path | API/auth regression plus focused acceptance probe |
+| Session revocation guard | Revocation helper validates `user`/`admin` kinds and rejects missing target sessions before mutation or audit | Preserve before broader hosted API work | Future revocation paths could reintroduce success-shaped missing-session responses | API/auth regression test for missing user and admin sessions |
+| Product-surface generic errors | Domain errors are intentionally user-facing; generic handler uses safe copy | Preserve safe generic responses while keeping domain errors useful | Raw exception text could leak implementation detail if future handlers bypass the guard | Product-surface regression test |
+| Public bot rate limiting | Public bot skeleton shares onboarding session storage and rate-limit rails | Preserve shared rate limiting while adding live clients later | Live bot entrypoints could bypass website/API throttling | Public bot regression test |
+| Live executor boundary | Fail-closed executor types, fake resolver/adapters, replay guards | Add live adapters behind explicit E2E gates | No real Docker/provider mutation enabled | Executor tests; live E2E later |
+| Health/fleet operations | Health scripts, health-watch, service health table | Dashboard reads service snapshots and failures | Fleet observability stack deferred | Health and dashboard tests |
+| Per-tenant isolation | Docker user homes and dedicated Nextcloud decision | Dedicated state roots in provisioning plan | Quota/backup/resource policy not complete | Access/provisioning/rollback tests |
+| No live secrets in unit tests | Fakes/fixtures and hygiene tests | Keep all live paths opt-in | SDK calls could leak into CI if unguarded | Public hygiene and no-secret suites |
+| SQLite-first with Postgres path | Stable text IDs and helper validation | Keep schema portable | SQLite-specific assumptions can creep in | Schema tests and migration review |
+| Honest E2E docs | `docs/arclink/live-e2e-secrets-needed.md` | Update as live adapters land | Unit success could be mistaken for live readiness | Documentation truth checks |
 
 ## Current ArcLink Test Coverage
 
@@ -33,30 +39,37 @@
 | `tests/test_arclink_product_config.py` | Product defaults, env precedence, blank fallback, legacy compatibility. |
 | `tests/test_arclink_schema.py` | ArcLink tables, onboarding tables, prefix reservation/generation, audit/events, subscriptions, service health, provisioning helpers, drift checks. |
 | `tests/test_arclink_chutes_and_adapters.py` | Chutes catalog validation, fake key references, fake Stripe sessions/webhooks, fake Cloudflare drift, Traefik labels. |
-| `tests/test_arclink_entitlements.py` | Stripe signature rejection, paid gate lift, invoice success mapping, failed/received replay, failed-payment audit, unsupported signed-event allowlist, manual comp reason, atomic failure rollback, caller-owned transaction rejection, nested invoice compatibility, profile-only paid/comp preservation. |
-| `tests/test_arclink_onboarding.py` | Public sessions, duplicate active-session prevention, fake checkout, cancelled/expired checkout, entitlement-gated provisioning readiness, channel handoff, secret rejection, returning-user entitlement preservation during prepare/resume. |
+| `tests/test_arclink_entitlements.py` | Stripe signature rejection, paid gate lift, invoice mapping, replay behavior, allowlists, manual comp, atomic rollback, transaction ownership, entitlement preservation. |
+| `tests/test_arclink_onboarding.py` | Public sessions, duplicate prevention, fake checkout, checkout cancellation/expiry, entitlement-gated readiness, channel handoff, secret rejection. |
 | `tests/test_arclink_ingress.py` | DNS persistence/drift and Traefik golden labels. |
 | `tests/test_arclink_access.py` | Dedicated Nextcloud decision and SSH-over-HTTP rejection. |
 | `tests/test_arclink_provisioning.py` | Dry-run service/DNS/access intent, entitlement visibility, no-secret validation, retry after secret repair, rollback planning. |
 | `tests/test_arclink_admin_actions.py` | Reason-required queued actions, idempotency, audit rows, secret-safe metadata, no live side effects. |
 | `tests/test_arclink_dashboard.py` | User dashboard summary and admin dashboard operational/failure projections. |
-| `tests/test_arclink_executor.py` | Executor live-gate refusal, secret resolver contracts, fake apply result shape, digest mismatch rejection, fake provider/edge idempotency, and no secret-material leakage. |
-| `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary PDF skip, provider-name context. |
+| `tests/test_arclink_api_auth.py` | User/admin sessions, token hashing, scoped reads, public onboarding APIs, rate limits, CSRF checks, MFA-ready admin mutations, and secret masking. |
+| `tests/test_arclink_executor.py` | Live-gate refusal, secret resolver contracts, fake apply result shape, digest mismatch rejection, provider idempotency, secret-material guards, Compose dependency validation. |
+| `tests/test_arclink_product_surface.py` | Local WSGI first screen, fake checkout flow, user/admin dashboard rendering, queued admin actions, no DNS mutation, mobile overflow guards, favicon route. |
+| `tests/test_arclink_public_bots.py` | Telegram/Discord public bot conversation-state contract, fake checkout, unsupported channel rejection, metadata secret rejection. |
+| `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary skip behavior, provider-name context. |
 
-## Active Coverage Gap
+## Active Gaps
 
-No active no-secret executor coverage gap remains for the completed
-lint-risk and replay/dependency repair. Existing focused tests cover applied
-Compose replay without secret rematerialization, zero fake failure limits,
-rollback destructive-action rejection, DNS type rejection, operation-digest
-replay checks, strict Chutes replay, and missing Compose dependency rejection.
-
-Remaining coverage gaps are live/E2E only: real Docker Compose execution,
-Cloudflare DNS/Tunnel/Access mutation, Chutes key lifecycle, Stripe live
-actions, hosted dashboard/API action wiring, and public bot/website delivery.
+- The API/auth/RBAC boundary is an initial no-secret helper layer, not a hosted
+  production identity system.
+- Production Next.js/Tailwind dashboards are not implemented.
+- Live Docker, Stripe, Cloudflare, Chutes, Telegram, Discord, Notion/OAuth, and
+  hosted dashboard E2E are not implemented.
+- Production browser automation still needs to be added when the Next.js or
+  equivalent production frontend exists.
 
 ## Coverage Verdict
 
-Coverage is ready to progress from lint to document. Live provider execution,
-host provisioning execution, and Next.js dashboard implementation still require
-separate E2E-gated slices.
+Coverage is sufficient for BUILD to continue on the ArcLink foundation path
+without live secrets. The local product-surface responsiveness repair has
+accepted narrow-mobile and desktop browser-smoke evidence for `/`,
+`/onboarding/onb_surface_fixture`, `/user`, and `/admin`, with no page-level
+horizontal overflow. The foundation confirmation gate now covers invalid public
+onboarding channel rejection, session revocation, session counts, safe generic
+errors, and public-bot rate-limit coverage. Preserve the existing no-secret
+contracts and continue the production API/auth boundary before live provider
+execution or production frontend work.

@@ -2,453 +2,274 @@
 
 ## Goal
 
-Transform Almanac into ArcLink: a Chutes-first, self-serve, paid, single-user
-AI deployment SaaS with website, Telegram, and Discord onboarding; isolated
-Docker deployments; Stripe entitlement gating; Cloudflare/Traefik host routing;
-responsive user/admin dashboards; and preserved Hermes/qmd/vault/memory/Notion
-service robustness.
+Transform Almanac into ArcLink: a Chutes-first, self-serve, paid,
+single-user AI deployment SaaS with website, Telegram, and Discord onboarding;
+Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
+user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
+Notion, Nextcloud, code-server, bot, and health robustness.
 
 ## Current Status
 
-The ArcLink foundation is additive and partially implemented.
+ArcLink is partially scaffolded inside the existing Almanac repository. The
+foundation is additive: it introduces `arclink_*` state, product helpers,
+fakeable provider adapters, entitlement gates, public onboarding contracts,
+ingress/access/provisioning intent, dashboard read models, queued admin-action
+contracts, initial API/auth helpers, executor boundaries, a local
+product-surface prototype, and public bot skeletons.
 
-- Product/config helpers exist in `python/arclink_product.py`.
-- ArcLink SaaS schema and helpers exist in `python/almanac_control.py`.
-- Chutes catalog validation and fake key management exist in
-  `python/arclink_chutes.py`.
-- Stripe, Cloudflare, hostname, and Traefik fakes exist in
-  `python/arclink_adapters.py`.
-- Stripe entitlement processing exists in `python/arclink_entitlements.py`.
-- Public web/Telegram/Discord onboarding session and fake checkout contracts
-  exist in `python/arclink_onboarding.py`.
-- DNS persistence/drift and Traefik role labels exist in
-  `python/arclink_ingress.py`.
-- Nextcloud isolation and SSH access guards exist in `python/arclink_access.py`.
-- Dry-run provisioning intent exists in `python/arclink_provisioning.py`.
-- User/admin dashboard read models and queued admin action contracts exist in
-  `python/arclink_dashboard.py`.
-- Live executor request/result boundaries and no-secret resolver contracts
-  exist in `python/arclink_executor.py`.
-- No-secret tests cover product config, schema, Chutes/adapters, entitlements,
-  public onboarding, ingress, access, provisioning, dashboard/admin contracts,
-  executor contracts, model providers, docs, and public hygiene.
+This is not live SaaS provisioning yet. The current code records intent and
+proves no-secret behavior. It does not create live infrastructure, mutate live
+provider accounts, host a production identity system, or run hosted public
+bots.
 
-ArcLink is not ready for live provisioning. The current code records and
-validates provisioning intent and has no-secret fake executor adapters; it
-does not execute live containers, create live DNS records, mint live Chutes
-keys, execute queued admin actions, serve a frontend, authenticate dashboard
-sessions, or complete live public payment/bot/dashboard flows.
+The latest foundation slice includes the narrow API/auth and product-surface
+repairs that previously blocked BUILD: missing session revocation now fails
+before mutation or audit, active session counts exclude expired/revoked rows,
+generic product-surface errors use safe copy, public bot turns share the
+onboarding rate-limit rail, and `start_public_onboarding_api()` rejects invalid
+channels before writing rate-limit state.
 
-## Chosen Path
+## Chosen Architecture
 
-Choose staged evolution of the existing Docker/Python control plane.
+Use staged evolution of the existing Docker/Python/Bash Almanac control plane.
 
-Path A: evolve Docker Compose, Python/Bash, Hermes, qmd, memory, Nextcloud,
-code-server, and bot onboarding into ArcLink. This is selected because it
-preserves the working substrate and keeps no-secret tests practical.
+Selected path:
 
-Path B: build a clean SaaS shell and call Almanac as a black-box provisioner.
-This remains a later boundary option, but it duplicates state, audit, health,
-and provisioning too early.
+- Docker Compose first for MVP customer deployment units.
+- Python first for control-plane, API/auth, billing, provisioning, dashboard
+  read models, and executor boundaries.
+- Bash retained for host operations and canonical deploy/health flows.
+- SQLite first with Postgres-compatible schema choices.
+- Chutes first through central config and per-deployment secret references.
+- Stripe, Cloudflare, Traefik, Chutes, Telegram, Discord, Notion, and OAuth
+  live paths behind fakeable adapters and explicit E2E gates.
+- Next.js/Tailwind later for the production dashboard after the no-secret
+  API/auth/RBAC boundary is hardened for hosted use.
 
-Path C: rewrite around Kubernetes or Nomad now. This is premature until Docker
-node density, multi-host scheduling, or operator load becomes the bottleneck.
+Rejected for MVP:
 
-## Non-Negotiable Constraints
-
-- Preserve existing Almanac services and focused tests.
-- Do not require live secrets for unit tests.
-- Prefer Docker-first ArcLink evolution.
-- Keep `ALMANAC_*` compatibility where needed; prefer `ARCLINK_*` for new
-  product surfaces.
-- Do not advertise raw SSH-over-HTTP or fragile path-prefix routing.
-- Keep Hermes, qmd, managed memory, vault watch, Notion guardrails, bot
-  gateways, health watch, Nextcloud, and code-server in the product foundation.
-- Keep public onboarding state separate from private user-agent bot tokens and
-  provider credentials.
+- Scheduler-first Kubernetes/Nomad rewrite.
+- Raw SSH-over-HTTP or fragile path-prefix routing for Nextcloud/code-server.
+- A standalone SaaS shell that duplicates Almanac state before contracts
+  stabilize.
 
 ## Validation Criteria
 
-PLAN is ready for BUILD when:
+PLAN is complete when:
 
-- Required research artifacts exist and are project-specific.
-- This plan is project-specific and contains no fallback placeholder marker.
-- The next BUILD slice can proceed without live secrets.
-- Live blockers are documented as E2E prerequisites, not unit-test blockers.
+- Required research artifacts are project-specific and portable.
+- This plan contains no fallback placeholder marker.
+- BUILD can proceed without live secrets.
+- Live blockers are documented as E2E prerequisites.
+- The next tasks are actionable and testable.
 
 The ArcLink foundation remains valid when:
 
-- Entitlement mutation is explicit and profile-only updates preserve existing
-  entitlement state.
-- Per-deployment dry-run provisioning renders Compose/env/DNS/Traefik/access
-  intent without secret values.
-- Rendered services include Hermes, qmd, memory, vault watch, Nextcloud,
-  code-server, bot gateway, managed context, health, and notification lanes.
-- Per-deployment state roots match the dedicated Nextcloud isolation decision.
-- Chutes credentials are represented by secret references only.
-- Stripe webhook processing stays signature-first, idempotent, replayable for
-  failed rows, transaction-owned, and safe around caller-owned transactions.
-- Public onboarding advances to provisioning readiness only through the Stripe
+- `ARCLINK_*` product config preserves legacy compatibility where needed.
+- ArcLink commercial state lives in `arclink_*` tables with stable text IDs.
+- Entitlements mutate only through verified Stripe events or reasoned admin
+  helpers.
+- Public onboarding advances to provisioning readiness only through the
   entitlement gate.
-- `arclink_provisioning_jobs` supports idempotent start/resume/fail/rollback
-  transitions.
-- Timeline events and service-health placeholders are recorded for admin and
-  dashboard use.
-- Dashboard/admin read models stay secret-free, and admin action requests are
-  queued, reasoned, idempotent, and audited before any future executor acts.
-- Fake executor idempotency rejects explicit Docker Compose key reuse when the
-  rendered intent digest changes.
-- Existing ArcLink no-secret tests and touched-module compile checks pass.
+- Provisioning dry-runs render services, DNS, Traefik, access, state roots,
+  timeline events, and service-health placeholders without plaintext secrets.
+- Rendered service plans preserve Hermes, qmd, memory, vault watch, Nextcloud,
+  code-server, bot gateway, managed context, health, and notifications.
+- Admin actions are reason-required, queued, idempotent, audited, and
+  secret-safe.
+- Executor live mutation fails closed by default.
+- Unit tests remain no-secret.
 
-## Completed Foundation
+## BUILD Tasks
 
-### Phase 1: Product Identity And Compatibility
+### 0. Active Lint Repair: Invalid Public Onboarding Channel
 
-Status: no-secret scaffold present.
+Status: completed in the repository. This was the first BUILD step and
+repaired the no-secret lint gate before adding any hosted routes, frontend
+shell, or live provider mutation.
 
-- Add `ARCLINK_*` product helpers with legacy `ALMANAC_*` fallback.
-- Make non-empty ArcLink values take precedence.
-- Treat blank ArcLink values as unset.
-- Keep diagnostics key-only and secret-safe.
+- Change `start_public_onboarding_api()` so it validates/cleans `channel` and
+  `channel_identity` through the shared onboarding validator path before calling
+  `check_arclink_rate_limit()`.
+- Unsupported public onboarding channels such as `email` must raise without
+  writing to `rate_limits`.
+- Add a focused regression in `tests/test_arclink_api_auth.py` proving rejected
+  public onboarding channels leave `rate_limits` unchanged.
+- Confirm `revoke_arclink_session()` rejects missing user/admin session ids
+  before mutation or audit and still rejects blank or unknown session kinds.
+- Confirm admin dashboard active session counts include only active,
+  unrevoked, unexpired user/admin sessions.
+- Confirm product-surface generic errors do not render raw exception text into
+  HTML or JSON while domain errors remain intentionally user-facing.
+- Confirm public bot turns share the onboarding rate-limit rail and still use
+  the shared public onboarding session contract.
+- Keep this step as validation and small repair only; do not add live Telegram,
+  Discord, Stripe, Cloudflare, Chutes, or Docker mutation.
 
-Validation: `tests/test_arclink_product_config.py`.
-
-### Phase 2: ArcLink SaaS Schema
-
-Status: no-secret scaffold present.
-
-- Add `arclink_users`, deployments, subscriptions, provisioning jobs, DNS
-  records, admins, audit, events, service health, model catalog, webhook event,
-  public onboarding, and action-intent tables.
-- Add helpers for prefix reservation/generation, audit/events, subscriptions,
-  service health, provisioning jobs, entitlement state, and drift checks.
-- Keep schema SQLite-compatible with stable text ids.
-
-Validation: `tests/test_arclink_schema.py`.
-
-### Phase 3: Chutes-First Provider Layer
-
-Status: no-secret scaffold present.
-
-- Parse and validate Chutes model catalog fixtures.
-- Support required-capability validation for the configured default model.
-- Provide a fake key manager that returns secret references, not plaintext keys.
-- Keep live auth/key lifecycle as an E2E prerequisite.
-
-Validation: `tests/test_arclink_chutes_and_adapters.py`.
-
-### Phase 4: Entitlement Gate
-
-Status: no-secret scaffold present.
-
-- Verify Stripe webhooks and fail closed on blank secrets.
-- Deduplicate processed webhook event ids.
-- Allow explicit replay of `failed` and `received` webhook rows while keeping
-  `processed` rows idempotent.
-- Mirror subscription state, including current nested invoice parent payloads.
-- Update user entitlement state for supported mutating events.
-- Advance deployments out of `entitlement_required` only when paid or comped.
-- Require reasoned audit rows for admin comps and blocked payment states.
-- Ignore unsupported signed Stripe event types without mutating entitlement
-  state.
-- Keep supported webhook handling atomic and reject caller-owned active
-  transactions without rolling back caller work.
-- Preserve existing `paid` and `comp` entitlements during profile-only user
-  upserts and onboarding prepare/resume paths.
-
-Validation: `tests/test_arclink_entitlements.py`,
-`tests/test_arclink_onboarding.py`.
-
-### Phase 5: DNS, Ingress, And Access Planning
-
-Status: no-secret scaffold present.
-
-- Generate obscure deployment prefixes with denylist and collision retry.
-- Persist desired DNS records and record Cloudflare drift events.
-- Render Traefik labels for dashboard, files, code, and Hermes hosts.
-- Pin MVP Nextcloud isolation to dedicated per-deployment instances.
-- Pin SSH strategy to Cloudflare Access/Tunnel TCP and reject raw
-  SSH-over-HTTP.
-
-Validation: `tests/test_arclink_ingress.py`, `tests/test_arclink_access.py`,
-and the Traefik golden fixture.
-
-### Phase 6: Provisioning Orchestration
-
-Status: no-secret dry-run scaffold present.
-
-- Add dry-run rendering and provisioning job state transitions.
-- Wrap dry-run attempts in deterministic idempotency keys and explicit
-  resume/fail behavior.
-- Render per-deployment state roots, env/config, Compose service intent, DNS,
-  Traefik, access-link intent, health placeholders, and timeline events.
-- Reject plaintext-looking Chutes, Stripe, Cloudflare, Telegram, Discord, and
-  Notion values in dry-run output.
-- Render dedicated `nextcloud-db` and `nextcloud-redis` services, volumes, and
-  `nextcloud` dependencies.
-- Add planning-only rollback for failed execution jobs.
-
-Validation: `tests/test_arclink_provisioning.py`.
-
-### Phase 7: Public Onboarding Contracts
-
-Status: no-secret scaffold present.
-
-- Add public onboarding session records for web, Telegram, and Discord.
-- Record funnel events for started, question answered, checkout opened,
-  payment success/failure/cancel/expire, provisioning requested, first agent
-  contact, and channel handoff.
-- Add deterministic fake Stripe checkout creation behind the adapter boundary.
-- Connect successful checkout completion to existing entitlement and
-  provisioning gates without executing live containers.
-- Keep public onboarding bot state separate from private user-agent bot state.
-- Reject private bot-token-shaped and provider-token-shaped values from public
-  onboarding metadata.
-
-Validation: `tests/test_arclink_onboarding.py`.
-
-### Phase 8: Dashboard And Admin Contracts
-
-Status: no-secret backend contract present.
-
-- Add user dashboard read models for deployment status, access links, billing,
-  bot contact state, model/provider state, memory/qmd freshness, service
-  health, and recent events.
-- Add admin read models for onboarding funnel, subscriptions, deployments,
-  service health, DNS drift, provisioning jobs, audit log, queued action
-  intents, and recent failures.
-- Add reason-required admin action contracts for restart, reprovision, suspend,
-  force resynth, rotate keys, DNS repair, refund/comp/cancel, and rollout.
-- Keep actions queued/audited and no-secret; do not execute live provider or
-  host mutations from this slice.
-
-Validation: `tests/test_arclink_admin_actions.py`,
-`tests/test_arclink_dashboard.py`.
-
-## Completed Build Slice: Executor Replay/Dependency Consistency Repair
-
-The executor lint-risk repair is complete: Docker replay avoids secret
-rematerialization, zero fake failure limits fail closed, rollback delete
-detection is explicit, and DNS record types are allowlisted. The follow-up
-replay/dependency consistency repair is also complete: fake provider, edge,
-Chutes, and rollback replays are bound to stable operation digests, strict
-Chutes replay rejects action or secret-ref drift, and fake Compose rejects
-missing service dependencies before apply.
-
-Status: executor request/result types, fake Docker/provider/edge/rollback
-adapters, secret resolver contracts, intent-digest mismatch rejection, and the
-lint-risk and replay/dependency repairs exist. The next slices are documentation
-reconciliation and separately gated live adapter work.
-
-### Task 1: Fake Adapter Replay Consistency
-
-- Bind fake Cloudflare DNS, Cloudflare Access, Chutes key, and rollback
-  idempotency keys to a stable operation digest derived from their request
-  inputs.
-- If an explicit or derived idempotency key is reused with changed inputs, raise
-  `ArcLinkExecutorError` before returning a stored result.
-- Make Chutes replay especially strict: it must never return the current
-  request's `action` or `secret_ref` with a previously stored key result.
-  Reject mismatched replay inputs, and for identical replay return the stored
-  action and stored secret reference.
-- Add focused regressions for DNS record changes, access app/SSH plan changes,
-  Chutes action/secret-ref changes, and rollback plan/action/health changes.
-
-### Task 2: Compose Dependency Validation
-
-- Make `_compose_service_start_order` reject `depends_on` entries that reference
-  services missing from the rendered compose intent.
-- Raise `ArcLinkExecutorError` with the service and missing dependency names in
-  the message.
-- Add a regression proving fake compose execution cannot pass a dependency graph
-  that real Docker Compose would reject.
-
-### Task 3: Refresh Completion Notes And Gate
-
-- `research/BUILD_COMPLETION_NOTES.md` records the repair and focused
-  validation.
-- Build and test gates accepted the replay/dependency regressions.
-- Do not enable real Docker, Cloudflare, Chutes, Stripe, or host mutation in
-  this repair.
-
-### Task 4: Focused Validation
-
-No-secret checks for the touched surface:
+Acceptance probe:
 
 ```bash
-python3 tests/test_arclink_executor.py
-python3 tests/test_arclink_provisioning.py
+python3 - <<'PY'
+import sqlite3, sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("python").resolve()))
+import almanac_control as control
+import arclink_api_auth as api
+
+conn = sqlite3.connect(":memory:")
+conn.row_factory = sqlite3.Row
+control.ensure_schema(conn)
+try:
+    api.start_public_onboarding_api(conn, channel="email", channel_identity="bad@example.test")
+except Exception as exc:
+    print(type(exc).__name__, str(exc))
+print(conn.execute("SELECT COUNT(*) AS n FROM rate_limits").fetchone()["n"])
+PY
+```
+
+The last printed line must be `0`.
+
+Validation:
+
+```bash
+python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_product_surface.py
+python3 tests/test_arclink_public_bots.py
 python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/arclink_executor.py python/arclink_provisioning.py
-python3 -m ruff check python/arclink_executor.py tests/test_arclink_executor.py
+python3 -m py_compile python/almanac_control.py python/arclink_*.py
+python3 -m ruff check python/arclink_dashboard.py python/arclink_api_auth.py python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_dashboard.py tests/test_arclink_api_auth.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py
 git diff --check
 ```
 
-## Completed Executor Foundation
+### 1. Hosted API/Auth Hardening
 
-The previous executor slices made live execution possible to test safely
-through fake adapters, without turning it on by default.
+- Keep user/admin session records storing token hashes only.
+- Keep admin roles, MFA-ready factors, CSRF checks, and rate-limit hooks.
+- Turn helper functions into hosted routes only after request signing,
+  cookie/session transport, CSRF storage, error shapes, logging, and deployment
+  config are explicit.
+- Keep shared public onboarding APIs for website, Telegram, and Discord.
+- Keep user billing/provisioning/dashboard read APIs over existing helpers.
+- Keep admin read APIs for onboarding, payments, deployments, DNS drift,
+  service health, audit, logs/events, provisioning jobs, and queued actions.
+- Keep queued admin mutation APIs reason-required and idempotency-keyed.
+- Keep secret reads masked by default and audited before any future reveal flow.
 
-### Task 1: Executor Types And Gating
-
-- Add an `arclink_executor` module or similarly scoped executor package.
-- Define executor request/result dataclasses for `docker_compose_apply`,
-  `cloudflare_dns_apply`, `cloudflare_access_apply`, `chutes_key_apply`,
-  `stripe_action_apply`, and `rollback_apply`.
-- Require an explicit E2E/live flag for any adapter that mutates a host or
-  provider.
-- Add tests proving executor calls fail closed when the flag is absent.
-
-### Task 2: Secret Resolver Contract
-
-- Define a resolver interface for `secret://` references.
-- Support a fake resolver for unit tests and a file-materialization contract
-  for `/run/secrets/*`.
-- Validate that resolved values are never written to dashboard views, audit
-  metadata, provisioning job metadata, events, or test snapshots.
-- Add tests for missing secret, invalid ref, and successful fake resolution.
-
-### Task 3: Docker Compose Execution Adapter
-
-Status: no-secret fake adapter contract present.
-
-- Consume `render_arclink_provisioning_intent()` output without re-rendering
-  service semantics in the executor.
-- Plan project name, env file, compose file, volumes, secrets, labels, and
-  service start order from the intent.
-- Add fake adapter tests for idempotent start/resume and failed partial apply.
-- Keep real `docker compose` invocation behind the E2E/live flag.
-
-### Task 4: Provider And Edge Execution Adapters
-
-Status: no-secret fake adapter contract present.
-
-- Add fake Cloudflare DNS/Tunnel/Access mutation based on rendered DNS/access
-  intent.
-- Add fake Chutes key create/rotate/revoke lifecycle that returns secret
-  references only.
-- Keep Stripe refund/cancel/portal live actions as queued admin-action
-  executor candidates, not direct dashboard mutations.
-- Document live credentials required for each adapter in the E2E docs.
-
-### Task 5: Rollback Executor Contract
-
-Status: no-secret fake adapter contract present.
-
-- Extend rollback planning into a fakeable executor contract.
-- Rollback should stop/remove unhealthy rendered services, preserve state
-  roots, leave secret refs for review, and append audit/events.
-- Add tests proving rollback is idempotent and does not delete vault or
-  customer state roots.
-
-### Completed Validation Envelope
-
-Run no-secret checks for the touched surface:
+Validation:
 
 ```bash
-python3 tests/test_arclink_product_config.py
-python3 tests/test_arclink_schema.py
-python3 tests/test_arclink_chutes_and_adapters.py
-python3 tests/test_arclink_entitlements.py
 python3 tests/test_arclink_onboarding.py
-python3 tests/test_arclink_ingress.py
-python3 tests/test_arclink_access.py
-python3 tests/test_arclink_provisioning.py
-python3 tests/test_arclink_admin_actions.py
+python3 tests/test_arclink_entitlements.py
 python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_admin_actions.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_executor.py
 python3 tests/test_public_repo_hygiene.py
 python3 -m py_compile python/almanac_control.py python/arclink_*.py
 git diff --check
 ```
 
-## Later Phases
+### 2. Production Dashboard
 
-## Next BUILD Slice: ArcLink Product Surface Foundation
+- Add the production web app after API/auth contracts are stable.
+- Use Next.js/Tailwind unless a better fit is documented at that time.
+- Make the first screen a usable onboarding workflow, not a marketing-only
+  landing page.
+- Build responsive user dashboard views for deployment health, access links,
+  bot setup, files, code, Hermes, qmd/memory freshness, skills, model,
+  billing, security, and support.
+- Build responsive admin dashboard views for onboarding funnel, users,
+  deployments, payments, infrastructure, bots, security/abuse,
+  releases/maintenance, logs, audit, and queued admin actions.
+- Prefer deep links for Nextcloud, code-server, and Hermes until embedding is
+  proven safe and reliable.
 
-The backend foundation is ready for the next product slice. Build the first
-usable ArcLink product surface without live provider mutation:
+Validation:
 
-- Public website onboarding entry point with web form workflow backed by the
-  existing public onboarding contract.
-- User dashboard surface for deployment state, access links, billing state,
-  bot connection state, model/provider state, qmd/memory freshness, service
-  health, events, and skill education.
-- Admin dashboard surface for onboarding funnel, payments/subscriptions,
-  deployments, host/service health, DNS drift, provisioning jobs, audit log,
-  queued actions, failures, and release/maintenance posture.
-- Shared API boundary that reads from existing `arclink_*` helpers and queues
-  audited admin actions instead of executing live mutations directly.
-- Telegram and Discord public bot adapter skeletons that share the same
-  onboarding session semantics as the website.
-- Brand-faithful responsive UI using the ArcLink brand system: dark
-  operational control-room tone, Jet/Carbon surfaces, Signal Orange actions,
-  Space Grotesk/Inter-compatible typography, no generic AI purple gradients,
-  and no marketing-only first screen.
+```bash
+python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_admin_actions.py
+python3 tests/test_arclink_onboarding.py
+python3 tests/test_public_repo_hygiene.py
+git diff --check
+```
 
-Keep this slice no-secret and locally testable:
+Add browser coverage for desktop and narrow mobile workflows when the frontend
+exists.
 
-- Use fake adapters/fixtures for Stripe, Cloudflare, Chutes, Telegram,
-  Discord, deployment hosts, and dashboard data where live credentials are
-  absent.
-- Do not enable real Docker Compose, Cloudflare, Chutes, Stripe, Hetzner,
-  Telegram, Discord, Notion, OAuth, or host mutation.
-- Add browser/unit/API tests appropriate to the stack Ralphie introduces.
-- Keep live E2E instructions in `docs/arclink/live-e2e-secrets-needed.md`
-  current as each surface lands.
-
-Acceptance for this slice:
-
-- A local developer can start the product surface without secrets and see the
-  public onboarding flow, user dashboard, and admin dashboard using fixture or
-  local control-plane data.
-- Mobile and desktop responsive layouts are usable and match
-  `docs/arclink/brand-system.md`.
-- Admin actions remain reason-required, queued, idempotent, audited, and
-  secret-free.
-- Public bot adapters expose deterministic conversation-state contracts and do
-  not confuse public onboarding bots with private user-agent bots.
-- Documentation clearly separates shipped no-secret behavior from live E2E
-  prerequisites.
-
-### Phase 9: Live Provisioning Execution
+### 3. Live-Gated Provisioning Executor
 
 - Enable real Docker Compose execution only in an operator-controlled E2E
   environment.
-- Create/update per-deployment Compose projects from rendered intent.
-- Apply Cloudflare DNS/tunnel/access records through live adapters.
-- Mint/rotate/revoke Chutes keys through the verified production account path.
+- Materialize per-deployment Compose projects from rendered intent.
+- Apply Cloudflare DNS and Access/Tunnel records through live adapters.
+- Mint, rotate, and revoke Chutes keys only after account-backed behavior is
+  verified.
+- Keep fake adapters as the default for unit tests and local development.
 - Add rollback execution for failed partial deployment.
 
-### Phase 10: Public Website And User Dashboard
+Validation:
 
-- Add Next.js 15 + Tailwind app after executor, auth, and API contracts exist.
-- Build responsive views for overview, files, code, Hermes, memory, skills,
-  model, billing, security, support, and diagnostics.
-- Prefer deep links where iframe embedding is brittle.
-- Add Playwright coverage once the app exists.
+```bash
+python3 tests/test_arclink_provisioning.py
+python3 tests/test_arclink_executor.py
+python3 tests/test_arclink_ingress.py
+python3 tests/test_arclink_access.py
+python3 tests/test_public_repo_hygiene.py
+python3 -m py_compile python/almanac_control.py python/arclink_*.py
+git diff --check
+```
 
-### Phase 11: Admin Dashboard
+Live E2E must use real credentials and must not be collapsed into unit tests.
 
-- Build admin views for onboarding, payments, health, infrastructure, bots,
-  security/abuse, releases, logs, audit trail, and operations.
-- Implement sensitive actions through queued audited jobs and executor workers.
-- Add RBAC/session controls and tests before exposing action endpoints.
-
-### Phase 12: Live E2E
+### 4. Real E2E And Operations
 
 - Keep `docs/arclink/live-e2e-secrets-needed.md` current.
-- Run live E2E only after credentials and infrastructure exist: website or bot
-  onboarding, Stripe test payment, provisioning execution, DNS and ingress,
-  dashboard login, bot conversation, file upload and qmd retrieval, memory
-  refresh, code-server, Hermes dashboard, and admin health/action views.
+- Test website or bot onboarding, Stripe test payment, entitlement gate,
+  provisioning execution, DNS/ingress, dashboard login, agent bot contact,
+  file upload, qmd retrieval, memory refresh, code-server, Hermes dashboard,
+  and admin health/action flows.
+- Record honest evidence for Chutes inference, private agent bot handoff,
+  dashboard accuracy, queued action execution, and DNS drift repair.
+- Add fleet operations for node inventory, placement, disk quotas, backup
+  status, queue depth, deployment density, host metrics, rollout, rollback,
+  maintenance mode, and announcements.
+
+### 5. Product Surface Stewardship
+
+- Keep the local WSGI surface as a no-secret prototype and contract smoke,
+  even after production frontend work starts.
+- Preserve fake checkout, fake provider behavior, queued-only admin actions,
+  favicon route, and narrow-mobile/desktop overflow guard coverage.
+- Do not let the prototype become the production authentication, billing, or
+  live-operation boundary.
+
+Validation:
+
+```bash
+python3 tests/test_arclink_product_surface.py
+python3 tests/test_arclink_public_bots.py
+python3 tests/test_arclink_dashboard.py
+python3 tests/test_public_repo_hygiene.py
+git diff --check
+```
 
 ## Blockers And Risks
 
-- Dashboard/admin frontend routes, RBAC, browser session auth, and action
-  executors are not implemented yet.
-- Live Stripe checkout/webhook delivery, Cloudflare DNS/tunnel mutation,
-  Chutes key lifecycle, public bot credentials, Notion, OAuth, dashboards, and
-  deployment-host execution remain E2E prerequisites.
-- Dedicated Nextcloud per deployment may become resource-heavy; keep the shared
-  Nextcloud alternative deferred until isolation and resource pressure are both
-  measured.
+- The API/auth/RBAC boundary is an initial no-secret helper layer, not a hosted
+  production identity system.
+- Production Next.js/Tailwind dashboards are missing.
+- Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, OAuth, and host
+  execution require real credentials and E2E verification.
+- Dedicated Nextcloud per deployment may become resource-heavy.
+- The broad rebrand should remain staged until runtime and API boundaries are
+  stable.
+
+## BUILD Handoff
+
+BUILD may begin with no live secrets. Start by rerunning the foundation gate
+confirmation, then harden the API/auth boundary toward a hosted service. Keep
+the local product surface as a replaceable prototype, and keep live provider
+mutation plus live deployment execution behind explicit E2E gates.

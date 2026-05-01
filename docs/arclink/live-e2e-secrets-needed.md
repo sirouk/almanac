@@ -52,18 +52,22 @@ Executor adapter credential checklist:
   workspace state roots are preserved.
 
 The public onboarding contract can be tested without live secrets through fake
-Stripe checkout sessions and durable `arclink_onboarding_*` rows. A live E2E
-still needs Stripe checkout session creation against real product/price ids,
-signed checkout completion webhooks, hosted success/cancel URLs, and real
-Telegram/Discord public onboarding bots. Public bot ids and user/channel ids may
-be persisted as hints; private user-agent bot tokens must stay in the secret
-manager or private deployment state.
+Stripe checkout sessions, durable `arclink_onboarding_*` rows, the local
+`python/arclink_product_surface.py` web/API surface, and deterministic
+Telegram/Discord bot conversation skeletons in `python/arclink_public_bots.py`.
+A live E2E still needs Stripe checkout session creation against real
+product/price ids, signed checkout completion webhooks, hosted success/cancel
+URLs, and real Telegram/Discord public onboarding bot clients. Public bot ids
+and user/channel ids may be persisted as hints; private user-agent bot tokens
+must stay in the secret manager or private deployment state.
 
 Dashboard/admin contracts can be tested without live secrets through read-model
-helpers and queued `arclink_action_intents` rows. A live E2E still needs hosted
-dashboard routes, session authentication, RBAC, and explicit action-to-executor
-wiring before restart, reprovision, DNS repair, key rotation, refund, cancel,
-comp, or rollout controls can mutate real services or providers.
+helpers, local product-surface pages, local JSON routes, and queued
+`arclink_action_intents` rows. A live E2E still needs production hosted
+dashboard routes, session authentication, RBAC, CSRF/rate-limit controls, and
+explicit action-to-executor wiring before restart, reprovision, DNS repair, key
+rotation, refund, cancel, comp, or rollout controls can mutate real services or
+providers.
 
 Provisioning secret resolution is intentionally split by image support. Stock
 images that support file-backed credentials, including Postgres and Nextcloud,

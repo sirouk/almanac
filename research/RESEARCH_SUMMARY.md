@@ -1,129 +1,131 @@
 # Research Summary
 
-<confidence>92</confidence>
+<confidence>90</confidence>
 
 ## Goal
 
 Transform Almanac into ArcLink: a Chutes-first, self-serve, paid,
 single-user AI deployment SaaS with website, Telegram, and Discord onboarding;
-Stripe entitlement gates; Cloudflare and Traefik host routing; responsive
+Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
 user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
 Notion, Nextcloud, code-server, bot, and health robustness.
 
-## Current Finding
+## Finding
 
 ArcLink should continue as a staged evolution of the existing Almanac
-Docker/Python control plane. The repository already has a mature operational
-substrate: Docker Compose, Python control-plane modules, Bash deploy and
-health scripts, Hermes/qmd/vault/memory rails, Nextcloud, code-server,
-Telegram and Discord onboarding foundations, Notion SSOT, service health, and
-focused no-secret regression tests.
+control plane, not as a rewrite. The repository already contains the substrate
+needed for the foundation: Docker Compose, Python control-plane modules, Bash
+deploy and health scripts, Hermes/qmd/vault/memory rails, Nextcloud,
+code-server, Telegram and Discord onboarding foundations, Notion SSOT, service
+health, and focused no-secret tests.
 
-The ArcLink foundation is additive and contract-first. Product config, SaaS
-schema helpers, Chutes catalog validation, fakeable Stripe/Cloudflare/Traefik/
-Chutes adapters, entitlement handling, ingress/access decisions, dry-run
-provisioning intent, public onboarding session contracts, dashboard read
-models, queued admin action contracts, and fake executor/secret resolver
-boundaries are present. The current code records, validates, and fake-applies
-intent. It does not execute live customer containers, create live DNS records,
-mint live Chutes keys, serve a Next.js frontend, or execute queued admin
-actions against live providers.
+ArcLink-specific foundation code is present in additive modules:
 
-## Implemented Foundation
+- Product identity and config helpers.
+- SaaS schema and helper rows in the existing control-plane database.
+- Chutes catalog validation and fake key references.
+- Fakeable Stripe, Cloudflare, Traefik, and Chutes adapter contracts.
+- Stripe entitlement processing.
+- Public web/Telegram/Discord onboarding sessions.
+- DNS, ingress, access, provisioning, dashboard, admin-action, executor,
+  API/auth, product-surface, and public-bot contracts.
 
-| Surface | Evidence | Status |
-| --- | --- | --- |
-| Product identity/config | `python/arclink_product.py`, `tests/test_arclink_product_config.py` | Present. |
-| SaaS schema/helpers | `arclink_*` tables and helpers in `python/almanac_control.py`, `tests/test_arclink_schema.py` | Present. |
-| Chutes-first provider | `python/arclink_chutes.py`, `config/model-providers.yaml` | Catalog/fake-key scaffold present; live key lifecycle deferred. |
-| Stripe entitlement gate | `python/arclink_entitlements.py`, `tests/test_arclink_entitlements.py` | No-secret webhook/entitlement contract present. |
-| Public onboarding contract | `python/arclink_onboarding.py`, `tests/test_arclink_onboarding.py` | Web/Telegram/Discord session and fake checkout contract present. |
-| Cloudflare/Traefik ingress | `python/arclink_adapters.py`, `python/arclink_ingress.py`, Traefik golden fixture | Render/drift scaffold present; live adapter deferred. |
-| Access strategy | `python/arclink_access.py`, `tests/test_arclink_access.py` | Dedicated Nextcloud and Cloudflare Access TCP decisions are test-pinned. |
-| Provisioning dry run | `python/arclink_provisioning.py`, `tests/test_arclink_provisioning.py` | Intent renderer, no-secret service plan, health placeholders, timeline events, and rollback planning present. |
-| Dashboard/admin backend contracts | `python/arclink_dashboard.py`, `tests/test_arclink_dashboard.py`, `tests/test_arclink_admin_actions.py` | User/admin read models and queued, audited action intents present. |
-| Executor boundary | `python/arclink_executor.py`, `tests/test_arclink_executor.py` | Fail-closed executor types, secret resolver contracts, fake Docker/provider/edge/rollback behavior, digest and operation replay guards, DNS type validation, and Compose dependency validation present. |
-| E2E truth docs | `docs/arclink/live-e2e-secrets-needed.md` | Present; must stay current as live paths land. |
+The code is not a live SaaS yet. It records and validates intent, exposes
+secret-free read/action contracts, and proves behavior through fake adapters.
+It does not yet execute live customer Docker deployments, create live DNS or
+Cloudflare Access records, mint live Chutes keys, operate live Stripe checkout
+or refunds, host production dashboard sessions, or run production public bot
+clients.
 
-## Path Comparison
+## Implementation Path Comparison
 
-Path A: evolve the Docker/Python control plane.
+Path A: evolve the Docker/Python Almanac control plane into ArcLink.
 
-This remains selected. It preserves working Hermes/qmd/memory/health/bot
-behavior, keeps no-secret tests practical, and lets ArcLink prove onboarding,
-payment, provisioning, access, dashboard, and admin contracts before executing
-live infrastructure changes.
+This is the selected path. It preserves Hermes, qmd, memory, vault, Notion,
+Nextcloud, code-server, health, bot, and deployment behavior while keeping unit
+tests deterministic and no-secret.
 
-Path B: build a clean SaaS shell that treats Almanac as a black-box
+Path B: build a separate SaaS shell and treat Almanac as a black-box
 provisioner.
 
-This is viable later if ArcLink needs a separate web/API boundary, but it is
-too early. It would duplicate state, audit, billing, health, and provisioning
-semantics before the backend contract is stable.
+This remains viable later, but it would duplicate billing, audit, health,
+provisioning, and state semantics before the backend contract is stable.
 
-Path C: rewrite around Kubernetes or Nomad.
+Path C: rewrite around Kubernetes or Nomad now.
 
-This is not justified for the MVP. Docker Compose plus per-node supervision is
-enough until real multi-host scheduling pressure appears.
+This is premature for the MVP. Docker Compose plus a clear executor boundary is
+the safer path until multi-host scheduling pressure is real.
+
+Path D: build the production dashboard first.
+
+This should wait. The repository needs a production API/auth/RBAC boundary
+before a Next.js/Tailwind dashboard can safely own user and admin workflows.
 
 ## Key Assumptions
 
 - Docker mode is the first ArcLink provisioning target.
-- Baremetal/systemd behavior remains a compatibility/operator lane.
-- New SaaS state belongs in `arclink_*` tables with stable text ids and
-  Postgres-compatible shapes.
-- `ARCLINK_*` values should take precedence over non-empty `ALMANAC_*`
-  aliases; blank ArcLink values should be treated as unset.
+- Baremetal/systemd remains a compatibility and operator lane.
+- New commercial state belongs in `arclink_*` tables with stable text IDs.
+- `ARCLINK_*` values take precedence over non-empty legacy aliases where both
+  exist; blank ArcLink values are treated as unset.
 - Unit tests must not require live Stripe, Cloudflare, Chutes, Telegram,
-  Discord, Notion, OAuth, or server credentials.
+  Discord, Notion, OAuth, or host credentials.
 - Public website, Telegram, and Discord onboarding should share one durable
   backend session contract.
-- User/admin dashboards should consume backend read/action contracts; the
-  frontend should not invent separate business logic.
+- Dashboard and admin surfaces should consume backend read/action contracts,
+  not duplicate billing/provisioning logic.
+- The local Python WSGI product surface is a prototype and contract probe, not
+  the final production dashboard architecture.
 
 ## Build Readiness
 
-The no-secret executor lint-risk and replay/dependency repairs are complete.
-The next phase should reconcile documentation and handoff artifacts, then
-proceed only to E2E-gated live adapter planning: Docker Compose materialization,
-Cloudflare DNS/Tunnel/Access, Chutes key lifecycle, Stripe actions, hosted
-dashboard/API action wiring, and public bot/website delivery.
+The plan is ready for BUILD handoff, but BUILD must start with one small
+no-secret repair before broader hosted API/auth or live-adapter work:
+
+- `start_public_onboarding_api()` validates unsupported channels only after
+  writing a `rate_limits` row. Unsupported channels such as `email` must fail
+  before any rate-limit mutation.
+
+After that repair, rerun the no-secret foundation confirmation gate. The
+current working tree also includes the narrow repairs that previously blocked
+broader BUILD work:
+
+1. Missing user/admin session revocation raises before mutation or audit.
+2. Revocation still accepts only `user` and `admin` session kinds.
+3. Active user/admin session counts include only active, unrevoked, unexpired
+   rows.
+4. Generic product-surface failures use safe copy rather than raw internal
+   exception text.
+5. Public-bot turns use the shared onboarding rate-limit rail.
+
+BUILD should first repair and confirm those surfaces, then continue:
+
+1. Harden the initial API/auth boundary into hosted-ready contracts over the
+   existing onboarding, entitlement, dashboard, provisioning, and admin-action
+   helpers.
+2. Keep the local product surface accepted as a replaceable no-secret
+   prototype.
+3. Keep live provider and host mutation behind explicit E2E gates.
+4. Defer the production Next.js/Tailwind dashboard until the API/auth boundary
+   exists.
 
 ## Remaining Risks
 
-- Real Docker Compose execution and live provider mutation remain disabled by
-  default and must stay behind explicit E2E/operator gates.
-- Live Chutes key lifecycle and auth-header behavior still need account-backed
-  verification.
-- Stripe, Cloudflare, public bot, Notion, OAuth, and deployment-host E2E are
-  blocked on real credentials/infrastructure but must not block unit tests.
-- Public onboarding has a no-secret contract, but live Stripe checkout,
-  hosted success/cancel URLs, and real bot handoff are not implemented.
-- Dedicated Nextcloud per deployment is safer for isolation but heavier; shared
-  Nextcloud remains deferred until measured resource pressure justifies it.
-- The provisioning renderer records intent and timeline data, not live
-  containers.
-- Broad rebrand work could destabilize legacy Almanac paths if done before
-  backend contracts and execution boundaries settle.
+- Live Chutes key lifecycle is unverified until account-backed behavior is
+  tested.
+- Stripe and Cloudflare live paths require real credentials and E2E evidence.
+- Public Telegram/Discord onboarding clients are skeleton contracts, not
+  production bot processes.
+- The API/auth slice is a no-secret backend contract, not a hosted production
+  identity system.
+- Dedicated Nextcloud per deployment is safer for isolation but may become
+  resource-heavy.
+- A broad Almanac-to-ArcLink rename could destabilize mature paths if attempted
+  before execution and API boundaries settle.
 
-## External Research Notes
+## Reference Topics For Live Work
 
-- Chutes is the primary inference target for ArcLink; keep the base URL and
-  default model centralized and treat live per-deployment key lifecycle as an
-  E2E prerequisite until the production account flow is verified:
-  https://docs.chutes.ai/
-- Stripe webhook processing must verify the raw payload, signature header, and
-  endpoint secret; blank secrets must fail closed:
-  https://docs.stripe.com/webhooks/signature
-- Cloudflare Tunnel/Access is the correct direction for SSH/TCP-style access;
-  do not present raw SSH as HTTP routing:
-  https://developers.cloudflare.com/tunnel/
-- Docker Compose secrets and image-supported `_FILE` environment variables
-  match the no-plaintext provisioning intent:
-  https://docs.docker.com/reference/compose-file/secrets/
-- Traefik Docker labels support host rules and explicit service ports, matching
-  the host-per-service routing plan:
-  https://doc.traefik.io/traefik/reference/routing-configuration/other-providers/docker/
-- Next.js App Router and Tailwind remain suitable for the later dashboard
-  phase, but no dashboard app exists yet:
-  https://nextjs.org/docs/app
+Live adapter implementation should verify current behavior against official
+provider documentation for Chutes, Stripe webhooks, Cloudflare Tunnel/Access,
+Docker Compose secrets, Traefik Docker labels, Next.js App Router, and Tailwind
+responsive design before enabling production mutations.

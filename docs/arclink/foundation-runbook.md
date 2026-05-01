@@ -1,0 +1,381 @@
+# ArcLink Foundation Runbook
+
+This runbook describes the current ArcLink foundation behavior. It is written
+for project operators and implementation agents, not for live customer
+operations.
+
+## Current Boundary
+
+ArcLink is currently an additive foundation on top of Almanac. New product
+surfaces use `ARCLINK_*` configuration, `arclink_*` database tables, and
+`python/arclink_*.py` helpers while existing Almanac deploy, onboarding,
+Hermes, qmd, vault, memory, Notion, and health paths keep their current names.
+
+The current provisioning layer records and validates intent. Public onboarding
+now has no-secret durable session and checkout contracts. A guarded executor
+boundary exists for Docker Compose, Cloudflare, model-provider, Stripe, and
+rollback operations, but it fails closed unless live/E2E execution is explicitly
+enabled. Dashboard/admin backend read models and queued admin action contracts
+exist, but ArcLink still does not ship production adapters that execute
+customer deployment containers, create live DNS records, mint live model
+provider keys, run live public bots, serve a frontend, authenticate dashboard
+sessions, or execute queued admin actions.
+
+## Assumptions
+
+- Docker Compose remains the MVP deployment substrate.
+- The existing Almanac Docker path is the operational base for ArcLink work.
+- Unit and regression tests must not require live Stripe, Cloudflare, model
+  provider, Telegram, Discord, Notion, or host provisioning secrets.
+- Secret material is represented by `secret://...` references or Compose
+  secret file targets, never plaintext values in persisted intent.
+- Public onboarding stores channel/customer/checkout hints only. It must not
+  store private deployment bot tokens, provider keys, webhook secrets, or raw
+  credentials.
+- Paid or comped entitlement is required before provisioning intent is marked
+  ready for execution.
+- Profile-only user updates must not mutate entitlement state. Entitlement
+  changes belong to explicit entitlement writers: signed Stripe webhook
+  processing, `set_arclink_user_entitlement()`, or reasoned admin comp helpers.
+- Stripe entitlement webhook processing owns its database transaction. Callers
+  must pass a connection without an active transaction.
+- Manual comp actions are admin-owned and must include an audit reason.
+- Dashboard read models are projections over existing ArcLink tables. They must
+  not expose raw metadata columns, plaintext secrets, or provider credentials.
+- Admin dashboard actions are queued audited intent only. They require an admin
+  id, target, reason, idempotency key, and secret-free metadata before any
+  future executor may act on them.
+- Mutating executor methods must fail closed unless a live/E2E enable flag is
+  deliberately supplied by the caller.
+- Executor idempotency keys are replay keys for identical inputs only. Reusing
+  a key with changed rendered Compose intent, DNS records, Access plans, Chutes
+  action or secret ref, or rollback plan must fail before returning stored
+  results.
+- Executor results must not include plaintext secret material. Compose secrets
+  resolve from `secret://...` references to `/run/secrets/...` targets through
+  an injected resolver.
+- Rendered Compose services must not reference missing `depends_on` services.
+- Dedicated per-deployment Nextcloud services are the MVP isolation model.
+- SSH access is advertised only through Cloudflare Access TCP-style hints, not
+  raw SSH over HTTP or path-prefix routing.
+
+## Rationale
+
+The foundation keeps ArcLink additive so the project can reuse Almanac's
+working host substrate instead of duplicating deploy, runtime, retrieval,
+memory, notification, and repair behavior too early. `ARCLINK_*` names and
+`arclink_*` tables give product work a clear namespace while preserving
+compatibility with existing `ALMANAC_*` configuration and operational scripts.
+
+Provisioning is dry-run first because the risky parts are contracts, not Docker
+syntax: entitlement gating, deterministic retries, host/container path
+separation, DNS intent, ingress labels, access hints, and secret-reference
+handling all need stable records before a live executor can safely start or
+roll back containers.
+
+Dedicated per-deployment Nextcloud services are the default because isolation is
+easier to reason about than shared app/database/cache tenancy during MVP work.
+Cloudflare Access TCP-style SSH hints are pinned because raw SSH cannot be
+routed safely through HTTP path prefixes or ordinary Traefik HTTP host rules.
+
+## Ownership
+
+ArcLink owns:
+
+- Product identity and compatibility helpers in `python/arclink_product.py`.
+- SaaS state rows under the `arclink_*` table namespace in
+  `python/almanac_control.py`.
+- Stripe entitlement interpretation in `python/arclink_entitlements.py`.
+- Hostname, DNS drift, and Traefik intent in `python/arclink_ingress.py` and
+  `python/arclink_adapters.py`.
+- Nextcloud isolation and SSH access strategy guards in
+  `python/arclink_access.py`.
+- No-secret provisioning intent, job state, health placeholders, timeline
+  events, secret-reference validation, and rollback planning in
+  `python/arclink_provisioning.py`.
+- Guarded mutating executor contracts and secret materialization rules in
+  `python/arclink_executor.py`.
+- Public website, Telegram, and Discord onboarding session contracts in
+  `python/arclink_onboarding.py`.
+- User/admin dashboard read models and queued admin action intent in
+  `python/arclink_dashboard.py`.
+
+Almanac continues to own the live shared-host substrate: deploy/install/upgrade
+scripts, Docker orchestration wrappers, Hermes runtime installation, qmd,
+vault, memory synthesis, Notion SSOT, notifications, Curator, and user-agent
+refresh/gateway rails.
+
+## Current Behavior
+
+Configuration:
+
+- Non-empty `ARCLINK_*` values override legacy `ALMANAC_*` aliases.
+- Blank `ARCLINK_*` values are ignored so generated env files do not erase
+  working legacy settings.
+- Conflict diagnostics name only variable keys and do not print values.
+
+Entitlements:
+
+- Stripe webhook verification rejects blank secrets before signature parsing.
+- Processed webhook event ids are idempotent and replay without duplicating
+  audit or timeline events.
+- Rows left in `failed` or `received` can be replayed with the same event id
+  after payload or handler repair.
+- Entitlement webhook processing starts and commits its own transaction. If
+  entitlement work fails after the event is accepted, user entitlement,
+  subscription mirror, deployment status, audit, and timeline side effects roll
+  back together, and the webhook row is left `failed` for replay.
+- Caller-owned active transactions are rejected and left open for the caller to
+  commit or roll back.
+- Signed unsupported events are marked `processed` but do not mutate entitlement
+  state, subscription mirrors, audit rows, or timeline events.
+- Supported payment events mirror subscription state, update the user
+  entitlement, and advance matching deployments out of `entitlement_required`
+  only when entitlement is `paid` or `comp`.
+- Payment-blocking states write audit rows.
+- `upsert_arclink_user()` defaults a newly inserted user to `none` when no
+  entitlement is supplied, but preserves an existing row's `entitlement_state`
+  and `entitlement_updated_at` during profile-only updates.
+- Admin comps require a reason. A user-level comp sets the user entitlement to
+  `comp` and lifts every blocked deployment for that user. A deployment-targeted
+  comp only lifts the named deployment, records a deployment-scoped audit row,
+  and leaves the user's global entitlement state unchanged.
+
+Provisioning dry run:
+
+- A deterministic provisioning job is created or resumed from the idempotency
+  key.
+- Failed jobs can be returned to `queued`; stale `started_at`, `finished_at`,
+  and `error` values are cleared before the next attempt.
+- Intent renders host state roots separately from container runtime paths.
+- Intent renders dashboard, Hermes gateway/dashboard, qmd, vault watch, memory
+  synthesis, dedicated Nextcloud DB/Redis/app services, code-server,
+  notification delivery, health watch, and managed-context installation.
+- Nextcloud and Postgres use file-backed secret environment variables through
+  Compose secrets. code-server uses an explicit entrypoint file resolver.
+- App/provider tokens remain resolver-required references until live execution
+  supplies a safe materialization step.
+- Service-health placeholders and timeline events are recorded for admin and
+  dashboard surfaces to consume later.
+- Dry-run intent may be visible for unpaid deployments, but execution readiness
+  remains false and no `provisioning_ready_for_execution` event is recorded.
+- Failed provisioning jobs can be retried with the same idempotency key after
+  metadata repair. The retry returns the job to `queued`, clears stale
+  timestamps and error text, and increments the attempt count when it starts
+  again.
+- Cancelled provisioning jobs are terminal and cannot be resumed.
+- Rollback planning is idempotent and only allowed for failed jobs. The plan
+  records the intended actions `stop_rendered_services`,
+  `remove_unhealthy_containers`, `preserve_state_roots`, and
+  `leave_secret_refs_for_manual_review`; it does not execute rollback actions.
+
+Executor boundary:
+
+- Docker Compose, Cloudflare DNS, Cloudflare Access, model-provider key, Stripe
+  action, and rollback apply calls raise `ArcLinkLiveExecutionRequired` by
+  default.
+- The testable fake path sets `ArcLinkExecutorConfig.live_enabled=True` and
+  adapter name `fake`; production callers must provide their own explicit
+  live/E2E enablement and adapters.
+- Compose execution consumes rendered provisioning intent and reports project
+  name, service names, host volume sources, and secret target paths without
+  returning secret values.
+- Explicit fake Compose idempotency keys are bound to the rendered intent
+  digest. Reusing a key after changing services, environment, volumes, labels,
+  secrets, or other rendered intent fails before resume or replay.
+- Successful fake Compose replays return stored applied state without
+  rematerializing secrets.
+- Fake Compose planning rejects dependency cycles, invalid `depends_on` shapes,
+  and dependencies that point to missing services.
+- Compose secret specs must use `secret://...` references and `/run/secrets/...`
+  targets. Missing, empty, or malformed secret references fail before a result
+  is returned.
+- Fake Docker failure injection requires a positive service limit; zero or
+  negative limits fail closed.
+- Cloudflare DNS execution allows only `A`, `AAAA`, `CNAME`, and `TXT` records.
+  Other record types fail before fake or future live apply.
+- Cloudflare Access execution rejects SSH strategies other than
+  `cloudflare_access_tcp`.
+- Model-provider key actions are limited to `create`, `rotate`, and `revoke`.
+- Fake Cloudflare DNS, Cloudflare Access, Chutes key lifecycle, and rollback
+  replays store an operation digest. Reusing an idempotency key with changed
+  inputs fails instead of returning stale provider, edge, key, or rollback
+  results.
+- Fake Chutes replay returns the stored action and stored `secret://` reference
+  only for identical replay. Action drift or secret-ref drift is rejected.
+- Stripe actions are limited to `refund`, `cancel`, and `portal`.
+- Rollback execution requires `preserve_state_roots` in the plan before it can
+  return an applied result.
+- Rollback execution rejects action names that imply deleting customer state
+  roots or vault data.
+
+Public onboarding:
+
+- Web, Telegram, and Discord entrypoints create or resume durable
+  `arclink_onboarding_sessions` rows.
+- A partial unique index prevents duplicate active sessions for the same public
+  channel identity. Terminal payment or completion states allow a new session
+  later.
+- Funnel events are append-only rows in `arclink_onboarding_events`: started,
+  question answered, checkout opened, payment success/failure/cancel/expire,
+  provisioning requested, first agent contact, and channel handoff.
+- Checkout creation uses a deterministic fake Stripe client in no-secret tests.
+  It stores Stripe checkout ids and URLs, not Stripe secret keys.
+- Checkout completion does not grant provisioning directly. The signed Stripe
+  entitlement webhook updates the user entitlement and advances the linked
+  deployment gate first; onboarding then marks the session
+  `provisioning_ready`.
+- Preparing or resuming onboarding for a returning user updates profile and
+  deployment hints without passing an implicit `none` entitlement. Existing
+  `paid` and `comp` entitlement rows remain unchanged unless an explicit
+  entitlement writer changes them.
+- Cancelled and expired checkout helpers leave the linked deployment at
+  `entitlement_required` and record funnel events for admin conversion views.
+- Telegram and Discord identifiers are public channel hints. Private
+  user-agent bot tokens remain outside public onboarding rows.
+
+Dashboard and admin contracts:
+
+- User dashboard reads return customer profile, entitlement, deployment,
+  access-link, billing, bot-contact, model, qmd/memory freshness, service
+  health, and recent-event summaries from ArcLink-owned rows.
+- User dashboard output omits raw metadata columns and rejects known plaintext
+  secret shapes from the contract surface.
+- Admin dashboard reads return onboarding funnel aggregates, subscription
+  mirrors, deployments, service health, DNS drift, provisioning jobs, queued
+  action intents, audit rows, and recent failures.
+- Admin dashboard filters are intentionally simple and SQLite-compatible:
+  channel, status, deployment id, user id, and `since`.
+- Admin actions are represented as `arclink_action_intents` rows with status
+  `queued`; the current helper does not call Stripe, Cloudflare,
+  model provider, Docker, Telegram, Discord, Notion, or host provisioning APIs.
+- Admin actions require an admin id, supported action type, supported target,
+  reason, and idempotency key.
+- Reusing an idempotency key for the same action returns the existing intent
+  without duplicating audit rows. Reusing it for a different request is
+  rejected.
+- Action metadata may contain `secret://...` references, but plaintext-looking
+  secret material is rejected before any action intent or audit row is written.
+
+### Entitlement Repair
+
+Use entitlement repair only after confirming the customer, deployment, and
+Stripe event identity through project-owned admin records. Do not edit
+`arclink_users`, `arclink_subscriptions`, or `arclink_deployments` by hand when
+an existing helper can express the action.
+
+For a replayable Stripe failure, repair the payload or handler condition, then
+reprocess the same Stripe event id. Expected result:
+
+- The webhook row moves from `failed` or `received` to `processed`.
+- Entitlement side effects commit once.
+- Replaying a `processed` event returns a replay result without duplicating
+  events.
+
+For a manual credit, call the comp helper with an actor id and a reason. Use a
+deployment id only for one-off deployment credits; omit it only when the user
+should have global comp entitlement.
+
+For a profile correction, use `upsert_arclink_user()` without
+`entitlement_state`. Supplying `entitlement_state` is an intentional
+entitlement mutation and should be reviewed like a billing/support action.
+
+### Provisioning Repair
+
+Use the dry-run renderer as the first repair surface. If rendering fails due to
+plaintext-looking secret material or stale metadata, fix the deployment metadata
+to contain only `secret://...` references or Compose secret file targets, then
+rerun the same idempotency key.
+
+If executor replay fails because an idempotency key was reused with changed
+inputs, choose one of two explicit paths:
+
+- Reuse the original request inputs when the operator intended an idempotent
+  replay or resume.
+- Issue a new idempotency key when the operator intentionally changed the
+  Compose intent, DNS records, Access plan, model-provider operation, or
+  rollback plan.
+
+If fake Compose rejects a missing dependency, fix the rendered service graph
+before retrying. Do not work around the error by dropping `depends_on`; it is
+the early signal that the dry-run intent no longer matches an executable
+Compose project.
+
+If a future live execution job fails, create a rollback plan before changing
+state roots or secret references. The current executor contract requires
+rollback plans to preserve state roots; production rollback adapters still need
+separate E2E validation before they mutate real services.
+
+### Admin Action Repair
+
+Use queued admin actions to record operator intent when the requested operation
+is not yet backed by a live executor. Do not perform a live provider mutation
+just because an `arclink_action_intents` row exists.
+
+If an operator retries the same request, reuse the original idempotency key.
+Expected result:
+
+- The original action id is returned.
+- No duplicate audit row is created.
+- The queued status remains available for a future executor or manual review.
+
+If the requested metadata includes a secret, store only a `secret://...`
+reference. Plain API keys, webhook secrets, bot tokens, OAuth credentials, or
+passwords do not belong in dashboard action metadata.
+
+## Runbook
+
+After changing ArcLink foundation behavior, run the focused no-secret checks:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+python3 tests/test_arclink_product_config.py
+python3 tests/test_arclink_schema.py
+python3 tests/test_arclink_chutes_and_adapters.py
+python3 tests/test_arclink_entitlements.py
+python3 tests/test_arclink_onboarding.py
+python3 tests/test_arclink_ingress.py
+python3 tests/test_arclink_access.py
+python3 tests/test_arclink_provisioning.py
+python3 tests/test_arclink_executor.py
+python3 tests/test_arclink_admin_actions.py
+python3 tests/test_arclink_dashboard.py
+python3 tests/test_model_providers.py
+python3 tests/test_public_repo_hygiene.py
+git diff --check
+```
+
+When touching shell deploy or Tailscale wrapper behavior, also run:
+
+```bash
+bash -n deploy.sh bin/*.sh test.sh
+python3 tests/test_deploy_regressions.py
+```
+
+Before promoting ArcLink beyond foundation work, confirm these are still true:
+
+- Documentation does not claim production live customer provisioning is shipped.
+- Provisioning output contains only secret references or secret file targets.
+- Executor docs keep the explicit live/E2E gate and secret-free result contract.
+- Executor docs keep strict replay semantics: idempotency keys are valid only
+  for identical inputs, and changed operations need new keys.
+- Compose docs keep missing dependency rejection as a pre-apply guard.
+- Entitlement and provisioning retry docs preserve idempotency and transaction
+  ownership expectations.
+- Dashboard/admin docs preserve the distinction between read models, queued
+  action intent, and future live executors.
+- New public docs contain no local machine paths, operator names, live hostnames,
+  tokens, or copied `.env` values.
+- New tests can run without live secrets.
+
+## Open Risks
+
+- Live provisioning execution still needs production Docker, Cloudflare,
+  model-provider, Stripe, secret-provider, and rollback adapters wired behind
+  the explicit live/E2E gate.
+- Cloudflare DNS/tunnel changes are represented as desired intent and fake drift
+  checks only.
+- Live model provider key lifecycle is not implemented; the current key manager
+  is a fake no-secret adapter.
+- Dashboard/admin backend contracts are not a hosted UI. RBAC, session auth,
+  action execution, and frontend routes still need explicit implementation.

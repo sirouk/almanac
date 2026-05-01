@@ -162,6 +162,23 @@ operator control center, but they do not mean the same thing.
 If a command does not include the word `docker`, it uses the baremetal path.
 Docker is always explicit under `./deploy.sh docker ...`.
 
+## Local Validation
+
+Install focused test and lint dependencies before running ArcLink or onboarding
+validation:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
+ArcLink foundation behavior and runbook notes live in:
+
+```text
+docs/arclink/foundation.md
+docs/arclink/foundation-runbook.md
+docs/arclink/live-e2e-secrets-needed.md
+```
+
 ## Baremetal Path
 
 Baremetal is the original full operator path. It installs and repairs the live

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[1]
 MCP_SERVER = REPO / "python" / "almanac_mcp_server.py"
+CONTROL = REPO / "python" / "almanac_control.py"
 PYTHON_DIR = REPO / "python"
 
 
@@ -35,6 +36,60 @@ class FakeConn:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+class FakeSqliteConn:
+    def __init__(self) -> None:
+        self.closed = False
+        self.executed: list[str] = []
+        self.row_factory = None
+
+    def execute(self, sql: str):  # noqa: ANN201
+        self.executed.append(sql)
+        return self
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_control_connect_db_retries_transient_lock_during_startup_maintenance() -> None:
+    mod = load_module(CONTROL, "almanac_control_sqlite_retry_test")
+    attempts = {"connect": 0, "expire": 0}
+    conns: list[FakeSqliteConn] = []
+    sleeps: list[float] = []
+
+    def fake_connect(path, timeout):  # noqa: ANN001, ANN202
+        attempts["connect"] += 1
+        conn = FakeSqliteConn()
+        conns.append(conn)
+        return conn
+
+    def flaky_expire(conn):  # noqa: ANN001, ANN202
+        attempts["expire"] += 1
+        if attempts["expire"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return 0
+
+    original_connect = mod.sqlite3.connect
+    mod.sqlite3.connect = fake_connect
+    mod.ensure_runtime_paths = lambda cfg: None
+    mod.ensure_schema = lambda conn, cfg: None
+    mod._migrate_onboarding_bot_tokens = lambda conn, cfg: None
+    mod.expire_stale_ssot_pending_writes = flaky_expire
+    mod.time.sleep = sleeps.append
+    mod._control_sqlite_retry_seconds = lambda: 5.0
+
+    try:
+        cfg = SimpleNamespace(db_path=Path("/tmp/almanac-control-test.sqlite3"))
+        result = mod.connect_db(cfg)
+    finally:
+        mod.sqlite3.connect = original_connect
+
+    expect(attempts == {"connect": 2, "expire": 2}, f"unexpected attempts: {attempts}")
+    expect(sleeps == [0.25], f"expected one control DB retry sleep, got {sleeps}")
+    expect(conns[0].closed, "failed startup connection should be closed before retry")
+    expect(result is conns[1], "connect_db should return the successful retry connection")
+    print("PASS test_control_connect_db_retries_transient_lock_during_startup_maintenance")
 
 
 def test_mcp_dispatch_retries_transient_sqlite_lock_before_serving_status() -> None:
@@ -99,6 +154,7 @@ def test_qmd_bridge_retries_locked_or_unreachable_mcp_once_before_returning_resu
 
 
 def main() -> int:
+    test_control_connect_db_retries_transient_lock_during_startup_maintenance()
     test_mcp_dispatch_retries_transient_sqlite_lock_before_serving_status()
     test_qmd_bridge_retries_locked_or_unreachable_mcp_once_before_returning_result()
     print("PASS all Almanac MCP resilience tests")

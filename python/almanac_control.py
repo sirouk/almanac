@@ -18,6 +18,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -555,27 +556,66 @@ def ensure_runtime_paths(cfg: Config) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def connect_db(cfg: Config) -> sqlite3.Connection:
-    ensure_runtime_paths(cfg)
-    conn = sqlite3.connect(cfg.db_path, timeout=15.0)
-    conn.row_factory = sqlite3.Row
-    default_journal_mode = "DELETE" if os.environ.get("ALMANAC_DOCKER_MODE") == "1" else "WAL"
-    journal_mode = config_env_value("ALMANAC_SQLITE_JOURNAL_MODE", default_journal_mode).strip().upper()
-    if journal_mode not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
-        journal_mode = default_journal_mode
+def _is_transient_sqlite_lock(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "database is locked" in message or "database table is locked" in message
+
+
+def _control_sqlite_retry_seconds() -> float:
+    raw = os.environ.get("ALMANAC_CONTROL_SQLITE_RETRY_SECONDS", "45")
     try:
-        conn.execute(f"PRAGMA journal_mode = {journal_mode}")
-    except sqlite3.OperationalError:
-        if journal_mode != "WAL":
-            raise
-        conn.execute("PRAGMA journal_mode = DELETE")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 15000")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    ensure_schema(conn, cfg)
-    _migrate_onboarding_bot_tokens(conn, cfg)
-    expire_stale_ssot_pending_writes(conn)
-    return conn
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 45.0
+
+
+def _connect_db_once(cfg: Config) -> sqlite3.Connection:
+    ensure_runtime_paths(cfg)
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(cfg.db_path, timeout=15.0)
+        conn.row_factory = sqlite3.Row
+        default_journal_mode = "DELETE" if os.environ.get("ALMANAC_DOCKER_MODE") == "1" else "WAL"
+        journal_mode = config_env_value("ALMANAC_SQLITE_JOURNAL_MODE", default_journal_mode).strip().upper()
+        if journal_mode not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
+            journal_mode = default_journal_mode
+        try:
+            conn.execute(f"PRAGMA journal_mode = {journal_mode}")
+        except sqlite3.OperationalError:
+            if journal_mode != "WAL":
+                raise
+            conn.execute("PRAGMA journal_mode = DELETE")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 15000")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        ensure_schema(conn, cfg)
+        _migrate_onboarding_bot_tokens(conn, cfg)
+        expire_stale_ssot_pending_writes(conn)
+        return conn
+    except Exception:
+        if conn is not None:
+            conn.close()
+        raise
+
+
+def connect_db(cfg: Config) -> sqlite3.Connection:
+    retry_seconds = _control_sqlite_retry_seconds()
+    deadline = time.monotonic() + retry_seconds
+    delay = 0.25
+    while True:
+        try:
+            return _connect_db_once(cfg)
+        except sqlite3.OperationalError as exc:
+            if not _is_transient_sqlite_lock(exc):
+                raise
+            now = time.monotonic()
+            if now >= deadline:
+                raise
+            sleep_for = min(delay, max(0.0, deadline - now))
+            print(f"Almanac control sqlite transient failure; retrying: {exc}", file=sys.stderr)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            delay = min(delay * 2, 2.0)
 
 
 def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:

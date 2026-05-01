@@ -551,59 +551,135 @@ def _qmd_default_collections() -> list[str]:
     return ["vault", "vault-pdf-ingest"]
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = str(os.environ.get(name) or default).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(0.0, value)
+
+
+def _mcp_sqlite_retry_seconds() -> float:
+    return _env_float("ALMANAC_MCP_SQLITE_RETRY_SECONDS", 45.0)
+
+
+def _mcp_qmd_retry_seconds() -> float:
+    return _env_float("ALMANAC_MCP_QMD_RETRY_SECONDS", 30.0)
+
+
+def _sqlite_database_locked(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "database is locked" in str(exc).lower()
+
+
+def _transient_mcp_bridge_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "database is locked",
+            "database table is locked",
+            "temporarily unavailable",
+            "connection refused",
+            "connection reset",
+            "connection aborted",
+            "timed out",
+            "timeout",
+            "broken pipe",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "returned 502",
+            "returned 503",
+            "returned 504",
+        )
+    )
+
+
+def _retry_transient(operation, *, retry_seconds: float, retryable, label: str):  # type: ignore[no-untyped-def]
+    deadline = time.monotonic() + max(0.0, retry_seconds)
+    delay = 0.25
+    while True:
+        try:
+            return operation()
+        except Exception as exc:  # noqa: BLE001
+            if not retryable(exc) or time.monotonic() >= deadline:
+                raise
+            LOGGER.warning("%s transient failure; retrying: %s", label, exc)
+            time.sleep(delay)
+            delay = min(2.0, delay * 2)
+
+
+def _connect_db_with_retry(cfg: Config):  # type: ignore[no-untyped-def]
+    return _retry_transient(
+        lambda: connect_db(cfg),
+        retry_seconds=_mcp_sqlite_retry_seconds(),
+        retryable=_sqlite_database_locked,
+        label="Almanac control sqlite",
+    )
+
+
 def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeout: int = 12) -> dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
 
-    def rpc(payload: dict[str, Any], session_id: str | None = None) -> tuple[str | None, dict[str, Any]]:
-        request_headers = dict(headers)
-        if session_id:
-            request_headers["mcp-session-id"] = session_id
-        response = http_request(
-            url,
-            method="POST",
-            headers=request_headers,
-            json_payload=payload,
-            timeout=timeout,
-        )
-        parsed = parse_json_response(response, label=url)
-        if not isinstance(parsed, dict):
-            raise RuntimeError(f"{url} returned a non-object MCP response")
-        if "error" in parsed:
-            message = str(((parsed.get("error") or {}).get("message")) or "MCP tool call failed")
-            raise RuntimeError(message)
-        if response.status_code >= 400:
-            raise RuntimeError(f"{url} returned {response.status_code}")
-        return response.headers.get("mcp-session-id") or session_id, parsed
+    def call_once() -> dict[str, Any]:
+        def rpc(payload: dict[str, Any], session_id: str | None = None) -> tuple[str | None, dict[str, Any]]:
+            request_headers = dict(headers)
+            if session_id:
+                request_headers["mcp-session-id"] = session_id
+            response = http_request(
+                url,
+                method="POST",
+                headers=request_headers,
+                json_payload=payload,
+                timeout=timeout,
+            )
+            parsed = parse_json_response(response, label=url)
+            if not isinstance(parsed, dict):
+                raise RuntimeError(f"{url} returned a non-object MCP response")
+            if "error" in parsed:
+                message = str(((parsed.get("error") or {}).get("message")) or "MCP tool call failed")
+                raise RuntimeError(message)
+            if response.status_code >= 400:
+                raise RuntimeError(f"{url} returned {response.status_code}")
+            return response.headers.get("mcp-session-id") or session_id, parsed
 
-    session_id, _ = rpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": {},
-                "clientInfo": {"name": "almanac-mcp-vault-bridge", "version": "1.0"},
+        session_id, _ = rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "almanac-mcp-vault-bridge", "version": "1.0"},
+                },
+            }
+        )
+        rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
+        _, response = rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments},
             },
-        }
+            session_id,
+        )
+        result = (response or {}).get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"{url} returned no MCP result object")
+        return result
+
+    return _retry_transient(
+        call_once,
+        retry_seconds=_mcp_qmd_retry_seconds(),
+        retryable=_transient_mcp_bridge_error,
+        label=f"MCP bridge call {tool_name} via {url}",
     )
-    rpc({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, session_id)
-    _, response = rpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        },
-        session_id,
-    )
-    result = (response or {}).get("result")
-    if not isinstance(result, dict):
-        raise RuntimeError(f"{url} returned no MCP result object")
-    return result
 
 
 def _qmd_query_arguments(arguments: dict, *, limit_key: str = "limit", include_vec: bool = True) -> dict[str, Any]:
@@ -1380,7 +1456,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        with connect_db(self.server.cfg) as conn:
+        with _connect_db_with_retry(self.server.cfg) as conn:
             warnings = list_vault_warnings(conn)
         self._send_json(
             {
@@ -1551,7 +1627,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch_tool(self, tool_name: str, arguments: dict) -> dict:
         cfg = self.server.cfg
-        with connect_db(cfg) as conn:
+        with _connect_db_with_retry(cfg) as conn:
             if tool_name == "status":
                 warnings = list_vault_warnings(conn)
                 return {

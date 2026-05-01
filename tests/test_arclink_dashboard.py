@@ -101,11 +101,35 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
 
     view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
     expect(view["user"]["email"] == "dashboard@example.test", str(view))
+    expect(
+        {section["section"] for section in view["sections"]}
+        == {
+            "deployment_health",
+            "access_links",
+            "bot_setup",
+            "files",
+            "code",
+            "hermes",
+            "qmd_memory",
+            "skills",
+            "model",
+            "billing",
+            "security",
+            "support",
+        },
+        str(view["sections"]),
+    )
     expect(view["entitlement"]["state"] == "paid", str(view))
     expect(len(view["deployments"]) == 1, str(view))
     deployment = view["deployments"][0]
+    section_index = {section["section"]: section for section in deployment["sections"]}
     expect(deployment["deployment_id"] == prepared["deployment_id"], str(deployment))
     expect(deployment["access"]["urls"]["dashboard"] == "https://u-amber-vault-1a2b.example.test", str(deployment))
+    expect(section_index["files"]["url"] == "https://files-amber-vault-1a2b.example.test", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://code-amber-vault-1a2b.example.test", str(section_index["code"]))
+    expect(section_index["hermes"]["url"] == "https://hermes-amber-vault-1a2b.example.test", str(section_index["hermes"]))
+    expect(section_index["security"]["status"] == "masked", str(section_index["security"]))
+    expect(section_index["support"]["status"] == "available", str(section_index["support"]))
     expect(deployment["billing"]["subscriptions"][0]["status"] == "active", str(deployment["billing"]))
     expect(deployment["bot_contact"]["first_contacted"], str(deployment["bot_contact"]))
     expect(deployment["model"]["model_id"] == "model-default", str(deployment["model"]))
@@ -159,6 +183,27 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
     )
 
     view = dashboard.read_arclink_admin_dashboard(conn, channel="web", deployment_id=prepared["deployment_id"])
+    section_index = {section["section"]: section for section in view["sections"]}
+    expect(
+        set(section_index)
+        == {
+            "onboarding_funnel",
+            "users",
+            "deployments",
+            "payments",
+            "infrastructure",
+            "bots",
+            "security_abuse",
+            "releases_maintenance",
+            "logs_events",
+            "audit",
+            "queued_actions",
+        },
+        str(view["sections"]),
+    )
+    expect(section_index["infrastructure"]["status"] == "degraded", str(section_index["infrastructure"]))
+    expect(section_index["queued_actions"]["counts"]["queued"] == 1, str(section_index["queued_actions"]))
+    expect(section_index["security_abuse"]["counts"]["active_admin_sessions"] == 0, str(section_index["security_abuse"]))
     event_counts = {row["event_type"]: row["count"] for row in view["onboarding_funnel"]["events"]}
     expect(event_counts["started"] == 1 and event_counts["first_agent_contact"] == 1, str(event_counts))
     expect(view["deployments"][0]["deployment_id"] == prepared["deployment_id"], str(view["deployments"]))
@@ -173,10 +218,69 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
     print("PASS test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures")
 
 
+def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> None:
+    control = load_module("almanac_control.py", "almanac_control_dashboard_session_count_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_session_count_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_dashboard_session_count_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_session_count_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    api.upsert_arclink_admin(conn, admin_id="admin_sessions", email="sessions-admin@example.test", role="ops")
+    api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_active")
+    api.create_arclink_admin_session(conn, admin_id="admin_sessions", session_id="asess_active")
+    now = control.utc_now_iso()
+
+    conn.execute(
+        """
+        INSERT INTO arclink_user_sessions (
+          session_id, user_id, session_token_hash, csrf_token_hash, status,
+          metadata_json, created_at, last_seen_at, expires_at, revoked_at
+        ) VALUES (?, ?, 'hash', 'csrf', 'active', '{}', ?, ?, ?, '')
+        """,
+        ("usess_expired", prepared["user_id"], now, now, "2000-01-01T00:00:00+00:00"),
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_user_sessions (
+          session_id, user_id, session_token_hash, csrf_token_hash, status,
+          metadata_json, created_at, last_seen_at, expires_at, revoked_at
+        ) VALUES (?, ?, 'hash', 'csrf', 'active', '{}', ?, ?, ?, ?)
+        """,
+        ("usess_revoked", prepared["user_id"], now, now, "2999-01-01T00:00:00+00:00", now),
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_admin_sessions (
+          session_id, admin_id, role, session_token_hash, csrf_token_hash, status,
+          mfa_verified_at, metadata_json, created_at, last_seen_at, expires_at, revoked_at
+        ) VALUES (?, 'admin_sessions', 'ops', 'hash', 'csrf', 'active', '', '{}', ?, ?, ?, '')
+        """,
+        ("asess_expired", now, now, "2000-01-01T00:00:00+00:00"),
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_admin_sessions (
+          session_id, admin_id, role, session_token_hash, csrf_token_hash, status,
+          mfa_verified_at, metadata_json, created_at, last_seen_at, expires_at, revoked_at
+        ) VALUES (?, 'admin_sessions', 'ops', 'hash', 'csrf', 'active', '', '{}', ?, ?, ?, ?)
+        """,
+        ("asess_revoked", now, now, "2999-01-01T00:00:00+00:00", now),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_admin_dashboard(conn)
+    counts = {section["section"]: section["counts"] for section in view["sections"]}
+    security = counts["security_abuse"]
+    expect(security["active_user_sessions"] == 1, str(security))
+    expect(security["active_admin_sessions"] == 1, str(security))
+    print("PASS test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions")
+
+
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
-    print("PASS all 2 ArcLink dashboard tests")
+    test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
+    print("PASS all 3 ArcLink dashboard tests")
     return 0
 
 

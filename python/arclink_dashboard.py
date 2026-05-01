@@ -30,6 +30,33 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
 ARCLINK_ACTION_INTENT_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled"})
+ARCLINK_USER_DASHBOARD_SECTIONS = (
+    "deployment_health",
+    "access_links",
+    "bot_setup",
+    "files",
+    "code",
+    "hermes",
+    "qmd_memory",
+    "skills",
+    "model",
+    "billing",
+    "security",
+    "support",
+)
+ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
+    "onboarding_funnel",
+    "users",
+    "deployments",
+    "payments",
+    "infrastructure",
+    "bots",
+    "security_abuse",
+    "releases_maintenance",
+    "logs_events",
+    "audit",
+    "queued_actions",
+)
 
 _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
@@ -102,6 +129,114 @@ def _deployment_urls(prefix: str, base_domain: str) -> dict[str, str]:
     if not str(prefix or "").strip() or not str(base_domain or "").strip():
         return {}
     return {role: f"https://{host}" for role, host in arclink_hostnames(prefix, base_domain).items()}
+
+
+def _count(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> int:
+    row = conn.execute(sql, args).fetchone()
+    return int(row[0] if row is not None else 0)
+
+
+def _health_status(health: list[dict[str, Any]]) -> str:
+    statuses = {str(item.get("status") or "").lower() for item in health}
+    if statuses & {"failed", "unhealthy"}:
+        return "unhealthy"
+    if statuses & {"degraded"}:
+        return "degraded"
+    if statuses & {"healthy"}:
+        return "healthy"
+    if statuses & {"planned", "pending"}:
+        return "planned"
+    return "unknown"
+
+
+def _user_dashboard_sections(
+    *,
+    urls: Mapping[str, str],
+    health: list[dict[str, Any]],
+    onboarding: Mapping[str, Any],
+    model: Mapping[str, Any],
+    billing: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    qmd = next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""})
+    memory = next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""})
+    health_index = {str(item["service_name"]): item for item in health}
+    return [
+        {
+            "section": "deployment_health",
+            "label": "Deployment Health",
+            "status": _health_status(health),
+            "services": health,
+        },
+        {
+            "section": "access_links",
+            "label": "Access Links",
+            "status": "ready" if urls else "pending",
+            "links": [{"role": role, "url": url} for role, url in urls.items()],
+        },
+        {
+            "section": "bot_setup",
+            "label": "Bot Setup",
+            "status": "contacted" if onboarding.get("first_contacted") else "pending",
+            "channel": str(onboarding.get("channel") or ""),
+            "handoff_recorded": bool(onboarding.get("handoff_recorded")),
+        },
+        {
+            "section": "files",
+            "label": "Files",
+            "status": "ready" if urls.get("files") else "pending",
+            "url": str(urls.get("files") or ""),
+        },
+        {
+            "section": "code",
+            "label": "Code",
+            "status": "ready" if urls.get("code") else "pending",
+            "url": str(urls.get("code") or ""),
+        },
+        {
+            "section": "hermes",
+            "label": "Hermes",
+            "status": "ready" if urls.get("hermes") else "pending",
+            "url": str(urls.get("hermes") or ""),
+        },
+        {
+            "section": "qmd_memory",
+            "label": "qmd And Memory",
+            "status": _health_status([qmd, memory]),
+            "qmd": qmd,
+            "memory": memory,
+        },
+        {
+            "section": "skills",
+            "label": "Skills",
+            "status": str(health_index.get("managed-context", {}).get("status") or "planned"),
+            "summary": "managed context and org-published skills",
+        },
+        {
+            "section": "model",
+            "label": "Model",
+            "status": str(model.get("credential_state") or "unknown"),
+            "provider": str(model.get("provider") or ""),
+            "model_id": str(model.get("model_id") or ""),
+        },
+        {
+            "section": "billing",
+            "label": "Billing",
+            "status": str(billing.get("entitlement_state") or "none"),
+            "subscriptions": billing.get("subscriptions") or [],
+        },
+        {
+            "section": "security",
+            "label": "Security",
+            "status": "masked",
+            "summary": "session-scoped dashboard access; secrets are reference-only",
+        },
+        {
+            "section": "support",
+            "label": "Support",
+            "status": "available",
+            "summary": "operator support actions are reason-required, queued, and audited",
+        },
+    ]
 
 
 def _service_health(conn: sqlite3.Connection, deployment_id: str) -> list[dict[str, Any]]:
@@ -228,33 +363,38 @@ def read_arclink_user_dashboard(
         health = _service_health(conn, str(dep["deployment_id"]))
         onboarding = _deployment_onboarding(conn, str(dep["deployment_id"]))
         model_id = onboarding.get("selected_model_id") or _json_loads(str(dep.get("metadata_json") or "{}")).get("selected_model_id") or ""
+        urls = _deployment_urls(str(dep["prefix"] or ""), str(dep["base_domain"] or ""))
+        billing = {
+            "entitlement_state": str(user["entitlement_state"] or "none"),
+            "entitlement_updated_at": str(user["entitlement_updated_at"] or ""),
+            "subscriptions": subscriptions,
+        }
+        model = {
+            "provider": primary_provider({}),
+            "model_id": str(model_id or ""),
+            "credential_state": "secret_ref_pending",
+        }
         deployment_cards.append(
             {
                 "deployment_id": str(dep["deployment_id"] or ""),
                 "status": str(dep["status"] or ""),
                 "prefix": str(dep["prefix"] or ""),
                 "base_domain": str(dep["base_domain"] or ""),
-                "access": {"urls": _deployment_urls(str(dep["prefix"] or ""), str(dep["base_domain"] or ""))},
-                "billing": {
-                    "entitlement_state": str(user["entitlement_state"] or "none"),
-                    "entitlement_updated_at": str(user["entitlement_updated_at"] or ""),
-                    "subscriptions": subscriptions,
-                },
+                "access": {"urls": urls},
+                "billing": billing,
                 "bot_contact": onboarding,
-                "model": {
-                    "provider": primary_provider({}),
-                    "model_id": str(model_id or ""),
-                    "credential_state": "secret_ref_pending",
-                },
+                "model": model,
                 "freshness": {
                     "qmd": next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""}),
                     "memory": next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""}),
                 },
+                "sections": _user_dashboard_sections(urls=urls, health=health, onboarding=onboarding, model=model, billing=billing),
                 "service_health": health,
                 "recent_events": _deployment_events(conn, str(dep["deployment_id"]), limit=recent_limit),
             }
         )
     return {
+        "sections": [{"section": section, "label": section.replace("_", " ").title()} for section in ARCLINK_USER_DASHBOARD_SECTIONS],
         "user": {
             "user_id": str(user["user_id"] or ""),
             "email": str(user["email"] or ""),
@@ -585,9 +725,103 @@ def read_arclink_admin_dashboard(
             (*failure_health_args, limit),
         ).fetchall()
     )
+    user_count = _count(conn, "SELECT COUNT(*) FROM arclink_users")
+    now = utc_now_iso()
+    active_user_sessions = _count(
+        conn,
+        """
+        SELECT COUNT(*)
+        FROM arclink_user_sessions
+        WHERE status = 'active' AND revoked_at = '' AND expires_at > ?
+        """,
+        (now,),
+    )
+    active_admin_sessions = _count(
+        conn,
+        """
+        SELECT COUNT(*)
+        FROM arclink_admin_sessions
+        WHERE status = 'active' AND revoked_at = '' AND expires_at > ?
+        """,
+        (now,),
+    )
+    admin_count = _count(conn, "SELECT COUNT(*) FROM arclink_admins WHERE status = 'active'")
+    rate_limit_observations = _count(conn, "SELECT COUNT(*) FROM rate_limits")
+    public_bot_sessions = _count(
+        conn,
+        "SELECT COUNT(*) FROM arclink_onboarding_sessions WHERE LOWER(channel) IN ('telegram', 'discord')",
+    )
+    event_count = _count(conn, "SELECT COUNT(*) FROM arclink_events")
+    audit_count = _count(conn, "SELECT COUNT(*) FROM arclink_audit_log")
+    queued_action_count = _count(conn, "SELECT COUNT(*) FROM arclink_action_intents WHERE status = 'queued'")
+    failed_job_count = _count(conn, "SELECT COUNT(*) FROM arclink_provisioning_jobs WHERE status = 'failed'")
+    admin_sections = [
+        {
+            "section": "onboarding_funnel",
+            "label": "Onboarding Funnel",
+            "status": "ready",
+            "counts": {"sessions": sum(int(row["count"]) for row in session_counts), "events": sum(int(row["count"]) for row in event_counts)},
+        },
+        {"section": "users", "label": "Users", "status": "ready", "counts": {"users": user_count}},
+        {
+            "section": "deployments",
+            "label": "Deployments",
+            "status": "ready",
+            "counts": {"visible": len(deployments)},
+        },
+        {
+            "section": "payments",
+            "label": "Payments",
+            "status": "ready",
+            "counts": {"subscriptions": len(subscriptions)},
+        },
+        {
+            "section": "infrastructure",
+            "label": "Infrastructure",
+            "status": "degraded" if recent_failures or dns_drift else "ready",
+            "counts": {"service_health": len(service_health), "dns_drift": len(dns_drift), "failed_jobs": failed_job_count},
+        },
+        {
+            "section": "bots",
+            "label": "Bots",
+            "status": "ready",
+            "counts": {"public_bot_sessions": public_bot_sessions},
+        },
+        {
+            "section": "security_abuse",
+            "label": "Security And Abuse",
+            "status": "ready",
+            "counts": {
+                "active_admins": admin_count,
+                "active_user_sessions": active_user_sessions,
+                "active_admin_sessions": active_admin_sessions,
+                "rate_limit_observations": rate_limit_observations,
+            },
+        },
+        {
+            "section": "releases_maintenance",
+            "label": "Releases And Maintenance",
+            "status": "ready",
+            "counts": {"rollout_actions": sum(1 for row in action_intents if row["action_type"] == "rollout")},
+        },
+        {
+            "section": "logs_events",
+            "label": "Logs And Events",
+            "status": "ready",
+            "counts": {"events": event_count, "recent_failures": len(recent_failures[:limit])},
+        },
+        {"section": "audit", "label": "Audit", "status": "ready", "counts": {"audit_rows": audit_count}},
+        {
+            "section": "queued_actions",
+            "label": "Queued Actions",
+            "status": "pending" if queued_action_count else "clear",
+            "counts": {"queued": queued_action_count},
+        },
+    ]
 
     return {
         "filters": filters,
+        "sections": admin_sections,
         "onboarding_funnel": {"sessions": session_counts, "events": event_counts},
         "subscriptions": subscriptions,
         "deployments": deployments,

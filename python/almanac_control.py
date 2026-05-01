@@ -1014,8 +1014,60 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           email TEXT NOT NULL,
           role TEXT NOT NULL,
           status TEXT NOT NULL,
+          role_scope_json TEXT NOT NULL DEFAULT '{}',
+          totp_enabled INTEGER NOT NULL DEFAULT 0,
+          totp_secret_ref TEXT NOT NULL DEFAULT '',
+          totp_verified_at TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_user_sessions (
+          session_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          session_token_hash TEXT NOT NULL,
+          csrf_token_hash TEXT NOT NULL,
+          status TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_admin_sessions (
+          session_id TEXT PRIMARY KEY,
+          admin_id TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT '',
+          session_token_hash TEXT NOT NULL,
+          csrf_token_hash TEXT NOT NULL,
+          status TEXT NOT NULL,
+          mfa_verified_at TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_admin_roles (
+          admin_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          granted_by TEXT NOT NULL DEFAULT '',
+          reason TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          revoked_at TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (admin_id, role)
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_admin_totp_factors (
+          factor_id TEXT PRIMARY KEY,
+          admin_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          secret_ref TEXT NOT NULL,
+          enrolled_at TEXT NOT NULL,
+          verified_at TEXT NOT NULL DEFAULT '',
+          last_used_at TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS arclink_audit_log (
@@ -1342,7 +1394,35 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     _ensure_column(conn, "arclink_users", "entitlement_state", "TEXT NOT NULL DEFAULT 'none'")
     _ensure_column(conn, "arclink_users", "entitlement_updated_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_admins", "role_scope_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "arclink_admins", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "arclink_admins", "totp_secret_ref", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_admins", "totp_verified_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_onboarding_sessions", "completed_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_user_sessions_user_status
+        ON arclink_user_sessions (user_id, status, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_admin_sessions_admin_status
+        ON arclink_admin_sessions (admin_id, status, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_admin_roles_role_active
+        ON arclink_admin_roles (role, revoked_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_admin_totp_admin_status
+        ON arclink_admin_totp_factors (admin_id, status)
+        """
+    )
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_onboarding_active_identity

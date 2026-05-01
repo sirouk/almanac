@@ -117,6 +117,13 @@ def _clean_identity(identity: str) -> str:
     return clean
 
 
+def normalize_arclink_public_onboarding_contact(*, channel: str, channel_identity: str) -> dict[str, str]:
+    return {
+        "channel": _clean_channel(channel),
+        "channel_identity": _clean_identity(channel_identity),
+    }
+
+
 def _stable_id(prefix: str, *parts: str, length: int = 24) -> str:
     digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:length]
     return f"{prefix}_{digest}"

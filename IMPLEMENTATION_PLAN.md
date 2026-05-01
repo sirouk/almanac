@@ -29,6 +29,30 @@ generic product-surface errors use safe copy, public bot turns share the
 onboarding rate-limit rail, and `start_public_onboarding_api()` rejects invalid
 channels before writing rate-limit state.
 
+## Active Next Pass
+
+Ralphie's previous `done` state means the no-secret foundation cycle passed; it
+does not mean ArcLink is complete. The next run should start from
+`research/RALPHIE_NEXT_PASS_STEERING.md` and turn the remaining delivery ladder
+into a fresh PLAN/BUILD cycle.
+
+Priority order:
+
+1. Build the production API/auth boundary over the existing Python ArcLink
+   contracts.
+2. Add the real ArcLink web app after the API boundary is stable, defaulting to
+   Next.js/Tailwind unless a smaller repo-fit is justified.
+3. Add Telegram and Discord runtime adapters that share the same onboarding
+   contract as the web workflow.
+4. Add live-gated Docker/Cloudflare/Stripe/Chutes/bot executor paths with fake
+   adapters remaining default.
+5. Run live E2E only when explicit credentials are present and record the proof.
+
+Do not repeat completed foundation work except for narrow repairs required by
+the next layer. Do not call the product complete while live provisioning,
+production frontend, hosted auth, public bot runtimes, and real E2E evidence
+remain absent.
+
 ## Chosen Architecture
 
 Use staged evolution of the existing Docker/Python/Bash Almanac control plane.

@@ -23,6 +23,61 @@ ArcLink is final only when a real user can:
 Until that journey passes real E2E with recorded evidence, do not call ArcLink
 complete.
 
+## Mandatory Local Completion Checklist
+
+Ralphie must treat this checklist as the terminal guard. Do not route to `done`
+while any non-external item remains unchecked. Mark an item `[x]` only in the
+same commit that implements the item and records its acceptance evidence.
+
+- [ ] Gap 1A: Add dedicated web test coverage for the Next.js app, including
+  API client tests and smoke coverage for `/`, `/onboarding`, `/dashboard`, and
+  `/admin`.
+- [ ] Gap 1B: Add browser/mobile verification for the web app and record the
+  evidence without claiming live provisioning.
+- [ ] Gap 2A: Wire the website onboarding workflow to the hosted API contract
+  with fake checkout handoff and regression coverage.
+- [ ] Gap 2B: Prove web/Telegram/Discord onboarding parity through shared
+  fixtures and no-secret tests.
+- [ ] Gap 3A: Add Telegram runtime adapter skeleton with fake tests and
+  explicit env-gated live startup.
+- [ ] Gap 3B: Add Discord runtime adapter skeleton with fake tests and
+  explicit env-gated live startup.
+- [ ] Gap 4A: Complete Stripe fake/live adapter boundary for checkout,
+  webhook replay, entitlement transition, portal link, and reconciliation
+  drift tests.
+- [ ] Gap 5A: Complete Cloudflare fake/live adapter boundary for hostname
+  creation, verification, repair, removal, and DNS drift reporting.
+- [ ] Gap 6A: Complete Docker Compose executor boundary for render, live-gated
+  apply, health, rollback, idempotent resume, and teardown.
+- [ ] Gap 7A: Complete Chutes default provider/key lifecycle boundary with
+  fake tests, live-gated inference proof path, and secret-reference-only
+  outputs.
+- [ ] Gap 8A: Add deploy/runbook assets for the Hetzner or `s1396` full-stack
+  control-plane deployment behind the production domain.
+- [ ] Gap 9A: Add an E2E harness that can run the full signup-to-agent journey
+  in fake mode and switches to live mode only when credentials are present.
+- [ ] Gap 10A: Expand the admin dashboard/control plane to cover payments,
+  infrastructure, bots, security/abuse, releases, maintenance, logs, audit,
+  and queued live-gated controls.
+- [ ] Gap 10B: Ensure every admin mutation remains guarded by auth, CSRF, role,
+  reason, idempotency, and append-only audit tests.
+
+## External Live E2E Checklist
+
+These items require real accounts or credentials. Keep them visible, but do not
+block no-secret commits on them. When credentials become available, remove the
+`[external]` tag for the relevant item and complete it with real E2E evidence.
+
+- [ ] [external] Live Stripe checkout/webhook/customer/subscription/portal E2E.
+- [ ] [external] Live Cloudflare hostname/Tunnel/Access E2E.
+- [ ] [external] Live Docker provisioning on the selected Hetzner or `s1396`
+  node.
+- [ ] [external] Live Chutes inference and per-deployment key lifecycle E2E.
+- [ ] [external] Live Telegram onboarding bot E2E.
+- [ ] [external] Live Discord onboarding bot E2E.
+- [ ] [external] Live full signup-to-agent journey with dashboard, Hermes,
+  qmd retrieval, memory synth, Nextcloud/files, and code-server access.
+
 ## Gap 1: Production Next.js/Tailwind App
 
 Build the production web app that consumes `python/arclink_hosted_api.py`.

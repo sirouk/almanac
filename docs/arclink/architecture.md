@@ -126,7 +126,13 @@ explicit `live_enabled=True` and injected credentials.
 ## Current Limitations
 
 - Executor is fail-closed; no production live adapters are shipped yet.
-- Frontend dashboard (Next.js 15/Tailwind 4) exists in `web/` but uses mock data; API wiring needed.
-- Public bots are conversation skeletons, not running clients.
-- Live E2E testing requires credentials listed in
-  `docs/arclink/live-e2e-secrets-needed.md`.
+- Admin dashboard is wired to all hosted API admin endpoints; user dashboard
+  live data wiring is deferred.
+- Public bots have runtime adapters with fake-mode fallback; live HTTP
+  transport requires bot tokens.
+- Live E2E scaffold exists (`tests/test_arclink_e2e_live.py`) with
+  Stripe, Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks,
+  but full live proof skips until credentials and explicit live flags are
+  available. See `docs/arclink/live-e2e-secrets-needed.md`.
+- Deployment assets, observability, data safety, and documentation truth pass
+  remain (Production 13-16).

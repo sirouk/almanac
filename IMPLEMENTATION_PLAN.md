@@ -19,8 +19,8 @@ external credential.
 ## Current Status
 
 - 17 ArcLink Python modules (7,877 lines).
-- 17 test files + 4 hygiene + 2 web tests + 1 browser suite =
-  160 ArcLink tests plus 41 browser product checks passing.
+- 19 test files + 4 hygiene + 2 web tests + 1 browser suite =
+  166 ArcLink tests plus 41 browser product checks passing.
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
 - Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
@@ -49,7 +49,19 @@ external credential.
   and fake onboarding flow. Proof: `npm run test:browser` -> 41 passed,
   3 desktop-only skips on 2026-05-02.
 
-Do not rebuild P1-10 unless a regression is proven by a failing test.
+- **Production 11** (Fake E2E): Full journey harness covering web signup,
+  onboarding, checkout, Stripe webhook, entitlement, provisioning, service
+  health, user dashboard, admin audit, and admin actions. 6 tests in
+  `tests/test_arclink_e2e_fake.py`.
+- **Production 12** (Live E2E): Secret-gated scaffold with Stripe,
+  Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks. It skips
+  cleanly when credentials or explicit live flags are absent; full live journey
+  proof remains blocked on external accounts and credentials.
+  `tests/test_arclink_e2e_live.py`.
+
+Do not rebuild P1-11 unless a regression is proven by a failing test. Treat P12
+as scaffolded but externally blocked until real credentials are supplied and a
+credentialed run proves the live path.
 
 ## Chosen Architecture
 
@@ -71,7 +83,7 @@ PLAN is complete when:
 - Live blockers are documented as E2E prerequisites.
 - The next tasks are actionable and testable.
 
-## BUILD Tasks (Remaining: Production 11-16)
+## BUILD Tasks (Remaining: Production 13-16)
 
 ### Phase 3: Brand and UI Polish (Production 10) -- COMPLETE
 
@@ -101,7 +113,7 @@ cd web && npx tsc --noEmit && node --test tests/test_page_smoke.mjs
 # npm run test:browser
 ```
 
-### Phase 4: E2E Journey (Production 11-12) -- NEXT
+### Phase 4: E2E Journey (Production 11 complete, Production 12 scaffolded)
 
 **Production 11: Fake E2E Harness**
 
@@ -115,8 +127,10 @@ cd web && npx tsc --noEmit && node --test tests/test_page_smoke.mjs
 **Production 12: Live E2E Harness**
 
 - Build secret-gated live E2E harness: `tests/test_arclink_e2e_live.py`.
-- Run the same journey against real Stripe, Cloudflare, Chutes, Telegram,
-  Discord, and Docker.
+- Include read-only or non-destructive live checks for Stripe, Cloudflare,
+  Chutes, Telegram, Discord, and Docker readiness.
+- Expand to the same journey against real providers once the external
+  credentials and account fixtures exist.
 - Gate on presence of each credential; skip gracefully when absent.
 - Never leak secrets or make destructive calls accidentally.
 - Blocked: all external credentials (see External Live Proof Checklist).
@@ -126,7 +140,7 @@ Validation:
 ```bash
 python3 tests/test_arclink_e2e_fake.py
 # Live E2E only when credentials present:
-# ARCLINK_E2E_LIVE=1 python3 tests/test_arclink_e2e_live.py
+# ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
 ```
 
 ### Phase 5: Operations and Documentation (Production 13-16)
@@ -205,7 +219,7 @@ These require real accounts/credentials. Build fake/live boundaries first.
 
 - Admin dashboard is wired to API; user dashboard live data wiring deferred.
 - API/auth boundary not yet deployed behind production identity provider.
-- Live provider integration requires real credentials (P12).
+- Live provider proof requires real credentials and a deliberate live run (P12).
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
 
 ## BUILD Handoff

@@ -438,7 +438,10 @@ python3 tests/test_arclink_hosted_api.py
 python3 tests/test_arclink_telegram.py
 python3 tests/test_arclink_discord.py
 python3 tests/test_model_providers.py
+python3 tests/test_arclink_e2e_fake.py
 python3 tests/test_public_repo_hygiene.py
+# Live E2E (only when credentials present):
+# ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
 python3 -m py_compile python/almanac_control.py python/arclink_*.py
 git diff --check
 ```
@@ -470,7 +473,8 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
 
 - Live provisioning execution still needs production Docker, Cloudflare,
   model-provider, Stripe, secret-provider, and rollback adapters wired behind
-  the explicit live/E2E gate.
+  the explicit live/E2E gate. The current live E2E scaffold is not a completed
+  live customer journey until credentials are supplied and the run succeeds.
 - Cloudflare DNS/tunnel changes are represented as desired intent and fake drift
   checks only.
 - Live model provider key lifecycle is not implemented; the current key manager

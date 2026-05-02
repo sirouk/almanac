@@ -65,9 +65,9 @@
 | P7: Telegram/Discord onboarding parity | LANDED. Shared state machine, runtime adapters, fake mode, payload validation. | Live HTTP transport deferred. |
 | P8: User dashboard | LANDED. Responsive layout, mock data panels. | Wire to hosted API for live data. |
 | P9: Admin dashboard | LANDED. 18-tab admin page wired to hosted API (overview, users, deployments, onboarding, health, provisioning, dns, payments, infrastructure, bots, security, releases, audit, events, actions, sessions, provider, reconciliation). Queue-action and revoke-session forms with CSRF. | Complete. |
-| P10: Web UI product checks | Brand system partially applied | Browser E2E smoke, empty/error/loading states, accessibility, mobile layout proof |
-| P11: Fake E2E harness | Individual contract tests exist | Unified fake journey harness not yet built |
-| P12: Live E2E harness | Not started | Blocked: live credentials |
+| P10: Web UI product checks | LANDED. Playwright suite (41 tests), brand system, mobile/desktop viewports, accessible forms, loading/empty/error states, fake-adapter labeling. | Complete. |
+| P11: Fake E2E harness | LANDED. 6 tests in `tests/test_arclink_e2e_fake.py` covering full journey: signup, onboarding, checkout, webhook, entitlement, provisioning, health, dashboard, audit, admin actions. | Complete. |
+| P12: Live E2E harness | SCAFFOLDED. `tests/test_arclink_e2e_live.py` has secret-gated Stripe, Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks that skip cleanly when live flags/credentials are absent. | Full live journey proof blocked on external credentials and a deliberate credentialed run. |
 | P13: Deployment assets | docs/arclink/live-e2e-secrets-needed.md exists | env example, ingress plan, backup notes, runbook, rollback steps |
 | P14: Observability | Structured events, health snapshots, audit log | Alert candidates, queue/deployment status dashboard reads |
 | P15: Data safety | Per-user isolation decision, secret guards in tests | Volume layout doc, backup plan, teardown safeguards, destructive confirmations |
@@ -75,17 +75,15 @@
 
 ## Active Gaps
 
-- P9 admin dashboard is landed and wired to all hosted API admin endpoints.
-- Brand system partially applied; mobile/responsive browser proof needed (P10).
-- Unified fake E2E journey harness not yet built (P11).
-- Live E2E, deploy assets, observability, data safety, docs truth remain (P12-16).
-- Live external credentials remain external blockers for P12.
+- P1-11 landed and checked; P12 scaffold landed but live proof remains external.
+- Deploy assets, observability, data safety, docs truth remain (P13-16).
+- Live external credentials remain external blockers for P12 live proof.
 
 ## Coverage Verdict
 
-Coverage is sufficient for BUILD to continue. 160 ArcLink tests across 17 test
-files (plus 4 hygiene and 2 web tests) cover the no-secret foundation.
-Production 1-9 are landed and checked. Production 10-16 remain. No item requires
-live credentials to begin; 6 external items are blocked on credentials for live
-proof only. BUILD should proceed through Production 9-10 (admin dashboard,
-brand/UI), then 11-16 (E2E, deploy, ops, docs).
+Coverage is sufficient for BUILD to continue. 166 ArcLink tests across 19 test
+files (plus 4 hygiene, 2 web tests, and 41 browser product checks) cover the
+no-secret foundation. Production 1-12 are landed and checked. Production 13-16
+remain. No item requires live credentials to begin; 6 external items are blocked
+on credentials for live proof only. BUILD should proceed with Production 13-16
+(deploy assets, observability, data safety, docs truth).

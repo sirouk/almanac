@@ -93,6 +93,37 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
 - Profile-only upsert preservation: `upsert_arclink_user()` no longer resets
   entitlement state during profile-only updates for returning users.
 
+## Admin Dashboard and API Wiring (2026-05-02)
+
+- **Production 9**: Admin dashboard fully wired to hosted API with 18 tabs
+  (overview, users, deployments, onboarding, health, provisioning, dns,
+  payments, infrastructure, bots, security, releases, audit, events, actions,
+  sessions, provider, reconciliation). Queue-action and revoke-session forms
+  with CSRF. Sidebar + mobile tab layout. StatusBadge and ErrorAlert shared
+  components.
+
+## Browser Product Proof (2026-05-02)
+
+- **Production 10**: Playwright suite covering `/`, `/login`, `/onboarding`,
+  `/dashboard`, and `/admin` across desktop/mobile viewports with deterministic
+  API mocks. ArcLink brand system applied (Jet Black, Carbon, Soft White,
+  Signal Orange, Space Grotesk). Accessible forms, loading/empty/error states,
+  mobile overflow checks, fake-adapter labeling. 41 tests passed, 3
+  desktop-only skips.
+
+## E2E Journey Harnesses (2026-05-02)
+
+- **Production 11**: Fake E2E harness in `tests/test_arclink_e2e_fake.py` (6
+  tests). Proves full journey: web signup, onboarding answers, checkout
+  simulation, Stripe webhook, entitlement activation, provisioning request,
+  service health visibility, user dashboard state, admin audit, admin actions.
+  All fake adapters, no live credentials.
+
+- **Production 12**: Live E2E scaffold in `tests/test_arclink_e2e_live.py`
+  with secret-gated Stripe, Cloudflare, Chutes, Telegram, Discord, and
+  read-only Docker checks. All skip cleanly when live flags/credentials are
+  absent. Full live journey proof remains blocked on external credentials.
+
 ## Provider Boundary Progress (2026-05-02)
 
 Incremental Production 3-6 work: resource limits, healthchecks, and expanded
@@ -133,5 +164,6 @@ fake adapter coverage.
 - Web app foundation exists but views use mock data; API wiring needed.
 - Telegram/Discord runtime adapters exist with fake-mode dispatch; live HTTP
   transport (polling/gateway) not yet implemented.
-- No live E2E test suite with real credentials.
+- Live E2E scaffold exists but full live proof is blocked on real credentials
+  and a deliberate credentialed run (P12).
 - TOTP/MFA is schema-ready but not code-verified against real TOTP providers.

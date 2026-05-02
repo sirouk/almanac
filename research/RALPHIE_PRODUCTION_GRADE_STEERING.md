@@ -120,13 +120,18 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
   services, accessible forms, clear empty/error/loading states, and route-level
   smoke tests. Browser proof: `cd web && npm run test:browser` completed
   with 41 passed and 3 desktop-only skips on 2026-05-02.
-- [ ] Production 11: E2E harness proves the fake full journey: web signup,
+- [x] Production 11: E2E harness proves the fake full journey: web signup,
   onboarding answers, checkout simulation, entitlement activation,
   provisioning request, service health visibility, admin audit, and user
-  dashboard state.
-- [ ] Production 12: Live E2E harness exists and is secret-gated so it can run
-  the same journey against real Stripe, Cloudflare, Chutes, Telegram, Discord,
-  and Docker without leaking secrets or making destructive calls accidentally.
+  dashboard state. Proof: `python3 tests/test_arclink_e2e_fake.py` -> 6 tests
+  passed on 2026-05-02.
+- [ ] [external] Production 12: Live E2E harness exists and is secret-gated
+  with Stripe, Cloudflare, Chutes, Telegram, Discord, and read-only Docker
+  checks. It must be expanded/executed as the same real-provider journey once
+  external accounts and credentials exist. Current scaffold proof:
+  `python3 tests/test_arclink_e2e_live.py` skips cleanly when
+  `ARCLINK_E2E_LIVE` is unset. Blocked: all external credentials and a
+  deliberate credentialed live run.
 - [ ] Production 13: Deployment assets exist for the selected host: env
   example, secret checklist, Docker/Traefik or chosen ingress plan, backup and
   restore notes, health checks, restart procedure, and release/rollback steps.
@@ -153,12 +158,14 @@ and docs. Do not mark the project done while any non-external item remains.
      product-proof slices unless a regression is proven by a failing test.
    - Live provider proof remains deferred to Production 12 and requires real
      credentials.
-2. Prove the Journey (Production 11-12) next:
-   - Add a no-secret fake E2E harness for web signup, onboarding answers,
-     checkout simulation, entitlement activation, provisioning request, service
-     health visibility, admin audit, and user dashboard state.
-   - Add a secret-gated live E2E harness that skips cleanly until Stripe,
-     Cloudflare, Chutes, Telegram, Discord, and Docker live credentials exist.
+2. Prove the Journey (Production 11 complete, Production 12 externally blocked):
+   - Keep the no-secret fake E2E harness passing for web signup, onboarding
+     answers, checkout simulation, entitlement activation, provisioning
+     request, service health visibility, admin audit, and user dashboard state.
+   - Keep the secret-gated live E2E scaffold honest: it must skip cleanly until
+     Stripe, Cloudflare, Chutes, Telegram, Discord, and Docker live credentials
+     exist, and it must not be marked live-proven until a credentialed run
+     succeeds.
 3. Finish Operations (Production 13-16):
    - Deployment assets, env examples, runbooks, backup/restore, health checks,
      restart/release/rollback procedures.

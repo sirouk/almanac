@@ -18,6 +18,47 @@ feature: Hermes, qmd, Chutes, vaults, memory stubs, skills, Nextcloud,
 code-server, dashboards, bots, and provisioning health should be surfaced with
 confidence and taste.
 
+## Professional Finish Gate
+
+Do not call ArcLink finished because a phase says `done`. Treat the final form
+as a launchable operating system for private AI deployments. A slice is only
+complete when the code, tests, docs, UI behavior, and operator story all agree.
+
+Required finish behavior:
+
+- Every primary user path has a real implementation path: web onboarding,
+  Telegram onboarding, Discord onboarding, checkout handoff, entitlement,
+  provisioning intent, dashboard visibility, service links, billing portal,
+  and support or recovery guidance.
+- Every primary admin path has a real implementation path: funnel visibility,
+  user lookup, payment state, queue state, DNS/provider drift, service health,
+  audit, guarded actions, release status, and incident recovery guidance.
+- Fake adapters are visibly labeled as fake/local wherever they appear in UI,
+  tests, docs, or runbooks. Live claims require live proof.
+- Browser/mobile claims require browser evidence. Use Playwright or an
+  equivalent browser check for desktop and narrow mobile views, including text
+  overflow and route smoke coverage.
+- Backend claims require deterministic tests, safe error shapes, auth/audit
+  coverage, and no-secret fake adapter coverage before any live-gated work.
+- Live external work must stay behind explicit E2E switches and documented
+  credentials. A missing key is an external blocker, not a reason to skip the
+  fake/live boundary.
+- Documentation must be a truth layer. If code says one thing and docs say
+  another, fix the mismatch before committing.
+- Each completed production item must name the proof: commit, files changed,
+  focused tests, browser checks when relevant, and remaining live blockers.
+
+Quality bar:
+
+- Prefer small, composable modules over broad rewrites.
+- Preserve Almanac's working orchestration surfaces while renaming and
+  streamlining public ArcLink surfaces.
+- Keep public UI and bot copy direct, operator-grade, and brand aligned.
+- Keep admin UI dense, useful, and action-oriented. Avoid decorative panels
+  that do not help operate the system.
+- No plaintext secrets, no local absolute path leakage, no overclaimed uptime,
+  no live-service promises without a verified live run.
+
 ## Brand Quality Gate
 
 The UI and copy must follow `docs/arclink/brand-system.md` and the source brand

@@ -35,6 +35,27 @@ Cloudflare, Docker executor, and Chutes should not be rebuilt unless a failing
 test proves a regression. Live proof remains deferred to the secret-gated E2E
 harness.
 
+Professional bar:
+
+- Build the product surface as an operating console, not a placeholder demo.
+- Start from the existing `/web` app and `python/arclink_product_surface.py`,
+  then decide whether to deepen the Next.js API wiring, Python-rendered
+  fallback, or both. Do not leave two divergent product truths.
+- The user dashboard must expose real API-backed state for onboarding,
+  entitlement, deployment, service health, provider/model state, billing, and
+  sessions. Empty, loading, degraded, and fake/local states must be explicit.
+- The admin dashboard must expose real API-backed state for onboarding funnel,
+  users, payments, queue, Cloudflare/DNS drift, provider state, service health,
+  audit, and guarded actions.
+- The web flow, Telegram adapter, and Discord adapter must share one
+  onboarding contract. Any copy or state transition added to one surface must
+  be reflected in the shared tests.
+- Browser/mobile verification is required. Capture desktop and narrow mobile
+  evidence with Playwright or an equivalent browser check before marking
+  Production 10 complete.
+- Do not call the UI production-ready if it only compiles. It must be usable
+  as a real operator surface with honest fake/live labels.
+
 Required capabilities:
 
 - Wire the existing Next.js user dashboard to the hosted `/api/v1` user

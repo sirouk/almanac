@@ -8634,8 +8634,8 @@ publish_control_tailscale_ingress() {
   notion_path="$(normalize_http_path "$notion_path")"
   echo "Publishing Dockerized Sovereign Control Node over Tailscale Funnel on HTTPS :$port ..."
   tailscale funnel --bg --yes --https="$port" "http://127.0.0.1:$web_port" >/dev/null
-  tailscale funnel --bg --yes --https="$port" --set-path="/api" "http://127.0.0.1:$api_port" >/dev/null
-  tailscale funnel --bg --yes --https="$port" --set-path="$notion_path" "http://127.0.0.1:$notion_port" >/dev/null
+  tailscale funnel --bg --yes --https="$port" --set-path="/api" "http://127.0.0.1:$api_port/api" >/dev/null
+  tailscale funnel --bg --yes --https="$port" --set-path="$notion_path" "http://127.0.0.1:$notion_port$notion_path" >/dev/null
 }
 
 collect_control_install_answers() {

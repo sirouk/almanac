@@ -69,6 +69,15 @@ def test_backend_client_allowed_accepts_explicit_cidrs() -> None:
     print("PASS test_backend_client_allowed_accepts_explicit_cidrs")
 
 
+def test_notion_health_endpoint_is_available_before_transport_guard() -> None:
+    body = NOTION_WEBHOOK_PY.read_text(encoding="utf-8")
+    health_check = 'if self.path == "/health":'
+    transport_guard = "if not self._require_loopback_transport():"
+    expect(health_check in body and transport_guard in body, body)
+    expect(body.index(health_check) < body.index(transport_guard, body.index("def do_GET")), body)
+    print("PASS test_notion_health_endpoint_is_available_before_transport_guard")
+
+
 def test_wrappers_force_loopback_host_by_default() -> None:
     mcp_text = MCP_WRAPPER.read_text(encoding="utf-8")
     notion_text = NOTION_WRAPPER.read_text(encoding="utf-8")
@@ -111,9 +120,10 @@ def test_loopback_proxy_identity_headers_are_not_trusted_by_default() -> None:
 def main() -> int:
     test_backend_client_allowed_only_accepts_loopback()
     test_backend_client_allowed_accepts_explicit_cidrs()
+    test_notion_health_endpoint_is_available_before_transport_guard()
     test_wrappers_force_loopback_host_by_default()
     test_loopback_proxy_identity_headers_are_not_trusted_by_default()
-    print("PASS all 4 loopback hardening regression tests")
+    print("PASS all 5 loopback hardening regression tests")
     return 0
 
 

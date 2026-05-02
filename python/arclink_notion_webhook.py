@@ -300,12 +300,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/health":
+            self._send_json({"ok": True, "service": "arclink-notion-webhook"})
+            return
         if not self._require_loopback_transport():
             return
-        if self.path != "/health":
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
-        self._send_json({"ok": True, "service": "arclink-notion-webhook"})
+        self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
         if not self._require_loopback_transport():

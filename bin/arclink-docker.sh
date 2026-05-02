@@ -348,7 +348,7 @@ docker_port_set_available() {
     host_port_available_for_service "$webhook_port" notion-webhook 8283 &&
     host_port_available_for_service "$nextcloud_port" nextcloud 80 &&
     host_port_available_for_service "$api_port" control-api 8900 &&
-    host_port_available_for_service "$web_port" control-web 3000
+    host_port_available_for_service "$web_port" control-ingress 8080
 }
 
 persist_docker_ports() {

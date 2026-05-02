@@ -63,6 +63,7 @@ def test_compose_defines_full_stack_services() -> None:
         "notion-webhook:",
         "control-api:",
         "control-web:",
+        "control-ingress:",
         "control-provisioner:",
         "vault-watch:",
         "agent-supervisor:",
@@ -82,7 +83,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("127.0.0.1:${QMD_MCP_PORT:-8181}:8181" in body, body)
     expect("127.0.0.1:${NEXTCLOUD_PORT:-18080}:80" in body, body)
     expect("127.0.0.1:${ARCLINK_API_PORT:-8900}:8900" in body, body)
-    expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:3000" in body, body)
+    expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080" in body, body)
     expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
     expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)
     expect("./arclink-priv/secrets/ssh:/root/.ssh" in body, body)
@@ -157,6 +158,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("compose up -d --no-build" in body, body)
     expect("show_ports()" in body, body)
     expect("docker_port_set_available()" in body, body)
+    expect("host_port_available_for_service \"$web_port\" control-ingress 8080" in body, body)
     expect("QMD_MCP_PORT" in body and "ARCLINK_MCP_PORT" in body and "ARCLINK_API_PORT" in body and "ARCLINK_WEB_PORT" in body, body)
     expect("18181 + offset" in body and "18282 + offset" in body and "28080 + offset" in body, body)
     expect("18900 + offset" in body and "13000 + offset" in body, body)

@@ -1987,6 +1987,8 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("collect_control_install_answers()" in text, "expected control-node provider configuration flow")
     expect("ArcLink ingress mode (domain/tailscale)" in text, "expected control install to ask for domain or Tailscale ingress")
     expect("publish_control_tailscale_ingress()" in text, "expected control install to publish Dockerized control surfaces through Tailscale")
+    expect('"http://127.0.0.1:$api_port/api"' in text, "expected Tailscale /api route to preserve the API prefix")
+    expect('"http://127.0.0.1:$notion_port$notion_path"' in text, "expected Tailscale Notion route to preserve its callback path")
     expect("Local/starter fleet SSH user" in text, "expected local starter fleet registration to collect an SSH target user")
     expect("ARCLINK_LOCAL_FLEET_SSH_USER:-arclink" in text, "expected local fleet SSH user to default to arclink")
     expect("Create/repair local fleet Unix user and authorize this key now" in text, "expected local fleet bootstrap helper prompt")

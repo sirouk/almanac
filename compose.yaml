@@ -192,6 +192,12 @@ services:
     command: ["./bin/arclink-notion-webhook.sh", "--host", "0.0.0.0", "--port", "8283"]
     ports:
       - "127.0.0.1:${ARCLINK_NOTION_WEBHOOK_PORT:-8283}:8283"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.arclink-control-notion.rule=PathPrefix(`/notion/webhook`)"
+      - "traefik.http.routers.arclink-control-notion.entrypoints=web"
+      - "traefik.http.routers.arclink-control-notion.priority=200"
+      - "traefik.http.services.arclink-control-notion.loadbalancer.server.port=8283"
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8283/health >/dev/null"]
@@ -201,6 +207,12 @@ services:
     command: ["python3", "python/arclink_hosted_api.py"]
     ports:
       - "127.0.0.1:${ARCLINK_API_PORT:-8900}:8900"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.arclink-control-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.arclink-control-api.entrypoints=web"
+      - "traefik.http.routers.arclink-control-api.priority=150"
+      - "traefik.http.services.arclink-control-api.loadbalancer.server.port=8900"
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8900/api/v1/health >/dev/null"]
@@ -211,11 +223,34 @@ services:
     depends_on:
       control-api:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:${ARCLINK_WEB_PORT:-3000}:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.arclink-control-web.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.arclink-control-web.entrypoints=web"
+      - "traefik.http.routers.arclink-control-web.priority=1"
+      - "traefik.http.services.arclink-control-web.loadbalancer.server.port=3000"
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000 >/dev/null"]
+
+  control-ingress:
+    image: ${ARCLINK_TRAEFIK_IMAGE:-docker.io/library/traefik:v3}
+    restart: *restart-unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:8080"
+      - "--api.dashboard=false"
+      - "--log.level=INFO"
+    ports:
+      - "127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      control-web:
+        condition: service_healthy
+      control-api:
+        condition: service_healthy
 
   control-provisioner:
     <<: *arclink-app

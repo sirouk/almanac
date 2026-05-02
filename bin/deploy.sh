@@ -956,22 +956,22 @@ choose_mode() {
   cat <<'EOF'
 ArcLink deploy menu
 
-  1) Baremetal shared-host install / repair from current checkout
-  2) Upgrade deployed host from configured upstream
-  3) Write config only
-  4) Notion SSOT setup / test
-  5) Notion workspace migration
-  6) Notion page backup / restore
-  7) Enrollment status
-  8) Enrollment trace
-  9) Enrollment align / repair
- 10) Enrollment reset / cleanup
- 11) Curator setup / repair
- 12) Rotate Nextcloud secrets
- 13) Print agent payload
- 14) Health check
- 15) Remove / teardown
- 16) Docker-first control center (recommended for ArcLink SaaS hosts)
+  1) Shared Host mode install / repair (operator-led)
+  2) Shared Host mode upgrade from configured upstream
+  3) Shared Host mode write config only
+  4) Shared Host mode Notion SSOT setup / test
+  5) Shared Host mode Notion workspace migration
+  6) Shared Host mode Notion page backup / restore
+  7) Shared Host mode enrollment status
+  8) Shared Host mode enrollment trace
+  9) Shared Host mode enrollment align / repair
+ 10) Shared Host mode enrollment reset / cleanup
+ 11) Shared Host mode Curator setup / repair
+ 12) Shared Host mode rotate Nextcloud secrets
+ 13) Shared Host mode print agent payload
+ 14) Shared Host mode health check
+ 15) Shared Host mode remove / teardown
+ 16) Sovereign Node mode control center (Docker-first)
  17) Exit
 EOF
 
@@ -1049,7 +1049,7 @@ choose_docker_mode() {
   local answer=""
 
   cat <<'EOF'
-ArcLink Docker control center
+ArcLink Sovereign Node control center
 
   1) Install / repair Docker stack from current checkout
   2) Upgrade / rebuild Docker stack from current checkout
@@ -4162,8 +4162,8 @@ collect_install_answers() {
 
   load_detected_config || true
 
-  echo "ArcLink deploy: baremetal shared-host install / repair from current checkout"
-  echo "For the Docker-first ArcLink SaaS host path, use: ./deploy.sh docker install"
+  echo "ArcLink deploy: Shared Host mode install / repair from current checkout"
+  echo "For Sovereign Node mode, use: ./deploy.sh docker install"
   echo
 
   detected_user="${ARCLINK_USER:-}"

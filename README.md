@@ -9,10 +9,10 @@ admin dashboards, fleet operations, rollout records, and a secret-gated live
 proof harness.
 
 `deploy.sh` still plays a real role: it is the host bootstrap and operations
-entrypoint for the underlying machine. It installs or repairs the Docker or
-baremetal ArcLink runtime that ArcLink builds on. ArcLink's Python control
-plane owns product state, provisioning intent, provider gates, admin actions,
-and live-proof orchestration.
+entrypoint for the underlying machine. It installs or repairs either ArcLink
+mode: Shared Host or Sovereign Node. ArcLink's Python control plane owns
+product state, provisioning intent, provider gates, admin actions, and
+live-proof orchestration.
 
 Use this mental split:
 
@@ -147,7 +147,7 @@ flowchart LR
 
 ## Repository Layout
 
-The historical baremetal deployed layout is:
+The Shared Host deployed layout is:
 
 ```text
 /home/arclink/
@@ -155,7 +155,7 @@ The historical baremetal deployed layout is:
     arclink-priv/          # private nested repo: config, vault, runtime state
 ```
 
-The Docker-first ArcLink host can also run from a root-owned or operator-owned
+The Sovereign Node host can also run from a root-owned or operator-owned
 checkout such as:
 
 ```text
@@ -190,10 +190,10 @@ the outer infrastructure repo.
 
 ## Host Deployment From Scratch
 
-For ArcLink today, the recommended first host path is Docker Compose through
-`deploy.sh`. That gives you the operational substrate quickly while preserving
-the same health, repair, upgrade, and recovery entrypoint the older ArcLink
-host path uses.
+For ArcLink today, the recommended first host path is Sovereign Node Mode:
+Docker Compose through `deploy.sh`. That gives you the operational substrate
+quickly while preserving the same health, repair, upgrade, and recovery
+entrypoint that Shared Host Mode uses.
 
 ### 1. Prepare The Host
 
@@ -261,23 +261,25 @@ Stripe, Cloudflare, Chutes, Telegram, Discord, and production host credentials.
 ./deploy.sh docker rotate-nextcloud-secrets
 ```
 
-Use baremetal `./deploy.sh install` only when you intentionally want the older
-systemd/user-service shared-host path. ArcLink's MVP deployment substrate is
-Docker-first.
+Use `./deploy.sh install` when you intentionally want Shared Host Mode:
+operator-led onboarding, approved enrollments, enrolled Unix users, and shared
+host services. Use `./deploy.sh docker install` when you want Sovereign Node
+Mode: one deployment as its own private node.
 
 ## Deployment Paths
 
-ArcLink keeps two deployment paths in this repository. They share the same
-operator control center, but they do not mean the same thing.
+ArcLink has two first-class deployment paths. They share `deploy.sh`, health,
+repair, upgrade, and recovery vocabulary, but they represent different product
+shapes.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
-| **Docker-first** | ArcLink MVP host deployment, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
-| **Baremetal** | Legacy/full ArcLink shared-host installs, operator onboarding, enrolled Unix users, systemd user services, production upgrades. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
+| **Sovereign Node Mode** | Individual/private ArcLink deployments, productized SaaS hosts, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
+| **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
 
-The interactive `./deploy.sh` menu defaults to the Docker control center.
-Direct commands that do not include the word `docker`, such as `./deploy.sh
-install`, still use the baremetal path.
+The interactive `./deploy.sh` menu exposes both modes and defaults to Sovereign
+Node Mode. Direct commands that do not include the word `docker`, such as
+`./deploy.sh install`, use Shared Host Mode.
 
 ## Local Validation
 
@@ -296,19 +298,20 @@ docs/arclink/foundation-runbook.md
 docs/arclink/live-e2e-secrets-needed.md
 ```
 
-## Baremetal Path
+## Shared Host Mode
 
-Baremetal is the original full operator path. It installs and repairs the live
-shared-host system, performs operator onboarding/config collection, uses `sudo`
-for privileged host setup, manages systemd units, provisions enrolled Unix
-users, and drives production upgrades from the configured upstream.
+Shared Host Mode is the operator-led ArcLink path. It installs and repairs the
+live shared-host system, performs operator onboarding/config collection, uses
+`sudo` for privileged host setup, manages systemd units, provisions enrolled
+Unix users, and drives production upgrades from the configured upstream.
 
-Use baremetal when you want the complete current ArcLink operating model:
+Use Shared Host Mode when you want the complete operator-led ArcLink operating
+model:
 Curator onboarding, per-user Unix accounts, user-level systemd services,
 chat gateways, Tailscale Serve/Funnel integration, host health repair, and
 idempotent reinstall/upgrade flows.
 
-### Baremetal Requirements
+### Shared Host Requirements
 
 Supported shared-host environments:
 
@@ -324,7 +327,7 @@ Not supported as a full host:
 You can still use helper commands from macOS or another workstation, but the
 actual shared-host stack expects Linux system services.
 
-### Baremetal Quick Start
+### Shared Host Quick Start
 
 From the repo root:
 
@@ -354,7 +357,7 @@ and Nextcloud settings, model presets, Notion, deploy keys, private backup
 remote, and optional Quarto support. It asks first, then uses `sudo` only for
 the steps that need root.
 
-### Baremetal First Install Checklist
+### Shared Host First Install Checklist
 
 Before a serious install, have these ready:
 
@@ -396,7 +399,15 @@ from the same control-plane state.
 - Bash and Python 3 on the machine running the wrapper scripts.
 - No Podman requirement for Docker mode.
 
-### Containerized Quick Start
+## Sovereign Node Mode
+
+Sovereign Node Mode is the individual ArcLink path backed by Docker Compose. A
+deployment is treated as its own private node with its own runtime state,
+secrets, health, and product configuration. This is the path for productized
+individual deployments and the future collaboration model described in
+`FUTURE_SHARED_ARCLINK.md`.
+
+### Sovereign Node Quick Start
 
 From the repo root:
 
@@ -413,13 +424,13 @@ The selected ports are persisted in `arclink-priv/state/docker/ports.json`.
 Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
-Docker install asks the operator-facing configuration questions, writes
+Sovereign Node install asks the operator-facing configuration questions, writes
 `arclink-priv/config/docker.env`, applies the private operating profile when
 present, records the release state, runs strict Docker health, and runs the live
-agent MCP tool smoke so the containerized path stays aligned with the baremetal
+agent MCP tool smoke so the containerized path stays aligned with the Shared Host
 operator contract. It also runs the Curator setup flow from the container so the
 operator gets the same model, channel, and notification questions as a
-baremetal install. If OpenAI Codex is selected as the org-wide provider, Docker
+Shared Host install. If OpenAI Codex is selected as the org-wide provider, Docker
 install captures that shared credential from the Curator Codex sign-in instead
 of starting a separate auth flow during the first questionnaire. Set
 `ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG=1` or
@@ -455,8 +466,8 @@ The Docker path keeps the same operator vocabulary for container-native work:
 
 Pinned-component Docker upgrades re-enter `./deploy.sh docker upgrade` after
 the pin bump and load upstream push/deploy-key settings from the Docker runtime
-config. Baremetal commands remain baremetal unless the command includes
-`docker`.
+config. Shared Host commands remain in Shared Host Mode unless the command
+includes `docker`.
 
 The Docker submenu is available with:
 
@@ -579,7 +590,7 @@ An enrolled user gets:
 - A `~/ArcLink` symlink to the shared vault for VS Code / code-server file
   explorer convenience.
 - `$HERMES_HOME/ArcLink` and `$HERMES_HOME/Vault` symlinks for agent-local
-  discovery and compatibility with older instructions.
+  discovery and compatibility with existing instructions.
 - Optional Nextcloud user access.
 - Optional private agent backup to a user-owned GitHub repo. Curator asks for a
   private `owner/repo` path, generates a per-user deploy key, refuses public
@@ -940,9 +951,9 @@ The default posture is local-first and tailnet-first:
 - User agents get isolated Unix accounts and private Hermes homes.
 - User agents authenticate to ArcLink MCP with a per-agent bootstrap token
   stored in their private Hermes home; the managed-context plugin injects it
-  automatically so agents do not expose or hand-type it. Baremetal
-  realignment and Docker agent supervision both validate and repair that token
-  path idempotently.
+  automatically so agents do not expose or hand-type it. Shared Host
+  realignment and Sovereign Node agent supervision both validate and repair
+  that token path idempotently.
 - User-facing write access goes through scoped broker rails, not raw Notion
   access.
 - Health checks flag placeholder secrets, missing keys, inaccessible ports,
@@ -983,7 +994,7 @@ Telegram bot command menus use Telegram-compatible underscores for multiword
 commands, such as `/setup_backup`, `/verify_notion`, `/ssh_key`, and
 operator-only `/retry_contact`. Operators can also use `/upgrade` in the
 configured Curator operator channel to queue an idempotent host upgrade/repair.
-The older typed hyphen aliases continue to work when sent as plain messages.
+Typed hyphen aliases continue to work when sent as plain messages.
 Discord app commands include `/upgrade` and `/retry-contact`; `/retry-contact`
 accepts a target in the operator channel, while in an onboarding DM it retries
 that user's own Discord agent-bot handoff.
@@ -1041,9 +1052,9 @@ After install:
 ## ArcLink: Self-Serve AI Deployment SaaS
 
 ArcLink is the Chutes-first self-serve AI deployment product built on top of
-ArcLink's shared-host substrate. It adds commercial SaaS primitives while
-preserving the existing ArcLink deploy, onboarding, Hermes, qmd, vault, memory,
-Notion, and service-health paths.
+ArcLink's Shared Host and Sovereign Node substrates. It adds commercial SaaS
+primitives while preserving the existing ArcLink deploy, onboarding, Hermes,
+qmd, vault, memory, Notion, and service-health paths.
 
 ArcLink owns:
 

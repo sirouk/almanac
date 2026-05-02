@@ -1400,12 +1400,12 @@ def test_deploy_menu_defaults_to_docker_first() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "choose_mode() {", "docker_usage() {")
     expect(
-        "Baremetal shared-host install / repair" in snippet,
-        "expected option 1 to be explicitly marked as the baremetal substrate path",
+        "Shared Host mode install / repair (operator-led)" in snippet,
+        "expected option 1 to be explicitly marked as the operator-led shared host path",
     )
     expect(
-        "Docker-first control center (recommended for ArcLink SaaS hosts)" in snippet,
-        "expected Docker control center to be labeled as the recommended SaaS path",
+        "Sovereign Node mode control center (Docker-first)" in snippet,
+        "expected Docker control center to be labeled as the Sovereign Node path",
     )
     expect('read -r -p "Choose mode [16]: "' in snippet, "expected menu default to be Docker-first")
     expect('case "${answer:-16}"' in snippet, "expected blank menu selection to choose Docker mode")
@@ -1416,12 +1416,12 @@ def test_baremetal_install_banner_points_to_docker_first_path() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
     expect(
-        "ArcLink deploy: baremetal shared-host install / repair from current checkout" in snippet,
-        "expected baremetal install heading to be explicit",
+        "ArcLink deploy: Shared Host mode install / repair from current checkout" in snippet,
+        "expected Shared Host install heading to be explicit",
     )
     expect(
-        "For the Docker-first ArcLink SaaS host path, use: ./deploy.sh docker install" in snippet,
-        "expected baremetal path to point operators to Docker-first install",
+        "For Sovereign Node mode, use: ./deploy.sh docker install" in snippet,
+        "expected Shared Host path to point operators to Sovereign Node install",
     )
     print("PASS test_baremetal_install_banner_points_to_docker_first_path")
 
@@ -1953,7 +1953,7 @@ def test_write_answers_file_persists_host_dependency_choices() -> None:
 def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
-    expect("ArcLink Docker control center" in text, "expected Docker submenu")
+    expect("ArcLink Sovereign Node control center" in text, "expected Sovereign Node submenu")
     expect('MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
     expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
     expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")

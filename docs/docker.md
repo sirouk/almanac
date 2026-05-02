@@ -73,16 +73,16 @@ Show the current assignment with:
 
 The default stack starts ArcLink MCP, qmd MCP, Notion webhook, Nextcloud,
 Postgres, Redis, vault watching, recurring job containers, memory synthesis,
-and the Docker agent supervisor. The supervisor replaces the baremetal per-user
+and the Docker agent supervisor. The supervisor replaces the Shared Host per-user
 systemd units for enrolled agents: it reconciles refresh, Hermes gateway,
 dashboard, authenticated dashboard proxy, cron tick, and code-server workspace
 processes from the control-plane state.
 
-The `memory-synth` job mirrors the baremetal `arclink-memory-synth.timer`: it
+The `memory-synth` job mirrors the Shared Host `arclink-memory-synth.timer`: it
 uses the configured `ARCLINK_MEMORY_SYNTH_*` values, or falls back to
 `PDF_VISION_*`, to build cached semantic recall cards for managed-context
 hot injection without putting LLM summarization on the chat path. The same
-generalized vault and Notion synthesis behavior is used in Docker and baremetal,
+generalized vault and Notion synthesis behavior is used in Docker and Shared Host,
 including bounded media/data inventories, symlink boundary checks, and shallow
 repo handling. Vault changes can request a non-blocking synthesis pass in both
 modes, and full-source hashes keep move/rename/delete freshness separate from
@@ -91,10 +91,10 @@ backstop.
 
 `install` and `upgrade` also apply the private operating profile when present,
 record `state/arclink-release.json`, run Docker health, and run the same live
-agent MCP tool smoke that the baremetal upgrade path uses.
+agent MCP tool smoke that the Shared Host upgrade path uses.
 
 Agent web surfaces are published individually as they are reconciled. ArcLink
-keeps the same access-state ports as baremetal, but Docker mode does not reserve
+keeps the same access-state ports as Shared Host, but Docker mode does not reserve
 the entire possible port range at Compose startup.
 
 ## Privilege Boundary
@@ -107,7 +107,7 @@ remove per-agent gateway, dashboard proxy, cron, and workspace containers.
 Treat Docker mode as a trusted-host deployment. Do not expose the Docker socket
 or the agent-supervisor service publicly. The shared HTTP services in
 `compose.yaml` remain bound to `127.0.0.1` by default so external access can be
-handled deliberately through the same access rails as baremetal.
+handled deliberately through the same access rails as Shared Host Mode.
 
 Optional profiles are available for `curator`, `quarto`, and `backup`:
 
@@ -117,7 +117,7 @@ COMPOSE_PROFILES=curator ./deploy.sh docker install
 
 `./deploy.sh docker install` asks the operator-facing Docker configuration
 questions before the build/up step, then runs Curator setup interactively when a
-terminal is available. That matches the baremetal operator flow for organization
+terminal is available. That matches the Shared Host operator flow for organization
 context, provider defaults, Nextcloud, backup, PDF vision, Curator model, chat
 channels, and operator notifications while keeping host-systemd-only questions
 out of Docker mode. If OpenAI Codex is selected as the org-wide provider, the
@@ -175,9 +175,9 @@ Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
 pin bump and load upstream push/deploy-key settings from the Docker runtime
 config. The interactive `./deploy.sh` menu defaults to this Docker control
 center so new ArcLink SaaS hosts do not accidentally fall back into the
-baremetal upgrade path.
+Shared Host upgrade path.
 
-Host/systemd-only commands remain explicit baremetal operations. `./deploy.sh
+Host/systemd-only commands remain explicit Shared Host operations. `./deploy.sh
 remove` tears down a host install; `./deploy.sh docker remove` is an alias for
 Docker teardown and does not remove `arclink-priv/` bind-mounted state.
 
@@ -211,5 +211,5 @@ volumes, but bind-mounted `arclink-priv/` state remains on disk.
   default local Docker stack.
 - Agent code-server workspaces are launched by the Docker supervisor through the
   host Docker socket, using the same access-state ports and credentials as the
-  baremetal path.
+  Shared Host path.
 - The Docker app image installs Hermes and qmd from `config/pins.json`.

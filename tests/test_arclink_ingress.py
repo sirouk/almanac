@@ -75,10 +75,96 @@ def test_traefik_dynamic_labels_match_golden_file_for_all_host_roles() -> None:
     print("PASS test_traefik_dynamic_labels_match_golden_file_for_all_host_roles")
 
 
+def test_dns_provision_creates_records_and_marks_provisioned() -> None:
+    control = load_module("almanac_control.py", "almanac_control_ingress_prov_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_prov_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_prov_test")
+    conn = memory_db(control)
+    cloudflare = adapters.FakeCloudflareClient()
+
+    records = ingress.provision_arclink_dns(
+        conn,
+        deployment_id="dep_prov_1",
+        prefix="testprov",
+        base_domain="example.test",
+        target="edge.example.test",
+        cloudflare=cloudflare,
+    )
+    expect(len(records) == 4, str(records))
+    expect(len(cloudflare.records) == 4, str(cloudflare.records))
+    db_records = conn.execute(
+        "SELECT status FROM arclink_dns_records WHERE deployment_id = 'dep_prov_1'"
+    ).fetchall()
+    expect(all(r["status"] == "provisioned" for r in db_records), str([dict(r) for r in db_records]))
+    events = conn.execute(
+        "SELECT event_type FROM arclink_events WHERE subject_id = 'dep_prov_1' AND event_type = 'dns_provisioned'"
+    ).fetchall()
+    expect(len(events) == 1, str([dict(r) for r in events]))
+    print("PASS test_dns_provision_creates_records_and_marks_provisioned")
+
+
+def test_dns_teardown_removes_records_and_marks_torn_down() -> None:
+    control = load_module("almanac_control.py", "almanac_control_ingress_tear_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_tear_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_tear_test")
+    conn = memory_db(control)
+    cloudflare = adapters.FakeCloudflareClient()
+
+    # First provision
+    ingress.provision_arclink_dns(
+        conn, deployment_id="dep_tear_1", prefix="teartest",
+        base_domain="example.test", target="edge.example.test", cloudflare=cloudflare,
+    )
+    expect(len(cloudflare.records) == 4, "expected 4 records after provision")
+
+    # Then teardown
+    removed = ingress.teardown_arclink_dns(
+        conn, deployment_id="dep_tear_1", prefix="teartest",
+        base_domain="example.test", cloudflare=cloudflare,
+    )
+    expect(len(removed) == 4, f"expected 4 removed, got {len(removed)}")
+    expect(len(cloudflare.records) == 0, "expected 0 records after teardown")
+    db_records = conn.execute(
+        "SELECT status FROM arclink_dns_records WHERE deployment_id = 'dep_tear_1'"
+    ).fetchall()
+    expect(all(r["status"] == "torn_down" for r in db_records), str([dict(r) for r in db_records]))
+    events = conn.execute(
+        "SELECT event_type FROM arclink_events WHERE subject_id = 'dep_tear_1' AND event_type = 'dns_teardown'"
+    ).fetchall()
+    expect(len(events) == 1, str([dict(r) for r in events]))
+    print("PASS test_dns_teardown_removes_records_and_marks_torn_down")
+
+
+def test_dns_provision_is_idempotent_on_retry() -> None:
+    control = load_module("almanac_control.py", "almanac_control_ingress_retry_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_retry_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_retry_test")
+    conn = memory_db(control)
+    cloudflare = adapters.FakeCloudflareClient()
+
+    # Provision twice — should be idempotent
+    ingress.provision_arclink_dns(
+        conn, deployment_id="dep_retry", prefix="retrytest",
+        base_domain="example.test", target="edge.example.test", cloudflare=cloudflare,
+    )
+    ingress.provision_arclink_dns(
+        conn, deployment_id="dep_retry", prefix="retrytest",
+        base_domain="example.test", target="edge2.example.test", cloudflare=cloudflare,
+    )
+    expect(len(cloudflare.records) == 4, "expected 4 records")
+    # All should point to new target
+    for rec in cloudflare.records.values():
+        expect(rec.target == "edge2.example.test", f"expected updated target, got {rec.target}")
+    print("PASS test_dns_provision_is_idempotent_on_retry")
+
+
 def main() -> int:
     test_dns_reconciler_persists_desired_records_and_records_drift_events()
     test_traefik_dynamic_labels_match_golden_file_for_all_host_roles()
-    print("PASS all 2 ArcLink ingress tests")
+    test_dns_provision_creates_records_and_marks_provisioned()
+    test_dns_teardown_removes_records_and_marks_torn_down()
+    test_dns_provision_is_idempotent_on_retry()
+    print("PASS all 5 ArcLink ingress tests")
     return 0
 
 

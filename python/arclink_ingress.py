@@ -102,6 +102,72 @@ def reconcile_arclink_dns(
     return drift
 
 
+def _mark_dns_status(
+    conn: sqlite3.Connection,
+    deployment_id: str,
+    status: str,
+    event_type: str,
+    metadata: dict[str, Any],
+) -> None:
+    now = utc_now_iso()
+    conn.execute(
+        "UPDATE arclink_dns_records SET status = ?, updated_at = ? WHERE deployment_id = ?",
+        (status, now, deployment_id),
+    )
+    conn.commit()
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type=event_type,
+        metadata=metadata,
+    )
+
+
+def teardown_arclink_dns(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    prefix: str,
+    base_domain: str,
+    cloudflare: Any,
+) -> list[str]:
+    """Remove all DNS records for a deployment and mark them torn down."""
+    hostnames = arclink_hostnames(prefix, base_domain)
+    removed = cloudflare.teardown_records(list(hostnames.values()))
+    _mark_dns_status(conn, deployment_id, "torn_down", "dns_teardown",
+                     {"removed": removed, "prefix": prefix})
+    return removed
+
+
+def provision_arclink_dns(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    prefix: str,
+    base_domain: str,
+    target: str,
+    cloudflare: Any,
+    max_retries: int = 2,
+) -> dict[str, DnsRecord]:
+    """Create DNS records with retry safety. Idempotent via upsert."""
+    records = desired_arclink_dns_records(prefix=prefix, base_domain=base_domain, target=target)
+    persist_arclink_dns_records(conn, deployment_id=deployment_id, records=records)
+    last_error: Exception | None = None
+    for attempt in range(1 + max_retries):
+        try:
+            for record in records.values():
+                cloudflare.upsert_record(record)
+            _mark_dns_status(conn, deployment_id, "provisioned", "dns_provisioned",
+                             {"prefix": prefix, "attempt": attempt + 1})
+            return records
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return records
+
+
 def render_traefik_dynamic_labels(
     *,
     prefix: str,

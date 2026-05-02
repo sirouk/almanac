@@ -180,6 +180,20 @@ class FakeCloudflareClient:
                 drift.append(f"changed {record.record_type.upper()} {record.hostname}")
         return drift
 
+    def delete_record(self, hostname: str, record_type: str) -> bool:
+        key = (hostname.lower(), record_type.upper())
+        if key in self.records:
+            del self.records[key]
+            return True
+        return False
+
+    def teardown_records(self, hostnames: list[str], record_type: str = "CNAME") -> list[str]:
+        removed: list[str] = []
+        for hostname in hostnames:
+            if self.delete_record(hostname, record_type):
+                removed.append(hostname)
+        return removed
+
 
 def arclink_hostnames(prefix: str, base_domain: str) -> dict[str, str]:
     clean_prefix = str(prefix or "").strip().lower()

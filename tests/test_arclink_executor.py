@@ -667,6 +667,46 @@ def test_fake_docker_compose_rejects_missing_depends_on_service() -> None:
     print("PASS test_fake_docker_compose_rejects_missing_depends_on_service")
 
 
+def test_fake_docker_compose_lifecycle_operations() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_lifecycle_test")
+    executor = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(adapter_name="fake", live_enabled=True))
+
+    for action in ("stop", "restart", "inspect", "teardown"):
+        result = executor.docker_compose_lifecycle(
+            mod.DockerComposeLifecycleRequest(
+                deployment_id="dep_lifecycle",
+                action=action,
+                idempotency_key=f"lc-{action}-1",
+            )
+        )
+        expect(result.status == "completed", f"{action} expected completed got {result.status}")
+        expect(result.action == action, f"expected {action} got {result.action}")
+        expect(result.live is False, f"expected fake (live=False) for {action}")
+
+    # Invalid action rejected
+    try:
+        executor.docker_compose_lifecycle(
+            mod.DockerComposeLifecycleRequest(deployment_id="dep_lifecycle", action="explode")
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("unsupported" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected unsupported lifecycle action to fail")
+
+    # Lifecycle requires live_enabled
+    no_live = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(adapter_name="fake", live_enabled=False))
+    try:
+        no_live.docker_compose_lifecycle(
+            mod.DockerComposeLifecycleRequest(deployment_id="dep_lifecycle", action="stop")
+        )
+    except mod.ArcLinkLiveExecutionRequired:
+        pass
+    else:
+        raise AssertionError("expected live execution required error")
+
+    print("PASS test_fake_docker_compose_lifecycle_operations")
+
+
 def main() -> int:
     test_executor_mutating_operations_fail_closed_without_live_flag()
     test_secret_resolvers_validate_refs_and_hide_material()
@@ -684,7 +724,8 @@ def main() -> int:
     test_fake_rollback_executor_is_idempotent_and_preserves_state_roots()
     test_fake_rollback_rejects_idempotency_key_reuse_with_changed_plan()
     test_fake_docker_compose_rejects_missing_depends_on_service()
-    print("PASS all 16 ArcLink executor tests")
+    test_fake_docker_compose_lifecycle_operations()
+    print("PASS all 17 ArcLink executor tests")
     return 0
 
 

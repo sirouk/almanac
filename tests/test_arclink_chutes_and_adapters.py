@@ -136,6 +136,44 @@ def test_cloudflare_drift_and_traefik_label_rendering() -> None:
     print("PASS test_cloudflare_drift_and_traefik_label_rendering")
 
 
+def test_chutes_key_rotate_and_state_tracking() -> None:
+    chutes = load_module("arclink_chutes.py", "arclink_chutes_rotate_test")
+    mgr = chutes.FakeChutesKeyManager()
+    created = mgr.create_key("dep_rot_1", label="initial")
+    expect(created["status"] == "active", str(created))
+    expect(mgr.key_state("dep_rot_1") is not None, "expected key state")
+
+    rotated = mgr.rotate_key("dep_rot_1", label="rotated")
+    expect(rotated["status"] == "active", str(rotated))
+    state = mgr.key_state("dep_rot_1")
+    expect(state is not None and state["status"] == "active", str(state))
+
+    revoked = mgr.revoke_key(rotated["key_id"])
+    expect(revoked["status"] == "revoked", str(revoked))
+    expect(mgr.key_state("dep_rot_1")["status"] == "revoked", "expected revoked")  # type: ignore[index]
+    print("PASS test_chutes_key_rotate_and_state_tracking")
+
+
+def test_fake_inference_smoke_and_failure_reporting() -> None:
+    chutes = load_module("arclink_chutes.py", "arclink_chutes_inference_test")
+
+    # Success path
+    client = chutes.FakeChutesInferenceClient()
+    result = client.chat_completion(model="deepseek-ai/DeepSeek-R1", messages=[{"role": "user", "content": "hi"}])
+    expect("choices" in result, str(result))
+    expect(len(client.calls) == 1, str(client.calls))
+
+    # Failure path
+    failing = chutes.FakeChutesInferenceClient(fail=True)
+    try:
+        failing.chat_completion(model="deepseek-ai/DeepSeek-R1", messages=[{"role": "user", "content": "hi"}])
+        expect(False, "expected ChutesCatalogError")
+    except chutes.ChutesCatalogError:
+        pass
+    expect(len(failing.calls) == 1, "failure should still record the call")
+    print("PASS test_fake_inference_smoke_and_failure_reporting")
+
+
 def main() -> int:
     test_chutes_catalog_parses_and_validates_default_model()
     test_chutes_catalog_fails_for_missing_or_unsupported_default()
@@ -143,7 +181,9 @@ def main() -> int:
     test_fake_stripe_webhook_and_sessions()
     test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank()
     test_cloudflare_drift_and_traefik_label_rendering()
-    print("PASS all 6 ArcLink Chutes/adapter tests")
+    test_chutes_key_rotate_and_state_tracking()
+    test_fake_inference_smoke_and_failure_reporting()
+    print("PASS all 8 ArcLink Chutes/adapter tests")
     return 0
 
 

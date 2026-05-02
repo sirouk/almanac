@@ -306,6 +306,8 @@ def _handle_logout(
     kind: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     creds = extract_arclink_session_credentials(headers, session_kind=kind)
+    csrf = extract_arclink_csrf_token(headers, session_kind=kind)
+    require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind=kind)
     result = revoke_arclink_session(
         conn,
         session_id=creds["session_id"],
@@ -395,6 +397,8 @@ def _handle_user_portal_link(
     stripe_client: Any,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind="user")
     result = create_user_portal_link_api(
         conn, session_id=creds["session_id"], session_token=creds["session_token"],
         stripe_client=stripe_client,

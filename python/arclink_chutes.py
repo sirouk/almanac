@@ -127,15 +127,31 @@ class FakeChutesKeyManager:
     def __init__(self) -> None:
         self.keys: dict[str, dict[str, str]] = {}
 
-    def create_key(self, deployment_id: str, *, label: str = "") -> dict[str, str]:
+    @staticmethod
+    def _clean_deployment_id(deployment_id: str) -> str:
         clean_id = str(deployment_id or "").strip()
         if not clean_id:
             raise ValueError("deployment_id is required")
-        key_id = f"fake_chutes_key_{clean_id}"
+        return clean_id
+
+    @staticmethod
+    def _key_id_for(deployment_id: str) -> str:
+        return f"fake_chutes_key_{deployment_id}"
+
+    def create_key(self, deployment_id: str, *, label: str = "") -> dict[str, str]:
+        clean_id = self._clean_deployment_id(deployment_id)
+        key_id = self._key_id_for(clean_id)
         secret_ref = f"secret://arclink/chutes/{clean_id}"
         record = {"key_id": key_id, "deployment_id": clean_id, "label": label, "secret_ref": secret_ref, "status": "active"}
         self.keys[key_id] = record
         return dict(record)
+
+    def rotate_key(self, deployment_id: str, *, label: str = "") -> dict[str, str]:
+        clean_id = self._clean_deployment_id(deployment_id)
+        old_key_id = self._key_id_for(clean_id)
+        if old_key_id in self.keys:
+            self.keys[old_key_id]["status"] = "rotated"
+        return self.create_key(clean_id, label=label or "rotated")
 
     def revoke_key(self, key_id: str) -> dict[str, str]:
         clean_id = str(key_id or "").strip()
@@ -143,3 +159,33 @@ class FakeChutesKeyManager:
             raise KeyError(clean_id)
         self.keys[clean_id]["status"] = "revoked"
         return dict(self.keys[clean_id])
+
+    def key_state(self, deployment_id: str) -> dict[str, str] | None:
+        clean_id = self._clean_deployment_id(deployment_id)
+        key_id = self._key_id_for(clean_id)
+        return dict(self.keys[key_id]) if key_id in self.keys else None
+
+
+class FakeChutesInferenceClient:
+    """Fake inference client for smoke testing without live credentials."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._fail = fail
+
+    def chat_completion(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        api_key: str = "",
+    ) -> dict[str, Any]:
+        record = {"model": model, "messages": messages, "api_key_provided": bool(api_key)}
+        self.calls.append(record)
+        if self._fail:
+            raise ChutesCatalogError(f"fake inference failure for model {model}")
+        return {
+            "id": f"fake_cmpl_{len(self.calls)}",
+            "model": model,
+            "choices": [{"message": {"role": "assistant", "content": "Hello from fake inference."}}],
+        }

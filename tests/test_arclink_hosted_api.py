@@ -554,10 +554,19 @@ def test_user_portal_link_route() -> None:
     )
     expect(status == 401, f"expected 401 got {status}")
 
-    # With auth -> 200 with portal_url
-    status, payload, _ = hosted.route_arclink_hosted_api(
+    # With auth but no CSRF -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/user/portal",
         headers=auth_headers(session),
+        body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 without CSRF got {status}")
+
+    # With auth + CSRF -> 200 with portal_url
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/portal",
+        headers=auth_headers(session, csrf=True),
         body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
         config=config,
     )
@@ -610,12 +619,22 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
     )
     expect(status == 200, f"expected 200 got {status}")
 
-    # Logout
-    status, payload, headers = hosted.route_arclink_hosted_api(
+    # Logout without CSRF should fail
+    status, _, _ = hosted.route_arclink_hosted_api(
         conn,
         method="POST",
         path="/api/v1/auth/user/logout",
         headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 without CSRF got {status}")
+
+    # Logout with CSRF
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/user/logout",
+        headers=auth_headers(session, csrf=True),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -775,10 +794,18 @@ def test_admin_logout_clears_cookies_and_revokes_session() -> None:
     )
     expect(status == 200, f"expected 200 got {status}")
 
-    # Logout
-    status, payload, headers = hosted.route_arclink_hosted_api(
+    # Logout without CSRF should fail
+    status, _, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/logout",
         headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 without CSRF got {status}")
+
+    # Logout with CSRF
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/logout",
+        headers=auth_headers(session, csrf=True),
         config=config,
     )
     expect(status == 200, f"logout expected 200 got {status}")
@@ -1039,6 +1066,60 @@ def test_admin_reconciliation_route() -> None:
     print("PASS test_admin_reconciliation_route")
 
 
+def test_stripe_webhook_rejects_bad_signature() -> None:
+    import time as _time
+    control = load_module("almanac_control.py", "almanac_control_hosted_badsig_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_badsig_test")
+    conn = memory_db(control)
+    secret = "whsec_test_badsig"
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_WEBHOOK_SECRET": secret,
+    })
+    event_payload = json.dumps({"id": "evt_bad", "type": "checkout.session.completed", "data": {"object": {}}})
+
+    # Bad signature -> 400
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": "t=9999,v1=badsig"},
+        body=event_payload, config=config,
+    )
+    expect(status == 400, f"expected 400 got {status}: {payload}")
+
+    print("PASS test_stripe_webhook_rejects_bad_signature")
+
+
+def test_unauthenticated_logout_and_portal_rejected() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_noauth_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_noauth_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # User logout without any session -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/user/logout",
+        headers={}, config=config,
+    )
+    expect(status == 401, f"user logout expected 401 got {status}")
+
+    # Admin logout without any session -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/logout",
+        headers={}, config=config,
+    )
+    expect(status == 401, f"admin logout expected 401 got {status}")
+
+    # User portal without any session -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/portal",
+        headers={}, body=json.dumps({"return_url": "https://example.test"}),
+        config=config,
+    )
+    expect(status == 401, f"user portal expected 401 got {status}")
+
+    print("PASS test_unauthenticated_logout_and_portal_rejected")
+
+
 def test_wsgi_adapter_smoke() -> None:
     from io import BytesIO
     control = load_module("almanac_control.py", "almanac_control_hosted_wsgi_test")
@@ -1068,6 +1149,74 @@ def test_wsgi_adapter_smoke() -> None:
     expect("session" in response, str(response))
 
     print("PASS test_wsgi_adapter_smoke")
+
+
+def test_read_only_admin_blocked_from_mutations() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_ro_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_ro_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_ro_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_ro_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    api.upsert_arclink_admin(conn, admin_id="admin_ro", email="ro@example.test", role="read_only")
+    session = api.create_arclink_admin_session(conn, admin_id="admin_ro", session_id="asess_ro")
+
+    # read_only admin can read dashboard
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/dashboard",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"read expected 200 got {status}")
+
+    # read_only admin cannot queue actions even with CSRF
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/admin/actions",
+        headers=auth_headers(session, csrf=True),
+        body=json.dumps({
+            "action_type": "restart", "target_kind": "deployment",
+            "target_id": prepared["deployment_id"], "reason": "ro test",
+            "idempotency_key": "ro-test-1",
+        }),
+        config=config,
+    )
+    expect(status == 401, f"read_only mutation expected 401 got {status}: {payload}")
+    expect("role" in str(payload.get("error", "")).lower(), f"expected role error: {payload}")
+
+    print("PASS test_read_only_admin_blocked_from_mutations")
+
+
+def test_login_rejects_unknown_email() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_badlogin_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_badlogin_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Admin login with unknown email -> 401
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/login",
+        headers={}, body=json.dumps({"email": "nonexistent@example.test"}),
+        config=config,
+    )
+    expect(status == 401, f"admin login expected 401 got {status}: {payload}")
+
+    # User login with unknown email -> 401
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/user/login",
+        headers={}, body=json.dumps({"email": "nonexistent@example.test"}),
+        config=config,
+    )
+    expect(status == 401, f"user login expected 401 got {status}: {payload}")
+
+    # Admin login with blank email -> 401
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/login",
+        headers={}, body=json.dumps({"email": ""}),
+        config=config,
+    )
+    expect(status == 401, f"blank admin login expected 401 got {status}")
+
+    print("PASS test_login_rejects_unknown_email")
 
 
 def main() -> int:
@@ -1100,8 +1249,12 @@ def main() -> int:
     test_user_provider_state_route()
     test_admin_provider_state_route()
     test_admin_reconciliation_route()
+    test_stripe_webhook_rejects_bad_signature()
+    test_unauthenticated_logout_and_portal_rejected()
     test_wsgi_adapter_smoke()
-    print("PASS all 30 ArcLink hosted API tests")
+    test_read_only_admin_blocked_from_mutations()
+    test_login_rejects_unknown_email()
+    print("PASS all 34 ArcLink hosted API tests")
     return 0
 
 

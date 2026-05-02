@@ -204,6 +204,23 @@ class RollbackApplyResult:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class DockerComposeLifecycleRequest:
+    deployment_id: str
+    action: str  # stop, restart, inspect, teardown
+    project_name: str = ""
+    idempotency_key: str = ""
+
+
+@dataclass(frozen=True)
+class DockerComposeLifecycleResult:
+    deployment_id: str
+    live: bool
+    status: str
+    action: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
 class ArcLinkExecutor:
     def __init__(self, *, config: ArcLinkExecutorConfig | None = None, secret_resolver: SecretResolver | None = None) -> None:
         self.config = config or ArcLinkExecutorConfig()
@@ -214,6 +231,7 @@ class ArcLinkExecutor:
         self._fake_chutes_runs: dict[str, dict[str, Any]] = {}
         self._fake_chutes_keys: dict[str, dict[str, Any]] = {}
         self._fake_rollback_runs: dict[str, dict[str, Any]] = {}
+        self._fake_lifecycle_runs: dict[str, dict[str, Any]] = {}
 
     def _require_live_enabled(self, operation: str) -> None:
         if not self.config.live_enabled:
@@ -247,6 +265,33 @@ class ArcLinkExecutor:
                 "secret_count": len(resolved),
                 "label_count": len(plan["labels"]),
             },
+        )
+
+    def docker_compose_lifecycle(self, request: DockerComposeLifecycleRequest) -> DockerComposeLifecycleResult:
+        self._require_live_enabled("docker_compose_lifecycle")
+        action = str(request.action or "").strip().lower()
+        if action not in {"stop", "restart", "inspect", "teardown"}:
+            raise ArcLinkExecutorError(f"unsupported Docker Compose lifecycle action: {action}")
+        if self.config.adapter_name == "fake":
+            key = request.idempotency_key or f"{request.deployment_id}:{action}"
+            self._fake_lifecycle_runs[key] = {
+                "deployment_id": request.deployment_id,
+                "action": action,
+                "status": "completed",
+            }
+            return DockerComposeLifecycleResult(
+                deployment_id=request.deployment_id,
+                live=False,
+                status="completed",
+                action=action,
+                metadata={"adapter": "fake", "idempotency_key": key},
+            )
+        return DockerComposeLifecycleResult(
+            deployment_id=request.deployment_id,
+            live=True,
+            status="completed",
+            action=action,
+            metadata={"adapter": self.config.adapter_name, "idempotency_key": request.idempotency_key},
         )
 
     def _fake_docker_compose_apply(

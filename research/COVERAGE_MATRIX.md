@@ -1,5 +1,5 @@
 # Coverage Matrix
-<!-- refreshed: 2026-05-02 plan-gate sync -->
+<!-- refreshed: 2026-05-02T06:47:00Z document-phase after live-proof-orchestration build -->
 
 | Goal / success criterion | Existing coverage | Plan coverage | Remaining gap / risk | Validation |
 | --- | --- | --- | --- | --- |
@@ -30,7 +30,8 @@
 | Host readiness tooling (Gap A) | LANDED. `arclink_host_readiness.py` (213 lines), 14 tests | Executable checks for Docker, Docker Compose subcommand, ports, state root, env, secrets, ingress, CLI | No-secret readiness complete | Host readiness tests |
 | Live readiness diagnostics (Gap C) | LANDED. `arclink_diagnostics.py` (140 lines), 11 tests | Secret-safe diagnostics for Stripe, Cloudflare, Chutes, Telegram, Discord, Docker, CLI | No-secret diagnostics complete; live connectivity deferred | Redaction and missing-credential tests |
 | Live-gated Docker executor (Gap B) | LANDED. Injectable DockerRunner, FakeDockerRunner, DryRunStep, 20 tests | Live flags, state root, secret resolver required; rollback safeguards | No-secret runner boundary complete; real Docker mutation deferred | Executor live-gate tests |
-| Full live E2E expansion (Gap D) | Ordered journey model and evidence ledger scaffolded; provider live checks skip cleanly without credentials | Expand to full signup-to-agent journey when credentials present | Credentialed execution remains skipped until credentials exist | Live E2E harness with credential gates |
+| Live proof orchestration runner | LANDED. `arclink_live_runner.py` (232 lines), `bin/arclink-live-proof` CLI, 13 tests | Composes host readiness, diagnostics, journey, and evidence into single pass. Dry-run default, live with `--live` flag. | Credentialed live execution externally blocked | Live runner tests, evidence redaction tests |
+| Full live E2E expansion (Gap D) | Ordered journey model and evidence ledger scaffolded; live proof runner landed; provider live checks skip cleanly without credentials | Expand to full signup-to-agent journey when credentials present | Credentialed execution remains skipped until credentials exist | Live E2E harness with credential gates |
 
 ## Current ArcLink Test Coverage
 
@@ -59,6 +60,7 @@
 | `tests/test_arclink_e2e_live.py` | Secret-gated live E2E scaffold: Stripe, Cloudflare, Chutes, Telegram, Discord, Docker checks skip without credentials; no-secret journey/evidence checks run. |
 | `tests/test_arclink_live_journey.py` | Ordered live journey steps, live-gate requirements, missing-credential names, skip behavior, runner success/failure behavior, summary helpers. |
 | `tests/test_arclink_evidence.py` | Deterministic evidence ledger output, run ID generation, journey-to-ledger conversion, secret/query-token/sensitive-key redaction. |
+| `tests/test_arclink_live_runner.py` | Live proof orchestration: no-secret dry-run blocked summary, credential-present dry-run readiness, fake runner live execution, evidence artifact redaction, CLI JSON output, missing-env deduplication. |
 | `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary skip behavior, provider-name context. |
 | `web/tests/test_api_client.mjs` | API client module unit tests. |
 | `web/tests/test_page_smoke.mjs` | Page route smoke tests. |
@@ -96,12 +98,14 @@
 
 ## Coverage Verdict
 
-Coverage is sufficient for the no-secret foundation. 234 ArcLink Python test functions
-across 23 test files (plus 4 hygiene, 2 web tests, and 41 browser product checks)
-cover P1-11, P13-P16, and Gaps A-E no-secret scaffolding. P12 credentialed proof
-remains externally blocked.
+Coverage is sufficient for the no-secret foundation. 247 ArcLink Python test functions
+across 24 test files (plus 4 hygiene, 2 web tests, and 41 browser product checks)
+cover P1-11, P13-P16, Gaps A-C, and Gaps D-E no-secret scaffolding including
+the live proof orchestration runner. P12 credentialed proof remains externally blocked.
 
 Gaps A-C are landed. Gaps D-E no-secret scaffolding (live journey model,
-evidence recorder, skip/blocker modeling, redacted evidence schema) is the
-active BUILD target. Only the credentialed live run itself is externally
-blocked.
+evidence recorder, skip/blocker modeling, redacted evidence schema) is landed.
+The live proof orchestration runner (`arclink_live_runner.py`, 232 lines, 13 tests)
+composes host readiness, provider diagnostics, journey model, and evidence ledger
+into a single dry-run or live proof pass with CLI at `bin/arclink-live-proof`.
+Only the credentialed live run itself is externally blocked.

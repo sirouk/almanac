@@ -1,12 +1,16 @@
 # ArcLink Live E2E Secrets Needed
 
 **Status:** The credentialed live run is externally blocked. No live E2E journey
-has been proven. The fake E2E harness (`tests/test_arclink_e2e_fake.py`) passes
-without credentials. Provider live checks in `tests/test_arclink_e2e_live.py`
-skip cleanly when credentials are absent, while no-secret journey/evidence tests
-still run. The ordered journey model
-(`python/arclink_live_journey.py`) and evidence ledger
-(`python/arclink_evidence.py`) are scaffolded and tested without secrets.
+has been proven. The live proof orchestration runner
+(`python/arclink_live_runner.py`) composes host readiness, provider diagnostics,
+journey model, and evidence ledger into a single dry-run or live proof pass.
+Run `bin/arclink-live-proof` (dry-run by default) or
+`bin/arclink-live-proof --live` when credentials are supplied. The fake E2E
+harness (`tests/test_arclink_e2e_fake.py`) passes without credentials. Provider
+live checks in `tests/test_arclink_e2e_live.py` skip cleanly when credentials
+are absent. The ordered journey model (`python/arclink_live_journey.py`) and
+evidence ledger (`python/arclink_evidence.py`) are scaffolded and tested without
+secrets.
 
 ## Journey Env Vars
 

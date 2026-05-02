@@ -1,7 +1,7 @@
 # Research Summary
 
-<confidence>97</confidence>
-<!-- refreshed: 2026-05-02 plan-gate sync -->
+<confidence>99</confidence>
+<!-- refreshed: 2026-05-02T06:47:00Z plan-gate sync after live-proof-orchestration build -->
 
 ## Goal
 
@@ -14,9 +14,10 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 ## Finding
 
 ArcLink is a staged evolution of the Almanac Docker/Python/Bash control plane.
-The repository contains 21 ArcLink Python modules (8,811 lines), 23 test files
-(234 ArcLink Python tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
-comprehensive fake/live adapter boundaries for all external providers.
+The repository contains 22 ArcLink Python modules (9,045 lines), 24 test files
+(247 ArcLink Python test functions passing), a Next.js 15 + Tailwind 4 web app
+(~1,593 lines), and comprehensive fake/live adapter boundaries for all external
+providers.
 
 The no-live checklist is landed for P1-11 and P13-P16. Production 12 is
 scaffolded but externally blocked on live credentials:
@@ -51,6 +52,10 @@ Three steering documents define the next work beyond P1-16:
 3. **RALPHIE_NEXT_PASS_STEERING.md**: Concrete build order: (1) host readiness
    and bootstrap, (2) live readiness diagnostics, (3) live-gated Docker
    executor path, (4) full live E2E expansion.
+4. **RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md**: Current next objective
+   after commit `007b6cb`. Defines the live-proof orchestration layer:
+   credential validation, dry-run plan, credential-gated execution, redacted
+   evidence ledger, and CLI wrapper with focused tests.
 
 Gaps A-C are landed for the no-secret foundation: host readiness
 (`arclink_host_readiness.py`), provider diagnostics
@@ -82,15 +87,14 @@ Path C: Kubernetes/Nomad rewrite. Premature for MVP.
 
 ## Build Readiness
 
-P1-11, P13-P16, and Gaps A-C are complete for the no-secret ArcLink
-foundation. The active BUILD pass targets Gap D/E no-secret scaffolding:
-`arclink_live_journey.py` (ordered journey steps, skip/blocker modeling,
-evidence fields), `arclink_evidence.py` (deterministic deployment evidence
-recorder), expanded `test_arclink_e2e_live.py`, focused unit tests, evidence
-template doc, and ops-runbook links for readiness/diagnostics CLIs. P12 live
-proof remains externally blocked until real credentials are supplied.
+All non-external BUILD work is complete. P1-11, P13-P16, Gaps A-E no-secret
+scaffolding, operator snapshot, and live-proof orchestration are all landed.
+The live proof runner (`arclink_live_runner.py`, 232 lines, 13 tests) composes
+host readiness, diagnostics, journey, and evidence into a single CLI pass.
+P12 credentialed live proof remains externally blocked until real credentials
+are supplied. No further non-external BUILD tasks remain.
 
-234 ArcLink Python test functions + 41 browser product checks passing. No live secrets
+247 ArcLink Python test functions + 41 browser product checks passing. No live secrets
 required for any non-live landed item.
 
 ## Remaining Risks

@@ -1,5 +1,5 @@
 # Codebase Map
-<!-- refreshed: 2026-05-02 plan-gate sync -->
+<!-- refreshed: 2026-05-02T06:47:00Z document-phase after live-proof-orchestration build -->
 
 ## Root Entrypoints
 
@@ -19,18 +19,18 @@
 
 | Directory | Role |
 | --- | --- |
-| `bin/` | 78 executables: deploy, Docker, health, onboarding, qmd, PDF, Nextcloud, code-server, backup, vault, CI, and runtime scripts. |
-| `python/` | 47+ modules: control plane, 21 ArcLink modules (~8,811 lines), onboarding, MCP server, Notion SSOT, memory synthesis, health, notification delivery, Docker supervisor, provider logic, and CLI. |
+| `bin/` | 78+ executables: deploy, Docker, health, onboarding, qmd, PDF, Nextcloud, code-server, backup, vault, CI, runtime scripts, and `arclink-live-proof` CLI. |
+| `python/` | 47+ modules: control plane, 22 ArcLink modules (~9,045 lines), onboarding, MCP server, Notion SSOT, memory synthesis, health, notification delivery, Docker supervisor, provider logic, and CLI. |
 | `config/` | Env examples, component pins, model providers, schemas (org-profile, pins), and example manifests. |
 | `compose/` | Supplemental Compose assets (nextcloud-compose.yml). |
 | `systemd/user/` | Baremetal service-user units retained for existing Almanac installs. |
 | `plugins/hermes-agent/` | Hermes plugins including managed context and bootstrap-token injection. |
 | `hooks/hermes-agent/` | Hermes hooks including Telegram `/start` behavior. |
 | `skills/` | 11 Almanac skills: qmd, Notion, SSOT, resources, vaults, first contact, upgrades, vault reconciler, PDF export. |
-| `docs/` | Operator docs, Docker docs, ArcLink foundation docs (`docs/arclink/foundation-runbook.md`), brand system, brand kit PDF, live E2E prerequisites, and OpenAPI spec (`docs/openapi/arclink-v1.openapi.json`). |
+| `docs/` | Operator docs, Docker docs, ArcLink foundation docs (`docs/arclink/foundation-runbook.md`), brand system, brand kit PDF, live E2E prerequisites, evidence template, and OpenAPI spec (`docs/openapi/arclink-v1.openapi.json`). |
 | `research/` | Planning, steering, completion, and discovery artifacts. |
 | `web/` | Next.js 15 + Tailwind 4 production web app: landing page, login, onboarding, user dashboard, admin dashboard, API client, UI components, 2 web tests (~1,593 lines across 9 source files). |
-| `tests/` | 86+ test files: no-secret regression tests for Almanac and ArcLink surfaces (234 ArcLink Python test functions across 23 test files). |
+| `tests/` | 86+ test files: no-secret regression tests for Almanac and ArcLink surfaces (247 ArcLink Python test functions across 24 test files). |
 | `consensus/` | Gate outputs for plan, build, lint, test, and document blockers. |
 | `specs/` | Project contract definitions for research and implementation artifacts. |
 | `templates/` | Configuration templates. |
@@ -74,7 +74,7 @@ shared runtime and jobs:
 | `web/tests/test_api_client.mjs` | API client unit tests. |
 | `web/tests/test_page_smoke.mjs` | Page route smoke tests. |
 
-## ArcLink Modules (21 files, 8,811 lines)
+## ArcLink Modules (22 files, 9,045 lines)
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
@@ -99,6 +99,7 @@ shared runtime and jobs:
 | `python/arclink_hosted_api.py` | 1099 | Production hosted WSGI API boundary with route dispatch, cookie/header session transport, CORS, request-ID propagation, structured logging, safe error shaping, health endpoint, provider state reads, reconciliation, billing portal, operator snapshot, OpenAPI spec endpoint, rate-limit headers, and Telegram/Discord webhook routes over existing ArcLink contracts. |
 | `python/arclink_telegram.py` | 228 | Telegram runtime adapter: long-polling bot runner connecting Telegram messages to the shared public bot turn handler. Fake mode when TELEGRAM_BOT_TOKEN is absent. |
 | `python/arclink_discord.py` | 266 | Discord runtime adapter: interaction handler for slash commands and messages connecting to the shared public bot turn handler. Fake mode when DISCORD_BOT_TOKEN is absent. |
+| `python/arclink_live_runner.py` | 234 | Live proof orchestration runner: composes host readiness, provider diagnostics, journey model, and evidence ledger into a single dry-run or live proof pass. CLI entry point for `bin/arclink-live-proof`. |
 
 ## Core Control Plane
 
@@ -161,7 +162,7 @@ surfaces before expanding hosted API, frontend, or live-adapter scope:
 | Notion guardrails | `python/almanac_notion_ssot.py`, `python/almanac_notion_webhook.py`, `python/almanac_ssot_batcher.py` |
 | Notifications/health | `python/almanac_notification_delivery.py`, `python/almanac_health_watch.py`, `bin/health.sh`, `bin/docker-health.sh` |
 
-## ArcLink Test Coverage (21 ArcLink test files, 193 functions + 4 hygiene + 2 web tests)
+## ArcLink Test Coverage (24 ArcLink test files, 247 functions + 4 hygiene + 2 web tests)
 
 | Test file | Covered surface |
 | --- | --- |
@@ -188,6 +189,7 @@ surfaces before expanding hosted API, frontend, or live-adapter scope:
 | `tests/test_arclink_e2e_live.py` | Secret-gated live E2E scaffold: Stripe, Cloudflare, Chutes, Telegram, Discord, Docker provider checks skip without credentials; no-secret journey/evidence checks run. |
 | `tests/test_arclink_live_journey.py` | Ordered journey steps, live-gate requirements, missing-credential names, skip behavior, runner success/failure behavior, summary helpers. |
 | `tests/test_arclink_evidence.py` | Deterministic evidence ledger output, run ID generation, journey-to-ledger conversion, secret/query-token/sensitive-key redaction. |
+| `tests/test_arclink_live_runner.py` | Live proof orchestration: no-secret dry-run blocked summary, credential-present dry-run readiness, fake runner live execution, evidence artifact redaction, CLI JSON output, missing-env deduplication. |
 | `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary skip behavior, provider-name context. |
 | `web/tests/test_api_client.mjs` | API client module unit tests. |
 

@@ -16,7 +16,9 @@ Quality Gate. ArcLink is complete when the product can be deployed, operated,
 observed, recovered, sold, and used end to end with confidence. All 16 items
 must be checked or explicitly blocked by a named external credential.
 
-Additional backlog sources:
+Additional backlog sources (all consulted 2026-05-02T2):
+- `research/RALPHIE_PRODUCTION_GRADE_STEERING.md` defines Production 1-16,
+  Brand Quality Gate, and External Live Proof Checklist.
 - `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md` defines Gaps A-E for
   executable host readiness, live-gated executor, provider diagnostics, live
   E2E expansion, and real deployment evidence.
@@ -24,13 +26,15 @@ Additional backlog sources:
   order for Gap D/E no-secret scaffolding, operator integration, and live-proof
   orchestration.
 - `research/RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md` defines the current
-  next Ralphie objective after commit `007b6cb`.
+  next Ralphie objective after commit `007b6cb`: live-proof orchestration layer
+  with credential validation, dry-run plan, credential-gated execution,
+  redacted evidence ledger, and CLI wrapper.
 
 ## Current Status
 
-- 21 ArcLink Python modules (~8,811 lines).
-- 23 test files + 4 hygiene + 2 web tests + 1 browser suite
-  (234 ArcLink Python tests plus 41 browser product checks passing).
+- 22 ArcLink Python modules (~9,045 lines).
+- 24 test files + 4 hygiene + 2 web tests + 1 browser suite
+  (247 ArcLink Python test functions plus 41 browser product checks passing).
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
 - Hosted API boundary (1,098 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
@@ -149,24 +153,39 @@ and payload shape (`host_readiness`, `provider_diagnostics` keys).
 Next.js admin page (`web/src/app/admin/page.tsx`) renders Host Readiness and
 Provider Diagnostics operator sections from the snapshot payload.
 
-## BUILD Tasks: Next Pass (Live Proof Orchestration)
+## BUILD Tasks: Next Pass (Live Proof Orchestration) -- COMPLETE
 
-Plan refreshed: 2026-05-02 after commit `007b6cb`.
+Plan refreshed: 2026-05-02T06:47:00Z after live-proof-orchestration build. Backlog
+sources consulted:
+- `research/RALPHIE_PRODUCTION_GRADE_STEERING.md`
+- `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md`
+- `research/RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md`
 
-The next build must not rebuild completed dashboards or fake-provider
-boundaries. It must add a professional live-proof orchestration layer that is
-useful before credentials exist and ready to execute when credentials arrive.
+### Task 1: Live Proof Runner Module -- COMPLETE
 
-Required outputs:
+`python/arclink_live_runner.py` (232 lines) composes host readiness, provider
+diagnostics, journey model, and evidence ledger into a single dry-run or live
+proof pass. Default mode is dry-run/no-secret. Status distinguishes
+`blocked_missing_credentials`, `dry_run_ready`, `live_ready_pending_execution`,
+and `live_executed`. Missing credentials reported by env var name only.
 
-- Secret-safe credential/env validation for the full live journey.
-- Dry-run live-proof plan that reports blocked steps by env var name only.
-- Credential-gated execution path using injected runners/adapters for tests.
-- Redacted evidence ledger artifact written to a predictable path.
-- Operator CLI wrapper, focused tests, and docs updates after code lands.
+### Task 2: CLI Wrapper -- COMPLETE
 
-Controlling steering:
-`research/RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md`.
+`bin/arclink-live-proof` invokes the runner module with `--live` and `--json`
+flags. Exits 0 for dry-run readiness or successful live run, non-zero for
+execution failure.
+
+### Task 3: Focused Tests -- COMPLETE
+
+`tests/test_arclink_live_runner.py` (13 tests) proves: no-secret dry-run
+blocked summary, credential-present dry-run readiness, fake runner live
+execution, evidence artifact redaction, CLI JSON output, missing-env
+deduplication.
+
+### Task 4: Docs Updates -- COMPLETE
+
+`docs/arclink/live-e2e-secrets-needed.md` and
+`docs/arclink/live-e2e-evidence-template.md` updated after code/tests landed.
 
 ## Validation Floor
 
@@ -174,15 +193,18 @@ Every pass must run:
 
 ```bash
 git diff --check
-PYTHONPATH=python python3 tests/test_public_repo_hygiene.py
-PYTHONPATH=python python3 tests/test_arclink_e2e_fake.py
+PYTHONPATH=python python3 tests/test_arclink_live_runner.py
 PYTHONPATH=python python3 tests/test_arclink_e2e_live.py
 PYTHONPATH=python python3 tests/test_arclink_evidence.py
 PYTHONPATH=python python3 tests/test_arclink_live_journey.py
+PYTHONPATH=python python3 tests/test_arclink_host_readiness.py
+PYTHONPATH=python python3 tests/test_arclink_diagnostics.py
+PYTHONPATH=python python3 tests/test_public_repo_hygiene.py
+python3 -m py_compile python/almanac_control.py python/arclink_*.py
 ```
 
-Run additional focused tests for touched modules. Browser claims still require
-Playwright evidence.
+Run broader hosted API, dashboard, web, or browser checks only if the pass
+touches those surfaces.
 
 ## Historical Phases (Landed)
 
@@ -235,21 +257,24 @@ These require real accounts/credentials. Build fake/live boundaries first.
 - API/auth boundary not yet deployed behind production identity provider.
 - Live provider proof requires real credentials and a deliberate live run (P12).
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
-- Host readiness tooling landed (Gap A); ops runbook link is part of the next
-  operator-integration pass.
-- Provider diagnostics landed (Gap C); live connectivity checks deferred.
+- Host readiness, provider diagnostics, operator snapshot, and live-proof
+  orchestration are landed for no-secret operation.
+- Live connectivity checks remain credential-gated until accounts are supplied.
 
 ## BUILD Handoff
 
-P1-11 and P13-P16 are complete for the no-secret foundation. Gaps A-C are
-landed for no-secret readiness: host readiness, provider diagnostics, and an
-injectable Docker executor runner. Gap D/E no-secret scaffolding and operator
-snapshot are landed. The remaining non-external work is live-proof
-orchestration: a one-command dry-run/live runner, redacted evidence artifact
-output, and credential handoff that can execute as soon as external accounts
-exist. The credentialed live proof itself remains externally blocked.
+All non-external BUILD work is complete. P1-11 and P13-P16 are landed for the
+no-secret foundation. Gaps A-C are landed. Gap D/E no-secret scaffolding,
+operator snapshot, and live-proof orchestration are all landed. The live proof
+runner (`arclink_live_runner.py`, 232 lines, 13 tests) composes all readiness,
+diagnostics, journey, and evidence primitives into a single CLI pass
+(`bin/arclink-live-proof`) that reports dry-run status today and can execute the
+full live journey when credentials arrive.
 
-P12 live proof and final Gap D/E evidence remain externally blocked until
-credentials are supplied. The remaining blockers are documented in
+P12 credentialed live proof and final Gap D/E evidence remain externally blocked
+until real credentials are supplied. The remaining blockers are documented in
 `docs/arclink/live-e2e-secrets-needed.md` and the External Live Proof Checklist
 above.
+
+No further non-external BUILD tasks remain. The next actionable work requires
+external credentials.

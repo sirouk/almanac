@@ -31,7 +31,8 @@ Template for recording live journey evidence. Fill in after a credentialed run.
 
 ## Evidence JSON
 
-Paste the output of `EvidenceLedger.to_json()` here after a live run:
+Run `bin/arclink-live-proof --live --json` and paste the evidence JSON here after
+a live run, or copy the artifact from the `evidence/` directory:
 
 ```json
 {

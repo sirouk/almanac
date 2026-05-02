@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# ArcLink live proof orchestration CLI.
+# Dry-run by default. Pass --live to attempt credentialed execution.
+# Exit 0: dry-run ready or live run passed.
+# Exit 1: live execution failure.
+# Exit 2: invalid input.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export PYTHONPATH="${REPO_ROOT}/python${PYTHONPATH:+:$PYTHONPATH}"
+
+exec python3 -m arclink_live_runner "$@"

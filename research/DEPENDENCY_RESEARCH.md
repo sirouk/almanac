@@ -1,5 +1,5 @@
 # Dependency Research
-<!-- refreshed: 2026-05-02 plan-gate sync -->
+<!-- refreshed: 2026-05-02T06:47:00Z plan-gate sync after live-proof-orchestration build -->
 
 ## Current Stack Components
 

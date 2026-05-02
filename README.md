@@ -9,10 +9,10 @@ admin dashboards, fleet operations, rollout records, and a secret-gated live
 proof harness.
 
 `deploy.sh` still plays a real role: it is the host bootstrap and operations
-entrypoint for the underlying machine. It installs or repairs either ArcLink
-mode: Shared Host or Sovereign Node. ArcLink's Python control plane owns
-product state, provisioning intent, provider gates, admin actions, and
-live-proof orchestration.
+entrypoint for the underlying machine. It now exposes three explicit paths:
+Sovereign Control Node, Shared Host, and Shared Host Docker. ArcLink's Python
+control plane owns product state, provisioning intent, provider gates, admin
+actions, and live-proof orchestration.
 
 Use this mental split:
 
@@ -155,7 +155,7 @@ The Shared Host deployed layout is:
     arclink-priv/          # private nested repo: config, vault, runtime state
 ```
 
-The Sovereign Node host can also run from a root-owned or operator-owned
+The Sovereign Control Node host can also run from a root-owned or operator-owned
 checkout such as:
 
 ```text
@@ -164,7 +164,7 @@ checkout such as:
 ```
 
 The exact host checkout path is less important than keeping the public repo and
-private runtime directory together. Docker mode records the chosen host paths in
+private runtime directory together. Control and Docker modes record the chosen host paths in
 `arclink-priv/config/docker.env`.
 
 `arclink-priv/` contains the sensitive and living parts:
@@ -190,10 +190,11 @@ the outer infrastructure repo.
 
 ## Host Deployment From Scratch
 
-For ArcLink today, the recommended first host path is Sovereign Node Mode:
-Docker Compose through `deploy.sh`. That gives you the operational substrate
-quickly while preserving the same health, repair, upgrade, and recovery
-entrypoint that Shared Host Mode uses.
+For ArcLink today, the recommended first host path is Sovereign Control Node
+Mode through `deploy.sh`. That makes this machine the product control plane:
+website/API onboarding, shared Telegram and Discord bot webhooks, Stripe
+checkout/webhook handling, admin/user dashboards, fleet placement, Cloudflare
+intent, and provisioning orchestration.
 
 ### 1. Prepare The Host
 
@@ -223,27 +224,26 @@ git clone -b arclink https://github.com/sirouk/arclink.git /root/arclink
 cd /root/arclink
 ```
 
-### 3. Bring Up The Docker Host Stack
+### 3. Bring Up The Sovereign Control Node
 
 ```bash
-./deploy.sh docker install
-./deploy.sh docker ports
-./deploy.sh docker health
+./deploy.sh control install
+./deploy.sh control ports
+./deploy.sh control health
 ```
 
-`./deploy.sh docker install` is idempotent. It bootstraps
-`arclink-priv/`, writes `arclink-priv/config/docker.env`, generates local
-runtime secrets for fresh installs, builds the app image, starts Docker Compose,
-runs Curator setup unless skipped, reconciles Docker state, records release
-state, prints ports, runs health checks, and runs the live-smoke checks that do
-not require external provider credentials.
+`./deploy.sh control install` is idempotent. It bootstraps `arclink-priv/`,
+writes `arclink-priv/config/docker.env`, gathers the public product/provider
+configuration, builds the app image, starts Docker Compose, records release
+state, prints ports, and verifies the control API, web app, MCP, qmd, webhook,
+Nextcloud, and job substrate.
 
 ### 4. Know What Is Live And What Is Gated
 
-After Docker install, the host substrate can run the existing ArcLink/ArcLink
-services: Nextcloud, qmd MCP, ArcLink MCP, Notion webhook, vault watch, agent
-supervisor, health watch, refresh jobs, PDF ingest, memory synthesis, and
-supporting jobs from `compose.yaml`.
+After control install, the host substrate runs the hosted API and web control
+center in addition to Nextcloud, qmd MCP, ArcLink MCP, Notion webhook, vault
+watch, agent supervisor, health watch, refresh jobs, PDF ingest, memory
+synthesis, and supporting jobs from `compose.yaml`.
 
 The SaaS control plane and web shell are present in code, tests, and docs, but
 credentialed production proof is still gated. Do not mark the system
@@ -253,35 +253,37 @@ Stripe, Cloudflare, Chutes, Telegram, Discord, and production host credentials.
 ### 5. Day-Two Host Commands
 
 ```bash
-./deploy.sh docker health
-./deploy.sh docker logs [SERVICE]
-./deploy.sh docker ps
-./deploy.sh docker upgrade
+./deploy.sh control health
+./deploy.sh control logs [SERVICE]
+./deploy.sh control ps
+./deploy.sh control upgrade
 ./deploy.sh docker pins-check
 ./deploy.sh docker rotate-nextcloud-secrets
 ```
 
 Use `./deploy.sh install` when you intentionally want Shared Host Mode:
 operator-led onboarding, approved enrollments, enrolled Unix users, and shared
-host services. Use `./deploy.sh docker install` when you want Sovereign Node
-Mode: one deployment as its own private node.
+host services. Use `./deploy.sh docker install` when you intentionally want the
+containerized Shared Host substrate.
 
 ## Deployment Paths
 
-ArcLink has two first-class deployment paths. They share `deploy.sh`, health,
+ArcLink has three first-class deployment paths. They share `deploy.sh`, health,
 repair, upgrade, and recovery vocabulary, but they represent different product
 shapes.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
-| **Sovereign Node Mode** | Individual/private ArcLink deployments, productized SaaS hosts, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
+| **Sovereign Control Node Mode** | Paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, Cloudflare intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
 | **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
+| **Shared Host Docker Mode** | Containerized validation and operation of the Shared Host substrate, including Curator/enrollment flows and shared services without a full systemd install. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
 
 The interactive `./deploy.sh` menu first asks which mode you want, then opens
-that mode's control center. Shared Host actions live under the Shared Host menu.
-Sovereign Node actions live under the Sovereign Node menu. The top-level
-default is Sovereign Node Mode. Direct commands that do not include the word
-`docker`, such as `./deploy.sh install`, use Shared Host Mode.
+that mode's control center. Sovereign Control Node actions live under the
+control menu. Shared Host actions live under the Shared Host menu. Shared Host
+Docker actions live under the Docker menu. The top-level default is Sovereign
+Control Node Mode. Direct commands that do not include `control` or `docker`,
+such as `./deploy.sh install`, use Shared Host Mode.
 
 ## Local Validation
 
@@ -374,14 +376,14 @@ Before a serious install, have these ready:
 - Claude account access for Claude Code OAuth lanes.
 - OpenAI/Codex sign-in if you want Codex lanes.
 
-## Containerized Path
+## Shared Host Docker Path
 
-Containerized is the Docker Compose path and the recommended ArcLink host
-deployment path today. It is designed for portable operation on servers,
-laptops, homelab machines, org evaluation boxes, and container-first
-environments where host systemd user services are not the runtime manager.
+Shared Host Docker is the Docker Compose path for the inherited operator-led
+substrate. It is designed for portable operation on servers, laptops, homelab
+machines, org evaluation boxes, and container-first environments where host
+systemd user services are not the runtime manager.
 
-Use containerized when you want the ArcLink/ArcLink substrate: ArcLink MCP, qmd
+Use Shared Host Docker when you want the ArcLink shared-host substrate: ArcLink MCP, qmd
 MCP, Notion webhook, Nextcloud, Postgres, Redis, vault watching, PDF ingest,
 docs sync,
 notification delivery, curator refresh, qmd refresh, enrolled-agent
@@ -401,22 +403,24 @@ from the same control-plane state.
 - Bash and Python 3 on the machine running the wrapper scripts.
 - No Podman requirement for Docker mode.
 
-## Sovereign Node Mode
+## Sovereign Control Node Mode
 
-Sovereign Node Mode is the individual ArcLink path backed by Docker Compose. A
-deployment is treated as its own private node with its own runtime state,
-secrets, health, and product configuration. This is the path for productized
-individual deployments and the future collaboration model described in
-`FUTURE_SHARED_ARCLINK.md`.
+Sovereign Control Node Mode is the product control-plane path backed by Docker
+Compose. The host becomes the coordinator for self-serve users: web/API,
+Telegram, and Discord onboarding; Stripe checkout/webhooks; fleet placement;
+per-user pod intent; Cloudflare ingress intent; health; and user/admin
+dashboards. Individual deployments are treated as Sovereign pods with their own
+runtime state, secrets, health, and product configuration. This is also the
+future collaboration model described in `FUTURE_SHARED_ARCLINK.md`.
 
-### Sovereign Node Quick Start
+### Sovereign Control Node Quick Start
 
 From the repo root:
 
 ```bash
-./deploy.sh docker install
-./deploy.sh docker ports
-./deploy.sh docker health
+./deploy.sh control install
+./deploy.sh control ports
+./deploy.sh control health
 ```
 
 Docker bootstrap writes local runtime config under
@@ -426,23 +430,38 @@ The selected ports are persisted in `arclink-priv/state/docker/ports.json`.
 Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
-Sovereign Node install asks the operator-facing configuration questions, writes
-`arclink-priv/config/docker.env`, applies the private operating profile when
-present, records the release state, runs strict Docker health, and runs the live
-agent MCP tool smoke so the containerized path stays aligned with the Shared Host
-operator contract. It also runs the Curator setup flow from the container so the
-operator gets the same model, channel, and notification questions as a
-Shared Host install. If OpenAI Codex is selected as the org-wide provider, Docker
-install captures that shared credential from the Curator Codex sign-in instead
-of starting a separate auth flow during the first questionnaire. Set
-`ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG=1` or
-`ARCLINK_DOCKER_SKIP_CURATOR_SETUP=1` for scripted installs that should skip
-those interactive phases.
+Sovereign Control Node install asks the public product questions: base domain,
+control API/web ports, Stripe price and webhook settings, Cloudflare zone
+credentials, Chutes owner key, and shared Telegram/Discord bot credentials.
+Missing credentials are allowed during bootstrap, but live E2E remains gated
+until they are present.
 
-ArcLink SaaS settings live in `config/env.example` and `ARCLINK_*` variables.
-Those product settings are separate from the generated Docker runtime file. The
-Docker file brings up the host substrate; the ArcLink hosted API, dashboards,
-provider boundaries, and live-proof runner consume the ArcLink configuration.
+Control-node details live in
+`docs/arclink/sovereign-control-node.md`.
+
+## Shared Host Docker Mode
+
+Shared Host Docker Mode is the containerized operator substrate. It runs the
+shared-host services and Curator/enrollment machinery inside Docker Compose for
+validation, repair, and container-native operation.
+
+### Shared Host Docker Quick Start
+
+```bash
+./deploy.sh docker install
+./deploy.sh docker ports
+./deploy.sh docker health
+```
+
+Shared Host Docker install asks the operator-facing configuration questions,
+writes `arclink-priv/config/docker.env`, applies the private operating profile
+when present, records release state, runs strict Docker health, and runs the
+live agent MCP tool smoke so the containerized path stays aligned with the
+Shared Host operator contract. It can also run the Curator setup flow from the
+container so the operator gets the same model, channel, and notification
+questions as a Shared Host install. Set `ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG=1`
+or `ARCLINK_DOCKER_SKIP_CURATOR_SETUP=1` for scripted installs that should skip
+those interactive phases.
 
 Docker agent homes are stored under `arclink-priv/state/docker/users/`, so
 container recreation does not erase enrolled-agent Hermes homes. Agent dashboard
@@ -468,9 +487,9 @@ The Docker path keeps the same operator vocabulary for container-native work:
 
 Pinned-component Docker upgrades re-enter `./deploy.sh docker upgrade` after
 the pin bump and load upstream push/deploy-key settings from the Docker runtime
-config. In the interactive flow, Sovereign Node commands stem from the
-Sovereign Node control center. Shared Host commands remain in Shared Host Mode
-unless the direct command includes `docker`.
+config. In the interactive flow, Shared Host Docker commands stem from the
+Shared Host Docker control center. Shared Host commands remain in Shared Host
+Mode unless the direct command includes `docker`.
 
 The Docker submenu is available with:
 
@@ -955,7 +974,7 @@ The default posture is local-first and tailnet-first:
 - User agents authenticate to ArcLink MCP with a per-agent bootstrap token
   stored in their private Hermes home; the managed-context plugin injects it
   automatically so agents do not expose or hand-type it. Shared Host
-  realignment and Sovereign Node agent supervision both validate and repair
+  realignment and Shared Host Docker agent supervision both validate and repair
   that token path idempotently.
 - User-facing write access goes through scoped broker rails, not raw Notion
   access.
@@ -1055,7 +1074,7 @@ After install:
 ## ArcLink: Self-Serve AI Deployment SaaS
 
 ArcLink is the Chutes-first self-serve AI deployment product built on top of
-ArcLink's Shared Host and Sovereign Node substrates. It adds commercial SaaS
+ArcLink's Shared Host and Sovereign Control Node substrates. It adds commercial SaaS
 primitives while preserving the existing ArcLink deploy, onboarding, Hermes,
 qmd, vault, memory, Notion, and service-health paths.
 
@@ -1105,6 +1124,7 @@ docs/arclink/foundation-runbook.md   # assumptions, ownership, runbook, repair
 docs/arclink/architecture.md         # module map and data flow
 docs/arclink/operations-runbook.md   # host operations, health, scale ops
 docs/arclink/brand-system.md         # visual identity and voice
+docs/arclink/sovereign-control-node.md # control-node deploy and logic trace
 docs/arclink/live-e2e-secrets-needed.md  # credential checklist for live testing
 ```
 

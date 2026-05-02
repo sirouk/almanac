@@ -1353,6 +1353,15 @@ def test_wsgi_503_status_text_for_degraded_health() -> None:
     print("PASS test_wsgi_503_status_text_for_degraded_health")
 
 
+def test_hosted_api_has_executable_control_node_entrypoint() -> None:
+    source = (load_module("arclink_hosted_api.py", "arclink_hosted_api_entrypoint_test").__loader__.path)  # type: ignore[attr-defined]
+    text = open(source, encoding="utf-8").read()
+    expect("def main() -> int:" in text, "hosted API needs a direct deployable entrypoint")
+    expect("make_server(host, port, app)" in text, "hosted API entrypoint should bind the configured API host/port")
+    expect('if __name__ == "__main__":' in text, "hosted API should be executable by compose")
+    print("PASS test_hosted_api_has_executable_control_node_entrypoint")
+
+
 def test_onboarding_payload_validation_rejects_missing_fields() -> None:
     control = load_module("arclink_control.py", "arclink_control_onb_validation_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onb_validation_test")
@@ -1575,6 +1584,7 @@ def main() -> int:
     test_stripe_webhook_rejects_bad_signature()
     test_unauthenticated_logout_and_portal_rejected()
     test_wsgi_adapter_smoke()
+    test_hosted_api_has_executable_control_node_entrypoint()
     test_read_only_admin_blocked_from_mutations()
     test_login_rejects_unknown_email()
     test_openapi_spec_route_serves_valid_contract()
@@ -1586,7 +1596,7 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
     test_admin_scale_operations_requires_auth_and_returns_snapshot()
-    print("PASS all 43 ArcLink hosted API tests")
+    print("PASS all 44 ArcLink hosted API tests")
     return 0
 
 

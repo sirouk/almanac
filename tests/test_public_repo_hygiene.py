@@ -83,6 +83,7 @@ PROVIDER_CODE_PATHS = {
     Path("docs/arclink/document-phase-status.md"),
     Path("docs/arclink/foundation.md"),
     Path("docs/arclink/live-e2e-secrets-needed.md"),
+    Path("docs/arclink/sovereign-control-node.md"),
     Path("python/arclink_chutes.py"),
     Path("python/arclink_dashboard.py"),
     Path("python/arclink_diagnostics.py"),

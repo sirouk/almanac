@@ -105,7 +105,7 @@ def active_deploy_operation(cfg: "Config") -> dict[str, str] | None:
     except (OSError, json.JSONDecodeError):
         payload = {}
     operation = str(payload.get("operation") or "").strip()
-    if operation not in {"install", "upgrade", "docker-install", "docker-upgrade"}:
+    if operation not in {"install", "upgrade", "docker-install", "docker-upgrade", "control-install", "control-upgrade"}:
         return None
 
     now = utc_now()

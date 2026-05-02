@@ -1,13 +1,14 @@
-# Docker Deployment
+# Shared Host Docker Deployment
 
-This is the first-class Docker Compose path for local and portable ArcLink
-deployments. It is separate from the existing host/systemd install path.
+This is the Docker Compose path for local and portable Shared Host ArcLink
+deployments. It is separate from the host/systemd Shared Host install path and
+from the Sovereign Control Node installer at `./deploy.sh control install`.
 
 ## Prerequisites
 
 - Docker with `docker compose`.
 - The repository checkout.
-- No Podman requirement for Docker mode.
+- No Podman requirement for Shared Host Docker mode.
 
 ## Bootstrap
 
@@ -43,6 +44,8 @@ QMD_MCP_PORT=8181
 ARCLINK_MCP_PORT=8282
 ARCLINK_NOTION_WEBHOOK_PORT=8283
 NEXTCLOUD_PORT=18080
+ARCLINK_API_PORT=8900
+ARCLINK_WEB_PORT=3000
 ```
 
 If any of those ports are already occupied, the wrapper chooses the next
@@ -53,6 +56,8 @@ QMD_MCP_PORT=18181
 ARCLINK_MCP_PORT=18282
 ARCLINK_NOTION_WEBHOOK_PORT=18283
 NEXTCLOUD_PORT=28080
+ARCLINK_API_PORT=18900
+ARCLINK_WEB_PORT=13000
 ```
 
 The chosen block is also recorded in
@@ -71,12 +76,12 @@ Show the current assignment with:
 ./deploy.sh docker install
 ```
 
-The default stack starts ArcLink MCP, qmd MCP, Notion webhook, Nextcloud,
-Postgres, Redis, vault watching, recurring job containers, memory synthesis,
-and the Docker agent supervisor. The supervisor replaces the Shared Host per-user
-systemd units for enrolled agents: it reconciles refresh, Hermes gateway,
-dashboard, authenticated dashboard proxy, cron tick, and code-server workspace
-processes from the control-plane state.
+The default stack starts the hosted control API/web services plus ArcLink MCP,
+qmd MCP, Notion webhook, Nextcloud, Postgres, Redis, vault watching, recurring
+job containers, memory synthesis, and the Docker agent supervisor. The
+supervisor replaces the Shared Host per-user systemd units for enrolled agents:
+it reconciles refresh, Hermes gateway, dashboard, authenticated dashboard proxy,
+cron tick, and code-server workspace processes from the control-plane state.
 
 The `memory-synth` job mirrors the Shared Host `arclink-memory-synth.timer`: it
 uses the configured `ARCLINK_MEMORY_SYNTH_*` values, or falls back to
@@ -173,10 +178,10 @@ MCP bootstrap token before starting gateways or agent web surfaces.
 
 Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
 pin bump and load upstream push/deploy-key settings from the Docker runtime
-config. The interactive `./deploy.sh` menu first chooses between Shared Host
-Mode and Sovereign Node Mode, then opens the selected control center. The
-top-level default is Sovereign Node Mode so new ArcLink SaaS hosts do not
-accidentally fall back into the Shared Host upgrade path.
+config. The interactive `./deploy.sh` menu first chooses between Sovereign
+Control Node Mode, Shared Host Mode, and Shared Host Docker Mode, then opens the
+selected control center. The top-level default is Sovereign Control Node Mode so
+new ArcLink SaaS hosts do not accidentally fall back into an operator-led path.
 
 Host/systemd-only commands remain explicit Shared Host operations. `./deploy.sh
 remove` tears down a host install; `./deploy.sh docker remove` is an alias for

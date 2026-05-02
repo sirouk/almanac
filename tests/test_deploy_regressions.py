@@ -977,6 +977,9 @@ fi
 
 
 def test_install_reexecs_for_unreadable_breadcrumb_config() -> None:
+    if os.geteuid() == 0:
+        print("SKIP test_install_reexecs_for_unreadable_breadcrumb_config (root can read chmod 000 paths)")
+        return
     status, output, sudo_log = run_install_reexec_case(0)
     expect(status == 0, f"expected unreadable-config case to reexec via sudo, got status {status}")
     expect("Switching to sudo before prompting" in output, "expected install flow to announce sudo-before-prompting path")
@@ -1064,6 +1067,9 @@ printf 'STATUS=%s\\n' "$status"
 
 
 def test_write_operator_artifact_falls_back_to_discovered_config() -> None:
+    if os.geteuid() == 0:
+        print("SKIP test_write_operator_artifact_falls_back_to_discovered_config (root does not write operator breadcrumb)")
+        return
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "probe_path_status() {", "run_as_user() {")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1396,10 +1402,10 @@ printf 'KEEP_DEFAULT=%q\\n' "$keep_default_result"
     print("PASS test_secret_prompt_helpers_do_not_prefix_newlines")
 
 
-def test_deploy_menu_defaults_to_docker_first() -> None:
+def test_deploy_menu_defaults_to_sovereign_control_node() -> None:
     text = DEPLOY_SH.read_text()
     shared_snippet = extract(text, "choose_shared_host_mode() {", "choose_mode() {")
-    mode_snippet = extract(text, "choose_mode() {", "docker_usage() {")
+    mode_snippet = extract(text, "choose_mode() {", "control_usage() {")
     expect(
         "ArcLink Shared Host control center" in shared_snippet,
         "expected Shared Host actions to live in their own submenu",
@@ -1413,13 +1419,18 @@ def test_deploy_menu_defaults_to_docker_first() -> None:
         "expected top-level menu to expose Shared Host mode",
     )
     expect(
-        "Sovereign Node mode control center (Docker-backed)" in mode_snippet,
-        "expected top-level menu to expose Sovereign Node mode",
+        "Sovereign Control Node control center (billing, bots, fleet, provisioning)" in mode_snippet,
+        "expected top-level menu to expose Sovereign Control Node mode",
     )
-    expect('read -r -p "Choose ArcLink mode [2]: "' in mode_snippet, "expected top-level default to be Sovereign Node mode")
-    expect('case "${answer:-2}"' in mode_snippet, "expected blank top-level selection to choose Sovereign Node mode")
-    expect('MODE="docker"' in mode_snippet and 'DOCKER_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Sovereign Node mode to route to its submenu")
-    print("PASS test_deploy_menu_defaults_to_docker_first")
+    expect(
+        "Shared Host Docker control center (containerized operator substrate)" in mode_snippet,
+        "expected top-level menu to expose Shared Host Docker mode",
+    )
+    expect('read -r -p "Choose ArcLink mode [2]: "' in mode_snippet, "expected top-level default to be Sovereign Control Node mode")
+    expect('case "${answer:-2}"' in mode_snippet, "expected blank top-level selection to choose Sovereign Control Node mode")
+    expect('MODE="control"' in mode_snippet and 'CONTROL_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Sovereign Control Node mode to route to its submenu")
+    expect('MODE="docker"' in mode_snippet and 'DOCKER_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Shared Host Docker mode to route to its submenu")
+    print("PASS test_deploy_menu_defaults_to_sovereign_control_node")
 
 
 def test_baremetal_install_banner_points_to_docker_first_path() -> None:
@@ -1430,8 +1441,8 @@ def test_baremetal_install_banner_points_to_docker_first_path() -> None:
         "expected Shared Host install heading to be explicit",
     )
     expect(
-        "For Sovereign Node mode, use: ./deploy.sh docker install" in snippet,
-        "expected Shared Host path to point operators to Sovereign Node install",
+        "For Sovereign Control Node mode, use: ./deploy.sh control install" in snippet,
+        "expected Shared Host path to point operators to Sovereign Control Node install",
     )
     print("PASS test_baremetal_install_banner_points_to_docker_first_path")
 
@@ -1962,9 +1973,14 @@ def test_write_answers_file_persists_host_dependency_choices() -> None:
 
 def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
+    expect("deploy.sh control install" in text, "expected Sovereign Control Node install command in deploy usage")
+    expect("ArcLink Sovereign Control Node control center" in text, "expected Sovereign Control Node submenu")
+    expect('MODE="control"' in text and 'CONTROL_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to control submenu")
+    expect("run_control_install_flow()" in text, "expected idempotent control install flow")
+    expect("collect_control_install_answers()" in text, "expected control-node provider configuration flow")
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
-    expect("ArcLink Sovereign Node control center" in text, "expected Sovereign Node submenu")
-    expect('MODE="docker"' in text and 'DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
+    expect("ArcLink Shared Host Docker control center" in text, "expected Shared Host Docker submenu")
+    expect('MODE="docker"' in text and 'DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Shared Host Docker submenu")
     expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
     expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")
     expect("docker-install|docker-upgrade|docker-reconfigure" in text, "expected Docker shortcut aliases")
@@ -2994,7 +3010,7 @@ def main() -> int:
         test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint,
         test_collect_install_answers_does_not_prompt_for_telegram_token_up_front,
         test_secret_prompt_helpers_do_not_prefix_newlines,
-        test_deploy_menu_defaults_to_docker_first,
+        test_deploy_menu_defaults_to_sovereign_control_node,
         test_baremetal_install_banner_points_to_docker_first_path,
         test_org_profile_builder_installs_jsonschema,
         test_collect_install_answers_randomizes_placeholder_passwords,

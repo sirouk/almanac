@@ -18,8 +18,10 @@ import sqlite3
 import time
 from typing import Any, Mapping
 from urllib.parse import parse_qs
+from wsgiref.simple_server import make_server
 
 from arclink_adapters import FakeStripeClient, StripeWebhookError
+from arclink_control import Config, connect_db
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
     GENERIC_ARCLINK_API_ERROR,
@@ -1117,3 +1119,27 @@ def make_arclink_hosted_api_wsgi(
         return [response_body]
 
     return app
+
+
+def main() -> int:
+    """Run the hosted API with the standard-library WSGI server.
+
+    Production deployments can still place this WSGI app behind a stronger
+    process manager, but the Docker control-node path needs a direct, boring
+    executable entrypoint.
+    """
+    hosted_config = HostedApiConfig()
+    logging.basicConfig(level=getattr(logging, hosted_config.log_level, logging.INFO))
+    cfg = Config.from_env()
+    host = str(os.environ.get("ARCLINK_API_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = int(str(os.environ.get("ARCLINK_API_PORT") or "8900"))
+    conn = connect_db(cfg)
+    app = make_arclink_hosted_api_wsgi(conn, config=hosted_config)
+    logger.info("ArcLink hosted API listening on %s:%s", host, port)
+    with make_server(host, port, app) as server:
+        server.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

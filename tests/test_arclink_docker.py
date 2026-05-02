@@ -25,6 +25,9 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("config/pins.json" in body, body)
     expect("@tobilu/qmd@${qmd_version}" in body, body)
     expect("hermes-agent" in body and "hermes-venv" in body, body)
+    expect("stripe" in body, body)
+    expect("cd /home/arclink/arclink/web" in body and "npm run build" in body, body)
+    expect("ARCLINK_API_INTERNAL_URL=http://control-api:8900" in body, body)
     expect("poppler-utils" in body and "inotify-tools" in body and "sqlite3" in body, body)
     expect("download.docker.com/linux/debian" in body and "docker-ce-cli" in body, body)
     expect("docker-compose-plugin" in body, body)
@@ -37,6 +40,8 @@ def test_compose_defines_full_stack_services() -> None:
     expect("arclink-app:" in body and "dockerfile: Dockerfile" in body, body)
     expect('profiles: ["build"]' in body, body)
     expect("ARCLINK_BACKEND_ALLOWED_CIDRS:" in body, body)
+    expect("ARCLINK_BASE_DOMAIN:" in body and "ARCLINK_PRIMARY_PROVIDER:" in body, body)
+    expect("STRIPE_WEBHOOK_SECRET:" in body and "CLOUDFLARE_API_TOKEN:" in body and "CHUTES_API_KEY:" in body, body)
     expect("ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}" in body, body)
     expect("QMD_MCP_HOST_PORT:" in body, body)
     expect("ARCLINK_DOCKER_AGENT_HOME_ROOT:" in body, body)
@@ -54,6 +59,8 @@ def test_compose_defines_full_stack_services() -> None:
         "arclink-mcp:",
         "qmd-mcp:",
         "notion-webhook:",
+        "control-api:",
+        "control-web:",
         "vault-watch:",
         "agent-supervisor:",
         "ssot-batcher:",
@@ -71,6 +78,9 @@ def test_compose_defines_full_stack_services() -> None:
     expect("127.0.0.1:${ARCLINK_MCP_PORT:-8282}:8282" in body, body)
     expect("127.0.0.1:${QMD_MCP_PORT:-8181}:8181" in body, body)
     expect("127.0.0.1:${NEXTCLOUD_PORT:-18080}:80" in body, body)
+    expect("127.0.0.1:${ARCLINK_API_PORT:-8900}:8900" in body, body)
+    expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:3000" in body, body)
+    expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
     expect("ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor" in body, body)
     expect("ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}" in body, body)
     expect("Intentional trusted-host boundary" in body, body)
@@ -134,11 +144,13 @@ def test_docker_operator_commands_are_present() -> None:
     expect("compose up -d --no-build" in body, body)
     expect("show_ports()" in body, body)
     expect("docker_port_set_available()" in body, body)
-    expect("QMD_MCP_PORT" in body and "ARCLINK_MCP_PORT" in body, body)
+    expect("QMD_MCP_PORT" in body and "ARCLINK_MCP_PORT" in body and "ARCLINK_API_PORT" in body and "ARCLINK_WEB_PORT" in body, body)
     expect("18181 + offset" in body and "18282 + offset" in body and "28080 + offset" in body, body)
+    expect("18900 + offset" in body and "13000 + offset" in body, body)
     expect("ports.json" in body, body)
     expect("agent-supervisor" in body, body)
     expect("http://127.0.0.1/status.php" in body, body)
+    expect("http://127.0.0.1:8900/api/v1/health" in body and "http://127.0.0.1:3000" in body, body)
     expect("qmd-mcp" in body and "qmd --version" in body, body)
     expect('pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' in body, body)
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
@@ -171,6 +183,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_component_upgrade_apply()" in body, body)
     expect("ARCLINK_COMPONENT_UPGRADE_MODE=docker" in body, body)
     expect("deploy.sh docker enrollment-status" in deploy, deploy)
+    expect("deploy.sh control install" in deploy and "control-install" in deploy, deploy)
     expect("docker-enrollment-status" in deploy and "docker-rotate-nextcloud-secrets" in deploy, deploy)
     expect("qmd-upgrade-check" in deploy and "node-upgrade" in deploy, deploy)
     expect('ARCLINK_COMPONENT_UPGRADE_MODE:-}" == "docker"' in component_upgrade, component_upgrade)
@@ -343,19 +356,21 @@ def test_readme_keeps_canonical_host_layout_root() -> None:
     print("PASS test_readme_keeps_canonical_host_layout_root")
 
 
-def test_readme_distinguishes_baremetal_and_containerized_paths() -> None:
+def test_readme_distinguishes_control_shared_host_and_docker_paths() -> None:
     body = read("README.md")
     expect("## Deployment Paths" in body, body)
-    expect("| **Baremetal** |" in body, body)
-    expect("| **Docker-first** |" in body, body)
-    expect("If a command does not include the word `docker`, it uses the baremetal path." in body, body)
-    expect("## Baremetal Path" in body and "### Baremetal Quick Start" in body, body)
-    expect("## Containerized Path" in body and "### Containerized Quick Start" in body, body)
-    expect("./deploy.sh install" in body and "./deploy.sh docker install" in body, body)
+    expect("| **Sovereign Control Node Mode** |" in body, body)
+    expect("| **Shared Host Mode** |" in body, body)
+    expect("| **Shared Host Docker Mode** |" in body, body)
+    expect("The top-level default is Sovereign" in body and "Control Node Mode." in body, body)
+    expect("## Shared Host Mode" in body and "### Shared Host Quick Start" in body, body)
+    expect("## Sovereign Control Node Mode" in body and "### Sovereign Control Node Quick Start" in body, body)
+    expect("## Shared Host Docker Mode" in body and "### Shared Host Docker Quick Start" in body, body)
+    expect("./deploy.sh control install" in body and "./deploy.sh install" in body and "./deploy.sh docker install" in body, body)
     expect("./deploy.sh docker enrollment-status" in body, body)
     expect("./deploy.sh docker rotate-nextcloud-secrets" in body, body)
     expect("Pinned-component Docker upgrades re-enter `./deploy.sh docker upgrade`" in body, body)
-    print("PASS test_readme_distinguishes_baremetal_and_containerized_paths")
+    print("PASS test_readme_distinguishes_control_shared_host_and_docker_paths")
 
 
 def test_docker_compose_config_validates_when_docker_is_available() -> None:
@@ -389,7 +404,7 @@ def main() -> int:
     test_docker_health_script_checks_container_runtime()
     test_dockerignore_excludes_sensitive_and_generated_context()
     test_readme_keeps_canonical_host_layout_root()
-    test_readme_distinguishes_baremetal_and_containerized_paths()
+    test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_docker_compose_config_validates_when_docker_is_available()
     print("PASS all 11 ArcLink Docker regression tests")
     return 0

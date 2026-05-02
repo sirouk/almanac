@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ARCLINK_REPO_DIR=/home/arclink/arclink \
     ARCLINK_PRIV_DIR=/home/arclink/arclink/arclink-priv \
     ARCLINK_CONFIG_FILE=/home/arclink/arclink/arclink-priv/config/docker.env \
+    ARCLINK_API_INTERNAL_URL=http://control-api:8900 \
     RUNTIME_DIR=/opt/arclink/runtime \
     UV_INSTALL_DIR=/usr/local/bin \
     HOME=/home/arclink \
@@ -62,11 +63,17 @@ RUN pin_value() { \
     "/opt/arclink/runtime/hermes-agent-src[cli,mcp,messaging,cron,web]" \
     PyYAML \
     requests \
+    stripe \
   && if [ -d /opt/arclink/runtime/hermes-agent-src/web ]; then \
        cd /opt/arclink/runtime/hermes-agent-src/web \
        && npm ci --no-audit --no-fund \
        && npm run build \
        && /opt/arclink/runtime/hermes-venv/bin/python3 -c 'from pathlib import Path; import hermes_cli, shutil; source = Path("/opt/arclink/runtime/hermes-agent-src/hermes_cli/web_dist"); target = Path(hermes_cli.__file__).resolve().parent / "web_dist"; shutil.rmtree(target, ignore_errors=True); shutil.copytree(source, target) if source.is_dir() else None'; \
+     fi \
+  && if [ -f web/package-lock.json ]; then \
+       cd /home/arclink/arclink/web \
+       && npm ci --no-audit --no-fund \
+       && npm run build; \
      fi \
   && chown -R arclink:arclink /home/arclink /opt/arclink
 

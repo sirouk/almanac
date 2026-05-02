@@ -20,6 +20,8 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   arclink-mcp
   qmd-mcp
   notion-webhook
+  control-api
+  control-web
   vault-watch
   agent-supervisor
   health-watch
@@ -42,7 +44,7 @@ Commands:
   ps          Show Compose service state
   ports       Show assigned Docker host ports
   logs        Follow or print Compose logs
-  health      Validate Compose config, state directories, and running services
+  health      Validate Compose config, state directories, control API/web, and running services
   record-release
               Record the current Docker checkout as the deployed ArcLink release
   live-smoke  Run the live agent MCP tool smoke inside the Docker supervisor
@@ -176,6 +178,13 @@ bootstrap() {
     "$SCRIPT_DIR/docker-entrypoint.sh" true
   set_env_file_value ARCLINK_DOCKER_HOST_REPO_DIR "$REPO_DIR"
   set_env_file_value ARCLINK_DOCKER_HOST_PRIV_DIR "$REPO_DIR/arclink-priv"
+  ensure_env_file_value ARCLINK_PRODUCT_NAME "ArcLink"
+  ensure_env_file_value ARCLINK_BASE_DOMAIN "arclink.online"
+  ensure_env_file_value ARCLINK_PRIMARY_PROVIDER "chutes"
+  ensure_env_file_value ARCLINK_API_HOST "0.0.0.0"
+  ensure_env_file_value ARCLINK_CORS_ORIGIN ""
+  ensure_env_file_value ARCLINK_COOKIE_DOMAIN ""
+  ensure_env_file_value ARCLINK_DEFAULT_PRICE_ID "price_arclink_starter"
   reserve_docker_ports
 }
 
@@ -219,6 +228,17 @@ set_env_file_value() {
   fi
   chmod 600 "$tmp_file"
   mv "$tmp_file" "$DOCKER_ENV_FILE"
+}
+
+ensure_env_file_value() {
+  local key="$1"
+  local default_value="$2"
+  local existing=""
+
+  existing="$(env_file_value "$key" 2>/dev/null || true)"
+  if [[ -z "$existing" ]]; then
+    set_env_file_value "$key" "$default_value"
+  fi
 }
 
 configured_or_default() {
@@ -284,18 +304,25 @@ docker_port_set_available() {
   local mcp_port="$2"
   local webhook_port="$3"
   local nextcloud_port="$4"
+  local api_port="$5"
+  local web_port="$6"
 
-  [[ "$qmd_port" != "$mcp_port" ]] || return 1
-  [[ "$qmd_port" != "$webhook_port" ]] || return 1
-  [[ "$qmd_port" != "$nextcloud_port" ]] || return 1
-  [[ "$mcp_port" != "$webhook_port" ]] || return 1
-  [[ "$mcp_port" != "$nextcloud_port" ]] || return 1
-  [[ "$webhook_port" != "$nextcloud_port" ]] || return 1
+  local -a ports=("$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" "$api_port" "$web_port")
+  local i=0 j=0
+  for i in "${!ports[@]}"; do
+    for j in "${!ports[@]}"; do
+      if [[ "$i" != "$j" && "${ports[$i]}" == "${ports[$j]}" ]]; then
+        return 1
+      fi
+    done
+  done
 
   host_port_available_for_service "$qmd_port" qmd-mcp 8181 &&
     host_port_available_for_service "$mcp_port" arclink-mcp 8282 &&
     host_port_available_for_service "$webhook_port" notion-webhook 8283 &&
-    host_port_available_for_service "$nextcloud_port" nextcloud 80
+    host_port_available_for_service "$nextcloud_port" nextcloud 80 &&
+    host_port_available_for_service "$api_port" control-api 8900 &&
+    host_port_available_for_service "$web_port" control-web 3000
 }
 
 persist_docker_ports() {
@@ -303,13 +330,17 @@ persist_docker_ports() {
   local mcp_port="$2"
   local webhook_port="$3"
   local nextcloud_port="$4"
+  local api_port="$5"
+  local web_port="$6"
 
   set_env_file_value QMD_MCP_PORT "$qmd_port"
   set_env_file_value ARCLINK_MCP_PORT "$mcp_port"
   set_env_file_value ARCLINK_NOTION_WEBHOOK_PORT "$webhook_port"
   set_env_file_value NEXTCLOUD_PORT "$nextcloud_port"
+  set_env_file_value ARCLINK_API_PORT "$api_port"
+  set_env_file_value ARCLINK_WEB_PORT "$web_port"
   mkdir -p "$(dirname "$DOCKER_PORT_MANIFEST")"
-  python3 - "$DOCKER_PORT_MANIFEST" "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" <<'PY'
+  python3 - "$DOCKER_PORT_MANIFEST" "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" "$api_port" "$web_port" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -320,6 +351,8 @@ payload = {
     "arclink_mcp_port": int(sys.argv[3]),
     "notion_webhook_port": int(sys.argv[4]),
     "nextcloud_port": int(sys.argv[5]),
+    "control_api_port": int(sys.argv[6]),
+    "control_web_port": int(sys.argv[7]),
 }
 path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -334,15 +367,19 @@ reserve_docker_ports() {
   local mcp_port=""
   local webhook_port=""
   local nextcloud_port=""
+  local api_port=""
+  local web_port=""
   local offset=0
 
   qmd_port="$(configured_or_default QMD_MCP_PORT 8181)"
   mcp_port="$(configured_or_default ARCLINK_MCP_PORT 8282)"
   webhook_port="$(configured_or_default ARCLINK_NOTION_WEBHOOK_PORT 8283)"
   nextcloud_port="$(configured_or_default NEXTCLOUD_PORT 18080)"
+  api_port="$(configured_or_default ARCLINK_API_PORT 8900)"
+  web_port="$(configured_or_default ARCLINK_WEB_PORT 3000)"
 
-  if docker_port_set_available "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port"; then
-    persist_docker_ports "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port"
+  if docker_port_set_available "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" "$api_port" "$web_port"; then
+    persist_docker_ports "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" "$api_port" "$web_port"
     return 0
   fi
 
@@ -351,9 +388,11 @@ reserve_docker_ports() {
     mcp_port=$((18282 + offset))
     webhook_port=$((18283 + offset))
     nextcloud_port=$((28080 + offset))
-    if docker_port_set_available "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port"; then
-      persist_docker_ports "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port"
-      echo "Docker ports assigned: qmd=$qmd_port arclink-mcp=$mcp_port notion-webhook=$webhook_port nextcloud=$nextcloud_port"
+    api_port=$((18900 + offset))
+    web_port=$((13000 + offset))
+    if docker_port_set_available "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" "$api_port" "$web_port"; then
+      persist_docker_ports "$qmd_port" "$mcp_port" "$webhook_port" "$nextcloud_port" "$api_port" "$web_port"
+      echo "Docker ports assigned: qmd=$qmd_port arclink-mcp=$mcp_port notion-webhook=$webhook_port nextcloud=$nextcloud_port control-api=$api_port control-web=$web_port"
       return 0
     fi
   done
@@ -468,6 +507,8 @@ health() {
 
   retry_compose_exec_quiet arclink-mcp curl -fsS http://127.0.0.1:8282/health
   retry_compose_exec_quiet notion-webhook curl -fsS http://127.0.0.1:8283/health
+  retry_compose_exec_quiet control-api curl -fsS http://127.0.0.1:8900/api/v1/health
+  retry_compose_exec_quiet control-web curl -fsS http://127.0.0.1:3000
   repair_running_nextcloud_data_dir
   retry_compose_exec_quiet nextcloud curl -fsS http://127.0.0.1/status.php || {
     diagnose_nextcloud_health_failure
@@ -590,6 +631,8 @@ show_ports() {
   printf 'ARCLINK_MCP_PORT=%s\n' "$(configured_or_default ARCLINK_MCP_PORT 8282)"
   printf 'ARCLINK_NOTION_WEBHOOK_PORT=%s\n' "$(configured_or_default ARCLINK_NOTION_WEBHOOK_PORT 8283)"
   printf 'NEXTCLOUD_PORT=%s\n' "$(configured_or_default NEXTCLOUD_PORT 18080)"
+  printf 'ARCLINK_API_PORT=%s\n' "$(configured_or_default ARCLINK_API_PORT 8900)"
+  printf 'ARCLINK_WEB_PORT=%s\n' "$(configured_or_default ARCLINK_WEB_PORT 3000)"
 }
 
 random_secret() {

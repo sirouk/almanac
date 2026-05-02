@@ -15,6 +15,9 @@ x-arclink-app: &arclink-app
   restart: *restart-unless-stopped
   environment: &arclink-env
     ARCLINK_DOCKER_MODE: "1"
+    ARCLINK_PRODUCT_NAME: ${ARCLINK_PRODUCT_NAME:-ArcLink}
+    ARCLINK_BASE_DOMAIN: ${ARCLINK_BASE_DOMAIN:-arclink.online}
+    ARCLINK_PRIMARY_PROVIDER: ${ARCLINK_PRIMARY_PROVIDER:-chutes}
     ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}
     ARCLINK_BACKEND_ALLOWED_CIDRS: ${ARCLINK_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}
     QMD_MCP_HOST_PORT: ${QMD_MCP_PORT:-8181}
@@ -27,6 +30,24 @@ x-arclink-app: &arclink-app
     ARCLINK_DOCKER_HOST_PRIV_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:-}
     ARCLINK_DOCKER_IMAGE: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
     ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}
+    ARCLINK_API_HOST: ${ARCLINK_API_HOST:-0.0.0.0}
+    ARCLINK_API_PORT: ${ARCLINK_API_CONTAINER_PORT:-8900}
+    ARCLINK_WEB_PORT: ${ARCLINK_WEB_CONTAINER_PORT:-3000}
+    ARCLINK_CORS_ORIGIN: ${ARCLINK_CORS_ORIGIN:-}
+    ARCLINK_COOKIE_DOMAIN: ${ARCLINK_COOKIE_DOMAIN:-}
+    ARCLINK_DEFAULT_PRICE_ID: ${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}
+    STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+    STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+    CHUTES_API_KEY: ${CHUTES_API_KEY:-}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+    TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+    DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+    DISCORD_APP_ID: ${DISCORD_APP_ID:-}
+    DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
+    ARCLINK_API_INTERNAL_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}
     RUNTIME_DIR: /opt/arclink/runtime
     HOME: /home/arclink
     XDG_CONFIG_HOME: /home/arclink/.qmd/config
@@ -152,6 +173,27 @@ services:
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8283/health >/dev/null"]
+
+  control-api:
+    <<: *arclink-app
+    command: ["python3", "python/arclink_hosted_api.py"]
+    ports:
+      - "127.0.0.1:${ARCLINK_API_PORT:-8900}:8900"
+    healthcheck:
+      <<: *healthcheck-http
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8900/api/v1/health >/dev/null"]
+
+  control-web:
+    <<: *arclink-app
+    command: ["sh", "-lc", "cd web && npm run start -- --hostname 0.0.0.0 --port 3000"]
+    depends_on:
+      control-api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ARCLINK_WEB_PORT:-3000}:3000"
+    healthcheck:
+      <<: *healthcheck-http
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000 >/dev/null"]
 
   vault-watch:
     <<: *arclink-app

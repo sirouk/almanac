@@ -24,6 +24,8 @@ fi
 ANSWERS_FILE="${ARCLINK_INSTALL_ANSWERS_FILE:-}"
 MODE=""
 PRIVILEGED_MODE=""
+CONTROL_DEPLOY_COMMAND=""
+CONTROL_DEPLOY_ARGS=()
 DOCKER_DEPLOY_COMMAND=""
 DOCKER_DEPLOY_ARGS=()
 DISCOVERED_CONFIG=""
@@ -93,6 +95,20 @@ ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
 ARCLINK_NOTION_WEBHOOK_HOST="${ARCLINK_NOTION_WEBHOOK_HOST:-127.0.0.1}"
 ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
 ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
+ARCLINK_PRODUCT_NAME="${ARCLINK_PRODUCT_NAME:-ArcLink}"
+ARCLINK_BASE_DOMAIN="${ARCLINK_BASE_DOMAIN:-arclink.online}"
+ARCLINK_PRIMARY_PROVIDER="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
+ARCLINK_API_HOST="${ARCLINK_API_HOST:-127.0.0.1}"
+ARCLINK_API_PORT="${ARCLINK_API_PORT:-8900}"
+ARCLINK_WEB_PORT="${ARCLINK_WEB_PORT:-3000}"
+ARCLINK_CORS_ORIGIN="${ARCLINK_CORS_ORIGIN:-}"
+ARCLINK_COOKIE_DOMAIN="${ARCLINK_COOKIE_DOMAIN:-}"
+ARCLINK_DEFAULT_PRICE_ID="${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
+STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
+CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+CLOUDFLARE_ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
+CHUTES_API_KEY="${CHUTES_API_KEY:-}"
 ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}"
 ARCLINK_SSOT_NOTION_ROOT_PAGE_ID="${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}"
 ARCLINK_SSOT_NOTION_SPACE_URL="${ARCLINK_SSOT_NOTION_SPACE_URL:-}"
@@ -120,6 +136,11 @@ OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
 OPERATOR_GENERAL_CHANNEL_ID="${OPERATOR_GENERAL_CHANNEL_ID:-}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_BOT_USERNAME="${TELEGRAM_BOT_USERNAME:-}"
+TELEGRAM_WEBHOOK_URL="${TELEGRAM_WEBHOOK_URL:-}"
+DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
+DISCORD_APP_ID="${DISCORD_APP_ID:-}"
+DISCORD_PUBLIC_KEY="${DISCORD_PUBLIC_KEY:-}"
 . "$BOOTSTRAP_DIR/bin/model-providers.sh" 2>/dev/null || true
 if declare -f model_provider_resolve_target_or_default >/dev/null 2>&1; then
   ARCLINK_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ARCLINK_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
@@ -416,6 +437,10 @@ usage() {
   cat <<'EOF'
 Usage:
   deploy.sh                # interactive menu
+  deploy.sh control install
+  deploy.sh control upgrade
+  deploy.sh control health
+  deploy.sh control ports
   deploy.sh install
   deploy.sh upgrade
   deploy.sh notion-ssot
@@ -432,7 +457,16 @@ Usage:
   deploy.sh remove
   deploy.sh health
 
-Docker control center:
+Sovereign Control Node:
+  deploy.sh control install       # idempotent control-plane bootstrap + build + up + health
+  deploy.sh control upgrade       # rebuild/recreate from current checkout + health
+  deploy.sh control reconfigure   # refresh control-node config/ports only
+  deploy.sh control health
+  deploy.sh control ports
+  deploy.sh control logs [SERVICE]
+  deploy.sh control ps
+
+Shared Host Docker control center:
   deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
   deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
   deploy.sh docker reconfigure    # refresh generated Docker config/ports only
@@ -457,7 +491,12 @@ Docker control center:
   deploy.sh docker down
   deploy.sh docker teardown
 
-Docker shortcut aliases:
+Control and Docker shortcut aliases:
+  deploy.sh control-install
+  deploy.sh control-upgrade
+  deploy.sh control-reconfigure
+  deploy.sh control-health
+  deploy.sh control-ports
   deploy.sh docker-install
   deploy.sh docker-upgrade
   deploy.sh docker-reconfigure
@@ -493,6 +532,30 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    control|sovereign)
+      MODE="control"
+      shift
+      if [[ $# -gt 0 ]]; then
+        case "$1" in
+          -h|--help)
+            CONTROL_DEPLOY_COMMAND="help"
+            shift
+            ;;
+          *)
+            CONTROL_DEPLOY_COMMAND="$1"
+            shift
+            ;;
+        esac
+      fi
+      CONTROL_DEPLOY_ARGS=("$@")
+      break
+      ;;
+    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-teardown|control-write-config|control-remove)
+      MODE="$1"
+      shift
+      CONTROL_DEPLOY_ARGS=("$@")
+      break
+      ;;
     docker)
       MODE="$1"
       shift
@@ -1008,8 +1071,9 @@ choose_mode() {
 ArcLink deploy menu
 
   1) Shared Host mode control center (operator-led)
-  2) Sovereign Node mode control center (Docker-backed)
-  3) Exit
+  2) Sovereign Control Node control center (billing, bots, fleet, provisioning)
+  3) Shared Host Docker control center (containerized operator substrate)
+  4) Exit
 EOF
 
     read -r -p "Choose ArcLink mode [2]: " answer
@@ -1020,18 +1084,48 @@ EOF
         fi
         ;;
       2)
+        MODE="control"
+        CONTROL_DEPLOY_COMMAND="menu"
+        return 0
+        ;;
+      3)
         MODE="docker"
         DOCKER_DEPLOY_COMMAND="menu"
         return 0
         ;;
-      3)
+      4)
         exit 0
         ;;
       *)
-        echo "Please choose 1 through 3."
+        echo "Please choose 1 through 4."
         ;;
     esac
   done
+}
+
+control_usage() {
+  cat <<'EOF'
+Usage:
+  deploy.sh control install        # idempotent Sovereign Control Node bootstrap + build + up + health
+  deploy.sh control upgrade        # rebuild/recreate from current checkout + health
+  deploy.sh control reconfigure    # refresh generated control config/ports only
+  deploy.sh control bootstrap
+  deploy.sh control config [-q]
+  deploy.sh control build [SERVICE...]
+  deploy.sh control up [SERVICE...]
+  deploy.sh control down
+  deploy.sh control ps
+  deploy.sh control ports
+  deploy.sh control logs [SERVICE]
+  deploy.sh control health
+
+Shortcut aliases:
+  deploy.sh control-install
+  deploy.sh control-upgrade
+  deploy.sh control-reconfigure
+  deploy.sh control-health
+  deploy.sh control-ports
+EOF
 }
 
 docker_usage() {
@@ -1083,7 +1177,7 @@ choose_docker_mode() {
   local answer=""
 
   cat <<'EOF'
-ArcLink Sovereign Node control center
+ArcLink Shared Host Docker control center
 
   1) Install / repair Docker stack from current checkout
   2) Upgrade / rebuild Docker stack from current checkout
@@ -1104,7 +1198,7 @@ ArcLink Sovereign Node control center
 EOF
 
   while true; do
-    read -r -p "Choose Docker mode [1]: " answer
+    read -r -p "Choose Shared Host Docker action [1]: " answer
     case "${answer:-1}" in
       1) DOCKER_DEPLOY_COMMAND="install"; return 0 ;;
       2) DOCKER_DEPLOY_COMMAND="upgrade"; return 0 ;;
@@ -1123,6 +1217,42 @@ EOF
       15) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
       16) exit 0 ;;
       *) echo "Please choose 1 through 16." ;;
+    esac
+  done
+}
+
+choose_control_mode() {
+  local answer=""
+
+  cat <<'EOF'
+ArcLink Sovereign Control Node control center
+
+  1) Install / repair control node from current checkout
+  2) Upgrade / rebuild control node from current checkout
+  3) Reconfigure generated control config and ports
+  4) Control node health check
+  5) Show control node ports
+  6) Show control node service state
+  7) Show control node logs
+  8) Stop control node stack
+  9) Teardown control node stack and named volumes
+ 10) Exit
+EOF
+
+  while true; do
+    read -r -p "Choose Sovereign Control Node action [1]: " answer
+    case "${answer:-1}" in
+      1) CONTROL_DEPLOY_COMMAND="install"; return 0 ;;
+      2) CONTROL_DEPLOY_COMMAND="upgrade"; return 0 ;;
+      3) CONTROL_DEPLOY_COMMAND="reconfigure"; return 0 ;;
+      4) CONTROL_DEPLOY_COMMAND="health"; return 0 ;;
+      5) CONTROL_DEPLOY_COMMAND="ports"; return 0 ;;
+      6) CONTROL_DEPLOY_COMMAND="ps"; return 0 ;;
+      7) CONTROL_DEPLOY_COMMAND="logs"; return 0 ;;
+      8) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
+      9) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
+      10) exit 0 ;;
+      *) echo "Please choose 1 through 10." ;;
     esac
   done
 }
@@ -1915,6 +2045,9 @@ emit_runtime_config() {
   fi
   {
     write_kv ARCLINK_NAME "$ARCLINK_NAME"
+    write_kv ARCLINK_PRODUCT_NAME "${ARCLINK_PRODUCT_NAME:-ArcLink}"
+    write_kv ARCLINK_BASE_DOMAIN "${ARCLINK_BASE_DOMAIN:-arclink.online}"
+    write_kv ARCLINK_PRIMARY_PROVIDER "${ARCLINK_PRIMARY_PROVIDER:-chutes}"
     write_kv ARCLINK_USER "$ARCLINK_USER"
     write_kv ARCLINK_HOME "$ARCLINK_HOME"
     write_kv ARCLINK_REPO_DIR "$ARCLINK_REPO_DIR"
@@ -1948,6 +2081,17 @@ emit_runtime_config() {
     write_kv QMD_MCP_PORT "$QMD_MCP_PORT"
     write_kv ARCLINK_MCP_HOST "$ARCLINK_MCP_HOST"
     write_kv ARCLINK_MCP_PORT "$ARCLINK_MCP_PORT"
+    write_kv ARCLINK_API_HOST "${ARCLINK_API_HOST:-127.0.0.1}"
+    write_kv ARCLINK_API_PORT "${ARCLINK_API_PORT:-8900}"
+    write_kv ARCLINK_WEB_PORT "${ARCLINK_WEB_PORT:-3000}"
+    write_kv ARCLINK_CORS_ORIGIN "${ARCLINK_CORS_ORIGIN:-}"
+    write_kv ARCLINK_COOKIE_DOMAIN "${ARCLINK_COOKIE_DOMAIN:-}"
+    write_kv ARCLINK_DEFAULT_PRICE_ID "${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+    write_kv STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
+    write_kv STRIPE_WEBHOOK_SECRET "${STRIPE_WEBHOOK_SECRET:-}"
+    write_kv CLOUDFLARE_API_TOKEN "${CLOUDFLARE_API_TOKEN:-}"
+    write_kv CLOUDFLARE_ZONE_ID "${CLOUDFLARE_ZONE_ID:-}"
+    write_kv CHUTES_API_KEY "${CHUTES_API_KEY:-}"
     write_kv ARCLINK_NOTION_WEBHOOK_HOST "$ARCLINK_NOTION_WEBHOOK_HOST"
     write_kv ARCLINK_NOTION_WEBHOOK_PORT "$ARCLINK_NOTION_WEBHOOK_PORT"
     write_kv ARCLINK_NOTION_WEBHOOK_PUBLIC_URL "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
@@ -2025,6 +2169,11 @@ emit_runtime_config() {
     write_kv OPERATOR_GENERAL_CHANNEL_PLATFORM "${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
     write_kv OPERATOR_GENERAL_CHANNEL_ID "${OPERATOR_GENERAL_CHANNEL_ID:-}"
     write_kv TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
+    write_kv TELEGRAM_BOT_USERNAME "${TELEGRAM_BOT_USERNAME:-}"
+    write_kv TELEGRAM_WEBHOOK_URL "${TELEGRAM_WEBHOOK_URL:-}"
+    write_kv DISCORD_BOT_TOKEN "${DISCORD_BOT_TOKEN:-}"
+    write_kv DISCORD_APP_ID "${DISCORD_APP_ID:-}"
+    write_kv DISCORD_PUBLIC_KEY "${DISCORD_PUBLIC_KEY:-}"
     write_kv ARCLINK_MODEL_PRESET_CODEX "${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
     write_kv ARCLINK_MODEL_PRESET_OPUS "${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
     write_kv ARCLINK_MODEL_PRESET_CHUTES "${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
@@ -4197,7 +4346,7 @@ collect_install_answers() {
   load_detected_config || true
 
   echo "ArcLink deploy: Shared Host mode install / repair from current checkout"
-  echo "For Sovereign Node mode, use: ./deploy.sh docker install"
+  echo "For Sovereign Control Node mode, use: ./deploy.sh control install"
   echo
 
   detected_user="${ARCLINK_USER:-}"
@@ -8037,9 +8186,9 @@ collect_docker_install_answers() {
   docker_env="$(docker_env_file_path)"
   load_docker_runtime_config
 
-  echo "ArcLink deploy: Docker install / repair from current checkout"
+  echo "ArcLink deploy: Shared Host Docker install / repair from current checkout"
   echo
-  echo "Docker mode uses fixed container paths and the current checkout as the host bind mount:"
+  echo "Shared Host Docker mode uses fixed container paths and the current checkout as the host bind mount:"
   echo "  host repo:    $BOOTSTRAP_DIR"
   echo "  host private: $BOOTSTRAP_DIR/arclink-priv"
   echo "  container:    /home/arclink/arclink"
@@ -8211,6 +8360,64 @@ EOF
   echo "Wrote Docker config to: $docker_env"
 }
 
+collect_control_install_answers() {
+  local docker_env="" default_base_domain="" default_api_port="" default_web_port=""
+  local default_cors_origin="" default_cookie_domain="" default_price_id=""
+
+  docker_env="$(docker_env_file_path)"
+  load_docker_runtime_config
+
+  echo "ArcLink deploy: Sovereign Control Node install / repair from current checkout"
+  echo
+  echo "This path runs the public onboarding API, website control center,"
+  echo "shared Telegram/Discord bot webhooks, Stripe webhook boundary, and"
+  echo "fleet/provisioning/admin control-plane services from this host."
+  echo
+  echo "Provider credentials are optional during bootstrap. Missing credentials"
+  echo "leave live E2E provider checks gated until you add them to:"
+  echo "  $docker_env"
+  echo
+
+  ARCLINK_PRODUCT_NAME="${ARCLINK_PRODUCT_NAME:-ArcLink}"
+  ARCLINK_PRIMARY_PROVIDER="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
+  default_base_domain="${ARCLINK_BASE_DOMAIN:-arclink.online}"
+  default_api_port="${ARCLINK_API_PORT:-8900}"
+  default_web_port="${ARCLINK_WEB_PORT:-3000}"
+  default_cors_origin="${ARCLINK_CORS_ORIGIN:-https://$default_base_domain}"
+  default_cookie_domain="${ARCLINK_COOKIE_DOMAIN:-.$default_base_domain}"
+  default_price_id="${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+
+  ARCLINK_BASE_DOMAIN="$(normalize_optional_answer "$(ask "ArcLink public base domain" "$default_base_domain")")"
+  if [[ -z "$ARCLINK_BASE_DOMAIN" ]]; then
+    ARCLINK_BASE_DOMAIN="arclink.online"
+  fi
+  ARCLINK_API_HOST="0.0.0.0"
+  ARCLINK_API_PORT="$(ask "Control API local port" "$default_api_port")"
+  ARCLINK_WEB_PORT="$(ask "Control web local port" "$default_web_port")"
+  ARCLINK_CORS_ORIGIN="$(normalize_optional_answer "$(ask "Browser CORS origin (type none to clear)" "$default_cors_origin")")"
+  ARCLINK_COOKIE_DOMAIN="$(normalize_optional_answer "$(ask "Session cookie domain (type none to clear)" "$default_cookie_domain")")"
+  ARCLINK_DEFAULT_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe default subscription price ID" "$default_price_id")")"
+  if [[ -z "$ARCLINK_DEFAULT_PRICE_ID" ]]; then
+    ARCLINK_DEFAULT_PRICE_ID="price_arclink_starter"
+  fi
+
+  STRIPE_SECRET_KEY="$(ask_secret_with_default "Stripe secret key (ENTER keeps current, type none to clear)" "${STRIPE_SECRET_KEY:-}")"
+  STRIPE_WEBHOOK_SECRET="$(ask_secret_with_default "Stripe webhook secret (ENTER keeps current, type none to clear)" "${STRIPE_WEBHOOK_SECRET:-}")"
+  CLOUDFLARE_API_TOKEN="$(ask_secret_with_default "Cloudflare DNS API token (ENTER keeps current, type none to clear)" "${CLOUDFLARE_API_TOKEN:-}")"
+  CLOUDFLARE_ZONE_ID="$(normalize_optional_answer "$(ask "Cloudflare zone ID (type none to clear)" "${CLOUDFLARE_ZONE_ID:-}")")"
+  CHUTES_API_KEY="$(ask_secret_with_default "Chutes owner API key (ENTER keeps current, type none to clear)" "${CHUTES_API_KEY:-}")"
+  TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Public Telegram bot token (ENTER keeps current, type none to clear)" "${TELEGRAM_BOT_TOKEN:-}")"
+  TELEGRAM_BOT_USERNAME="$(normalize_optional_answer "$(ask "Public Telegram bot username (type none to clear)" "${TELEGRAM_BOT_USERNAME:-}")")"
+  DISCORD_BOT_TOKEN="$(ask_secret_with_default "Public Discord bot token (ENTER keeps current, type none to clear)" "${DISCORD_BOT_TOKEN:-}")"
+  DISCORD_APP_ID="$(normalize_optional_answer "$(ask "Discord application ID (type none to clear)" "${DISCORD_APP_ID:-}")")"
+  DISCORD_PUBLIC_KEY="$(ask_secret_with_default "Discord public key (ENTER keeps current, type none to clear)" "${DISCORD_PUBLIC_KEY:-}")"
+
+  write_docker_runtime_config "$docker_env"
+  CONFIG_TARGET="$docker_env"
+  echo
+  echo "Wrote Sovereign Control Node config to: $docker_env"
+}
+
 run_docker_install_flow() {
   local run_curator_setup="${1:-1}"
   local operation="docker-upgrade"
@@ -8238,6 +8445,100 @@ run_docker_install_flow() {
   run_arclink_docker live-smoke
   finish_deploy_operation
   trap 'arclink_deploy_stable_copy_cleanup' EXIT
+}
+
+run_control_install_flow() {
+  local run_interactive="${1:-1}"
+  local operation="control-upgrade"
+
+  if [[ "$run_interactive" == "1" ]]; then
+    operation="control-install"
+  fi
+  begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/arclink-priv/state"
+  trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
+
+  echo "Installing or repairing ArcLink Sovereign Control Node from this checkout..."
+  run_arclink_docker bootstrap
+  if [[ "$run_interactive" == "1" && "${ARCLINK_CONTROL_SKIP_CONFIG:-0}" != "1" && -t 0 ]]; then
+    collect_control_install_answers
+  fi
+  run_arclink_docker build
+  run_arclink_docker up
+  run_arclink_docker record-release
+  run_arclink_docker ports
+  run_arclink_docker health
+  finish_deploy_operation
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
+}
+
+run_control_reconfigure_flow() {
+  echo "Refreshing ArcLink Sovereign Control Node generated config and port assignments..."
+  run_arclink_docker bootstrap
+  if [[ "${ARCLINK_CONTROL_SKIP_CONFIG:-0}" != "1" && -t 0 ]]; then
+    collect_control_install_answers
+  fi
+  run_arclink_docker config -q
+  run_arclink_docker ports
+}
+
+control_command_from_mode() {
+  case "$1" in
+    control-install) printf '%s\n' "install" ;;
+    control-upgrade) printf '%s\n' "upgrade" ;;
+    control-reconfigure) printf '%s\n' "reconfigure" ;;
+    control-bootstrap) printf '%s\n' "bootstrap" ;;
+    control-config) printf '%s\n' "config" ;;
+    control-build) printf '%s\n' "build" ;;
+    control-up) printf '%s\n' "up" ;;
+    control-down) printf '%s\n' "down" ;;
+    control-ps) printf '%s\n' "ps" ;;
+    control-ports) printf '%s\n' "ports" ;;
+    control-logs) printf '%s\n' "logs" ;;
+    control-health) printf '%s\n' "health" ;;
+    control-teardown) printf '%s\n' "teardown" ;;
+    control-write-config) printf '%s\n' "write-config" ;;
+    control-remove) printf '%s\n' "remove" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
+run_control_deploy_flow() {
+  local command="${CONTROL_DEPLOY_COMMAND:-}"
+
+  if [[ "$MODE" != "control" ]]; then
+    command="$(control_command_from_mode "$MODE")"
+  fi
+  if [[ -z "$command" || "$command" == "menu" ]]; then
+    if choose_control_mode; then
+      command="${CONTROL_DEPLOY_COMMAND:-}"
+    else
+      choose_mode
+      return 0
+    fi
+  fi
+
+  case "$command" in
+    help|-h|--help)
+      control_usage
+      ;;
+    install)
+      run_control_install_flow 1
+      ;;
+    upgrade)
+      run_control_install_flow 0
+      ;;
+    reconfigure)
+      run_control_reconfigure_flow
+      ;;
+    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|record-release|teardown|remove)
+      run_arclink_docker "$command" ${CONTROL_DEPLOY_ARGS[@]+"${CONTROL_DEPLOY_ARGS[@]}"}
+      ;;
+    *)
+      echo "Unknown Sovereign Control Node command: ${command:-<empty>}" >&2
+      control_usage >&2
+      return 2
+      ;;
+  esac
 }
 
 run_docker_reconfigure_flow() {
@@ -8375,6 +8676,9 @@ if [[ -z "$MODE" || "$MODE" == "menu" ]]; then
 fi
 
 case "$MODE" in
+  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-teardown|control-write-config|control-remove)
+    run_control_deploy_flow
+    ;;
   docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
     run_docker_deploy_flow
     ;;

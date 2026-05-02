@@ -21,7 +21,7 @@ Additional backlog sources:
   executable host readiness, live-gated executor, provider diagnostics, live
   E2E expansion, and real deployment evidence.
 - `research/RALPHIE_NEXT_PASS_STEERING.md` defines the concrete next build
-  order for Gaps A-C.
+  order for Gap D/E no-secret scaffolding and operator integration.
 
 ## Current Status
 
@@ -117,7 +117,11 @@ PLAN is complete when:
   Live Docker path requires runner. 20 tests (was 17) in
   `tests/test_arclink_executor.py`.
 
-## BUILD Tasks: Next Pass (Gaps A-C) -- LANDED
+## BUILD Tasks: Next Pass (Gap D/E Scaffolding) -- ACTIVE
+
+The next build has non-external work. Do not treat Gap D/E as fully blocked.
+Only the credentialed live run is blocked. BUILD must produce code, tests, and
+docs for the live journey model and deployment evidence ledger.
 
 ### Task 1: Host Readiness and Bootstrap (Gap A)
 
@@ -170,15 +174,21 @@ Validation:
 PYTHONPATH=python python3 -m pytest tests/test_arclink_executor.py -q
 ```
 
-### Task 4: Full Live E2E Expansion (Gap D) -- Externally Blocked
+### Task 4: Full Live E2E Expansion (Gap D) -- NO-SECRET SCAFFOLDING ACTIVE
 
-Keep skipped without credentials, but make the harness ready for real proof.
+Keep skipped without credentials, but make the harness ready for real proof now.
 
 Required:
+- Add or update a live journey module, preferably
+  `python/arclink_live_journey.py`, with ordered steps, blockers, statuses,
+  safe skip reasons, and secret-redacted evidence fields.
 - One path that can run website onboarding -> checkout -> webhook/entitlement ->
   provisioning -> DNS/health -> user/admin dashboard verification.
 - Provider checks can remain separate, but the final live proof must be one
   customer journey.
+- Expand `tests/test_arclink_e2e_live.py` so it uses the ordered journey model
+  and still skips cleanly without credentials.
+- Add focused no-secret tests for the journey model.
 - Clearly documented env names and setup steps in
   `docs/arclink/live-e2e-secrets-needed.md`.
 
@@ -186,6 +196,26 @@ Validation:
 ```bash
 # Only when credentials present:
 # ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
+```
+
+### Task 5: Deployment Evidence Ledger (Gap E) -- NO-SECRET SCAFFOLDING ACTIVE
+
+Create the evidence format before live credentials exist.
+
+Required:
+- Add or update an evidence module, preferably `python/arclink_evidence.py`,
+  with deterministic records for step name, status, timestamps, commit hash,
+  URLs/hostnames, health summaries, and redacted provider identifiers.
+- Add a future-run template under `docs/arclink/`, preferably
+  `docs/arclink/live-e2e-evidence-template.md`.
+- Add tests proving evidence output is deterministic and secret-redacted.
+- Link host readiness and provider diagnostics CLI commands from
+  `docs/arclink/operations-runbook.md`.
+
+Validation:
+```bash
+PYTHONPATH=python python3 tests/test_arclink_evidence.py
+PYTHONPATH=python python3 tests/test_arclink_live_journey.py
 ```
 
 ## Validation Floor
@@ -253,18 +283,20 @@ These require real accounts/credentials. Build fake/live boundaries first.
 - API/auth boundary not yet deployed behind production identity provider.
 - Live provider proof requires real credentials and a deliberate live run (P12).
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
-- Host readiness tooling landed (Gap A); ops runbook link pending.
+- Host readiness tooling landed (Gap A); ops runbook link is part of the next
+  operator-integration pass.
 - Provider diagnostics landed (Gap C); live connectivity checks deferred.
 
 ## BUILD Handoff
 
 P1-11 and P13-P16 are complete for the no-secret foundation. Gaps A-C are
 landed for no-secret readiness: host readiness, provider diagnostics, and an
-injectable Docker executor runner. The remaining work is Gap D (full live E2E
-expansion) and Gap E (real deployment evidence), both externally blocked on
-credentials and deliberate live runs.
+injectable Docker executor runner. The remaining non-external work is Gap D/E
+scaffolding: ordered live journey modeling, secret-redacted evidence recording,
+E2E harness expansion, and operator-runbook links. The credentialed live proof
+itself remains externally blocked.
 
-P12 live proof and Gaps D-E remain externally blocked until credentials are
-supplied. The remaining blockers are documented in
+P12 live proof and final Gap D/E evidence remain externally blocked until
+credentials are supplied. The remaining blockers are documented in
 `docs/arclink/live-e2e-secrets-needed.md` and the External Live Proof Checklist
 above.

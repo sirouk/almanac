@@ -45,11 +45,13 @@ Do not declare final form while any non-external item below is unfinished.
   Telegram, Discord, and host Docker. Diagnostics should say exactly which
   env/account is missing and must never print secret values.
 - [ ] Gap D: Expand the live E2E harness from provider smoke checks toward the
-  full signup-to-agent journey. Keep it skipped until credentials exist.
+  full signup-to-agent journey. No-secret journey modeling and skip behavior
+  must be built now; credentialed execution stays skipped until credentials
+  exist.
 - [ ] Gap E: Record real deployment evidence once credentials are supplied:
   website onboarding, checkout, provisioning, DNS, dashboard, Nextcloud,
   code-server, Hermes/qmd/memory, bot handoff, Chutes inference, and admin
-  operations.
+  operations. No-secret evidence schema/template work must be built now.
 
 ## External Live Blockers
 
@@ -65,6 +67,8 @@ These are blocked until the operator supplies credentials or account setup:
 
 ## Next Ralphie Objective
 
-Start with Gap D/E scaffolding because Gaps A-C are now landed. Do not rebuild
-P1-11, P13-P16, or Gaps A-C unless a failing test proves a regression. Do not
-mark P12 or final form complete until credential-backed E2E evidence exists.
+Start with Gap D/E scaffolding because Gaps A-C are now landed. The scaffolding
+is not externally blocked; only the credentialed live run is blocked. Do not
+rebuild P1-11, P13-P16, or Gaps A-C unless a failing test proves a regression.
+Do not mark P12 or final form complete until credential-backed E2E evidence
+exists.

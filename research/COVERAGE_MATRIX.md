@@ -20,7 +20,7 @@
 | Admin dashboard | Admin read model and local admin view | Add auth/RBAC and action API before frontend | Sensitive actions need strict audit and executor gates | Admin/dashboard/executor tests |
 | Active session counts | Admin dashboard security counts enforce active/unrevoked/unexpired filtering | Preserve before broader hosted API work | Future dashboard query changes could overcount expired or revoked sessions | Dashboard regression test |
 | Admin actions | Queued action intents require reason/idempotency and reject secrets | Future worker consumes only audited intent | Executor could bypass audit if not enforced | Admin action and executor tests |
-| API/auth boundary | User/admin sessions, CSRF checks, rate limits, MFA-ready admin factors, scoped reads, and queued mutation helpers | Harden into hosted API service before frontend/live actions | Current slice is not a hosted production identity system | API/auth tests, public hygiene, future browser/API E2E |
+| API/auth boundary | User/admin sessions, CSRF checks, rate limits, MFA-ready admin factors, scoped reads, queued mutation helpers, and hosted WSGI API with route dispatch, session transport, CORS, request-ID, and safe errors | Extend hosted API with remaining contract coverage before frontend/live actions | Hosted layer exists but not yet deployed behind production identity provider | API/auth tests, hosted API tests, public hygiene, future browser/API E2E |
 | Public onboarding invalid-input mutation | `start_public_onboarding_api()` validates channel and identity before rate limiting | Preserve this guard before hosted API work | Future transport routes could bypass the shared validator path | API/auth regression plus focused acceptance probe |
 | Session revocation guard | Revocation helper validates `user`/`admin` kinds and rejects missing target sessions before mutation or audit | Preserve before broader hosted API work | Future revocation paths could reintroduce success-shaped missing-session responses | API/auth regression test for missing user and admin sessions |
 | Product-surface generic errors | Domain errors are intentionally user-facing; generic handler uses safe copy | Preserve safe generic responses while keeping domain errors useful | Raw exception text could leak implementation detail if future handlers bypass the guard | Product-surface regression test |
@@ -54,8 +54,8 @@
 
 ## Active Gaps
 
-- The API/auth/RBAC boundary is an initial no-secret helper layer, not a hosted
-  production identity system.
+- The hosted API/auth boundary exists but is not yet deployed behind a
+  production identity provider or reverse proxy.
 - Production Next.js/Tailwind dashboards are not implemented.
 - Live Docker, Stripe, Cloudflare, Chutes, Telegram, Discord, Notion/OAuth, and
   hosted dashboard E2E are not implemented.

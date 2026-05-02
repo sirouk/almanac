@@ -63,8 +63,11 @@ must stay in the secret manager or private deployment state.
 
 Dashboard/admin contracts can be tested without live secrets through read-model
 helpers, local product-surface pages, local JSON routes, and queued
-`arclink_action_intents` rows. A live E2E still needs production hosted
-dashboard routes, session authentication, RBAC, CSRF/rate-limit controls, and
+`arclink_action_intents` rows. The hosted API boundary
+(`python/arclink_hosted_api.py`) provides route dispatch, session/cookie
+transport, CORS, request-ID propagation, and safe error shaping over these
+contracts, but a live E2E still needs a production reverse proxy, TLS
+termination, identity provider integration, RBAC policy enforcement, and
 explicit action-to-executor wiring before restart, reprovision, DNS repair, key
 rotation, refund, cancel, comp, or rollout controls can mutate real services or
 providers.

@@ -100,14 +100,15 @@ broader BUILD work:
 
 BUILD should first repair and confirm those surfaces, then continue:
 
-1. Harden the initial API/auth boundary into hosted-ready contracts over the
-   existing onboarding, entitlement, dashboard, provisioning, and admin-action
-   helpers.
+1. Harden the existing hosted API boundary (`python/arclink_hosted_api.py`)
+   which already provides route dispatch, cookie/header session transport, CORS,
+   request-ID propagation, safe error shaping, and Stripe webhook skip. Extend
+   with remaining contract coverage and production deployment config.
 2. Keep the local product surface accepted as a replaceable no-secret
    prototype.
 3. Keep live provider and host mutation behind explicit E2E gates.
-4. Defer the production Next.js/Tailwind dashboard until the API/auth boundary
-   exists.
+4. Defer the production Next.js/Tailwind dashboard until the hosted API boundary
+   is stable.
 
 ## Remaining Risks
 

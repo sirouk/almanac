@@ -267,6 +267,40 @@ API/auth boundary:
 - API error shaping keeps domain-specific `ArcLinkApiAuthError` copy visible
   while replacing unexpected exception details with generic user-safe text.
 
+Hosted API boundary:
+
+- `python/arclink_hosted_api.py` wraps existing ArcLink helper contracts into a
+  hosted WSGI application with route dispatch under `/api/v1`.
+- `HostedApiConfig` resolves runtime configuration from environment variables:
+  `ARCLINK_BASE_DOMAIN`, `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`,
+  `ARCLINK_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, and
+  `ARCLINK_DEFAULT_PRICE_ID`.
+- Public onboarding routes (`/onboarding/start`, `/onboarding/answer`,
+  `/onboarding/checkout`), admin login, and the Stripe webhook endpoint require
+  no session authentication.
+- User dashboard and admin dashboard reads require session credentials via
+  `Authorization` bearer token and `X-ArcLink-Session-Id` header.
+- Admin mutation routes (`/admin/actions`, `/admin/sessions/revoke`) require
+  admin session authentication plus CSRF token via `X-ArcLink-CSRF-Token`.
+- Admin login sets `HttpOnly`, `SameSite=Lax` session cookies with optional
+  `Secure` and `Domain` flags from config. Session revocation clears cookies
+  when the revoked session matches the caller.
+- CORS preflight (`OPTIONS`) and response headers are emitted only when
+  `ARCLINK_CORS_ORIGIN` is configured.
+- Every response includes an `X-ArcLink-Request-Id` header, either echoed from
+  the client or generated server-side.
+- `ArcLinkApiAuthError` maps to 401, `StripeWebhookError` maps to 400, and
+  unexpected exceptions map to 400 with the generic safe error string. No raw
+  tracebacks or internal details are returned.
+- The Stripe webhook route skips processing and returns `{"status": "skipped"}`
+  when `STRIPE_WEBHOOK_SECRET` is not configured, allowing no-secret test and
+  development environments to operate without Stripe credentials.
+- `make_arclink_hosted_api_wsgi()` returns a standard WSGI app suitable for
+  `wsgiref`, gunicorn, or other WSGI servers.
+- The hosted API is the production boundary. The local product surface
+  (`arclink_product_surface.py`) remains a no-secret prototype and contract
+  smoke tool.
+
 Public bot skeletons:
 
 - `python/arclink_public_bots.py` provides deterministic Telegram and Discord
@@ -383,6 +417,7 @@ python3 tests/test_arclink_dashboard.py
 python3 tests/test_arclink_api_auth.py
 python3 tests/test_arclink_product_surface.py
 python3 tests/test_arclink_public_bots.py
+python3 tests/test_arclink_hosted_api.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
 python3 -m py_compile python/almanac_control.py python/arclink_*.py

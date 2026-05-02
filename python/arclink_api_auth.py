@@ -643,6 +643,153 @@ def read_admin_dashboard_api(
     return ArcLinkApiResponse(status=200, payload=read_arclink_admin_dashboard(conn, **filters))
 
 
+def read_user_billing_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(session["user_id"] or "")
+    dashboard = read_arclink_user_dashboard(conn, user_id=target_user)
+    billing = {
+        "entitlement": dashboard.get("entitlement", {}),
+        "subscriptions": [],
+    }
+    for dep in dashboard.get("deployments", []):
+        for sub in dep.get("billing", {}).get("subscriptions", []):
+            if sub not in billing["subscriptions"]:
+                billing["subscriptions"].append(sub)
+    return ArcLinkApiResponse(status=200, payload=billing)
+
+
+def read_user_provisioning_status_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(session["user_id"] or "")
+    dashboard = read_arclink_user_dashboard(conn, user_id=target_user, deployment_id=deployment_id)
+    deployments = []
+    for dep in dashboard.get("deployments", []):
+        deployments.append({
+            "deployment_id": dep["deployment_id"],
+            "status": dep["status"],
+            "service_health": dep.get("service_health", []),
+            "recent_events": dep.get("recent_events", []),
+        })
+    return ArcLinkApiResponse(status=200, payload={"deployments": deployments})
+
+
+def read_admin_service_health_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+    status: str = "",
+    since: str = "",
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(
+        conn, deployment_id=deployment_id, status=status, since=since,
+    )
+    return ArcLinkApiResponse(status=200, payload={
+        "service_health": dashboard.get("service_health", []),
+        "recent_failures": [f for f in dashboard.get("recent_failures", []) if f.get("kind") == "service_health"],
+    })
+
+
+def read_admin_provisioning_jobs_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+    status: str = "",
+    since: str = "",
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(
+        conn, deployment_id=deployment_id, status=status, since=since,
+    )
+    return ArcLinkApiResponse(status=200, payload={
+        "provisioning_jobs": dashboard.get("provisioning_jobs", []),
+    })
+
+
+def read_admin_dns_drift_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+    since: str = "",
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(
+        conn, deployment_id=deployment_id, since=since,
+    )
+    return ArcLinkApiResponse(status=200, payload={
+        "dns_drift": dashboard.get("dns_drift", []),
+    })
+
+
+def read_admin_audit_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+    since: str = "",
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(
+        conn, deployment_id=deployment_id, since=since,
+    )
+    return ArcLinkApiResponse(status=200, payload={
+        "audit": dashboard.get("audit", []),
+    })
+
+
+def read_admin_events_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+    since: str = "",
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(
+        conn, deployment_id=deployment_id, since=since,
+    )
+    return ArcLinkApiResponse(status=200, payload={
+        "events": dashboard.get("events", []),
+    })
+
+
+def read_admin_queued_actions_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+    status: str = "",
+    since: str = "",
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(
+        conn, deployment_id=deployment_id, status=status, since=since,
+    )
+    return ArcLinkApiResponse(status=200, payload={
+        "actions": dashboard.get("action_intents", []),
+    })
+
+
 def queue_admin_action_api(
     conn: sqlite3.Connection,
     *,

@@ -221,8 +221,16 @@ and production routing are designed.
 by the local surface. `python/arclink_api_auth.py` wraps those read models with
 hashed user/admin sessions, CSRF checks, explicit header/cookie credential
 extraction, rate-limit hooks, MFA-ready admin gates, and safe error shapes.
-These helpers are still a no-secret backend contract, not a hosted production
-identity provider, and they do not execute live operations.
+
+`python/arclink_hosted_api.py` wraps the existing ArcLink helper contracts into
+a production-oriented WSGI application with route dispatch under `/api/v1`,
+cookie/header session transport, CORS, request-ID propagation, structured
+logging, safe error shaping, and Stripe webhook skip for no-secret environments.
+`HostedApiConfig` resolves runtime settings from `ARCLINK_BASE_DOMAIN`,
+`ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`, `ARCLINK_COOKIE_SECURE`,
+`STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, and `ARCLINK_DEFAULT_PRICE_ID`.
+The hosted API is the intended production boundary; the local product surface
+remains a no-secret prototype.
 
 User dashboard reads summarize ArcLink-owned rows for a customer: profile,
 entitlement, deployments, access URLs, subscription mirror state, onboarding bot
@@ -269,6 +277,7 @@ python3 tests/test_arclink_dashboard.py
 python3 tests/test_arclink_api_auth.py
 python3 tests/test_arclink_product_surface.py
 python3 tests/test_arclink_public_bots.py
+python3 tests/test_arclink_hosted_api.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
 python3 -m py_compile python/almanac_control.py python/arclink_*.py

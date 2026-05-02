@@ -29,6 +29,13 @@ generic product-surface errors use safe copy, public bot turns share the
 onboarding rate-limit rail, and `start_public_onboarding_api()` rejects invalid
 channels before writing rate-limit state.
 
+The hosted API boundary (`python/arclink_hosted_api.py`) now wraps existing
+ArcLink helper contracts into a production-oriented WSGI application with route
+dispatch under `/api/v1`, cookie/header session transport, CORS, request-ID
+propagation, structured logging, safe error shaping, and Stripe webhook skip
+for no-secret environments. This means BUILD task 1 begins from an existing
+hosted layer rather than from scratch.
+
 ## Active Next Pass
 
 Ralphie's previous `done` state means the no-secret foundation cycle passed; it
@@ -169,12 +176,18 @@ git diff --check
 
 ### 1. Hosted API/Auth Hardening
 
+Status: initial hosted layer landed in `python/arclink_hosted_api.py` with
+route dispatch, session/cookie transport, CORS, request-ID, safe errors, and
+Stripe webhook skip. Remaining work hardens and extends this boundary.
+
 - Keep user/admin session records storing token hashes only.
 - Keep admin roles, MFA-ready factors, CSRF checks, and rate-limit hooks.
-- Turn helper functions into hosted routes only after request signing,
-  cookie/session transport, CSRF storage, error shapes, logging, and deployment
-  config are explicit.
+- Extend hosted routes with remaining contract coverage: user billing/provisioning
+  reads, provisioning job status, admin provisioning/DNS/service-health reads.
 - Keep shared public onboarding APIs for website, Telegram, and Discord.
+- Keep `HostedApiConfig` runtime resolution from `ARCLINK_BASE_DOMAIN`,
+  `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`, `ARCLINK_COOKIE_SECURE`,
+  `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, and `ARCLINK_DEFAULT_PRICE_ID`.
 - Keep user billing/provisioning/dashboard read APIs over existing helpers.
 - Keep admin read APIs for onboarding, payments, deployments, DNS drift,
   service health, audit, logs/events, provisioning jobs, and queued actions.

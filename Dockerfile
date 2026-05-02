@@ -1,13 +1,13 @@
 FROM node:22-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    ALMANAC_REPO_DIR=/home/almanac/almanac \
-    ALMANAC_PRIV_DIR=/home/almanac/almanac/almanac-priv \
-    ALMANAC_CONFIG_FILE=/home/almanac/almanac/almanac-priv/config/docker.env \
-    RUNTIME_DIR=/opt/almanac/runtime \
+    ARCLINK_REPO_DIR=/home/arclink/arclink \
+    ARCLINK_PRIV_DIR=/home/arclink/arclink/arclink-priv \
+    ARCLINK_CONFIG_FILE=/home/arclink/arclink/arclink-priv/config/docker.env \
+    RUNTIME_DIR=/opt/arclink/runtime \
     UV_INSTALL_DIR=/usr/local/bin \
-    HOME=/home/almanac \
-    PATH=/home/almanac/.local/bin:/opt/almanac/runtime/hermes-venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOME=/home/arclink \
+    PATH=/home/arclink/.local/bin:/opt/arclink/runtime/hermes-venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -41,10 +41,10 @@ RUN apt-get update \
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN useradd --create-home --home-dir /home/almanac --shell /bin/bash almanac
+RUN useradd --create-home --home-dir /home/arclink --shell /bin/bash arclink
 
-WORKDIR /home/almanac/almanac
-COPY . /home/almanac/almanac
+WORKDIR /home/arclink/arclink
+COPY . /home/arclink/arclink
 
 RUN pin_value() { \
       python3 -c 'import json, sys; print(json.load(open("config/pins.json"))["components"][sys.argv[1]][sys.argv[2]])' "$1" "$2"; \
@@ -54,21 +54,21 @@ RUN pin_value() { \
   && npm install -g "@tobilu/qmd@${qmd_version}" \
   && hermes_repo="$(pin_value hermes-agent repo)" \
   && hermes_ref="$(pin_value hermes-agent ref)" \
-  && mkdir -p /opt/almanac/runtime \
-  && git clone "$hermes_repo" /opt/almanac/runtime/hermes-agent-src \
-  && git -C /opt/almanac/runtime/hermes-agent-src checkout --force --detach "$hermes_ref" \
-  && uv venv /opt/almanac/runtime/hermes-venv --python /usr/bin/python3 --seed \
-  && uv pip install --python /opt/almanac/runtime/hermes-venv/bin/python3 \
-    "/opt/almanac/runtime/hermes-agent-src[cli,mcp,messaging,cron,web]" \
+  && mkdir -p /opt/arclink/runtime \
+  && git clone "$hermes_repo" /opt/arclink/runtime/hermes-agent-src \
+  && git -C /opt/arclink/runtime/hermes-agent-src checkout --force --detach "$hermes_ref" \
+  && uv venv /opt/arclink/runtime/hermes-venv --python /usr/bin/python3 --seed \
+  && uv pip install --python /opt/arclink/runtime/hermes-venv/bin/python3 \
+    "/opt/arclink/runtime/hermes-agent-src[cli,mcp,messaging,cron,web]" \
     PyYAML \
     requests \
-  && if [ -d /opt/almanac/runtime/hermes-agent-src/web ]; then \
-       cd /opt/almanac/runtime/hermes-agent-src/web \
+  && if [ -d /opt/arclink/runtime/hermes-agent-src/web ]; then \
+       cd /opt/arclink/runtime/hermes-agent-src/web \
        && npm ci --no-audit --no-fund \
        && npm run build \
-       && /opt/almanac/runtime/hermes-venv/bin/python3 -c 'from pathlib import Path; import hermes_cli, shutil; source = Path("/opt/almanac/runtime/hermes-agent-src/hermes_cli/web_dist"); target = Path(hermes_cli.__file__).resolve().parent / "web_dist"; shutil.rmtree(target, ignore_errors=True); shutil.copytree(source, target) if source.is_dir() else None'; \
+       && /opt/arclink/runtime/hermes-venv/bin/python3 -c 'from pathlib import Path; import hermes_cli, shutil; source = Path("/opt/arclink/runtime/hermes-agent-src/hermes_cli/web_dist"); target = Path(hermes_cli.__file__).resolve().parent / "web_dist"; shutil.rmtree(target, ignore_errors=True); shutil.copytree(source, target) if source.is_dir() else None'; \
      fi \
-  && chown -R almanac:almanac /home/almanac /opt/almanac
+  && chown -R arclink:arclink /home/arclink /opt/arclink
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/home/almanac/almanac/bin/docker-entrypoint.sh"]
-CMD ["./bin/almanac-docker.sh", "health"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/home/arclink/arclink/bin/docker-entrypoint.sh"]
+CMD ["./bin/arclink-docker.sh", "health"]

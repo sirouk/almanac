@@ -6,9 +6,9 @@ operations.
 
 ## Current Boundary
 
-ArcLink is currently an additive foundation on top of Almanac. New product
+ArcLink is currently an additive foundation on top of ArcLink. New product
 surfaces use `ARCLINK_*` configuration, `arclink_*` database tables, and
-`python/arclink_*.py` helpers while existing Almanac deploy, onboarding,
+`python/arclink_*.py` helpers while existing ArcLink deploy, onboarding,
 Hermes, qmd, vault, memory, Notion, and health paths keep their current names.
 
 The current provisioning layer records and validates intent. Public onboarding
@@ -25,7 +25,7 @@ authenticate dashboard sessions, or execute queued admin actions.
 ## Assumptions
 
 - Docker Compose remains the MVP deployment substrate.
-- The existing Almanac Docker path is the operational base for ArcLink work.
+- The existing ArcLink Docker path is the operational base for ArcLink work.
 - Unit and regression tests must not require live Stripe, Cloudflare, model
   provider, Telegram, Discord, Notion, or host provisioning secrets.
 - Secret material is represented by `secret://...` references or Compose
@@ -62,11 +62,11 @@ authenticate dashboard sessions, or execute queued admin actions.
 
 ## Rationale
 
-The foundation keeps ArcLink additive so the project can reuse Almanac's
+The foundation keeps ArcLink additive so the project can reuse ArcLink's
 working host substrate instead of duplicating deploy, runtime, retrieval,
 memory, notification, and repair behavior too early. `ARCLINK_*` names and
 `arclink_*` tables give product work a clear namespace while preserving
-compatibility with existing `ALMANAC_*` configuration and operational scripts.
+compatibility with existing `ARCLINK_*` configuration and operational scripts.
 
 Provisioning is dry-run first because the risky parts are contracts, not Docker
 syntax: entitlement gating, deterministic retries, host/container path
@@ -85,7 +85,7 @@ ArcLink owns:
 
 - Product identity and compatibility helpers in `python/arclink_product.py`.
 - SaaS state rows under the `arclink_*` table namespace in
-  `python/almanac_control.py`.
+  `python/arclink_control.py`.
 - Stripe entitlement interpretation in `python/arclink_entitlements.py`.
 - Hostname, DNS drift, and Traefik intent in `python/arclink_ingress.py` and
   `python/arclink_adapters.py`.
@@ -106,7 +106,7 @@ ArcLink owns:
 - Telegram runtime adapter in `python/arclink_telegram.py`.
 - Discord runtime adapter in `python/arclink_discord.py`.
 
-Almanac continues to own the live shared-host substrate: deploy/install/upgrade
+ArcLink continues to own the live shared-host substrate: deploy/install/upgrade
 scripts, Docker orchestration wrappers, Hermes runtime installation, qmd,
 vault, memory synthesis, Notion SSOT, notifications, Curator, and user-agent
 refresh/gateway rails.
@@ -115,7 +115,7 @@ refresh/gateway rails.
 
 Configuration:
 
-- Non-empty `ARCLINK_*` values override legacy `ALMANAC_*` aliases.
+- Non-empty `ARCLINK_*` values override legacy `ARCLINK_*` aliases.
 - Blank `ARCLINK_*` values are ignored so generated env files do not erase
   working legacy settings.
 - Conflict diagnostics name only variable keys and do not print values.
@@ -442,7 +442,7 @@ python3 tests/test_arclink_e2e_fake.py
 python3 tests/test_public_repo_hygiene.py
 # Live E2E (only when credentials present):
 # ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
+python3 -m py_compile python/arclink_control.py python/arclink_*.py
 git diff --check
 ```
 

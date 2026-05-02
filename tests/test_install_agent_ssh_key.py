@@ -20,7 +20,7 @@ def test_install_agent_ssh_key_adds_tailnet_restricted_entry() -> None:
         root = Path(tmp)
         home_dir = root / "alex-home"
         home_dir.mkdir(parents=True, exist_ok=True)
-        pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyData almanac-remote-hermes@test"
+        pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyData arclink-remote-hermes@test"
 
         fakebin = root / "fakebin"
         fakebin.mkdir(parents=True, exist_ok=True)

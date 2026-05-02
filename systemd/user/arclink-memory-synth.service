@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink semantic memory synthesis
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/memory-synth.sh

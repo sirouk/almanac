@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-CONTROL_PY = REPO / "python" / "almanac_control.py"
+CONTROL_PY = REPO / "python" / "arclink_control.py"
 
 
 def load_module(path: Path, name: str):
@@ -35,38 +35,38 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 
 def config_values(root: Path) -> dict[str, str]:
     return {
-        "ALMANAC_USER": "almanac",
-        "ALMANAC_HOME": str(root / "home-almanac"),
-        "ALMANAC_REPO_DIR": str(REPO),
-        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(REPO),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
         "STATE_DIR": str(root / "state"),
         "RUNTIME_DIR": str(root / "state" / "runtime"),
         "VAULT_DIR": str(root / "vault"),
-        "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
-        "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
-        "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
-        "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
-        "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
-        "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
-        "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
-        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
-        "ALMANAC_MCP_HOST": "127.0.0.1",
-        "ALMANAC_MCP_PORT": "8282",
-        "ALMANAC_SSOT_NOTION_ROOT_PAGE_URL": "https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
-        "ALMANAC_SSOT_NOTION_ROOT_PAGE_ID": "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
-        "ALMANAC_SSOT_NOTION_SPACE_URL": "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
-        "ALMANAC_SSOT_NOTION_SPACE_ID": "12345678-90ab-cdef-1234-567890abcdef",
-        "ALMANAC_SSOT_NOTION_SPACE_KIND": "database",
-        "ALMANAC_SSOT_NOTION_TOKEN": "secret_test",
-        "ALMANAC_SSOT_NOTION_API_VERSION": "2026-03-11",
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ARCLINK_MCP_HOST": "127.0.0.1",
+        "ARCLINK_MCP_PORT": "8282",
+        "ARCLINK_SSOT_NOTION_ROOT_PAGE_URL": "https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        "ARCLINK_SSOT_NOTION_ROOT_PAGE_ID": "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
+        "ARCLINK_SSOT_NOTION_SPACE_URL": "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
+        "ARCLINK_SSOT_NOTION_SPACE_ID": "12345678-90ab-cdef-1234-567890abcdef",
+        "ARCLINK_SSOT_NOTION_SPACE_KIND": "database",
+        "ARCLINK_SSOT_NOTION_TOKEN": "secret_test",
+        "ARCLINK_SSOT_NOTION_API_VERSION": "2026-03-11",
         "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "tui-only",
         "OPERATOR_NOTIFY_CHANNEL_ID": "",
-        "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
-        "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
-        "ALMANAC_CURATOR_CHANNELS": "tui-only",
-        "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
-        "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+        "ARCLINK_MODEL_PRESET_CODEX": "openai:codex",
+        "ARCLINK_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+        "ARCLINK_MODEL_PRESET_CHUTES": "chutes:model-router",
+        "ARCLINK_CURATOR_CHANNELS": "tui-only",
+        "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+        "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
     }
 
 
@@ -85,7 +85,7 @@ def insert_agent(mod, conn, *, agent_id: str, unix_user: str, display_name: str 
             agent_id,
             unix_user,
             display_name,
-            str(Path("/home") / unix_user / ".local" / "share" / "almanac-agent" / "hermes-home"),
+            str(Path("/home") / unix_user / ".local" / "share" / "arclink-agent" / "hermes-home"),
             str(Path("/tmp") / f"{agent_id}-manifest.json"),
             now,
             now,
@@ -95,13 +95,13 @@ def insert_agent(mod, conn, *, agent_id: str, unix_user: str, display_name: str 
 
 
 def test_connect_db_enables_sqlite_wal_and_busy_timeout() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_sqlite_pragmas_test")
+    mod = load_module(CONTROL_PY, "arclink_control_sqlite_pragmas_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -120,13 +120,13 @@ def test_connect_db_enables_sqlite_wal_and_busy_timeout() -> None:
 
 
 def test_ssot_read_denies_database_query_until_verified() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_read_deny_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_read_deny_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -164,13 +164,13 @@ def test_ssot_read_denies_database_query_until_verified() -> None:
 
 
 def test_ssot_read_scopes_database_results_to_verified_user() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_read_scope_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_read_scope_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -255,13 +255,13 @@ def test_ssot_read_scopes_database_results_to_verified_user() -> None:
 
 
 def test_ssot_read_scopes_database_results_to_identity_override() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_read_override_scope_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_read_override_scope_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -349,13 +349,13 @@ def test_ssot_read_scopes_database_results_to_identity_override() -> None:
 
 
 def test_ssot_write_requires_verified_write_mode() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_write_gate_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_write_gate_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -393,13 +393,13 @@ def test_ssot_write_requires_verified_write_mode() -> None:
 
 
 def test_ensure_notion_verification_database_repairs_missing_managed_schema() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_verify_db_schema_repair_test")
+    mod = load_module(CONTROL_PY, "arclink_control_verify_db_schema_repair_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -407,7 +407,7 @@ def test_ensure_notion_verification_database_repairs_missing_managed_schema() ->
             mod.upsert_setting(
                 conn,
                 mod.NOTION_VERIFICATION_DB_URL_SETTING,
-                "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+                "https://www.notion.so/ArcLink-Verification-dddddddddddddddddddddddddddddddd",
             )
             mod.upsert_setting(conn, mod.NOTION_VERIFICATION_DB_PARENT_SETTING, "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb")
 
@@ -416,7 +416,7 @@ def test_ensure_notion_verification_database_repairs_missing_managed_schema() ->
 
             mod.retrieve_notion_database = lambda **kwargs: {
                 "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
-                "url": "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+                "url": "https://www.notion.so/ArcLink-Verification-dddddddddddddddddddddddddddddddd",
                 "data_sources": [{"id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}],
             }
 
@@ -460,13 +460,13 @@ def test_ensure_notion_verification_database_repairs_missing_managed_schema() ->
 
 
 def test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_drift() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_verify_db_schema_drift_fail_test")
+    mod = load_module(CONTROL_PY, "arclink_control_verify_db_schema_drift_fail_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -474,13 +474,13 @@ def test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_dri
             mod.upsert_setting(
                 conn,
                 mod.NOTION_VERIFICATION_DB_URL_SETTING,
-                "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+                "https://www.notion.so/ArcLink-Verification-dddddddddddddddddddddddddddddddd",
             )
             mod.upsert_setting(conn, mod.NOTION_VERIFICATION_DB_PARENT_SETTING, "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb")
 
             mod.retrieve_notion_database = lambda **kwargs: {
                 "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
-                "url": "https://www.notion.so/Almanac-Verification-dddddddddddddddddddddddddddddddd",
+                "url": "https://www.notion.so/ArcLink-Verification-dddddddddddddddddddddddddddddddd",
                 "data_sources": [{"id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}],
             }
             mod.retrieve_notion_data_source = lambda **kwargs: {
@@ -516,13 +516,13 @@ def test_ensure_notion_verification_database_does_not_recreate_on_wrong_type_dri
 
 
 def test_start_notion_identity_claim_creates_page_under_shared_parent() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_claim_page_parent_test")
+    mod = load_module(CONTROL_PY, "arclink_control_claim_page_parent_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -537,7 +537,7 @@ def test_start_notion_identity_claim_creates_page_under_shared_parent() -> None:
                 create_calls.append(kwargs)
                 return {
                     "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
-                    "url": "https://www.notion.so/Almanac-Verification-alex-cccccccccccccccccccccccccccccccc",
+                    "url": "https://www.notion.so/ArcLink-Verification-alex-cccccccccccccccccccccccccccccccc",
                 }
 
             mod.create_notion_page = fake_create_notion_page
@@ -570,13 +570,13 @@ def test_start_notion_identity_claim_creates_page_under_shared_parent() -> None:
 
 
 def test_ssot_write_applies_verified_owned_update() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_write_apply_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_write_apply_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -662,13 +662,13 @@ def test_ssot_write_applies_verified_owned_update() -> None:
 
 
 def test_ssot_write_applies_verified_owned_append() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_append_apply_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_append_apply_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -747,13 +747,13 @@ def test_ssot_write_applies_verified_owned_append() -> None:
 
 
 def test_ssot_write_applies_verified_owned_insert() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_insert_apply_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_insert_apply_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -826,13 +826,13 @@ def test_ssot_write_applies_verified_owned_insert() -> None:
 
 
 def test_ssot_write_allows_child_page_insert_under_verified_parent_without_owner_property() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_child_page_insert_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_child_page_insert_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -910,13 +910,13 @@ def test_ssot_write_allows_child_page_insert_under_verified_parent_without_owner
 
 
 def test_ssot_database_insert_outside_lane_queues_for_user_approval_then_applies() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_user_approved_database_insert_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_user_approved_database_insert_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -991,13 +991,13 @@ def test_ssot_database_insert_outside_lane_queues_for_user_approval_then_applies
 
 
 def test_ssot_create_database_under_shared_root_queues_then_inherits_parent_access() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_create_database_shared_parent_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_create_database_shared_parent_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1083,13 +1083,13 @@ def test_ssot_create_database_under_shared_root_queues_then_inherits_parent_acce
 
 
 def test_ssot_create_database_rejects_payload_parent_to_avoid_private_workspace_creation() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_create_database_parent_guard_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_create_database_parent_guard_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1146,13 +1146,13 @@ def test_ssot_create_database_rejects_payload_parent_to_avoid_private_workspace_
 
 
 def test_ssot_create_page_under_shared_root_queues_then_inherits_parent_access() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_create_page_shared_parent_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_create_page_shared_parent_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1242,13 +1242,13 @@ def test_ssot_create_page_under_shared_root_queues_then_inherits_parent_access()
 
 
 def test_ssot_create_page_rejects_payload_parent_to_avoid_private_workspace_creation() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_create_page_parent_guard_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_create_page_parent_guard_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1304,7 +1304,7 @@ def test_ssot_create_page_rejects_payload_parent_to_avoid_private_workspace_crea
 
 
 def test_ssot_create_page_normalizer_fails_closed_on_sloppy_agent_payloads() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_create_page_payload_guard_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_create_page_payload_guard_test")
     block = {
         "type": "paragraph",
         "paragraph": {
@@ -1388,7 +1388,7 @@ def test_ssot_create_page_normalizer_fails_closed_on_sloppy_agent_payloads() -> 
 
 
 def test_ssot_database_and_append_normalizers_reject_sloppy_agent_payloads() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_payload_guard_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_payload_guard_test")
     block = {
         "type": "paragraph",
         "paragraph": {
@@ -1425,13 +1425,13 @@ def test_ssot_database_and_append_normalizers_reject_sloppy_agent_payloads() -> 
 
 
 def test_ssot_preflight_reports_write_vs_user_approval() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_preflight_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_preflight_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1489,13 +1489,13 @@ def test_ssot_preflight_reports_write_vs_user_approval() -> None:
 
 
 def test_ssot_create_payload_validation_happens_before_approval_queueing() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_create_payload_prequeue_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_create_payload_prequeue_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1559,13 +1559,13 @@ def test_ssot_create_payload_validation_happens_before_approval_queueing() -> No
 
 
 def test_ssot_write_allows_page_update_from_prior_agent_history() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_page_history_update_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_page_history_update_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1631,13 +1631,13 @@ def test_ssot_write_allows_page_update_from_prior_agent_history() -> None:
 
 
 def test_ssot_write_queues_prior_agent_history_when_page_has_other_owner() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_page_history_owner_guard_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_page_history_owner_guard_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1712,13 +1712,13 @@ def test_ssot_write_queues_prior_agent_history_when_page_has_other_owner() -> No
 
 
 def test_ssot_write_queues_insert_under_out_of_scope_parent_page() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_page_parent_insert_scope_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_page_parent_insert_scope_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1789,13 +1789,13 @@ def test_ssot_write_queues_insert_under_out_of_scope_parent_page() -> None:
 
 
 def test_ssot_write_applies_without_changed_by_property() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_insert_without_changed_by_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_insert_without_changed_by_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1846,13 +1846,13 @@ def test_ssot_write_applies_without_changed_by_property() -> None:
 
 
 def test_ssot_write_fails_closed_when_changed_by_schema_lookup_fails() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_changed_by_schema_fail_closed_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_changed_by_schema_fail_closed_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1898,13 +1898,13 @@ def test_ssot_write_fails_closed_when_changed_by_schema_lookup_fails() -> None:
 
 
 def test_ssot_write_logs_failure_when_notion_apply_raises() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_write_apply_fail_audit_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_write_apply_fail_audit_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -1971,13 +1971,13 @@ def test_ssot_write_logs_failure_when_notion_apply_raises() -> None:
 
 
 def test_ssot_read_denies_suspended_identity() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_read_suspended_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_read_suspended_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2020,13 +2020,13 @@ def test_ssot_read_denies_suspended_identity() -> None:
 
 
 def test_ssot_write_queues_cross_owner_update() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_write_cross_owner_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_write_cross_owner_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2084,13 +2084,13 @@ def test_ssot_write_queues_cross_owner_update() -> None:
 
 
 def test_ssot_pending_write_approval_applies_queued_update() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_approve_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_pending_approve_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2178,13 +2178,13 @@ def test_ssot_pending_write_approval_applies_queued_update() -> None:
 
 
 def test_ssot_pending_write_approval_requires_current_verified_write_mode() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_approval_gate_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_pending_approval_gate_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2277,13 +2277,13 @@ def test_ssot_pending_write_approval_requires_current_verified_write_mode() -> N
 
 
 def test_ssot_pending_write_denial_marks_pending_row() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_deny_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_pending_deny_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2361,13 +2361,13 @@ def test_ssot_pending_write_denial_marks_pending_row() -> None:
 
 
 def test_ssot_pending_write_expiry_blocks_approval_replay() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_expiry_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_pending_expiry_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2457,13 +2457,13 @@ def test_ssot_pending_write_expiry_blocks_approval_replay() -> None:
 
 
 def test_list_agent_ssot_pending_writes_stays_scoped_and_expires_stale_rows() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_pending_scope_list_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_pending_scope_list_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2539,13 +2539,13 @@ def test_list_agent_ssot_pending_writes_stays_scoped_and_expires_stale_rows() ->
 
 
 def test_ssot_read_denies_name_collision() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_name_collision_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_name_collision_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2597,13 +2597,13 @@ def test_ssot_read_denies_name_collision() -> None:
 
 
 def test_ssot_read_denies_changed_by_only_match() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_changed_by_only_acl_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_changed_by_only_acl_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2649,13 +2649,13 @@ def test_ssot_read_denies_changed_by_only_match() -> None:
 
 
 def test_ssot_write_denies_suspended_identity() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_write_suspended_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_write_suspended_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2702,13 +2702,13 @@ def test_ssot_write_denies_suspended_identity() -> None:
 
 
 def test_ssot_principal_fails_closed_when_identity_registry_errors() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_ssot_registry_fail_closed_test")
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_registry_fail_closed_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         original_get_identity = mod.get_agent_identity
         try:
             cfg = mod.Config.from_env()
@@ -2746,13 +2746,13 @@ def test_ssot_principal_fails_closed_when_identity_registry_errors() -> None:
 
 
 def test_notion_batcher_hydrates_entity_before_routing() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_hydrate_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_hydrate_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2851,13 +2851,13 @@ def test_notion_batcher_hydrates_entity_before_routing() -> None:
 
 
 def test_notion_batcher_ignores_stale_verified_identity_without_active_agent() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_stale_identity_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_stale_identity_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2908,13 +2908,13 @@ def test_notion_batcher_ignores_stale_verified_identity_without_active_agent() -
 
 
 def test_notion_batcher_retries_when_hydration_fails() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_retry_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_retry_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -2950,13 +2950,13 @@ def test_notion_batcher_retries_when_hydration_fails() -> None:
 
 
 def test_notion_batcher_marks_event_failed_after_retry_budget() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_retry_budget_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_retry_budget_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -3011,13 +3011,13 @@ def test_notion_batcher_marks_event_failed_after_retry_budget() -> None:
 
 
 def test_notion_batcher_verifies_claim_page_event() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_verify_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_claim_verify_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -3122,13 +3122,13 @@ def test_notion_batcher_verifies_claim_page_event() -> None:
 
 
 def test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_verify_user_object_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_claim_verify_user_object_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -3220,13 +3220,13 @@ def test_notion_batcher_verifies_claim_page_event_when_page_exposes_user_id_only
 
 
 def test_notion_batcher_rejects_claim_page_edit_from_wrong_email() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_wrong_email_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_claim_wrong_email_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)
@@ -3319,13 +3319,13 @@ def test_notion_batcher_rejects_claim_page_edit_from_wrong_email() -> None:
 
 
 def test_notion_batcher_accepts_claim_page_edit_via_identity_override() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_notion_batcher_claim_override_test")
+    mod = load_module(CONTROL_PY, "arclink_control_notion_batcher_claim_override_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = mod.Config.from_env()
             conn = mod.connect_db(cfg)

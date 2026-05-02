@@ -2,20 +2,20 @@
 set -euo pipefail
 
 BOOTSTRAP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ALMANAC_USER="${ALMANAC_USER:-almanac}"
-ALMANAC_HOME="${ALMANAC_HOME:-/home/$ALMANAC_USER}"
-ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$ALMANAC_HOME/almanac}"
-ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
-ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
-VAULT_DIR="${VAULT_DIR:-$ALMANAC_PRIV_DIR/vault}"
-STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
+ARCLINK_USER="${ARCLINK_USER:-arclink}"
+ARCLINK_HOME="${ARCLINK_HOME:-/home/$ARCLINK_USER}"
+ARCLINK_REPO_DIR="${ARCLINK_REPO_DIR:-$ARCLINK_HOME/arclink}"
+ARCLINK_PRIV_DIR="${ARCLINK_PRIV_DIR:-$ARCLINK_REPO_DIR/arclink-priv}"
+ARCLINK_PRIV_CONFIG_DIR="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}"
+VAULT_DIR="${VAULT_DIR:-$ARCLINK_PRIV_DIR/vault}"
+STATE_DIR="${STATE_DIR:-$ARCLINK_PRIV_DIR/state}"
 NEXTCLOUD_STATE_DIR="${NEXTCLOUD_STATE_DIR:-$STATE_DIR/nextcloud}"
-PUBLISHED_DIR="${PUBLISHED_DIR:-$ALMANAC_PRIV_DIR/published}"
-QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ALMANAC_PRIV_DIR/quarto}"
+PUBLISHED_DIR="${PUBLISHED_DIR:-$ARCLINK_PRIV_DIR/published}"
+QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ARCLINK_PRIV_DIR/quarto}"
 ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
-ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
-ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}"
-ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}"
+ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
+ARCLINK_INSTALL_PODMAN="${ARCLINK_INSTALL_PODMAN:-auto}"
+ARCLINK_INSTALL_TAILSCALE="${ARCLINK_INSTALL_TAILSCALE:-auto}"
 APT_UPDATED="0"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
@@ -105,7 +105,7 @@ install_apt_packages() {
 require_supported_host() {
   if ! host_is_linux; then
     cat >&2 <<'EOF'
-bootstrap-system.sh supports full Almanac host deployment only on Debian/Ubuntu-style
+bootstrap-system.sh supports full ArcLink host deployment only on Debian/Ubuntu-style
 Linux hosts. Native macOS can still use `./deploy.sh write-config`, but the shared
 service host needs Linux `systemd`, `loginctl`, and dedicated Unix users.
 EOF
@@ -115,7 +115,7 @@ EOF
   if ! command_exists apt-get; then
     cat >&2 <<'EOF'
 bootstrap-system.sh currently supports Debian/Ubuntu-style Linux hosts with `apt`.
-Use Ubuntu or Debian for Almanac host deployment.
+Use Ubuntu or Debian for ArcLink host deployment.
 EOF
     exit 1
   fi
@@ -123,7 +123,7 @@ EOF
   if ! command_exists systemctl || ! command_exists loginctl || [[ ! -d /run/systemd/system ]]; then
     if host_is_wsl; then
       cat >&2 <<'EOF'
-WSL2 was detected, but the Linux guest is not ready for full Almanac deployment.
+WSL2 was detected, but the Linux guest is not ready for full ArcLink deployment.
 Enable systemd inside the Ubuntu guest by adding this to /etc/wsl.conf:
   [boot]
   systemd=true
@@ -133,7 +133,7 @@ Then restart WSL from Windows with:
 EOF
     else
       cat >&2 <<'EOF'
-Almanac host deployment requires `systemd` and `loginctl` on the target Linux host.
+ArcLink host deployment requires `systemd` and `loginctl` on the target Linux host.
 EOF
     fi
     exit 1
@@ -158,7 +158,7 @@ install_base_linux_packages() {
 }
 
 install_podman_if_requested() {
-  if should_install_tool "podman" "$ALMANAC_INSTALL_PODMAN" "1"; then
+  if should_install_tool "podman" "$ARCLINK_INSTALL_PODMAN" "1"; then
     install_apt_packages podman
     return 0
   fi
@@ -171,11 +171,11 @@ install_podman_if_requested() {
 install_tailscale_if_requested() {
   local tailscale_default="0"
 
-  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE" == "1" ]]; then
     tailscale_default="1"
   fi
 
-  if should_install_tool "tailscale" "$ALMANAC_INSTALL_TAILSCALE" "$tailscale_default"; then
+  if should_install_tool "tailscale" "$ARCLINK_INSTALL_TAILSCALE" "$tailscale_default"; then
     if ! command_exists curl; then
       install_apt_packages curl
     fi
@@ -189,11 +189,11 @@ install_tailscale_if_requested() {
 }
 
 ensure_service_user() {
-  if id -u "$ALMANAC_USER" >/dev/null 2>&1; then
+  if id -u "$ARCLINK_USER" >/dev/null 2>&1; then
     return 0
   fi
 
-  useradd -m -s /bin/bash "$ALMANAC_USER"
+  useradd -m -s /bin/bash "$ARCLINK_USER"
 }
 
 chown_tree_excluding_path() {
@@ -207,12 +207,12 @@ chown_tree_excluding_path() {
   if [[ -n "$excluded" && -e "$excluded" ]]; then
     find "$root" -ignore_readdir_race \
       -path "$excluded" -prune -o \
-      -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+      -exec chown -h "$ARCLINK_USER:$ARCLINK_USER" {} +
     return 0
   fi
 
   find "$root" -ignore_readdir_race \
-    -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+    -exec chown -h "$ARCLINK_USER:$ARCLINK_USER" {} +
 }
 
 require_supported_host
@@ -220,43 +220,43 @@ install_base_linux_packages
 install_podman_if_requested
 install_tailscale_if_requested
 
-if [[ -z "${ALMANAC_HOME:-}" ]]; then
-  ALMANAC_HOME="$(default_home_for_user "$ALMANAC_USER")"
+if [[ -z "${ARCLINK_HOME:-}" ]]; then
+  ARCLINK_HOME="$(default_home_for_user "$ARCLINK_USER")"
 fi
 
 ensure_service_user
 
-install -d -m 0750 -o "$ALMANAC_USER" -g "$ALMANAC_USER" \
-  "$ALMANAC_HOME" \
-  "$ALMANAC_PRIV_DIR" \
-  "$ALMANAC_PRIV_CONFIG_DIR" \
+install -d -m 0750 -o "$ARCLINK_USER" -g "$ARCLINK_USER" \
+  "$ARCLINK_HOME" \
+  "$ARCLINK_PRIV_DIR" \
+  "$ARCLINK_PRIV_CONFIG_DIR" \
   "$VAULT_DIR" \
   "$STATE_DIR" \
   "$NEXTCLOUD_STATE_DIR" \
   "$PUBLISHED_DIR" \
   "$QUARTO_PROJECT_DIR"
-install -d -m 0755 -o "$ALMANAC_USER" -g "$ALMANAC_USER" "$ALMANAC_REPO_DIR"
+install -d -m 0755 -o "$ARCLINK_USER" -g "$ARCLINK_USER" "$ARCLINK_REPO_DIR"
 
 rsync -a --delete \
   --exclude ".git" \
   --exclude ".git/" \
-  --exclude "almanac-priv/" \
-  --exclude "config/almanac.env" \
-  "$BOOTSTRAP_DIR/" "$ALMANAC_REPO_DIR/"
-chown_tree_excluding_path "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"
-chown_tree_excluding_path "$ALMANAC_PRIV_DIR" "$NEXTCLOUD_STATE_DIR"
-chmod 0755 "$ALMANAC_REPO_DIR"
+  --exclude "arclink-priv/" \
+  --exclude "config/arclink.env" \
+  "$BOOTSTRAP_DIR/" "$ARCLINK_REPO_DIR/"
+chown_tree_excluding_path "$ARCLINK_REPO_DIR" "$ARCLINK_PRIV_DIR"
+chown_tree_excluding_path "$ARCLINK_PRIV_DIR" "$NEXTCLOUD_STATE_DIR"
+chmod 0755 "$ARCLINK_REPO_DIR"
 
-loginctl enable-linger "$ALMANAC_USER" || true
-systemctl start "user@$(id -u "$ALMANAC_USER").service" || true
+loginctl enable-linger "$ARCLINK_USER" || true
+systemctl start "user@$(id -u "$ARCLINK_USER").service" || true
 
 cat <<EOF
 
 System bootstrap complete.
 
 Next steps:
-  Write private config to: $ALMANAC_PRIV_CONFIG_DIR/almanac.env
-  sudo -iu $ALMANAC_USER env ALMANAC_CONFIG_FILE="$ALMANAC_PRIV_CONFIG_DIR/almanac.env" "$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh"
-  sudo -iu $ALMANAC_USER env ALMANAC_CONFIG_FILE="$ALMANAC_PRIV_CONFIG_DIR/almanac.env" "$ALMANAC_REPO_DIR/bin/install-user-services.sh"
+  Write private config to: $ARCLINK_PRIV_CONFIG_DIR/arclink.env
+  sudo -iu $ARCLINK_USER env ARCLINK_CONFIG_FILE="$ARCLINK_PRIV_CONFIG_DIR/arclink.env" "$ARCLINK_REPO_DIR/bin/bootstrap-userland.sh"
+  sudo -iu $ARCLINK_USER env ARCLINK_CONFIG_FILE="$ARCLINK_PRIV_CONFIG_DIR/arclink.env" "$ARCLINK_REPO_DIR/bin/install-user-services.sh"
 
 EOF

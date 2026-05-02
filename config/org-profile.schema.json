@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://almanac.local/schema/org-profile.schema.json",
-  "title": "Almanac operator context profile",
-  "description": "Versioned operator-authored profile that tells Almanac who the humans are, what they are responsible for, how groups relate, and how agents should orient themselves without confusing awareness for authority. The operating context can be an organization, household, family, solo operator, project collective, community, or hybrid.",
+  "$id": "https://arclink.local/schema/org-profile.schema.json",
+  "title": "ArcLink operator context profile",
+  "description": "Versioned operator-authored profile that tells ArcLink who the humans are, what they are responsible for, how groups relate, and how agents should orient themselves without confusing awareness for authority. The operating context can be an organization, household, family, solo operator, project collective, community, or hybrid.",
   "type": "object",
   "required": ["version", "organization", "roles", "people"],
   "properties": {
@@ -25,7 +25,7 @@
     },
     "people": {
       "type": "array",
-      "description": "Humans who may use Almanac or appear in agent orientation.",
+      "description": "Humans who may use ArcLink or appear in agent orientation.",
       "minItems": 1,
       "items": { "$ref": "#/$defs/person" }
     },
@@ -131,7 +131,7 @@
         },
         "scope": {
           "type": "string",
-          "description": "Short human-readable description of what Almanac is being aligned around."
+          "description": "Short human-readable description of what ArcLink is being aligned around."
         },
         "mission": { "$ref": "#/$defs/nonEmptyString" },
         "primary_project": { "type": "string" },
@@ -199,7 +199,7 @@
         "unix_user": {
           "type": "string",
           "pattern": "^[a-z_][a-z0-9_-]*[$]?$",
-          "description": "Optional Almanac Unix account username when already known."
+          "description": "Optional ArcLink Unix account username when already known."
         },
         "timezone": { "type": "string" },
         "quiet_hours": { "type": "string" },

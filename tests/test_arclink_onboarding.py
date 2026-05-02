@@ -23,7 +23,7 @@ def checkout_completed_payload(session: dict[str, str], *, event_id: str = "evt_
 
 
 def test_public_onboarding_sessions_resume_without_duplicate_active_rows() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onboarding_resume_test")
+    control = load_module("arclink_control.py", "arclink_control_onboarding_resume_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_resume_test")
     conn = memory_db(control)
     first = onboarding.create_or_resume_arclink_onboarding_session(
@@ -68,7 +68,7 @@ def test_public_onboarding_sessions_resume_without_duplicate_active_rows() -> No
 
 
 def test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onboarding_checkout_test")
+    control = load_module("arclink_control.py", "arclink_control_onboarding_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_onboarding_checkout_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_checkout_test")
     conn = memory_db(control)
@@ -144,7 +144,7 @@ def test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_bloc
 
 
 def test_successful_checkout_uses_entitlement_gate_before_provisioning_ready() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onboarding_success_test")
+    control = load_module("arclink_control.py", "arclink_control_onboarding_success_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_onboarding_success_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_onboarding_success_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_success_test")
@@ -201,7 +201,7 @@ def test_successful_checkout_uses_entitlement_gate_before_provisioning_ready() -
 
 
 def test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onboarding_handoff_test")
+    control = load_module("arclink_control.py", "arclink_control_onboarding_handoff_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_handoff_test")
     conn = memory_db(control)
     source = onboarding.create_or_resume_arclink_onboarding_session(
@@ -251,7 +251,7 @@ def test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens() -
 
 
 def test_prepare_onboarding_preserves_existing_entitlement() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onboarding_entitlement_preserve_test")
+    control = load_module("arclink_control.py", "arclink_control_onboarding_entitlement_preserve_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_preserve_test")
     conn = memory_db(control)
     session = onboarding.create_or_resume_arclink_onboarding_session(
@@ -292,7 +292,7 @@ def test_prepare_onboarding_preserves_existing_entitlement() -> None:
 
 def test_web_telegram_discord_onboarding_parity() -> None:
     """Prove all three channels create identical session shapes through the shared contract."""
-    control = load_module("almanac_control.py", "almanac_control_parity_test")
+    control = load_module("arclink_control.py", "arclink_control_parity_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_parity_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_parity_test")
     conn = memory_db(control)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Render ArcLink Quarto project every 30 minutes
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=30m
+Unit=arclink-quarto-render.service
+
+[Install]
+WantedBy=timers.target

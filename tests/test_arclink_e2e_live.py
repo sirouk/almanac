@@ -58,7 +58,7 @@ class LiveE2EBase(unittest.TestCase):
     def setUpClass(cls):
         if not LIVE:
             raise unittest.SkipTest("ARCLINK_E2E_LIVE not set")
-        cls.control = load_module("almanac_control.py", "control_e2e_live")
+        cls.control = load_module("arclink_control.py", "control_e2e_live")
         cls.api = load_module("arclink_api_auth.py", "api_e2e_live")
         cls.hosted = load_module("arclink_hosted_api.py", "hosted_e2e_live")
         cls.adapters = load_module("arclink_adapters.py", "adapters_e2e_live")

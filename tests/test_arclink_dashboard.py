@@ -93,7 +93,7 @@ def seed_dashboard(control, onboarding, conn):
 
 
 def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
-    control = load_module("almanac_control.py", "almanac_control_dashboard_user_test")
+    control = load_module("arclink_control.py", "arclink_control_dashboard_user_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_user_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_user_test")
     conn = memory_db(control)
@@ -145,7 +145,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
 
 
 def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None:
-    control = load_module("almanac_control.py", "almanac_control_dashboard_admin_test")
+    control = load_module("arclink_control.py", "arclink_control_dashboard_admin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_admin_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_test")
     conn = memory_db(control)
@@ -219,7 +219,7 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
 
 
 def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> None:
-    control = load_module("almanac_control.py", "almanac_control_dashboard_session_count_test")
+    control = load_module("arclink_control.py", "arclink_control_dashboard_session_count_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_session_count_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_dashboard_session_count_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_session_count_test")

@@ -9,10 +9,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
-MCP_SERVER_PY = REPO / "python" / "almanac_mcp_server.py"
-NOTION_WEBHOOK_PY = REPO / "python" / "almanac_notion_webhook.py"
-MCP_WRAPPER = REPO / "bin" / "almanac-mcp-server.sh"
-NOTION_WRAPPER = REPO / "bin" / "almanac-notion-webhook.sh"
+MCP_SERVER_PY = REPO / "python" / "arclink_mcp_server.py"
+NOTION_WEBHOOK_PY = REPO / "python" / "arclink_notion_webhook.py"
+MCP_WRAPPER = REPO / "bin" / "arclink-mcp-server.sh"
+NOTION_WRAPPER = REPO / "bin" / "arclink-notion-webhook.sh"
 
 
 def load_module(path: Path, name: str):
@@ -31,11 +31,11 @@ def expect(condition: bool, message: str) -> None:
 
 
 def test_backend_client_allowed_only_accepts_loopback() -> None:
-    os.environ.pop("ALMANAC_BACKEND_ALLOWED_CIDRS", None)
+    os.environ.pop("ARCLINK_BACKEND_ALLOWED_CIDRS", None)
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    mcp_server = load_module(MCP_SERVER_PY, "almanac_mcp_server_loopback_test")
-    notion_webhook = load_module(NOTION_WEBHOOK_PY, "almanac_notion_webhook_loopback_test")
+    mcp_server = load_module(MCP_SERVER_PY, "arclink_mcp_server_loopback_test")
+    notion_webhook = load_module(NOTION_WEBHOOK_PY, "arclink_notion_webhook_loopback_test")
 
     for candidate in ("127.0.0.1", "::1"):
         expect(mcp_server.backend_client_allowed(candidate), f"expected loopback to be accepted: {candidate}")
@@ -51,10 +51,10 @@ def test_backend_client_allowed_only_accepts_loopback() -> None:
 def test_backend_client_allowed_accepts_explicit_cidrs() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    mcp_server = load_module(MCP_SERVER_PY, "almanac_mcp_server_cidr_test")
-    notion_webhook = load_module(NOTION_WEBHOOK_PY, "almanac_notion_webhook_cidr_test")
+    mcp_server = load_module(MCP_SERVER_PY, "arclink_mcp_server_cidr_test")
+    notion_webhook = load_module(NOTION_WEBHOOK_PY, "arclink_notion_webhook_cidr_test")
 
-    os.environ["ALMANAC_BACKEND_ALLOWED_CIDRS"] = "172.16.0.0/12"
+    os.environ["ARCLINK_BACKEND_ALLOWED_CIDRS"] = "172.16.0.0/12"
     try:
         for candidate in ("172.23.0.1", "172.31.255.254"):
             expect(mcp_server.backend_client_allowed(candidate), f"expected Docker bridge CIDR to be accepted: {candidate}")
@@ -64,7 +64,7 @@ def test_backend_client_allowed_accepts_explicit_cidrs() -> None:
             expect(not mcp_server.backend_client_allowed(candidate), f"expected outside CIDR to be rejected: {candidate}")
             expect(not notion_webhook.backend_client_allowed(candidate), f"expected outside CIDR to be rejected: {candidate}")
     finally:
-        os.environ.pop("ALMANAC_BACKEND_ALLOWED_CIDRS", None)
+        os.environ.pop("ARCLINK_BACKEND_ALLOWED_CIDRS", None)
 
     print("PASS test_backend_client_allowed_accepts_explicit_cidrs")
 
@@ -73,9 +73,9 @@ def test_wrappers_force_loopback_host_by_default() -> None:
     mcp_text = MCP_WRAPPER.read_text(encoding="utf-8")
     notion_text = NOTION_WRAPPER.read_text(encoding="utf-8")
 
-    expect("--host 127.0.0.1" in mcp_text, "expected almanac-mcp wrapper to force loopback host")
+    expect("--host 127.0.0.1" in mcp_text, "expected arclink-mcp wrapper to force loopback host")
     expect("--host 127.0.0.1" in notion_text, "expected notion webhook wrapper to force loopback host")
-    expect("have_host_arg" in mcp_text, "expected almanac-mcp wrapper host override helper")
+    expect("have_host_arg" in mcp_text, "expected arclink-mcp wrapper host override helper")
     expect("have_host_arg" in notion_text, "expected notion webhook wrapper host override helper")
 
     print("PASS test_wrappers_force_loopback_host_by_default")
@@ -84,7 +84,7 @@ def test_wrappers_force_loopback_host_by_default() -> None:
 def test_loopback_proxy_identity_headers_are_not_trusted_by_default() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    mcp_server = load_module(MCP_SERVER_PY, "almanac_mcp_server_proxy_header_test")
+    mcp_server = load_module(MCP_SERVER_PY, "arclink_mcp_server_proxy_header_test")
     handler = object.__new__(mcp_server.Handler)
     handler.client_address = ("127.0.0.1", 12345)
     headers = Message()
@@ -94,12 +94,12 @@ def test_loopback_proxy_identity_headers_are_not_trusted_by_default() -> None:
 
     old_env = os.environ.copy()
     try:
-        os.environ.pop("ALMANAC_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE", None)
-        os.environ.pop("ALMANAC_TRUST_TAILSCALE_PROXY_HEADERS", None)
+        os.environ.pop("ARCLINK_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE", None)
+        os.environ.pop("ARCLINK_TRUST_TAILSCALE_PROXY_HEADERS", None)
         expect(handler._request_source_ip({"source_ip": "100.64.1.2"}) == "127.0.0.1", "source_ip override should be ignored by default")
         expect(handler._tailscale_identity() == {}, "Tailscale identity headers should be ignored by default")
-        os.environ["ALMANAC_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE"] = "1"
-        os.environ["ALMANAC_TRUST_TAILSCALE_PROXY_HEADERS"] = "1"
+        os.environ["ARCLINK_ALLOW_LOOPBACK_SOURCE_IP_OVERRIDE"] = "1"
+        os.environ["ARCLINK_TRUST_TAILSCALE_PROXY_HEADERS"] = "1"
         expect(handler._request_source_ip({"source_ip": "100.64.1.2"}) == "100.64.1.2", "explicit source override opt-in failed")
         expect(handler._tailscale_identity()["login"] == "spoof@example.test", "explicit proxy header trust opt-in failed")
     finally:

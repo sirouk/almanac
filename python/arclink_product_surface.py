@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from wsgiref.simple_server import make_server
 
-from almanac_control import (
+from arclink_control import (
     advance_arclink_entitlement_gate,
     append_arclink_event,
     create_arclink_provisioning_job,

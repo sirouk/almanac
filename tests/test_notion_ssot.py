@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 REPO = Path(__file__).resolve().parents[1]
-MODULE_PATH = REPO / "python" / "almanac_notion_ssot.py"
+MODULE_PATH = REPO / "python" / "arclink_notion_ssot.py"
 
 
 def load_module(path: Path, name: str):
@@ -52,7 +52,7 @@ def http_error(url: str, status: int, payload: dict, hdrs=None) -> HTTPError:
 
 
 def test_extract_notion_space_id_accepts_urls_and_raw_ids() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_extract_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_extract_test")
     expected = "12345678-90ab-cdef-1234-567890abcdef"
     expect(
         mod.extract_notion_space_id("https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef?pvs=4") == expected,
@@ -66,7 +66,7 @@ def test_extract_notion_space_id_accepts_urls_and_raw_ids() -> None:
 
 
 def test_normalize_notion_space_url_strips_query_and_fragment() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_normalize_url_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_normalize_url_test")
     expect(
         mod.normalize_notion_space_url(
             "https://www.notion.so/2c7ac68274b14a69904e4989e27b6c76?pvs=16#section"
@@ -83,10 +83,10 @@ def test_normalize_notion_space_url_strips_query_and_fragment() -> None:
 
 
 def test_handshake_notion_space_falls_back_to_database_lookup() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_handshake_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_handshake_test")
     target_url = "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef"
     source_url = f"{target_url}?pvs=16"
-    root_page_url = "https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+    root_page_url = "https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
 
     def fake_urlopen(req, timeout=15):
         full_url = req.full_url
@@ -95,7 +95,7 @@ def test_handshake_notion_space_falls_back_to_database_lookup() -> None:
                 {
                     "object": "user",
                     "id": "integration-1",
-                    "name": "Almanac SSOT",
+                    "name": "ArcLink SSOT",
                     "type": "bot",
                     "bot": {"workspace_name": "Acme"},
                 }
@@ -111,7 +111,7 @@ def test_handshake_notion_space_falls_back_to_database_lookup() -> None:
                     "properties": {
                         "title": {
                             "type": "title",
-                            "title": [{"plain_text": "The Almanac"}],
+                            "title": [{"plain_text": "The ArcLink"}],
                         }
                     },
                 }
@@ -139,13 +139,13 @@ def test_handshake_notion_space_falls_back_to_database_lookup() -> None:
     expect(payload["space_url"] == target_url, payload)
     expect(payload["root_page_id"] == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb", payload)
     expect(payload["root_page_url"] == root_page_url, payload)
-    expect(payload["root_page_title"] == "The Almanac", payload)
+    expect(payload["root_page_title"] == "The ArcLink", payload)
     expect(payload["integration"]["workspace_name"] == "Acme", payload)
     print("PASS test_handshake_notion_space_falls_back_to_database_lookup")
 
 
 def test_handshake_notion_space_reports_invalid_secret_cleanly() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_invalid_secret_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_invalid_secret_test")
     target_url = "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef"
 
     def fake_urlopen(req, timeout=15):
@@ -166,7 +166,7 @@ def test_handshake_notion_space_reports_invalid_secret_cleanly() -> None:
 
 
 def test_create_notion_page_prefers_database_data_source_parent() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_create_page_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_create_page_test")
     calls: list[tuple[str, dict]] = []
 
     def fake_urlopen(req, timeout=15):
@@ -199,7 +199,7 @@ def test_create_notion_page_prefers_database_data_source_parent() -> None:
 
 
 def test_update_notion_page_uses_patch_endpoint() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_update_page_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_update_page_test")
     seen: list[tuple[str, str, dict]] = []
 
     def fake_urlopen(req, timeout=15):
@@ -229,7 +229,7 @@ def test_update_notion_page_uses_patch_endpoint() -> None:
 
 
 def test_request_json_retries_rate_limit_and_honors_retry_after() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_retry_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_retry_test")
     attempts = {"count": 0}
     sleeps: list[float] = []
 
@@ -259,7 +259,7 @@ def test_request_json_retries_rate_limit_and_honors_retry_after() -> None:
 
 
 def test_preflight_notion_root_children_creates_and_trashes_temp_objects() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_preflight_root_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_preflight_root_test")
     seen: list[tuple[str, str, dict]] = []
 
     def fake_urlopen(req, timeout=15):
@@ -295,7 +295,7 @@ def test_preflight_notion_root_children_creates_and_trashes_temp_objects() -> No
                         "title": [
                             {
                                 "type": "text",
-                                "text": {"content": "Almanac preflight page"},
+                                "text": {"content": "ArcLink preflight page"},
                             }
                         ]
                     },
@@ -308,14 +308,14 @@ def test_preflight_notion_root_children_creates_and_trashes_temp_objects() -> No
                 {
                     "parent": {"type": "page_id", "page_id": "11111111-2222-3333-4444-555555555555"},
                     "title": [
-                        {"type": "text", "text": {"content": "Almanac Preflight Database"}},
+                        {"type": "text", "text": {"content": "ArcLink Preflight Database"}},
                     ],
                     "initial_data_source": {"properties": {"Name": {"title": {}}}},
                     "description": [
                         {
                             "type": "text",
                             "text": {
-                                "content": "Temporary database created by Almanac setup preflight. Safe to trash immediately."
+                                "content": "Temporary database created by ArcLink setup preflight. Safe to trash immediately."
                             },
                         }
                     ],
@@ -338,7 +338,7 @@ def test_preflight_notion_root_children_creates_and_trashes_temp_objects() -> No
 
 
 def test_update_notion_database_and_data_source_use_patch_endpoints() -> None:
-    mod = load_module(MODULE_PATH, "almanac_notion_ssot_update_collection_test")
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_update_collection_test")
     seen: list[tuple[str, str, dict]] = []
 
     def fake_urlopen(req, timeout=15):

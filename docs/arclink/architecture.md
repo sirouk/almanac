@@ -1,13 +1,13 @@
 # ArcLink Architecture
 
 ArcLink is a self-serve AI deployment SaaS built as an additive layer on top of
-the Almanac shared-host substrate. This document describes the current module
+the ArcLink shared-host substrate. This document describes the current module
 map, data flow, and integration boundaries.
 
 ## Module Map
 
 ```text
-arclink_product.py          Config resolution, ARCLINK_*/ALMANAC_* precedence
+arclink_product.py          Config resolution, ARCLINK_*/ARCLINK_* precedence
 arclink_chutes.py           Chutes catalog client, model discovery
 arclink_adapters.py         Fake/live adapter registry (Stripe, Cloudflare, Chutes, bots)
 arclink_entitlements.py     Stripe webhook verification, entitlement state machine, comp helpers
@@ -28,7 +28,7 @@ arclink_telegram.py         Telegram runtime adapter, long-polling bot runner, f
 arclink_discord.py          Discord runtime adapter, interaction handler, fake mode
 ```
 
-All modules live under `python/` and import from `almanac_control.py` for
+All modules live under `python/` and import from `arclink_control.py` for
 database access (22 `arclink_*` tables in the shared SQLite/Postgres schema).
 
 ## Data Flow
@@ -99,9 +99,9 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 
 ## Integration Boundaries
 
-### Almanac Substrate (existing, unchanged)
+### ArcLink Substrate (existing, unchanged)
 
-ArcLink reuses Almanac's Docker Compose orchestration, Hermes runtime, qmd
+ArcLink reuses ArcLink's Docker Compose orchestration, Hermes runtime, qmd
 retrieval, vault watching, memory synthesis, Nextcloud, code-server, Curator,
 notification delivery, and health monitoring. These services run inside
 per-deployment containers rendered by the ArcLink provisioning layer.

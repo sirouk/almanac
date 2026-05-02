@@ -1,0 +1,11 @@
+[Unit]
+Description=ArcLink control-plane MCP server
+After=network.target
+
+[Service]
+ExecStart=%h/arclink/bin/arclink-mcp-server.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -9,7 +9,7 @@ COMPOSE_FILE="$BOOTSTRAP_DIR/compose/nextcloud-compose.yml"
 NEXTCLOUD_RUNTIME=""
 
 nextcloud_docker_mode_requested() {
-  [[ "${ALMANAC_CONTAINER_RUNTIME:-}" == "docker" || "${ALMANAC_DOCKER_MODE:-0}" == "1" ]]
+  [[ "${ARCLINK_CONTAINER_RUNTIME:-}" == "docker" || "${ARCLINK_DOCKER_MODE:-0}" == "1" ]]
 }
 
 nextcloud_using_podman() {
@@ -154,14 +154,14 @@ nextcloud_exec_www_data() {
 
 write_nextcloud_custom_config() {
   mkdir -p "$NEXTCLOUD_CUSTOM_CONFIG_DIR" "$NEXTCLOUD_EMPTY_SKELETON_DIR"
-  cat >"$NEXTCLOUD_ALMANAC_CONFIG_FILE" <<'EOF'
+  cat >"$NEXTCLOUD_ARCLINK_CONFIG_FILE" <<'EOF'
 <?php
 $CONFIG = array (
   'skeletondirectory' => '',
   'templatedirectory' => '',
 );
 EOF
-  chmod 0644 "$NEXTCLOUD_ALMANAC_CONFIG_FILE"
+  chmod 0644 "$NEXTCLOUD_ARCLINK_CONFIG_FILE"
 }
 
 write_nextcloud_hook_script() {
@@ -172,8 +172,8 @@ write_nextcloud_hook_script() {
 #!/bin/sh
 set -eu
 
-src='/almanac-config/almanac.config.php'
-dst='/var/www/html/config/almanac.config.php'
+src='/arclink-config/arclink.config.php'
+dst='/var/www/html/config/arclink.config.php'
 
 if [ -f "$src" ]; then
   cp -f "$src" "$dst"
@@ -486,7 +486,7 @@ run_podman_nextcloud() {
       -e "REDIS_HOST=127.0.0.1" \
       -e "NEXTCLOUD_TRUSTED_DOMAINS=localhost 127.0.0.1 ${NEXTCLOUD_TRUSTED_DOMAIN}" \
       -e "OVERWRITEPROTOCOL=https" \
-      -v "${NEXTCLOUD_ALMANAC_CONFIG_FILE}:/almanac-config/almanac.config.php:ro" \
+      -v "${NEXTCLOUD_ARCLINK_CONFIG_FILE}:/arclink-config/arclink.config.php:ro" \
       -v "${NEXTCLOUD_HTML_DIR}:/var/www/html" \
       -v "${NEXTCLOUD_DATA_DIR}:/var/www/html/data" \
       -v "${NEXTCLOUD_PRE_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/pre-installation" \

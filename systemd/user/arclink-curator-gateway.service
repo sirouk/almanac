@@ -1,0 +1,10 @@
+[Unit]
+Description=ArcLink Curator messaging gateway
+
+[Service]
+ExecStart=%h/arclink/bin/curator-gateway.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

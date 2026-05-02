@@ -2,7 +2,7 @@
 """notion-page-pdf-export.py — print publicly-shared Notion pages as PDFs.
 
 Use case: a Notion page (or set of pages) is shared via "Share to web" / "anyone
-with the link" but the Almanac integration was never invited, so the
+with the link" but the ArcLink integration was never invited, so the
 ssot.read / notion.fetch rails return 404. We can still capture the live state
 by driving headless chromium against the public URL.
 
@@ -32,7 +32,7 @@ PRE-REQUISITES
     sudo /tmp/scrape-venv/bin/playwright install --with-deps chromium
 
 NOTES
-    - This is a fallback for pages we can't reach via the Almanac integration.
+    - This is a fallback for pages we can't reach via the ArcLink integration.
       Pages in our own workspace should be shared with the integration so the
       webhook + qmd pipeline gives sub-second propagation.
     - Pages that aren't web-shared redirect to /login and we skip them.

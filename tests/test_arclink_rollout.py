@@ -43,7 +43,7 @@ def _rollback_plan():
 
 
 def test_create_rollout() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_create")
+    control = load_module("arclink_control.py", "arclink_control_rlt_create")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_create")
     conn = memory_db(control)
     r = rollout.create_rollout(
@@ -60,7 +60,7 @@ def test_create_rollout() -> None:
 
 
 def test_advance_rollout_waves() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_advance")
+    control = load_module("arclink_control.py", "arclink_control_rlt_advance")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_advance")
     conn = memory_db(control)
     r = rollout.create_rollout(
@@ -78,7 +78,7 @@ def test_advance_rollout_waves() -> None:
 
 
 def test_pause_rollout() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_pause")
+    control = load_module("arclink_control.py", "arclink_control_rlt_pause")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_pause")
     conn = memory_db(control)
     r = rollout.create_rollout(
@@ -93,7 +93,7 @@ def test_pause_rollout() -> None:
 
 
 def test_fail_rollout() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_fail")
+    control = load_module("arclink_control.py", "arclink_control_rlt_fail")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_fail")
     conn = memory_db(control)
     r = rollout.create_rollout(
@@ -107,7 +107,7 @@ def test_fail_rollout() -> None:
 
 
 def test_rollback_preserves_state_roots() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_rb")
+    control = load_module("arclink_control.py", "arclink_control_rlt_rb")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_rb")
     conn = memory_db(control)
     r = rollout.create_rollout(
@@ -128,7 +128,7 @@ def test_rollback_preserves_state_roots() -> None:
 
 
 def test_rollback_plan_requires_preserve_state_roots() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_req")
+    control = load_module("arclink_control.py", "arclink_control_rlt_req")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_req")
     conn = memory_db(control)
     try:
@@ -144,7 +144,7 @@ def test_rollback_plan_requires_preserve_state_roots() -> None:
 
 
 def test_version_drift() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_drift")
+    control = load_module("arclink_control.py", "arclink_control_rlt_drift")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_drift")
     conn = memory_db(control)
     r = rollout.create_rollout(
@@ -166,7 +166,7 @@ def test_version_drift() -> None:
 
 
 def test_list_rollouts() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_list")
+    control = load_module("arclink_control.py", "arclink_control_rlt_list")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_list")
     conn = memory_db(control)
     rollout.create_rollout(
@@ -185,7 +185,7 @@ def test_list_rollouts() -> None:
 
 
 def test_cannot_advance_completed() -> None:
-    control = load_module("almanac_control.py", "almanac_control_rlt_adv_done")
+    control = load_module("arclink_control.py", "arclink_control_rlt_adv_done")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_adv_done")
     conn = memory_db(control)
     r = rollout.create_rollout(

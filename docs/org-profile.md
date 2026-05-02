@@ -1,4 +1,4 @@
-# Almanac Operating Profile
+# ArcLink Operating Profile
 
 The operating profile is the intended operator-owned source of truth for
 people, roles, responsibilities, relationships, and agent delegation
@@ -25,16 +25,16 @@ Shipped today:
   organization/team modes with baseline, function modules, a prototype-agent
   module, starter stubs, source references, revalidation rules, privacy policy,
   automation boundaries, and distribution expectations.
-- `./bin/almanac-ctl org-profile validate`
-- `./bin/almanac-ctl org-profile build`
-- `./bin/almanac-ctl org-profile preview`
-- `./bin/almanac-ctl org-profile apply`
-- `./bin/almanac-ctl org-profile doctor`
+- `./bin/arclink-ctl org-profile validate`
+- `./bin/arclink-ctl org-profile build`
+- `./bin/arclink-ctl org-profile preview`
+- `./bin/arclink-ctl org-profile apply`
+- `./bin/arclink-ctl org-profile doctor`
 - `./bin/org-profile-builder.sh` provides the same interactive builder path
   directly for install flows and operator shells.
-- Almanac already seeds per-agent `SOUL.md` and
-  `state/almanac-identity-context.json` from onboarding/session data.
-- The `almanac-managed-context` plugin can read the local identity state when
+- ArcLink already seeds per-agent `SOUL.md` and
+  `state/arclink-identity-context.json` from onboarding/session data.
+- The `arclink-managed-context` plugin can read the local identity state when
   it exists and inject a compact `[local:identity]` section.
 - Applied profiles also feed `[managed:org-profile]`,
   `[managed:user-responsibilities]`, and `[managed:team-map]` through plugin
@@ -55,14 +55,14 @@ apply; missing source references warn; real-looking secrets fail closed.
 Intended private profile file:
 
 ```text
-almanac-priv/config/org-profile.yaml
+arclink-priv/config/org-profile.yaml
 ```
 
 Private resource manifest generated or maintained from the same operator-owned
 profile:
 
 ```text
-almanac-priv/config/team-resources.tsv
+arclink-priv/config/team-resources.tsv
 ```
 
 Public template and schema:
@@ -87,7 +87,7 @@ actually collect during onboarding:
 - `contact.discord_handle`: the Discord username/handle the human can provide
   in chat. This is easier than a numeric Discord user id and is useful as an
   onboarding hint, but it is not proof of identity by itself.
-- `contact.discord_user_id`: optional stronger Discord id when Almanac can
+- `contact.discord_user_id`: optional stronger Discord id when ArcLink can
   resolve it through the gateway or an operator provides it.
 - `identity_hints.discord_handle`: matching hint for profile-to-enrollment
   alignment.
@@ -109,13 +109,13 @@ The authoritative profile is structured YAML only.
 
 Markdown is allowed as supporting context, but not as the authority for who owns
 work, who approves decisions, or what an agent may do. A profile can reference
-Markdown in `references`, and Almanac can render a sanitized generated Markdown
+Markdown in `references`, and ArcLink can render a sanitized generated Markdown
 summary for retrieval, but the structured YAML is the contract.
 
 That design gives operators three useful properties:
 
 - Schema validation catches typos and malformed input before agents consume it.
-- Preview can show exactly what Almanac believes the operator meant.
+- Preview can show exactly what ArcLink believes the operator meant.
 - Distribution can give each surface only the slice it needs.
 
 ## Minimum Useful Profile
@@ -124,19 +124,19 @@ A tiny valid file can start with one operating context, one role, and one
 person. This solo example is intentionally not an organization:
 
 ```yaml
-$schema: https://almanac.local/schema/org-profile.schema.json
+$schema: https://arclink.local/schema/org-profile.schema.json
 version: 1
 
 organization:
-  id: personal-almanac
-  name: Personal Almanac
+  id: personal-arclink
+  name: Personal ArcLink
   profile_kind: solo_operator
-  scope: One person running Almanac for personal projects and operating rhythm.
+  scope: One person running ArcLink for personal projects and operating rhythm.
   mission: Help the operator do focused, well-documented work.
 
 roles:
   operator:
-    description: Owns the Almanac deployment, privacy boundaries, and agent policy.
+    description: Owns the ArcLink deployment, privacy boundaries, and agent policy.
 
 people:
   - id: example-operator
@@ -144,7 +144,7 @@ people:
     role: operator
     agent:
       name: Guide
-      purpose: Help the operator maintain Almanac and keep important work visible.
+      purpose: Help the operator maintain ArcLink and keep important work visible.
 ```
 
 Operators can deepen the file over time with groups/teams, household circles,
@@ -155,21 +155,21 @@ relationships, responsibilities, identity hints, work surfaces, and policies.
 The operator flow is:
 
 ```bash
-./bin/almanac-ctl org-profile build
-./bin/almanac-ctl org-profile validate
-./bin/almanac-ctl org-profile preview
-./bin/almanac-ctl org-profile apply --yes
-./bin/almanac-ctl org-profile doctor
+./bin/arclink-ctl org-profile build
+./bin/arclink-ctl org-profile validate
+./bin/arclink-ctl org-profile preview
+./bin/arclink-ctl org-profile apply --yes
+./bin/arclink-ctl org-profile doctor
 ```
 
 `build` launches the interactive shell builder for the private profile. It can
 start from a starter profile, edit an existing file section by section, accept
 multi-line answers in the terminal, validate the result, and save only under
-the private `almanac-priv/config/org-profile.yaml` path unless `--file` points
-elsewhere. During `./deploy.sh install`, Almanac asks whether to launch this
+the private `arclink-priv/config/org-profile.yaml` path unless `--file` points
+elsewhere. During `./deploy.sh install`, ArcLink asks whether to launch this
 builder once the private path is known.
 
-`validate` reads `almanac-priv/config/org-profile.yaml`, validates it
+`validate` reads `arclink-priv/config/org-profile.yaml`, validates it
 against `config/org-profile.schema.json`, and fails closed on invalid input.
 
 `preview` prints a human-readable uptake report without writing live
@@ -213,16 +213,16 @@ agent ownership should be hard failures.
 
 ## Preview Report
 
-Preview should show the operator what Almanac will ingest in plain language:
+Preview should show the operator what ArcLink will ingest in plain language:
 
 ```text
 Operating profile preview
-  Source:   almanac-priv/config/org-profile.yaml
+  Source:   arclink-priv/config/org-profile.yaml
   Schema:   v1 valid
   Revision: sha256:...
 
 Operating Context
-  Example Almanac
+  Example ArcLink
   Kind: hybrid
   Scope: Solo, household, project, and team lanes.
   Mission: Keep useful work and life logistics visible without blurring privacy or approval.
@@ -248,7 +248,7 @@ Distribution
   per-agent SOUL.md:
     agent-alex, agent-morgan, agent-priya
   per-agent identity state:
-    state/almanac-identity-context.json
+    state/arclink-identity-context.json
   plugin-managed context:
     org-profile, user-responsibilities, team-map
   vault render:
@@ -297,8 +297,8 @@ SOUL.md should not include unnecessary private details about other people.
 
 ### Per-Agent Identity State
 
-`state/almanac-identity-context.json` receives machine-readable local
-identity for the installed `almanac-managed-context` plugin:
+`state/arclink-identity-context.json` receives machine-readable local
+identity for the installed `arclink-managed-context` plugin:
 
 - agent label
 - unix user
@@ -340,7 +340,7 @@ authoritative.
 
 ### Enrollment Defaults
 
-During onboarding, Almanac can ask a newly enrolled human to select one of the
+During onboarding, ArcLink can ask a newly enrolled human to select one of the
 applied profile people that is not already linked to an active agent. Curator
 shows only short labels such as name, role/title, and group/team when the
 profile privacy policy permits roster visibility. The selected
@@ -387,18 +387,18 @@ Recommended defaults:
 - Full person slice: only the agent serving that person and operator tools.
 - Teammate summary: role, team, responsibilities, escalation lane.
 - Public vault render: no chat ids, no private notes, no direct identifiers.
-- Control DB: full structured data, readable only by Almanac services.
+- Control DB: full structured data, readable only by ArcLink services.
 - Managed memory: compact and role-oriented.
 
 ## Apply Receipt
 
-After apply, Almanac records and prints:
+After apply, ArcLink records and prints:
 
 ```text
 Applied operating profile
   revision: sha256:...
   schema:   v1
-  source:   almanac-priv/config/org-profile.yaml
+  source:   arclink-priv/config/org-profile.yaml
   people:   3
   teams:    3
   roles:    3
@@ -435,7 +435,7 @@ Fail closed when:
 
 Warn, but allow apply when:
 
-- A person does not yet correspond to an enrolled Almanac user.
+- A person does not yet correspond to an enrolled ArcLink user.
 - A Notion identity hint has not yet been verified.
 - A referenced supporting document does not exist yet.
 - A team has no lead.
@@ -445,15 +445,15 @@ Warn, but allow apply when:
 The CLI accepts an explicit path for staging and review:
 
 ```bash
-./bin/almanac-ctl org-profile validate --file ./draft-org-profile.yaml
-./bin/almanac-ctl org-profile preview --file ./draft-org-profile.yaml
-./bin/almanac-ctl org-profile apply --file ./draft-org-profile.yaml --yes
+./bin/arclink-ctl org-profile validate --file ./draft-org-profile.yaml
+./bin/arclink-ctl org-profile preview --file ./draft-org-profile.yaml
+./bin/arclink-ctl org-profile apply --file ./draft-org-profile.yaml --yes
 ```
 
 Without `--file`, commands use:
 
 ```text
-almanac-priv/config/org-profile.yaml
+arclink-priv/config/org-profile.yaml
 ```
 
 The command names are intentionally boring. Operators need confidence that

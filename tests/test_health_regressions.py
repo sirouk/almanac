@@ -91,15 +91,15 @@ warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
 systemctl() {{
-  if [[ "$1" == "--user" && "$2" == "is-active" && "$3" == "almanac-github-backup.timer" ]]; then
+  if [[ "$1" == "--user" && "$2" == "is-active" && "$3" == "arclink-github-backup.timer" ]]; then
     printf 'active\\n'
     return 0
   fi
-  if [[ "$1" == "--user" && "$2" == "show" && "$3" == "almanac-github-backup.service" ]]; then
+  if [[ "$1" == "--user" && "$2" == "show" && "$3" == "arclink-github-backup.service" ]]; then
     case "$4" in
-      --property=Result) printf '%s\\n' "${{ALMANAC_BACKUP_RESULT:-success}}" ;;
-      --property=ActiveState) printf '%s\\n' "${{ALMANAC_BACKUP_ACTIVE_STATE:-inactive}}" ;;
-      --property=SubState) printf '%s\\n' "${{ALMANAC_BACKUP_SUB_STATE:-dead}}" ;;
+      --property=Result) printf '%s\\n' "${{ARCLINK_BACKUP_RESULT:-success}}" ;;
+      --property=ActiveState) printf '%s\\n' "${{ARCLINK_BACKUP_ACTIVE_STATE:-inactive}}" ;;
+      --property=SubState) printf '%s\\n' "${{ARCLINK_BACKUP_SUB_STATE:-dead}}" ;;
       *) return 1 ;;
     esac
     return 0
@@ -107,19 +107,19 @@ systemctl() {{
   return 1
 }}
 {snippet}
-check_unit_state almanac-github-backup.timer required
-check_user_timer_job_result almanac-github-backup.service required
-ALMANAC_BACKUP_RESULT=exit-code
-ALMANAC_BACKUP_ACTIVE_STATE=failed
-ALMANAC_BACKUP_SUB_STATE=failed
-check_user_timer_job_result almanac-github-backup.service required
+check_unit_state arclink-github-backup.timer required
+check_user_timer_job_result arclink-github-backup.service required
+ARCLINK_BACKUP_RESULT=exit-code
+ARCLINK_BACKUP_ACTIVE_STATE=failed
+ARCLINK_BACKUP_SUB_STATE=failed
+check_user_timer_job_result arclink-github-backup.service required
 """
     result = bash(script)
     expect(result.returncode == 0, f"backup timer job result case failed: {result.stderr}")
-    expect("PASS:almanac-github-backup.timer is active" in result.stdout, result.stdout)
-    expect("PASS:almanac-github-backup.service last result is success" in result.stdout, result.stdout)
+    expect("PASS:arclink-github-backup.timer is active" in result.stdout, result.stdout)
+    expect("PASS:arclink-github-backup.service last result is success" in result.stdout, result.stdout)
     expect(
-        "FAIL:almanac-github-backup.service last result is exit-code (state=failed/failed)" in result.stdout,
+        "FAIL:arclink-github-backup.service last result is exit-code (state=failed/failed)" in result.stdout,
         result.stdout,
     )
     print("PASS test_backup_timer_job_result_reports_success_and_failure")
@@ -127,7 +127,7 @@ check_user_timer_job_result almanac-github-backup.service required
 
 def test_activation_trigger_write_probe_reports_writable_and_unwritable_states() -> None:
     text = HEALTH_SH.read_text()
-    snippet = extract(text, "check_almanac_mcp_status() {", "check_vault_definition_health() {")
+    snippet = extract(text, "check_arclink_mcp_status() {", "check_vault_definition_health() {")
     script = f"""
 PASS_COUNT=0
 WARN_COUNT=0
@@ -172,7 +172,7 @@ warn_or_fail() {{ warn "$1"; }}
 FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/ss" <<'EOF'
 #!/usr/bin/env bash
-if [[ "${{ALMANAC_SS_FIXTURE:-safe}}" == "safe" ]]; then
+if [[ "${{ARCLINK_SS_FIXTURE:-safe}}" == "safe" ]]; then
   cat <<'SAFE'
 LISTEN 0 4096 127.0.0.1:8282 0.0.0.0:*
 LISTEN 0 4096 [::1]:8282 [::]:*
@@ -186,18 +186,18 @@ EOF
 chmod +x "$FAKEBIN/ss"
 PATH="$FAKEBIN:$PATH"
 {snippet}
-check_port_loopback_only 8282 "almanac-mcp backend port 8282"
-export ALMANAC_SS_FIXTURE=unsafe
-check_port_loopback_only 8282 "almanac-mcp backend port 8282"
+check_port_loopback_only 8282 "arclink-mcp backend port 8282"
+export ARCLINK_SS_FIXTURE=unsafe
+check_port_loopback_only 8282 "arclink-mcp backend port 8282"
 """
     result = bash(script)
     expect(result.returncode == 0, f"loopback-bind probe case failed: {result.stderr}")
     expect(
-        "PASS:almanac-mcp backend port 8282 only accepts loopback connections (127.0.0.1, ::1)" in result.stdout,
+        "PASS:arclink-mcp backend port 8282 only accepts loopback connections (127.0.0.1, ::1)" in result.stdout,
         f"expected safe loopback pass, got: {result.stdout!r}",
     )
     expect(
-        "WARN:almanac-mcp backend port 8282 is exposed on non-loopback listener(s): 0.0.0.0" in result.stdout,
+        "WARN:arclink-mcp backend port 8282 is exposed on non-loopback listener(s): 0.0.0.0" in result.stdout,
         f"expected unsafe loopback warning, got: {result.stdout!r}",
     )
     print("PASS test_loopback_bind_probe_reports_safe_and_unsafe_listeners")
@@ -205,7 +205,7 @@ check_port_loopback_only 8282 "almanac-mcp backend port 8282"
 
 def test_shared_notion_without_webhook_reports_sweep_fallback_warning() -> None:
     text = HEALTH_SH.read_text()
-    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
     script = f"""
 PASS_COUNT=0
 WARN_COUNT=0
@@ -215,8 +215,8 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
+ARCLINK_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL=""
 {snippet}
 """
     result = bash(script)
@@ -242,7 +242,7 @@ ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
 
 def test_shared_notion_with_public_webhook_but_no_token_warns_not_ready() -> None:
     text = HEALTH_SH.read_text()
-    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
     script = f"""
 PASS_COUNT=0
 WARN_COUNT=0
@@ -252,9 +252,9 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
-ALMANAC_DB_PATH="$(mktemp)"
+ARCLINK_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
+ARCLINK_DB_PATH="$(mktemp)"
 FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/sqlite3" <<'EOF'
 #!/usr/bin/env bash
@@ -283,7 +283,7 @@ PATH="$FAKEBIN:$PATH"
 
 def test_shared_notion_with_installed_token_but_unconfirmed_verification_warns() -> None:
     text = HEALTH_SH.read_text()
-    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
     script = f"""
 PASS_COUNT=0
 WARN_COUNT=0
@@ -293,10 +293,10 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_REPO_DIR=/srv/almanac
-ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
-ALMANAC_DB_PATH="$(mktemp)"
+ARCLINK_REPO_DIR=/srv/arclink
+ARCLINK_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
+ARCLINK_DB_PATH="$(mktemp)"
 FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/sqlite3" <<'EOF'
 #!/usr/bin/env bash
@@ -323,7 +323,7 @@ PATH="$FAKEBIN:$PATH"
 
 def test_shared_notion_with_confirmed_verification_reports_ready() -> None:
     text = HEALTH_SH.read_text()
-    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
     script = f"""
 PASS_COUNT=0
 WARN_COUNT=0
@@ -333,9 +333,9 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
-ALMANAC_DB_PATH="$(mktemp)"
+ARCLINK_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="https://hooks.example.com/notion/webhook"
+ARCLINK_DB_PATH="$(mktemp)"
 FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/sqlite3" <<'EOF'
 #!/usr/bin/env bash
@@ -363,7 +363,7 @@ PATH="$FAKEBIN:$PATH"
 def test_shared_notion_with_tailscale_funnel_reports_live_public_route() -> None:
     text = HEALTH_SH.read_text()
     helper = extract(text, "check_notion_webhook_funnel() {", "check_activation_trigger_write_access() {")
-    snippet = extract(text, 'if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
+    snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
     script = f"""
 PASS_COUNT=0
 WARN_COUNT=0
@@ -376,10 +376,10 @@ warn_or_fail() {{ warn "$1"; }}
 ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL=1
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT=443
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH=/notion/webhook
-ALMANAC_NOTION_WEBHOOK_PORT=8283
-ALMANAC_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="https://almanac.example.test/notion/webhook"
-ALMANAC_DB_PATH="$(mktemp)"
+ARCLINK_NOTION_WEBHOOK_PORT=8283
+ARCLINK_SSOT_NOTION_SPACE_URL="https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="https://arclink.example.test/notion/webhook"
+ARCLINK_DB_PATH="$(mktemp)"
 FAKEBIN="$(mktemp -d)"
 cat >"$FAKEBIN/sqlite3" <<'EOF'
 #!/usr/bin/env bash
@@ -391,7 +391,7 @@ if [[ "$1" == "funnel" && "$2" == "status" && "$3" == "--json" ]]; then
   cat <<'JSON'
 {{
   "Web": {{
-    "almanac.example.test:443": {{
+    "arclink.example.test:443": {{
       "Handlers": {{
         "/": {{
           "Proxy": "http://127.0.0.1:8283"
@@ -400,7 +400,7 @@ if [[ "$1" == "funnel" && "$2" == "status" && "$3" == "--json" ]]; then
     }}
   }},
   "AllowFunnel": {{
-    "almanac.example.test:443": true
+    "arclink.example.test:443": true
   }}
 }}
 JSON
@@ -416,7 +416,7 @@ PATH="$FAKEBIN:$PATH"
     result = bash(script)
     expect(result.returncode == 0, f"shared notion funnel case failed: {result.stderr}")
     expect(
-        "PASS:Tailscale Funnel publishes only the configured Notion webhook route: https://almanac.example.test/notion/webhook" in result.stdout,
+        "PASS:Tailscale Funnel publishes only the configured Notion webhook route: https://arclink.example.test/notion/webhook" in result.stdout,
         f"expected PASS about live webhook funnel route, got: {result.stdout!r}",
     )
     expect(
@@ -508,7 +508,7 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_DB_PATH={str(db_path)!r}
+ARCLINK_DB_PATH={str(db_path)!r}
 {snippet}
 check_active_agent_state
 """
@@ -542,15 +542,15 @@ def test_active_agent_health_fails_when_shared_vault_acl_is_missing() -> None:
         vault_dir = root / "vault"
         fakebin = root / "fakebin"
         required_skill_names = [
-            "almanac-qmd-mcp",
-            "almanac-vault-reconciler",
-            "almanac-first-contact",
-            "almanac-vaults",
-            "almanac-ssot",
-            "almanac-notion-knowledge",
-            "almanac-ssot-connect",
-            "almanac-notion-mcp",
-            "almanac-resources",
+            "arclink-qmd-mcp",
+            "arclink-vault-reconciler",
+            "arclink-first-contact",
+            "arclink-vaults",
+            "arclink-ssot",
+            "arclink-notion-knowledge",
+            "arclink-ssot-connect",
+            "arclink-notion-mcp",
+            "arclink-resources",
         ]
         hermes_home.mkdir(parents=True)
         (vault_dir / "Projects").mkdir(parents=True)
@@ -640,7 +640,7 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_DB_PATH={str(db_path)!r}
+ARCLINK_DB_PATH={str(db_path)!r}
 VAULT_DIR={str(vault_dir)!r}
 PATH={str(fakebin)!r}:$PATH
 {snippet}
@@ -666,22 +666,22 @@ def test_active_agent_health_fails_when_shared_vault_parent_acl_is_mount_hostile
         root = Path(tmp)
         db_path = root / "control.sqlite3"
         service_home = root / "service-home"
-        private_dir = service_home / "almanac" / "almanac-priv"
+        private_dir = service_home / "arclink" / "arclink-priv"
         manifest_path = root / "agent-manifest.json"
         hermes_home = root / "hermes-home"
         vault_dir = private_dir / "vault"
         fakebin = root / "fakebin"
         subuid_file = root / "subuid"
         required_skill_names = [
-            "almanac-qmd-mcp",
-            "almanac-vault-reconciler",
-            "almanac-first-contact",
-            "almanac-vaults",
-            "almanac-ssot",
-            "almanac-notion-knowledge",
-            "almanac-ssot-connect",
-            "almanac-notion-mcp",
-            "almanac-resources",
+            "arclink-qmd-mcp",
+            "arclink-vault-reconciler",
+            "arclink-first-contact",
+            "arclink-vaults",
+            "arclink-ssot",
+            "arclink-notion-knowledge",
+            "arclink-ssot-connect",
+            "arclink-notion-mcp",
+            "arclink-resources",
         ]
         hermes_home.mkdir(parents=True)
         (vault_dir / "Projects").mkdir(parents=True)
@@ -787,9 +787,9 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_DB_PATH={str(db_path)!r}
-ALMANAC_HOME={str(service_home)!r}
-export ALMANAC_ROOTLESS_SUBUID_FILE={str(subuid_file)!r}
+ARCLINK_DB_PATH={str(db_path)!r}
+ARCLINK_HOME={str(service_home)!r}
+export ARCLINK_ROOTLESS_SUBUID_FILE={str(subuid_file)!r}
 VAULT_DIR={str(vault_dir)!r}
 PATH={str(fakebin)!r}:$PATH
 {snippet}
@@ -813,15 +813,15 @@ def test_active_agent_health_fails_when_agent_backup_cron_last_run_failed() -> N
         manifest_path = root / "agent-manifest.json"
         hermes_home = root / "hermes-home"
         required_skill_names = [
-            "almanac-qmd-mcp",
-            "almanac-vault-reconciler",
-            "almanac-first-contact",
-            "almanac-vaults",
-            "almanac-ssot",
-            "almanac-notion-knowledge",
-            "almanac-ssot-connect",
-            "almanac-notion-mcp",
-            "almanac-resources",
+            "arclink-qmd-mcp",
+            "arclink-vault-reconciler",
+            "arclink-first-contact",
+            "arclink-vaults",
+            "arclink-ssot",
+            "arclink-notion-knowledge",
+            "arclink-ssot-connect",
+            "arclink-notion-mcp",
+            "arclink-resources",
         ]
         hermes_home.mkdir(parents=True)
         manifest_path.write_text('{"agent_id":"agent-backup"}\n', encoding="utf-8")
@@ -834,9 +834,9 @@ def test_active_agent_health_fails_when_agent_backup_cron_last_run_failed() -> N
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(f"# {rel_path}\n", encoding="utf-8")
         (hermes_home / "state").mkdir(parents=True)
-        (hermes_home / "state" / "almanac-agent-backup.env").write_text("AGENT_BACKUP_REMOTE=x\n", encoding="utf-8")
+        (hermes_home / "state" / "arclink-agent-backup.env").write_text("AGENT_BACKUP_REMOTE=x\n", encoding="utf-8")
         (hermes_home / "scripts").mkdir(parents=True)
-        (hermes_home / "scripts" / "almanac_agent_backup.py").write_text("# backup wrapper\n", encoding="utf-8")
+        (hermes_home / "scripts" / "arclink_agent_backup.py").write_text("# backup wrapper\n", encoding="utf-8")
         (hermes_home / "cron").mkdir(parents=True)
         (hermes_home / "cron" / "jobs.json").write_text(
             """
@@ -844,11 +844,11 @@ def test_active_agent_health_fails_when_agent_backup_cron_last_run_failed() -> N
   "jobs": [
     {
       "id": "a1bac0ffee42",
-      "managed_by": "almanac",
+      "managed_by": "arclink",
       "managed_kind": "agent-home-backup",
       "enabled": true,
       "state": "scheduled",
-      "script": "almanac_agent_backup.py",
+      "script": "arclink_agent_backup.py",
       "schedule": {"kind": "interval", "minutes": 240, "display": "every 240m"}
     }
   ]
@@ -920,7 +920,7 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ warn "$1"; }}
-ALMANAC_DB_PATH={str(db_path)!r}
+ARCLINK_DB_PATH={str(db_path)!r}
 VAULT_DIR=
 {snippet}
 check_active_agent_state
@@ -976,7 +976,7 @@ pass() {{ printf 'PASS:%s\\n' "$1"; }}
 warn() {{ printf 'WARN:%s\\n' "$1"; }}
 fail() {{ printf 'FAIL:%s\\n' "$1"; }}
 warn_or_fail() {{ fail "$1"; }}
-ALMANAC_DB_PATH={str(db_path)!r}
+ARCLINK_DB_PATH={str(db_path)!r}
 {snippet}
 check_active_agent_state
 """

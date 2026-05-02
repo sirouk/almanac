@@ -1,6 +1,6 @@
 # Docker Deployment
 
-This is the first-class Docker Compose path for local and portable Almanac
+This is the first-class Docker Compose path for local and portable ArcLink
 deployments. It is separate from the existing host/systemd install path.
 
 ## Prerequisites
@@ -15,18 +15,18 @@ deployments. It is separate from the existing host/systemd install path.
 ./deploy.sh docker reconfigure
 ```
 
-Bootstrap creates `almanac-priv/`, seeds the vault template, writes
-`almanac-priv/config/docker.env` when missing, and creates persisted state
+Bootstrap creates `arclink-priv/`, seeds the vault template, writes
+`arclink-priv/config/docker.env` when missing, and creates persisted state
 directories for Nextcloud, qmd, PDF ingest, Notion index markdown, and job
 status.
 
-The wrapper passes `almanac-priv/config/docker.env` to Docker Compose as its
+The wrapper passes `arclink-priv/config/docker.env` to Docker Compose as its
 env file after bootstrap. Existing config is preserved by default; set
-`ALMANAC_DOCKER_REWRITE_CONFIG=1` only when you intentionally want bootstrap
+`ARCLINK_DOCKER_REWRITE_CONFIG=1` only when you intentionally want bootstrap
 to regenerate the default Docker config.
 
 `./deploy.sh docker ...` is the operator-facing control path. It delegates to
-`bin/almanac-docker.sh` for the Docker-specific mechanics.
+`bin/arclink-docker.sh` for the Docker-specific mechanics.
 
 Fresh Docker config uses generated local secrets for Postgres and the Nextcloud
 admin user. Rotate them deliberately before any durable shared deployment.
@@ -35,13 +35,13 @@ secret values exist.
 
 ## Ports
 
-`bin/almanac-docker.sh` assigns host ports during bootstrap and persists them in
-`almanac-priv/config/docker.env`. It tries the standard Almanac ports first:
+`bin/arclink-docker.sh` assigns host ports during bootstrap and persists them in
+`arclink-priv/config/docker.env`. It tries the standard ArcLink ports first:
 
 ```text
 QMD_MCP_PORT=8181
-ALMANAC_MCP_PORT=8282
-ALMANAC_NOTION_WEBHOOK_PORT=8283
+ARCLINK_MCP_PORT=8282
+ARCLINK_NOTION_WEBHOOK_PORT=8283
 NEXTCLOUD_PORT=18080
 ```
 
@@ -50,13 +50,13 @@ available coherent Docker block, starting with:
 
 ```text
 QMD_MCP_PORT=18181
-ALMANAC_MCP_PORT=18282
-ALMANAC_NOTION_WEBHOOK_PORT=18283
+ARCLINK_MCP_PORT=18282
+ARCLINK_NOTION_WEBHOOK_PORT=18283
 NEXTCLOUD_PORT=28080
 ```
 
 The chosen block is also recorded in
-`almanac-priv/state/docker/ports.json`. Set `ALMANAC_DOCKER_AUTO_PORTS=0` only
+`arclink-priv/state/docker/ports.json`. Set `ARCLINK_DOCKER_AUTO_PORTS=0` only
 when you want fixed ports and prefer a startup failure over automatic reassignment.
 
 Show the current assignment with:
@@ -71,15 +71,15 @@ Show the current assignment with:
 ./deploy.sh docker install
 ```
 
-The default stack starts Almanac MCP, qmd MCP, Notion webhook, Nextcloud,
+The default stack starts ArcLink MCP, qmd MCP, Notion webhook, Nextcloud,
 Postgres, Redis, vault watching, recurring job containers, memory synthesis,
 and the Docker agent supervisor. The supervisor replaces the baremetal per-user
 systemd units for enrolled agents: it reconciles refresh, Hermes gateway,
 dashboard, authenticated dashboard proxy, cron tick, and code-server workspace
 processes from the control-plane state.
 
-The `memory-synth` job mirrors the baremetal `almanac-memory-synth.timer`: it
-uses the configured `ALMANAC_MEMORY_SYNTH_*` values, or falls back to
+The `memory-synth` job mirrors the baremetal `arclink-memory-synth.timer`: it
+uses the configured `ARCLINK_MEMORY_SYNTH_*` values, or falls back to
 `PDF_VISION_*`, to build cached semantic recall cards for managed-context
 hot injection without putting LLM summarization on the chat path. The same
 generalized vault and Notion synthesis behavior is used in Docker and baremetal,
@@ -90,10 +90,10 @@ the compact prompt sample; the recurring `memory-synth` job remains the
 backstop.
 
 `install` and `upgrade` also apply the private operating profile when present,
-record `state/almanac-release.json`, run Docker health, and run the same live
+record `state/arclink-release.json`, run Docker health, and run the same live
 agent MCP tool smoke that the baremetal upgrade path uses.
 
-Agent web surfaces are published individually as they are reconciled. Almanac
+Agent web surfaces are published individually as they are reconciled. ArcLink
 keeps the same access-state ports as baremetal, but Docker mode does not reserve
 the entire possible port range at Compose startup.
 
@@ -127,7 +127,7 @@ Curator-profile services when their configured credentials allow them to run.
 For scripted base stack refreshes that should skip operator setup, set:
 
 ```bash
-ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG=1 ALMANAC_DOCKER_SKIP_CURATOR_SETUP=1 ./deploy.sh docker install
+ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG=1 ARCLINK_DOCKER_SKIP_CURATOR_SETUP=1 ./deploy.sh docker install
 ```
 
 ## Health
@@ -168,7 +168,7 @@ restarts that supervisor and runs an immediate provisioner pass.
 
 The same supervisor also owns per-agent install realignment in Docker mode: it
 syncs skills/plugins/MCP entries, refreshes identity/SOUL, runs the local
-managed-context refresh, and validates or repairs each agent's private Almanac
+managed-context refresh, and validates or repairs each agent's private ArcLink
 MCP bootstrap token before starting gateways or agent web surfaces.
 
 Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
@@ -178,19 +178,19 @@ upgrade path.
 
 Host/systemd-only commands remain explicit baremetal operations. `./deploy.sh
 remove` tears down a host install; `./deploy.sh docker remove` is an alias for
-Docker teardown and does not remove `almanac-priv/` bind-mounted state.
+Docker teardown and does not remove `arclink-priv/` bind-mounted state.
 
 ## Logs
 
 ```bash
 ./deploy.sh docker logs
-./deploy.sh docker logs almanac-mcp
+./deploy.sh docker logs arclink-mcp
 ```
 
 Recurring job status is written under:
 
 ```text
-almanac-priv/state/docker/jobs/
+arclink-priv/state/docker/jobs/
 ```
 
 ## Stop And Teardown
@@ -201,7 +201,7 @@ almanac-priv/state/docker/jobs/
 ```
 
 `down` stops containers and keeps data. `teardown` also removes Compose named
-volumes, but bind-mounted `almanac-priv/` state remains on disk.
+volumes, but bind-mounted `arclink-priv/` state remains on disk.
 
 ## Notes
 

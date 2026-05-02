@@ -1,12 +1,12 @@
-# Copy this file to almanac-priv/config/org-profile.yaml and replace every
+# Copy this file to arclink-priv/config/org-profile.yaml and replace every
 # fictional value with the operator's real solo, household, project, team, or
 # organization operating context. Do not commit the populated private file.
-$schema: https://almanac.local/schema/org-profile.schema.json
+$schema: https://arclink.local/schema/org-profile.schema.json
 version: 1
 
 organization:
-  id: example-almanac
-  name: Example Almanac
+  id: example-arclink
+  name: Example ArcLink
   profile_kind: hybrid
   scope: Fictional compact example that can be adapted for a solo operator, household, project group, or small organization.
   mission: Keep important work, logistics, decisions, and knowledge visible without blurring privacy or approval.
@@ -352,8 +352,8 @@ relationships:
 
 work_surfaces:
   notion:
-    shared_space: Example Studio Almanac
-    root_page_hint: Company Home / Almanac
+    shared_space: Example Studio ArcLink
+    root_page_hint: Company Home / ArcLink
     default_visibility: org_shared
     onboarding_pages: private_to_user
     write_policy: Agents create shared pages/databases only through the brokered shared SSOT path.
@@ -522,7 +522,7 @@ benchmarks:
 policies:
   agent_behavior:
     global_may_do:
-      - Retrieve shared knowledge from Almanac before answering profile-specific questions.
+      - Retrieve shared knowledge from ArcLink before answering profile-specific questions.
       - Draft, summarize, classify, and prepare updates for the human they serve.
       - Create shared Notion pages or databases through brokered SSOT tools when the human asks for org-visible work.
     global_must_ask_before:
@@ -565,7 +565,7 @@ references:
   - id: launch-plan
     title: Client Portal Launch Plan
     type: notion
-    path: notion://Example Studio Almanac/Client Portal Launch
+    path: notion://Example Studio ArcLink/Client Portal Launch
     audience: all_agents
     sensitivity: internal
   - id: support-handbook

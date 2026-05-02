@@ -53,8 +53,8 @@ reconcile_backup_git_remote_branch() {
   BACKUP_RECONCILE_PUSH_REQUIRED=0
 }
 
-if [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then
-  git -C "$ALMANAC_PRIV_DIR" init -b "$BACKUP_GIT_BRANCH"
+if [[ ! -d "$ARCLINK_PRIV_DIR/.git" ]]; then
+  git -C "$ARCLINK_PRIV_DIR" init -b "$BACKUP_GIT_BRANCH"
 fi
 
 exclude_paths=()
@@ -68,25 +68,25 @@ fi
 
 for candidate in "${candidate_paths[@]}"; do
   [[ -n "$candidate" ]] || continue
-  if path_is_within_dir "$candidate" "$ALMANAC_PRIV_DIR"; then
-    rel_path="$(path_relative_to_dir "$candidate" "$ALMANAC_PRIV_DIR")"
+  if path_is_within_dir "$candidate" "$ARCLINK_PRIV_DIR"; then
+    rel_path="$(path_relative_to_dir "$candidate" "$ARCLINK_PRIV_DIR")"
     exclude_paths+=("$rel_path")
-    git -C "$ALMANAC_PRIV_DIR" rm --cached --ignore-unmatch "$rel_path" >/dev/null 2>&1 || true
+    git -C "$ARCLINK_PRIV_DIR" rm --cached --ignore-unmatch "$rel_path" >/dev/null 2>&1 || true
   fi
 done
 
 while IFS= read -r git_marker; do
   [[ -n "$git_marker" ]] || continue
   repo_path="$(dirname "$git_marker")"
-  if [[ "$repo_path" == "$ALMANAC_PRIV_DIR" ]]; then
+  if [[ "$repo_path" == "$ARCLINK_PRIV_DIR" ]]; then
     continue
   fi
-  rel_path="$(path_relative_to_dir "$repo_path" "$ALMANAC_PRIV_DIR")"
+  rel_path="$(path_relative_to_dir "$repo_path" "$ARCLINK_PRIV_DIR")"
   [[ -n "$rel_path" ]] || continue
   exclude_paths+=("$rel_path")
-  git -C "$ALMANAC_PRIV_DIR" rm --cached -r --ignore-unmatch "$rel_path" >/dev/null 2>&1 || true
+  git -C "$ARCLINK_PRIV_DIR" rm --cached -r --ignore-unmatch "$rel_path" >/dev/null 2>&1 || true
 done < <(
-  find "$ALMANAC_PRIV_DIR" -mindepth 2 \
+  find "$ARCLINK_PRIV_DIR" -mindepth 2 \
     \( -type d -name .git -print -prune \) -o \
     \( -type f -name .git -print \) \
     2>/dev/null
@@ -97,44 +97,44 @@ while IFS= read -r top_entry; do
   [[ -n "$top_entry" ]] || continue
   top_name="$(basename "$top_entry")"
   [[ "$top_name" == ".git" ]] && continue
-  if git -C "$ALMANAC_PRIV_DIR" check-ignore -q -- "$top_name"; then
-    git -C "$ALMANAC_PRIV_DIR" rm --cached -r --ignore-unmatch "$top_name" >/dev/null 2>&1 || true
+  if git -C "$ARCLINK_PRIV_DIR" check-ignore -q -- "$top_name"; then
+    git -C "$ARCLINK_PRIV_DIR" rm --cached -r --ignore-unmatch "$top_name" >/dev/null 2>&1 || true
     continue
   fi
   backup_top_level_pathspecs+=("$top_name")
 done < <(
-  find "$ALMANAC_PRIV_DIR" -mindepth 1 -maxdepth 1 -print 2>/dev/null
+  find "$ARCLINK_PRIV_DIR" -mindepth 1 -maxdepth 1 -print 2>/dev/null
 )
 
 if (( ${#backup_top_level_pathspecs[@]} > 0 )); then
   backup_add_pathspecs=("${backup_top_level_pathspecs[@]}")
   if (( ${#exclude_paths[@]} > 0 )); then
     for rel_path in "${exclude_paths[@]}"; do
-      if git -C "$ALMANAC_PRIV_DIR" check-ignore -q -- "$rel_path"; then
+      if git -C "$ARCLINK_PRIV_DIR" check-ignore -q -- "$rel_path"; then
         continue
       fi
       backup_add_pathspecs+=(":(exclude)$rel_path")
     done
   fi
-  git -C "$ALMANAC_PRIV_DIR" add -A -- "${backup_add_pathspecs[@]}"
+  git -C "$ARCLINK_PRIV_DIR" add -A -- "${backup_add_pathspecs[@]}"
 fi
 
-if ! git -C "$ALMANAC_PRIV_DIR" diff --cached --quiet --exit-code; then
+if ! git -C "$ARCLINK_PRIV_DIR" diff --cached --quiet --exit-code; then
   GIT_AUTHOR_NAME="$BACKUP_GIT_AUTHOR_NAME" \
   GIT_AUTHOR_EMAIL="$BACKUP_GIT_AUTHOR_EMAIL" \
   GIT_COMMITTER_NAME="$BACKUP_GIT_AUTHOR_NAME" \
   GIT_COMMITTER_EMAIL="$BACKUP_GIT_AUTHOR_EMAIL" \
-    git -C "$ALMANAC_PRIV_DIR" commit -m "almanac-priv backup: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    git -C "$ARCLINK_PRIV_DIR" commit -m "arclink-priv backup: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
   require_private_github_backup_remote "$BACKUP_GIT_REMOTE"
-  ensure_backup_git_origin_remote "$ALMANAC_PRIV_DIR"
+  ensure_backup_git_origin_remote "$ARCLINK_PRIV_DIR"
   prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
-  reconcile_backup_git_remote_branch "$ALMANAC_PRIV_DIR" "$BACKUP_GIT_BRANCH"
+  reconcile_backup_git_remote_branch "$ARCLINK_PRIV_DIR" "$BACKUP_GIT_BRANCH"
   if [[ "$BACKUP_RECONCILE_PUSH_REQUIRED" == "1" ]]; then
     # The steady-state backup path is a single-writer timer on this host, so a
     # normal non-force push is the right default after reconciliation.
-    git -C "$ALMANAC_PRIV_DIR" push origin "$BACKUP_GIT_BRANCH"
+    git -C "$ARCLINK_PRIV_DIR" push origin "$BACKUP_GIT_BRANCH"
   fi
 fi

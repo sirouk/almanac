@@ -18,7 +18,7 @@ def expect(condition: bool, message: str) -> None:
 def test_model_provider_yaml_defaults_are_authoritative() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    from almanac_model_providers import provider_default_model, provider_recommended_models, resolve_preset_target
+    from arclink_model_providers import provider_default_model, provider_recommended_models, resolve_preset_target
 
     expect(provider_default_model("chutes", REPO) == "moonshotai/Kimi-K2.6-TEE", "bad chutes default")
     expect(provider_default_model("opus", REPO) == "claude-opus-4-7", "bad opus default")
@@ -36,14 +36,14 @@ def test_shell_common_reads_model_provider_defaults() -> None:
         [
             "bash",
             "-lc",
-            "source bin/common.sh; printf '%s\\n' \"$ALMANAC_MODEL_PRESET_CODEX\" \"$ALMANAC_MODEL_PRESET_OPUS\" \"$ALMANAC_MODEL_PRESET_CHUTES\"",
+            "source bin/common.sh; printf '%s\\n' \"$ARCLINK_MODEL_PRESET_CODEX\" \"$ARCLINK_MODEL_PRESET_OPUS\" \"$ARCLINK_MODEL_PRESET_CHUTES\"",
         ],
         cwd=REPO,
         env={
             **os.environ,
-            "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
-            "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-            "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+            "ARCLINK_MODEL_PRESET_CODEX": "openai:codex",
+            "ARCLINK_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+            "ARCLINK_MODEL_PRESET_CHUTES": "chutes:model-router",
         },
         text=True,
         capture_output=True,

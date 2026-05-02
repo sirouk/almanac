@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh ArcLink qmd index every 15 minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=15m
+Unit=arclink-qmd-update.service
+
+[Install]
+WantedBy=timers.target

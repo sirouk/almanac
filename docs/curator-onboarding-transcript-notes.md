@@ -1,4 +1,4 @@
-# Almanac Curator Onboarding Design Notes
+# ArcLink Curator Onboarding Design Notes
 
 This public note captures generic product lessons from onboarding tests. Do not
 store live operator names, org rosters, budgets, transcript excerpts, repo
@@ -17,7 +17,7 @@ org-provided model credentials, per-agent `SOUL.md` seeding, managed context
 injection, Discord completion handoff with a confirmation code, Telegram
 `/start` handoff, private agent backup setup, Notion identity verification,
 dashboard/code/vault resource messages, Nextcloud vault access, and the
-`~/Almanac` workspace alias.
+`~/ArcLink` workspace alias.
 
 Current onboarding copy follows a "why / do this / reply with this" rhythm so
 chat messages stay scannable on Discord and Telegram. Dense setup steps, such
@@ -155,7 +155,7 @@ Expected behavior:
 
 ### Notion Access
 
-- [ ] Verify the user can open the shared Almanac page in the configured
+- [ ] Verify the user can open the shared ArcLink page in the configured
       workspace.
 - [ ] Route access requests to the operator/admin.
 - [ ] Use Discord relative timestamps for claim/access expiry messages when
@@ -165,7 +165,7 @@ Expected behavior:
 ### Dashboard, Vault, And Workspace
 
 - [ ] Keep dashboard and workspace links HTTPS when exposed through a tailnet.
-- [ ] Make clear which password unlocks the Almanac dashboard.
+- [ ] Make clear which password unlocks the ArcLink dashboard.
 - [ ] Keep credentials out of plugin-managed context.
 - [ ] Ensure the vault is visible in the code workspace and file-drop surface.
 - [ ] Keep Nextcloud available for bulk file uploads when enabled.

@@ -5,8 +5,8 @@
 
 | Goal / criterion | Current coverage | Remaining gap / risk | Validation surface |
 | --- | --- | --- | --- |
-| Transform Almanac into ArcLink | Additive `arclink_*` modules, ArcLink docs, web app, product config/env precedence | Broad public rebrand must not break Almanac runtime compatibility | Product config tests, docs truth checks, hygiene scan |
-| Preserve Almanac services/tests | Existing `bin/`, `python/almanac_*`, systemd units, Compose services, focused tests | Future ArcLink refactors could drift from deploy scripts | Almanac regression tests and deploy/health checks |
+| Transform ArcLink into ArcLink | Additive `arclink_*` modules, ArcLink docs, web app, product config/env precedence | Broad public rebrand must not break ArcLink runtime compatibility | Product config tests, docs truth checks, hygiene scan |
+| Preserve ArcLink services/tests | Existing `bin/`, `python/arclink_*`, systemd units, Compose services, focused tests | Future ArcLink refactors could drift from deploy scripts | ArcLink regression tests and deploy/health checks |
 | Chutes-first provider | `arclink_chutes.py`, model provider config, fake key lifecycle, diagnostics | Live account/key lifecycle unverified | Chutes/provider tests; live E2E when credentials exist |
 | Stripe checkout/entitlement | Fake checkout/webhook, subscription mirror, entitlement gates, reconciliation, billing portal contract | Live Stripe proof blocked | Entitlement/API/fake E2E tests; live E2E later |
 | Cloudflare DNS/subdomains | Prefix reservation, DNS intent, fake Cloudflare, drift, Traefik labels, diagnostics | Live DNS/tunnel proof blocked | Ingress/executor tests; live E2E later |

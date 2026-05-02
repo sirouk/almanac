@@ -69,7 +69,7 @@ def test_stripe_webhook_verifier_rejects_blank_secret_and_accepts_fixture() -> N
 
 
 def test_stripe_webhook_rejects_signature_mismatch() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_sig_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_sig_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sig_test")
     conn = memory_db(control)
     payload = stripe_payload(event_id="evt_bad_sig", event_type="customer.subscription.updated")
@@ -85,7 +85,7 @@ def test_stripe_webhook_rejects_signature_mismatch() -> None:
 
 
 def test_paid_webhook_is_idempotent_and_lifts_entitlement_gate() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_paid_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_paid_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_paid_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_paid_test")
     conn = memory_db(control)
@@ -114,7 +114,7 @@ def test_paid_webhook_is_idempotent_and_lifts_entitlement_gate() -> None:
 
 
 def test_failed_webhook_row_can_be_replayed_after_payload_fix() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_replay_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_replay_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_replay_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_replay_test")
     conn = memory_db(control)
@@ -158,7 +158,7 @@ def test_failed_webhook_row_can_be_replayed_after_payload_fix() -> None:
 
 
 def test_failed_payment_keeps_gate_blocked_and_audits_reason() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_failed_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_failed_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_failed_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_failed_test")
     conn = memory_db(control)
@@ -184,7 +184,7 @@ def test_failed_payment_keeps_gate_blocked_and_audits_reason() -> None:
 
 
 def test_supported_webhook_failure_rolls_back_entitlement_side_effects() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_atomicity_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_atomicity_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_atomicity_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_atomicity_test")
     conn = memory_db(control)
@@ -255,7 +255,7 @@ def test_supported_webhook_failure_rolls_back_entitlement_side_effects() -> None
 
 
 def test_stripe_webhook_rejects_caller_owned_transaction_without_rollback() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_caller_txn_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_caller_txn_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_caller_txn_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_caller_txn_test")
     conn = memory_db(control)
@@ -291,7 +291,7 @@ def test_stripe_webhook_rejects_caller_owned_transaction_without_rollback() -> N
 
 
 def test_invoice_success_sets_paid_and_lifts_entitlement_gate() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_invoice_success_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_invoice_success_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_invoice_success_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_invoice_success_test")
     conn = memory_db(control)
@@ -335,7 +335,7 @@ def test_invoice_success_sets_paid_and_lifts_entitlement_gate() -> None:
 
 
 def test_invoice_success_reads_nested_parent_subscription_details() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_nested_invoice_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_nested_invoice_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_nested_invoice_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_nested_invoice_test")
     conn = memory_db(control)
@@ -402,7 +402,7 @@ def test_invoice_success_reads_nested_parent_subscription_details() -> None:
 
 
 def test_unsupported_signed_event_does_not_mutate_paid_entitlement() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_unsupported_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_unsupported_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_unsupported_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_unsupported_test")
     conn = memory_db(control)
@@ -433,7 +433,7 @@ def test_unsupported_signed_event_does_not_mutate_paid_entitlement() -> None:
 
 
 def test_manual_comp_requires_reason_and_lifts_gate() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_comp_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_comp_test")
     conn = memory_db(control)
     control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
@@ -469,7 +469,7 @@ def test_manual_comp_requires_reason_and_lifts_gate() -> None:
 
 
 def test_profile_only_upsert_preserves_paid_and_comp_entitlements() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_preserve_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_preserve_test")
     conn = memory_db(control)
     paid = control.upsert_arclink_user(
         conn,
@@ -519,7 +519,7 @@ def test_profile_only_upsert_preserves_paid_and_comp_entitlements() -> None:
 
 
 def test_new_user_without_explicit_entitlement_defaults_to_none() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_default_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_default_test")
     conn = memory_db(control)
     user = control.upsert_arclink_user(
         conn,
@@ -533,7 +533,7 @@ def test_new_user_without_explicit_entitlement_defaults_to_none() -> None:
 
 
 def test_targeted_comp_advances_only_named_deployment_without_global_comp() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_targeted_comp_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_targeted_comp_test")
     conn = memory_db(control)
     control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
@@ -569,7 +569,7 @@ def test_targeted_comp_advances_only_named_deployment_without_global_comp() -> N
 
 
 def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_checkout_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_checkout_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_checkout_test")
@@ -617,7 +617,7 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
 
 
 def test_subscription_created_sets_paid_and_mirrors_subscription() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_sub_created_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_sub_created_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_created_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_created_test")
     conn = memory_db(control)
@@ -643,7 +643,7 @@ def test_subscription_created_sets_paid_and_mirrors_subscription() -> None:
 
 
 def test_subscription_deleted_cancels_entitlement_and_audits() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_sub_deleted_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_sub_deleted_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_deleted_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_deleted_test")
     conn = memory_db(control)
@@ -675,7 +675,7 @@ def test_subscription_deleted_cancels_entitlement_and_audits() -> None:
 
 
 def test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa() -> None:
-    control = load_module("almanac_control.py", "almanac_control_entitlement_drift_test")
+    control = load_module("arclink_control.py", "arclink_control_entitlement_drift_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_drift_test")
     conn = memory_db(control)
 

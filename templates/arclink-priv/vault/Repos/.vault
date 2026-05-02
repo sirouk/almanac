@@ -1,0 +1,12 @@
+# managed: arclink-default-vault
+name: Repos
+description: Repository inventory, codebase notes, onboarding context, and operational references for the GitHub repos the organization relies on.
+owner: organization
+default_subscribed: true
+category: inventory
+tags:
+  - repos
+  - code
+  - github
+  - engineering
+brief_template: Shared repo inventory for durable codebase context, ownership, onboarding notes, and operational quirks.

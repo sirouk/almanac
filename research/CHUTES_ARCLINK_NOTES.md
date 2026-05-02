@@ -4,7 +4,7 @@ Sources reviewed:
 
 - `https://github.com/Veightor/chutes-agent-toolkit`
 - live `https://llm.chutes.ai/v1/models` on 2026-05-01
-- Almanac `config/model-providers.yaml` and provider auth code
+- ArcLink `config/model-providers.yaml` and provider auth code
 
 ## Current Live Model Facts
 
@@ -30,7 +30,7 @@ ArcLink should not hard-code stale model claims. It should periodically refresh 
 
 ## Auth Caveat
 
-The Chutes Agent Toolkit notes a live-auth caveat: direct inference succeeded with `X-API-Key: cpk_...`; `Authorization: Bearer cpk_...` returned 401 in toolkit live tests dated 2026-04-15. Hermes custom providers generally expect bearer-style auth. Almanac currently treats Chutes as an OpenAI-compatible provider through Hermes custom-provider configuration.
+The Chutes Agent Toolkit notes a live-auth caveat: direct inference succeeded with `X-API-Key: cpk_...`; `Authorization: Bearer cpk_...` returned 401 in toolkit live tests dated 2026-04-15. Hermes custom providers generally expect bearer-style auth. ArcLink currently treats Chutes as an OpenAI-compatible provider through Hermes custom-provider configuration.
 
 ArcLink must build and test one of these before claiming Chutes works end-to-end:
 
@@ -47,7 +47,7 @@ Chutes is the default ArcLink inference provider. ArcLink owner account will cre
 BYOK remains available:
 
 - OpenAI Codex OAuth/device flow.
-- Anthropic/Claude OAuth/PKCE where supported by current Almanac flow.
+- Anthropic/Claude OAuth/PKCE where supported by current ArcLink flow.
 - Optional user-owned Chutes key later, but default is ArcLink-managed.
 
 ## Implementation Shape

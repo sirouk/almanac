@@ -9,8 +9,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: refresh-agent-install.sh --unix-user <user> [--bot-name <name>] [--user-name <name>] [--hermes-home <path>] [--repo-dir <path>] [--restart-gateway]
 
-Re-sync Almanac skills/plugins into an enrolled user's Hermes home, upsert the
-default Almanac MCP server entries without interactive prompts, refresh the
+Re-sync ArcLink skills/plugins into an enrolled user's Hermes home, upsert the
+default ArcLink MCP server entries without interactive prompts, refresh the
 identity prompt, then kick the plugin-managed context refresh and restart agent-facing
 services. By default, an already-running gateway is left alone to avoid
 interrupting user work. Pass --restart-gateway only when the shared Hermes
@@ -80,19 +80,19 @@ if ! id "$UNIX_USER" >/dev/null 2>&1; then
 fi
 
 TARGET_UID="$(id -u "$UNIX_USER")"
-TARGET_HERMES_HOME="${HERMES_HOME_ARG:-$HOME_DIR/.local/share/almanac-agent/hermes-home}"
-SOURCE_REPO_DIR="${REPO_DIR_ARG:-$ALMANAC_REPO_DIR}"
+TARGET_HERMES_HOME="${HERMES_HOME_ARG:-$HOME_DIR/.local/share/arclink-agent/hermes-home}"
+SOURCE_REPO_DIR="${REPO_DIR_ARG:-$ARCLINK_REPO_DIR}"
 RUNTIME_PYTHON="$(require_runtime_python)"
 RUNTIME_HERMES="$(require_runtime_hermes)"
 BUNDLED_SKILLS_DIR=""
 if [[ -d "$RUNTIME_DIR/hermes-agent-src/skills" ]]; then
   BUNDLED_SKILLS_DIR="$RUNTIME_DIR/hermes-agent-src/skills"
 fi
-ALMANAC_QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
+ARCLINK_QMD_URL="${ARCLINK_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
 TARGET_LOCAL_BIN_DIR="$HOME_DIR/.local/bin"
 TARGET_USER_SYSTEMD_DIR="$HOME_DIR/.config/systemd/user"
-TARGET_VAULT_LINK_PATH="${ALMANAC_USER_VAULT_LINK_PATH:-}"
-TARGET_ALMANAC_LINK_PATH="${ALMANAC_USER_ALMANAC_LINK_PATH:-$HOME_DIR/Almanac}"
+TARGET_VAULT_LINK_PATH="${ARCLINK_USER_VAULT_LINK_PATH:-}"
+TARGET_ARCLINK_LINK_PATH="${ARCLINK_USER_ARCLINK_LINK_PATH:-$HOME_DIR/ArcLink}"
 
 run_as_target() {
   local -a cmd=("$@")
@@ -151,13 +151,13 @@ try_user_systemctl() {
 
 target_can_access_repo() {
   if [[ "$(id -un)" == "$UNIX_USER" ]]; then
-    [[ -x "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" ]] && return 0
+    [[ -x "$SOURCE_REPO_DIR/bin/install-arclink-skills.sh" ]] && return 0
     return 1
   fi
   if [[ "$(id -u)" -ne 0 ]]; then
     return 1
   fi
-  runuser -u "$UNIX_USER" -- test -x "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh"
+  runuser -u "$UNIX_USER" -- test -x "$SOURCE_REPO_DIR/bin/install-arclink-skills.sh"
 }
 
 run_with_target_env_as_root() {
@@ -201,15 +201,15 @@ ensure_user_vault_link() {
   if [[ -n "$TARGET_VAULT_LINK_PATH" ]]; then
     ensure_one_vault_link "$TARGET_VAULT_LINK_PATH" || status=1
   fi
-  ensure_one_vault_link "$TARGET_ALMANAC_LINK_PATH" || status=1
+  ensure_one_vault_link "$TARGET_ARCLINK_LINK_PATH" || status=1
   ensure_one_vault_link "$TARGET_HERMES_HOME/Vault" || status=1
-  ensure_one_vault_link "$TARGET_HERMES_HOME/Almanac" || status=1
+  ensure_one_vault_link "$TARGET_HERMES_HOME/ArcLink" || status=1
   return "$status"
 }
 
 install_local_user_wrappers() {
-  local wrapper_path="$TARGET_LOCAL_BIN_DIR/almanac-agent-hermes"
-  local backup_wrapper="$TARGET_LOCAL_BIN_DIR/almanac-agent-configure-backup"
+  local wrapper_path="$TARGET_LOCAL_BIN_DIR/arclink-agent-hermes"
+  local backup_wrapper="$TARGET_LOCAL_BIN_DIR/arclink-agent-configure-backup"
 
   mkdir -p "$TARGET_LOCAL_BIN_DIR"
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -240,10 +240,10 @@ restart_gateway_if_possible() {
   if [[ ! -S "\$bus_path" ]] || ! command -v systemctl >/dev/null 2>&1; then
     return 0
   fi
-  printf '%s\n' "Restarting Almanac messaging gateway so config changes apply..." >&2
+  printf '%s\n' "Restarting ArcLink messaging gateway so config changes apply..." >&2
   env XDG_RUNTIME_DIR="\$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=\$bus_path" \\
-    systemctl --user restart almanac-user-agent-gateway.service >/dev/null 2>&1 || \\
-    printf '%s\n' "Note: could not restart Almanac messaging gateway automatically; run 'systemctl --user restart almanac-user-agent-gateway.service' in the remote account." >&2
+    systemctl --user restart arclink-user-agent-gateway.service >/dev/null 2>&1 || \\
+    printf '%s\n' "Note: could not restart ArcLink messaging gateway automatically; run 'systemctl --user restart arclink-user-agent-gateway.service' in the remote account." >&2
 }
 
 set +e
@@ -272,7 +272,7 @@ EOF
   fi
 }
 
-install_almanac_cron_jobs() {
+install_arclink_cron_jobs() {
   local cron_jobs_script="$SOURCE_REPO_DIR/bin/install-agent-cron-jobs.sh"
   if [[ -x "$cron_jobs_script" ]]; then
     run_as_target "$cron_jobs_script" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME" >/dev/null
@@ -280,7 +280,7 @@ install_almanac_cron_jobs() {
 }
 
 ensure_gateway_home_channel_env() {
-  local state_file="$TARGET_HERMES_HOME/state/almanac-enrollment.json"
+  local state_file="$TARGET_HERMES_HOME/state/arclink-enrollment.json"
   local env_file="$TARGET_HERMES_HOME/.env"
   if [[ ! -f "$state_file" ]]; then
     return 0
@@ -343,7 +343,7 @@ PY
 }
 
 ensure_agent_mcp_auth() {
-  local token_file="$TARGET_HERMES_HOME/secrets/almanac-bootstrap-token"
+  local token_file="$TARGET_HERMES_HOME/secrets/arclink-bootstrap-token"
 
   if [[ "$(id -u)" -ne 0 ]]; then
     if [[ ! -s "$token_file" ]]; then
@@ -357,7 +357,7 @@ ensure_agent_mcp_auth() {
     "$UNIX_USER" "$TARGET_HERMES_HOME" "$token_file" <<'PY'
 import sys
 
-from almanac_control import Config, connect_db, ensure_agent_mcp_bootstrap_token
+from arclink_control import Config, connect_db, ensure_agent_mcp_bootstrap_token
 
 cfg = Config.from_env()
 with connect_db(cfg) as conn:
@@ -369,11 +369,11 @@ with connect_db(cfg) as conn:
         actor="refresh-agent-install",
     )
 PY
-  SERVICE_NOTES+=("    - Almanac MCP auth: bootstrap token checked/repaired")
+  SERVICE_NOTES+=("    - ArcLink MCP auth: bootstrap token checked/repaired")
 }
 
 remove_legacy_backup_timer_unit() {
-  local timer_path="$TARGET_USER_SYSTEMD_DIR/almanac-user-agent-backup.timer"
+  local timer_path="$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-backup.timer"
   rm -f "$timer_path"
 }
 
@@ -447,10 +447,10 @@ ensure_systemd_bundled_skills_env() {
   fi
 
   local env_line="Environment=HERMES_BUNDLED_SKILLS=$BUNDLED_SKILLS_DIR"
-  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/almanac-user-agent-refresh.service" "$env_line"
-  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/almanac-user-agent-backup.service" "$env_line"
-  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/almanac-user-agent-gateway.service" "$env_line"
-  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/almanac-user-agent-dashboard.service" "$env_line"
+  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-refresh.service" "$env_line"
+  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-backup.service" "$env_line"
+  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-gateway.service" "$env_line"
+  ensure_unit_environment_line "$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-dashboard.service" "$env_line"
 
   if [[ "$SYSTEMD_ENV_UPDATED" == "1" ]]; then
     RESTART_GATEWAY="1"
@@ -460,20 +460,20 @@ ensure_systemd_bundled_skills_env() {
 
 ensure_gateway_running_without_interrupting_active_turns() {
   local state=""
-  if run_user_systemctl is-active almanac-user-agent-gateway.service >/dev/null 2>&1; then
+  if run_user_systemctl is-active arclink-user-agent-gateway.service >/dev/null 2>&1; then
     if [[ "$RESTART_GATEWAY" == "1" ]]; then
-      try_user_systemctl "Hermes gateway runtime restart" restart almanac-user-agent-gateway.service
+      try_user_systemctl "Hermes gateway runtime restart" restart arclink-user-agent-gateway.service
       return 0
     fi
     SERVICE_NOTES+=("    - Hermes gateway: already active; restart deferred to avoid interrupting user work")
     return 0
   fi
   state="$(
-    run_user_systemctl is-enabled almanac-user-agent-gateway.service 2>/dev/null || true
+    run_user_systemctl is-enabled arclink-user-agent-gateway.service 2>/dev/null || true
   )"
   case "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
     enabled|static|indirect)
-      try_user_systemctl "Hermes gateway" start almanac-user-agent-gateway.service
+      try_user_systemctl "Hermes gateway" start arclink-user-agent-gateway.service
       ;;
     *)
       SERVICE_NOTES+=("    - Hermes gateway: not enabled; start skipped")
@@ -483,16 +483,16 @@ ensure_gateway_running_without_interrupting_active_turns() {
 
 if target_can_access_repo; then
   run_as_target "$SOURCE_REPO_DIR/bin/sync-hermes-bundled-skills.sh" "$TARGET_HERMES_HOME" "$RUNTIME_DIR"
-  run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
-  run_as_target "$SOURCE_REPO_DIR/bin/install-almanac-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
+  run_as_target "$SOURCE_REPO_DIR/bin/install-arclink-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
+  run_as_target "$SOURCE_REPO_DIR/bin/install-arclink-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_as_target "$SOURCE_REPO_DIR/bin/upsert-hermes-mcps.sh" "$TARGET_HERMES_HOME"
   if [[ -x "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" ]]; then
     run_as_target "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" "$TARGET_HERMES_HOME" "$RUNTIME_DIR"
   fi
-  install_almanac_cron_jobs
+  install_arclink_cron_jobs
   run_as_target \
     "$RUNTIME_PYTHON" \
-    "$SOURCE_REPO_DIR/python/almanac_headless_hermes_setup.py" \
+    "$SOURCE_REPO_DIR/python/arclink_headless_hermes_setup.py" \
     --identity-only \
     --bot-name "${BOT_NAME:-$UNIX_USER}" \
     --unix-user "$UNIX_USER" \
@@ -503,8 +503,8 @@ else
     exit 1
   fi
   run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/sync-hermes-bundled-skills.sh" "$TARGET_HERMES_HOME" "$RUNTIME_DIR"
-  run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-almanac-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
-  run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-almanac-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
+  run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-arclink-skills.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
+  run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/install-arclink-plugins.sh" "$SOURCE_REPO_DIR" "$TARGET_HERMES_HOME"
   run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/upsert-hermes-mcps.sh" "$TARGET_HERMES_HOME"
   if [[ -x "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" ]]; then
     run_with_target_env_as_root "$SOURCE_REPO_DIR/bin/migrate-hermes-config.sh" "$TARGET_HERMES_HOME" "$RUNTIME_DIR"
@@ -514,7 +514,7 @@ else
   fi
   run_with_target_env_as_root \
     "$RUNTIME_PYTHON" \
-    "$SOURCE_REPO_DIR/python/almanac_headless_hermes_setup.py" \
+    "$SOURCE_REPO_DIR/python/arclink_headless_hermes_setup.py" \
     --identity-only \
     --bot-name "${BOT_NAME:-$UNIX_USER}" \
     --unix-user "$UNIX_USER" \
@@ -527,24 +527,24 @@ install_local_user_wrappers
 ensure_gateway_home_channel_env
 ensure_agent_mcp_auth
 
-run_user_systemctl disable --now almanac-user-agent-backup.timer >/dev/null 2>&1 || true
+run_user_systemctl disable --now arclink-user-agent-backup.timer >/dev/null 2>&1 || true
 remove_legacy_backup_timer_unit
 ensure_systemd_bundled_skills_env
 try_user_systemctl "user manager daemon-reload" daemon-reload
-try_user_systemctl "plugin-managed context refresh service" start almanac-user-agent-refresh.service
+try_user_systemctl "plugin-managed context refresh service" start arclink-user-agent-refresh.service
 ensure_gateway_running_without_interrupting_active_turns
-try_user_systemctl "Hermes dashboard/proxy" restart almanac-user-agent-dashboard.service almanac-user-agent-dashboard-proxy.service
-try_user_systemctl "code workspace" restart almanac-user-agent-code.service
+try_user_systemctl "Hermes dashboard/proxy" restart arclink-user-agent-dashboard.service arclink-user-agent-dashboard-proxy.service
+try_user_systemctl "code workspace" restart arclink-user-agent-code.service
 
 cat <<EOF
-Refreshed Almanac install for $UNIX_USER
+Refreshed ArcLink install for $UNIX_USER
   repo: $SOURCE_REPO_DIR
   home: $HOME_DIR
   hermes_home: $TARGET_HERMES_HOME
   mcp_urls:
-    - almanac-mcp: $ALMANAC_MCP_URL
-    - almanac-qmd: $ALMANAC_QMD_URL
-$(if [[ -n "${ALMANAC_EXTRA_MCP_URL:-}" ]]; then printf '    - %s: %s\n' "${ALMANAC_EXTRA_MCP_NAME:-external-kb}" "$ALMANAC_EXTRA_MCP_URL"; fi)
+    - arclink-mcp: $ARCLINK_MCP_URL
+    - arclink-qmd: $ARCLINK_QMD_URL
+$(if [[ -n "${ARCLINK_EXTRA_MCP_URL:-}" ]]; then printf '    - %s: %s\n' "${ARCLINK_EXTRA_MCP_NAME:-external-kb}" "$ARCLINK_EXTRA_MCP_URL"; fi)
 EOF
 
 if [[ ${#SERVICE_NOTES[@]} -gt 0 ]]; then

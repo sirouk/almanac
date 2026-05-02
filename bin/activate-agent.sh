@@ -3,13 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MCP_URL="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp}"
-QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
-HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
-TOKEN_FILE="${ALMANAC_BOOTSTRAP_TOKEN_FILE:-$HERMES_HOME/secrets/almanac-bootstrap-token}"
-STATE_FILE="${ALMANAC_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/almanac-enrollment.json}"
-FIRST_CONTACT_SCRIPT="$REPO_DIR/skills/almanac-first-contact/scripts/run-first-contact.sh"
-FIRST_CONTACT_LOG="$HERMES_HOME/state/almanac-first-contact.log"
+MCP_URL="${ARCLINK_MCP_URL:-http://127.0.0.1:${ARCLINK_MCP_PORT:-8282}/mcp}"
+QMD_URL="${ARCLINK_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
+HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/arclink-agent/hermes-home}"
+TOKEN_FILE="${ARCLINK_BOOTSTRAP_TOKEN_FILE:-$HERMES_HOME/secrets/arclink-bootstrap-token}"
+STATE_FILE="${ARCLINK_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/arclink-enrollment.json}"
+FIRST_CONTACT_SCRIPT="$REPO_DIR/skills/arclink-first-contact/scripts/run-first-contact.sh"
+FIRST_CONTACT_LOG="$HERMES_HOME/state/arclink-first-contact.log"
 
 json_get() {
   local file="$1"
@@ -73,7 +73,7 @@ if [[ "$status" == "active" ]]; then
   needs_registration="0"
 fi
 if [[ "$status" == "denied" || "$status" == "expired" ]]; then
-  echo "Almanac enrollment $status." >&2
+  echo "ArcLink enrollment $status." >&2
   exit 0
 fi
 
@@ -85,17 +85,17 @@ chmod 600 "$register_args" || true
 trap 'rm -f "$register_out" "$register_err" "$register_args"' EXIT
 
 if [[ "$needs_registration" == "1" ]]; then
-ALMANAC_ENROLLMENT_STATE_FILE="$STATE_FILE" \
-ALMANAC_REGISTER_TOKEN="$token" \
+ARCLINK_ENROLLMENT_STATE_FILE="$STATE_FILE" \
+ARCLINK_REGISTER_TOKEN="$token" \
 python3 - "$register_args" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
-state = json.loads(Path(os.environ["ALMANAC_ENROLLMENT_STATE_FILE"]).read_text(encoding="utf-8"))
+state = json.loads(Path(os.environ["ARCLINK_ENROLLMENT_STATE_FILE"]).read_text(encoding="utf-8"))
 Path(sys.argv[1]).write_text(json.dumps({
-    "token": os.environ["ALMANAC_REGISTER_TOKEN"],
+    "token": os.environ["ARCLINK_REGISTER_TOKEN"],
     "unix_user": state["unix_user"],
     "display_name": state["requester_identity"],
     "role": "user",
@@ -105,7 +105,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "channels": state.get("channels", ["tui-only"]),
 }) + "\n", encoding="utf-8")
 PY
-if python3 "$REPO_DIR/python/almanac_rpc_client.py" \
+if python3 "$REPO_DIR/python/arclink_rpc_client.py" \
   --url "$MCP_URL" \
   --tool "agents.register" \
   --json-args-file "$register_args" >"$register_out" 2>"$register_err"; then
@@ -131,17 +131,17 @@ else
   message="$(tr '\n' ' ' <"$register_err")"
   lowered="$(printf '%s' "$message" | tr '[:upper:]' '[:lower:]')"
   if [[ "$lowered" == *"pending operator approval"* || "$lowered" == *"not active"* || "$lowered" == *"pending"*approval* ]]; then
-    echo "Almanac enrollment pending operator approval."
+    echo "ArcLink enrollment pending operator approval."
     exit 0
   fi
   if [[ "$lowered" == *"denied"* ]]; then
     update_state_patch '{"status":"denied"}'
-    echo "Almanac enrollment denied." >&2
+    echo "ArcLink enrollment denied." >&2
     exit 0
   fi
   if [[ "$lowered" == *"expired"* ]]; then
     update_state_patch '{"status":"expired"}'
-    echo "Almanac enrollment expired." >&2
+    echo "ArcLink enrollment expired." >&2
     exit 0
   fi
   cat "$register_err" >&2
@@ -153,10 +153,10 @@ first_contact_ran_at="$(json_get "$STATE_FILE" "first_contact_ran_at")"
 if [[ -z "$first_contact_ran_at" && -x "$FIRST_CONTACT_SCRIPT" ]]; then
   mkdir -p "$(dirname "$FIRST_CONTACT_LOG")"
   if HERMES_HOME="$HERMES_HOME" \
-     ALMANAC_MCP_URL="$MCP_URL" \
-     ALMANAC_QMD_URL="$QMD_URL" \
-     ALMANAC_BOOTSTRAP_TOKEN_FILE="$TOKEN_FILE" \
-     ALMANAC_SHARED_REPO_DIR="$REPO_DIR" \
+     ARCLINK_MCP_URL="$MCP_URL" \
+     ARCLINK_QMD_URL="$QMD_URL" \
+     ARCLINK_BOOTSTRAP_TOKEN_FILE="$TOKEN_FILE" \
+     ARCLINK_SHARED_REPO_DIR="$REPO_DIR" \
      "$FIRST_CONTACT_SCRIPT" >"$FIRST_CONTACT_LOG" 2>&1; then
     update_state_patch "$(
       LOG_PATH="$FIRST_CONTACT_LOG" python3 - <<'PY'
@@ -179,9 +179,9 @@ print(json.dumps({
 }))
 PY
     )"
-    echo "Almanac first-contact retry pending; see $FIRST_CONTACT_LOG" >&2
+    echo "ArcLink first-contact retry pending; see $FIRST_CONTACT_LOG" >&2
     exit 0
   fi
 fi
 
-echo "Almanac enrollment active."
+echo "ArcLink enrollment active."

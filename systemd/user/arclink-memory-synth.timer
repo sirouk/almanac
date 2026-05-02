@@ -1,0 +1,10 @@
+[Unit]
+Description=Synthesize compact ArcLink memory cards every 30 minutes
+
+[Timer]
+OnBootSec=6m
+OnUnitActiveSec=30m
+Unit=arclink-memory-synth.service
+
+[Install]
+WantedBy=timers.target

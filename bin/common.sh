@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+ARCLINK_OPERATOR_ARTIFACT_FILE="${ARCLINK_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.arclink-operator.env}"
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -32,23 +32,23 @@ lowercase() {
 }
 
 read_operator_artifact_hints() {
-  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local artifact="${ARCLINK_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.arclink-operator.env}"
 
   if [[ ! -r "$artifact" ]]; then
     return 1
   fi
 
   (
-    ALMANAC_OPERATOR_DEPLOYED_USER=""
-    ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=""
-    ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=""
-    ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+    ARCLINK_OPERATOR_DEPLOYED_USER=""
+    ARCLINK_OPERATOR_DEPLOYED_REPO_DIR=""
+    ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR=""
+    ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE=""
     # shellcheck disable=SC1090
     source "$artifact"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_USER:-}"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_REPO_DIR:-}"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR:-}"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_USER:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_REPO_DIR:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
   )
 }
 
@@ -143,11 +143,11 @@ find_config_file() {
   local artifact_user="" artifact_repo="" artifact_priv="" artifact_config="" artifact_home=""
   local home_dir=""
   local line=""
-  nested_priv="$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
-  sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/almanac-priv/config/almanac.env"
+  nested_priv="$BOOTSTRAP_DIR/arclink-priv/config/arclink.env"
+  sibling_priv="$(cd "$BOOTSTRAP_DIR/.." && pwd)/arclink-priv/config/arclink.env"
   home_dir="$(resolve_home_dir || true)"
 
-  explicit_config="${ALMANAC_CONFIG_FILE:-}"
+  explicit_config="${ARCLINK_CONFIG_FILE:-}"
   if [[ -n "$explicit_config" ]]; then
     echo "$explicit_config"
     return 0
@@ -168,32 +168,32 @@ find_config_file() {
   fi
   if [[ -n "$artifact_priv" ]]; then
     candidates+=(
-      "$artifact_priv/config/almanac.env"
-      "$artifact_priv/almanac.env"
+      "$artifact_priv/config/arclink.env"
+      "$artifact_priv/arclink.env"
     )
   fi
   if [[ -n "$artifact_repo" ]]; then
     candidates+=(
-      "$artifact_repo/almanac-priv/config/almanac.env"
-      "$artifact_repo/config/almanac.env"
+      "$artifact_repo/arclink-priv/config/arclink.env"
+      "$artifact_repo/config/arclink.env"
     )
   fi
   if [[ -n "$artifact_home" ]]; then
     candidates+=(
-      "$artifact_home/almanac/almanac-priv/config/almanac.env"
-      "$artifact_home/almanac-priv/config/almanac.env"
+      "$artifact_home/arclink/arclink-priv/config/arclink.env"
+      "$artifact_home/arclink-priv/config/arclink.env"
     )
   fi
 
   candidates+=(
-    "$BOOTSTRAP_DIR/config/almanac.env"
+    "$BOOTSTRAP_DIR/config/arclink.env"
     "$nested_priv"
     "$sibling_priv"
   )
   if [[ -n "$home_dir" ]]; then
     candidates+=(
-      "$home_dir/almanac/almanac-priv/config/almanac.env"
-      "$home_dir/almanac-priv/config/almanac.env"
+      "$home_dir/arclink/arclink-priv/config/arclink.env"
+      "$home_dir/arclink-priv/config/arclink.env"
     )
   fi
   local candidate=""
@@ -213,14 +213,14 @@ if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
-ALMANAC_NAME="${ALMANAC_NAME:-almanac}"
-ALMANAC_USER="${ALMANAC_USER:-$(id -un)}"
-ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$BOOTSTRAP_DIR}"
-ALMANAC_HOME="${ALMANAC_HOME:-$(cd "$ALMANAC_REPO_DIR/.." && pwd)}"
-ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
-ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
-VAULT_DIR="${VAULT_DIR:-$ALMANAC_PRIV_DIR/vault}"
-STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
+ARCLINK_NAME="${ARCLINK_NAME:-arclink}"
+ARCLINK_USER="${ARCLINK_USER:-$(id -un)}"
+ARCLINK_REPO_DIR="${ARCLINK_REPO_DIR:-$BOOTSTRAP_DIR}"
+ARCLINK_HOME="${ARCLINK_HOME:-$(cd "$ARCLINK_REPO_DIR/.." && pwd)}"
+ARCLINK_PRIV_DIR="${ARCLINK_PRIV_DIR:-$ARCLINK_REPO_DIR/arclink-priv}"
+ARCLINK_PRIV_CONFIG_DIR="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}"
+VAULT_DIR="${VAULT_DIR:-$ARCLINK_PRIV_DIR/vault}"
+STATE_DIR="${STATE_DIR:-$ARCLINK_PRIV_DIR/state}"
 NEXTCLOUD_STATE_DIR="${NEXTCLOUD_STATE_DIR:-$STATE_DIR/nextcloud}"
 PDF_INGEST_DIR="${PDF_INGEST_DIR:-$STATE_DIR/pdf-ingest}"
 PDF_INGEST_MARKDOWN_DIR="${PDF_INGEST_MARKDOWN_DIR:-$PDF_INGEST_DIR/markdown}"
@@ -229,22 +229,22 @@ PDF_INGEST_MANIFEST_DB="${PDF_INGEST_MANIFEST_DB:-$PDF_INGEST_DIR/manifest.sqlit
 PDF_INGEST_LOCK_FILE="${PDF_INGEST_LOCK_FILE:-$PDF_INGEST_DIR/ingest.lock}"
 QMD_REFRESH_LOCK_FILE="${QMD_REFRESH_LOCK_FILE:-$STATE_DIR/qmd-refresh.lock}"
 RUNTIME_DIR="${RUNTIME_DIR:-$STATE_DIR/runtime}"
-PUBLISHED_DIR="${PUBLISHED_DIR:-$ALMANAC_PRIV_DIR/published}"
-ALMANAC_DB_PATH="${ALMANAC_DB_PATH:-$STATE_DIR/almanac-control.sqlite3}"
-ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
-ALMANAC_CURATOR_DIR="${ALMANAC_CURATOR_DIR:-$STATE_DIR/curator}"
-ALMANAC_CURATOR_MANIFEST="${ALMANAC_CURATOR_MANIFEST:-$ALMANAC_CURATOR_DIR/manifest.json}"
-ALMANAC_CURATOR_HERMES_HOME="${ALMANAC_CURATOR_HERMES_HOME:-$ALMANAC_CURATOR_DIR/hermes-home}"
-ALMANAC_ARCHIVED_AGENTS_DIR="${ALMANAC_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
-ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
-ALMANAC_NOTION_INDEX_DIR="${ALMANAC_NOTION_INDEX_DIR:-$STATE_DIR/notion-index}"
-ALMANAC_NOTION_INDEX_MARKDOWN_DIR="${ALMANAC_NOTION_INDEX_MARKDOWN_DIR:-$ALMANAC_NOTION_INDEX_DIR/markdown}"
-QMD_INDEX_NAME="${QMD_INDEX_NAME:-almanac}"
+PUBLISHED_DIR="${PUBLISHED_DIR:-$ARCLINK_PRIV_DIR/published}"
+ARCLINK_DB_PATH="${ARCLINK_DB_PATH:-$STATE_DIR/arclink-control.sqlite3}"
+ARCLINK_AGENTS_STATE_DIR="${ARCLINK_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
+ARCLINK_CURATOR_DIR="${ARCLINK_CURATOR_DIR:-$STATE_DIR/curator}"
+ARCLINK_CURATOR_MANIFEST="${ARCLINK_CURATOR_MANIFEST:-$ARCLINK_CURATOR_DIR/manifest.json}"
+ARCLINK_CURATOR_HERMES_HOME="${ARCLINK_CURATOR_HERMES_HOME:-$ARCLINK_CURATOR_DIR/hermes-home}"
+ARCLINK_ARCHIVED_AGENTS_DIR="${ARCLINK_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
+ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
+ARCLINK_NOTION_INDEX_DIR="${ARCLINK_NOTION_INDEX_DIR:-$STATE_DIR/notion-index}"
+ARCLINK_NOTION_INDEX_MARKDOWN_DIR="${ARCLINK_NOTION_INDEX_MARKDOWN_DIR:-$ARCLINK_NOTION_INDEX_DIR/markdown}"
+QMD_INDEX_NAME="${QMD_INDEX_NAME:-arclink}"
 QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
 PDF_INGEST_COLLECTION_NAME="${PDF_INGEST_COLLECTION_NAME:-vault-pdf-ingest}"
-ALMANAC_NOTION_INDEX_COLLECTION_NAME="${ALMANAC_NOTION_INDEX_COLLECTION_NAME:-notion-shared}"
-ALMANAC_NOTION_INDEX_ROOTS="${ALMANAC_NOTION_INDEX_ROOTS:-}"
-ALMANAC_NOTION_INDEX_RUN_EMBED="${ALMANAC_NOTION_INDEX_RUN_EMBED:-1}"
+ARCLINK_NOTION_INDEX_COLLECTION_NAME="${ARCLINK_NOTION_INDEX_COLLECTION_NAME:-notion-shared}"
+ARCLINK_NOTION_INDEX_ROOTS="${ARCLINK_NOTION_INDEX_ROOTS:-}"
+ARCLINK_NOTION_INDEX_RUN_EMBED="${ARCLINK_NOTION_INDEX_RUN_EMBED:-1}"
 VAULT_QMD_COLLECTION_MASK="${VAULT_QMD_COLLECTION_MASK:-**/*.{md,markdown,mdx,txt,text}}"
 VAULT_QMD_COLLECTION_MASK="$(normalize_vault_qmd_collection_mask "$VAULT_QMD_COLLECTION_MASK")"
 QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
@@ -258,34 +258,34 @@ QMD_EMBED_MAX_DOCS_PER_BATCH="${QMD_EMBED_MAX_DOCS_PER_BATCH:-8}"
 QMD_EMBED_MAX_BATCH_MB="${QMD_EMBED_MAX_BATCH_MB:-16}"
 QMD_EMBED_FORCE_ON_NEXT_REFRESH="${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"
 QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
-ALMANAC_MCP_HOST="${ALMANAC_MCP_HOST:-127.0.0.1}"
-ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
-ALMANAC_MCP_URL="${ALMANAC_MCP_URL:-http://${ALMANAC_MCP_HOST}:${ALMANAC_MCP_PORT}/mcp}"
-ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
-ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+ARCLINK_MCP_HOST="${ARCLINK_MCP_HOST:-127.0.0.1}"
+ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
+ARCLINK_MCP_URL="${ARCLINK_MCP_URL:-http://${ARCLINK_MCP_HOST}:${ARCLINK_MCP_PORT}/mcp}"
+ARCLINK_NOTION_WEBHOOK_HOST="${ARCLINK_NOTION_WEBHOOK_HOST:-127.0.0.1}"
+ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
 ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
-ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
-ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
-ALMANAC_SSOT_NOTION_SPACE_URL="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
-ALMANAC_SSOT_NOTION_SPACE_ID="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
-ALMANAC_SSOT_NOTION_SPACE_KIND="${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
-ALMANAC_SSOT_NOTION_API_VERSION="${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
-ALMANAC_SSOT_NOTION_TOKEN="${ALMANAC_SSOT_NOTION_TOKEN:-}"
-ALMANAC_ORG_NAME="${ALMANAC_ORG_NAME:-}"
-ALMANAC_ORG_MISSION="${ALMANAC_ORG_MISSION:-}"
-ALMANAC_ORG_PRIMARY_PROJECT="${ALMANAC_ORG_PRIMARY_PROJECT:-}"
-ALMANAC_ORG_TIMEZONE="${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
-ALMANAC_ORG_QUIET_HOURS="${ALMANAC_ORG_QUIET_HOURS:-}"
-ALMANAC_BOOTSTRAP_WINDOW_SECONDS="${ALMANAC_BOOTSTRAP_WINDOW_SECONDS:-3600}"
-ALMANAC_BOOTSTRAP_PER_IP_LIMIT="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
-ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
-ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS="${ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS:-900}"
-ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS="${ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS:-5}"
-ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS="${ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS:-60}"
-ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS="${ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS:-900}"
+ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}"
+ARCLINK_SSOT_NOTION_ROOT_PAGE_ID="${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}"
+ARCLINK_SSOT_NOTION_SPACE_URL="${ARCLINK_SSOT_NOTION_SPACE_URL:-}"
+ARCLINK_SSOT_NOTION_SPACE_ID="${ARCLINK_SSOT_NOTION_SPACE_ID:-}"
+ARCLINK_SSOT_NOTION_SPACE_KIND="${ARCLINK_SSOT_NOTION_SPACE_KIND:-}"
+ARCLINK_SSOT_NOTION_API_VERSION="${ARCLINK_SSOT_NOTION_API_VERSION:-2026-03-11}"
+ARCLINK_SSOT_NOTION_TOKEN="${ARCLINK_SSOT_NOTION_TOKEN:-}"
+ARCLINK_ORG_NAME="${ARCLINK_ORG_NAME:-}"
+ARCLINK_ORG_MISSION="${ARCLINK_ORG_MISSION:-}"
+ARCLINK_ORG_PRIMARY_PROJECT="${ARCLINK_ORG_PRIMARY_PROJECT:-}"
+ARCLINK_ORG_TIMEZONE="${ARCLINK_ORG_TIMEZONE:-Etc/UTC}"
+ARCLINK_ORG_QUIET_HOURS="${ARCLINK_ORG_QUIET_HOURS:-}"
+ARCLINK_BOOTSTRAP_WINDOW_SECONDS="${ARCLINK_BOOTSTRAP_WINDOW_SECONDS:-3600}"
+ARCLINK_BOOTSTRAP_PER_IP_LIMIT="${ARCLINK_BOOTSTRAP_PER_IP_LIMIT:-5}"
+ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
+ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS="${ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS:-900}"
+ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS="${ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS:-5}"
+ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS:-60}"
+ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS:-900}"
 PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
 PDF_INGEST_EXTRACTOR="${PDF_INGEST_EXTRACTOR:-auto}"
 PDF_INGEST_TRIGGER_QMD_REFRESH="${PDF_INGEST_TRIGGER_QMD_REFRESH:-1}"
@@ -295,29 +295,29 @@ PDF_VISION_ENDPOINT="${PDF_VISION_ENDPOINT:-}"
 PDF_VISION_MODEL="${PDF_VISION_MODEL:-}"
 PDF_VISION_API_KEY="${PDF_VISION_API_KEY:-}"
 PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
-ALMANAC_MEMORY_SYNTH_ENABLED="${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
-ALMANAC_MEMORY_SYNTH_ENDPOINT="${ALMANAC_MEMORY_SYNTH_ENDPOINT:-$PDF_VISION_ENDPOINT}"
-ALMANAC_MEMORY_SYNTH_MODEL="${ALMANAC_MEMORY_SYNTH_MODEL:-$PDF_VISION_MODEL}"
-ALMANAC_MEMORY_SYNTH_API_KEY="${ALMANAC_MEMORY_SYNTH_API_KEY:-$PDF_VISION_API_KEY}"
-ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN="${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
-ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS="${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
-ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS="${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
-ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS="${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
-ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS="${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
-ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT="${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
-ALMANAC_MEMORY_SYNTH_STATE_DIR="${ALMANAC_MEMORY_SYNTH_STATE_DIR:-$STATE_DIR/memory-synth}"
-ALMANAC_MEMORY_SYNTH_STATUS_FILE="${ALMANAC_MEMORY_SYNTH_STATUS_FILE:-$ALMANAC_MEMORY_SYNTH_STATE_DIR/status.json}"
-ALMANAC_MEMORY_SYNTH_LOCK_FILE="${ALMANAC_MEMORY_SYNTH_LOCK_FILE:-$ALMANAC_MEMORY_SYNTH_STATE_DIR/synth.lock}"
-ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE="${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"
+ARCLINK_MEMORY_SYNTH_ENABLED="${ARCLINK_MEMORY_SYNTH_ENABLED:-auto}"
+ARCLINK_MEMORY_SYNTH_ENDPOINT="${ARCLINK_MEMORY_SYNTH_ENDPOINT:-$PDF_VISION_ENDPOINT}"
+ARCLINK_MEMORY_SYNTH_MODEL="${ARCLINK_MEMORY_SYNTH_MODEL:-$PDF_VISION_MODEL}"
+ARCLINK_MEMORY_SYNTH_API_KEY="${ARCLINK_MEMORY_SYNTH_API_KEY:-$PDF_VISION_API_KEY}"
+ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN="${ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
+ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS="${ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
+ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS="${ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
+ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS="${ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
+ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS="${ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
+ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT="${ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
+ARCLINK_MEMORY_SYNTH_STATE_DIR="${ARCLINK_MEMORY_SYNTH_STATE_DIR:-$STATE_DIR/memory-synth}"
+ARCLINK_MEMORY_SYNTH_STATUS_FILE="${ARCLINK_MEMORY_SYNTH_STATUS_FILE:-$ARCLINK_MEMORY_SYNTH_STATE_DIR/status.json}"
+ARCLINK_MEMORY_SYNTH_LOCK_FILE="${ARCLINK_MEMORY_SYNTH_LOCK_FILE:-$ARCLINK_MEMORY_SYNTH_STATE_DIR/synth.lock}"
+ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE="${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"
 VAULT_WATCH_DEBOUNCE_SECONDS="${VAULT_WATCH_DEBOUNCE_SECONDS:-0.5}"
 VAULT_WATCH_MAX_BATCH_SECONDS="${VAULT_WATCH_MAX_BATCH_SECONDS:-10}"
 VAULT_WATCH_RUN_EMBED="${VAULT_WATCH_RUN_EMBED:-auto}"
-QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ALMANAC_PRIV_DIR/quarto}"
+QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ARCLINK_PRIV_DIR/quarto}"
 QUARTO_OUTPUT_DIR="${QUARTO_OUTPUT_DIR:-$PUBLISHED_DIR}"
 BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
-BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$ALMANAC_HOME/.ssh/almanac-backup-ed25519}"
-BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$ALMANAC_HOME/.ssh/almanac-backup-known_hosts}"
+BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$ARCLINK_HOME/.ssh/arclink-backup-ed25519}"
+BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$ARCLINK_HOME/.ssh/arclink-backup-known_hosts}"
 
 resolve_runtime_python() {
   local python_bin="${RUNTIME_DIR:-}/hermes-venv/bin/python3"
@@ -334,7 +334,7 @@ require_runtime_python() {
     printf '%s\n' "$python_bin"
     return 0
   fi
-  echo "Managed Almanac runtime python is missing at $python_bin. Run bootstrap-userland first." >&2
+  echo "Managed ArcLink runtime python is missing at $python_bin. Run bootstrap-userland first." >&2
   return 1
 }
 
@@ -447,13 +447,13 @@ require_runtime_hermes() {
     printf '%s\n' "$hermes_bin"
     return 0
   fi
-  echo "Managed Almanac runtime hermes is missing at $hermes_bin. Run bootstrap-userland first." >&2
+  echo "Managed ArcLink runtime hermes is missing at $hermes_bin. Run bootstrap-userland first." >&2
   return 1
 }
-BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
-BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-almanac@localhost}"
+BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
+BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-arclink@localhost}"
 NEXTCLOUD_PORT="${NEXTCLOUD_PORT:-18080}"
-NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
+NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-arclink.your-tailnet.ts.net}"
 POSTGRES_DB="${POSTGRES_DB:-${MARIADB_DATABASE:-nextcloud}}"
 POSTGRES_USER="${POSTGRES_USER:-${MARIADB_USER:-nextcloud}}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${MARIADB_PASSWORD:-}}"
@@ -472,65 +472,65 @@ NEXTCLOUD_HTML_DIR="${NEXTCLOUD_HTML_DIR:-$NEXTCLOUD_STATE_DIR/html}"
 NEXTCLOUD_DATA_DIR="${NEXTCLOUD_DATA_DIR:-$NEXTCLOUD_STATE_DIR/data}"
 NEXTCLOUD_CUSTOM_CONFIG_DIR="${NEXTCLOUD_CUSTOM_CONFIG_DIR:-$NEXTCLOUD_STATE_DIR/config}"
 NEXTCLOUD_EMPTY_SKELETON_DIR="${NEXTCLOUD_EMPTY_SKELETON_DIR:-$NEXTCLOUD_STATE_DIR/empty-skeleton}"
-NEXTCLOUD_ALMANAC_CONFIG_FILE="${NEXTCLOUD_ALMANAC_CONFIG_FILE:-$NEXTCLOUD_CUSTOM_CONFIG_DIR/almanac.config.php}"
+NEXTCLOUD_ARCLINK_CONFIG_FILE="${NEXTCLOUD_ARCLINK_CONFIG_FILE:-$NEXTCLOUD_CUSTOM_CONFIG_DIR/arclink.config.php}"
 NEXTCLOUD_HOOKS_DIR="${NEXTCLOUD_HOOKS_DIR:-$NEXTCLOUD_STATE_DIR/hooks}"
 NEXTCLOUD_PRE_INSTALL_HOOK_DIR="${NEXTCLOUD_PRE_INSTALL_HOOK_DIR:-$NEXTCLOUD_HOOKS_DIR/pre-installation}"
 NEXTCLOUD_POST_INSTALL_HOOK_DIR="${NEXTCLOUD_POST_INSTALL_HOOK_DIR:-$NEXTCLOUD_HOOKS_DIR/post-installation}"
 NEXTCLOUD_BEFORE_STARTING_HOOK_DIR="${NEXTCLOUD_BEFORE_STARTING_HOOK_DIR:-$NEXTCLOUD_HOOKS_DIR/before-starting}"
-NEXTCLOUD_PRE_INSTALL_HOOK_FILE="${NEXTCLOUD_PRE_INSTALL_HOOK_FILE:-$NEXTCLOUD_PRE_INSTALL_HOOK_DIR/20-almanac-config.sh}"
-NEXTCLOUD_POST_INSTALL_HOOK_FILE="${NEXTCLOUD_POST_INSTALL_HOOK_FILE:-$NEXTCLOUD_POST_INSTALL_HOOK_DIR/20-almanac-clean-admin-files.sh}"
-NEXTCLOUD_BEFORE_STARTING_HOOK_FILE="${NEXTCLOUD_BEFORE_STARTING_HOOK_FILE:-$NEXTCLOUD_BEFORE_STARTING_HOOK_DIR/20-almanac-config.sh}"
+NEXTCLOUD_PRE_INSTALL_HOOK_FILE="${NEXTCLOUD_PRE_INSTALL_HOOK_FILE:-$NEXTCLOUD_PRE_INSTALL_HOOK_DIR/20-arclink-config.sh}"
+NEXTCLOUD_POST_INSTALL_HOOK_FILE="${NEXTCLOUD_POST_INSTALL_HOOK_FILE:-$NEXTCLOUD_POST_INSTALL_HOOK_DIR/20-arclink-clean-admin-files.sh}"
+NEXTCLOUD_BEFORE_STARTING_HOOK_FILE="${NEXTCLOUD_BEFORE_STARTING_HOOK_FILE:-$NEXTCLOUD_BEFORE_STARTING_HOOK_DIR/20-arclink-config.sh}"
 NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
 NEXTCLOUD_VAULT_CONTAINER_PATH="${NEXTCLOUD_VAULT_CONTAINER_PATH:-/srv/vault}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
-TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
-ALMANAC_PRIV_TEMPLATE_DIR="${ALMANAC_PRIV_TEMPLATE_DIR:-$BOOTSTRAP_DIR/templates/almanac-priv}"
+TAILSCALE_ARCLINK_MCP_PATH="${TAILSCALE_ARCLINK_MCP_PATH:-/arclink-mcp}"
+ARCLINK_PRIV_TEMPLATE_DIR="${ARCLINK_PRIV_TEMPLATE_DIR:-$BOOTSTRAP_DIR/templates/arclink-priv}"
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
-ALMANAC_OPERATOR_TELEGRAM_USER_IDS="${ALMANAC_OPERATOR_TELEGRAM_USER_IDS:-}"
-ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
-if [[ -z "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
-  if [[ ",${ALMANAC_CURATOR_CHANNELS}," == *",telegram,"* || "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
-    ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="1"
+ARCLINK_OPERATOR_TELEGRAM_USER_IDS="${ARCLINK_OPERATOR_TELEGRAM_USER_IDS:-}"
+ARCLINK_CURATOR_CHANNELS="${ARCLINK_CURATOR_CHANNELS:-tui-only}"
+if [[ -z "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
+  if [[ ",${ARCLINK_CURATOR_CHANNELS}," == *",telegram,"* || "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
+    ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED="1"
   else
-    ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="0"
+    ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED="0"
   fi
 fi
-if [[ -z "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
-  if [[ ",${ALMANAC_CURATOR_CHANNELS}," == *",discord,"* ]]; then
-    ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="1"
+if [[ -z "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
+  if [[ ",${ARCLINK_CURATOR_CHANNELS}," == *",discord,"* ]]; then
+    ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED="1"
   else
-    ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="0"
+    ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED="0"
   fi
 fi
-ALMANAC_ONBOARDING_WINDOW_SECONDS="${ALMANAC_ONBOARDING_WINDOW_SECONDS:-3600}"
-ALMANAC_ONBOARDING_PER_USER_LIMIT="${ALMANAC_ONBOARDING_PER_USER_LIMIT:-${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}}"
-ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT="${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-$ALMANAC_ONBOARDING_PER_USER_LIMIT}"
-ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT="${ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
-ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT="${ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
+ARCLINK_ONBOARDING_WINDOW_SECONDS="${ARCLINK_ONBOARDING_WINDOW_SECONDS:-3600}"
+ARCLINK_ONBOARDING_PER_USER_LIMIT="${ARCLINK_ONBOARDING_PER_USER_LIMIT:-${ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}}"
+ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT="${ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-$ARCLINK_ONBOARDING_PER_USER_LIMIT}"
+ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT="${ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
+ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT="${ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
 OPERATOR_GENERAL_CHANNEL_ID="${OPERATOR_GENERAL_CHANNEL_ID:-}"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/model-providers.sh" 2>/dev/null || true
 if declare -f model_provider_resolve_target_or_default >/dev/null 2>&1; then
-  ALMANAC_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ALMANAC_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
-  ALMANAC_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ALMANAC_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
-  ALMANAC_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ALMANAC_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
+  ARCLINK_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ARCLINK_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
+  ARCLINK_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ARCLINK_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
+  ARCLINK_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ARCLINK_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
 else
-  ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
-  ALMANAC_MODEL_PRESET_OPUS="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
-  ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
+  ARCLINK_MODEL_PRESET_CODEX="${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
+  ARCLINK_MODEL_PRESET_OPUS="${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
+  ARCLINK_MODEL_PRESET_CHUTES="${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
 fi
-ALMANAC_ORG_PROVIDER_ENABLED="${ALMANAC_ORG_PROVIDER_ENABLED:-}"
-ALMANAC_ORG_PROVIDER_PRESET="${ALMANAC_ORG_PROVIDER_PRESET:-}"
-ALMANAC_ORG_PROVIDER_MODEL_ID="${ALMANAC_ORG_PROVIDER_MODEL_ID:-}"
-ALMANAC_ORG_PROVIDER_REASONING_EFFORT="${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}"
-ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
-ALMANAC_ORG_PROVIDER_SECRET="${ALMANAC_ORG_PROVIDER_SECRET:-}"
-ALMANAC_EXTRA_MCP_NAME="${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
-ALMANAC_EXTRA_MCP_LABEL="${ALMANAC_EXTRA_MCP_LABEL:-External knowledge rail}"
-ALMANAC_EXTRA_MCP_URL="${ALMANAC_EXTRA_MCP_URL:-}"
-ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
-ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+ARCLINK_ORG_PROVIDER_ENABLED="${ARCLINK_ORG_PROVIDER_ENABLED:-}"
+ARCLINK_ORG_PROVIDER_PRESET="${ARCLINK_ORG_PROVIDER_PRESET:-}"
+ARCLINK_ORG_PROVIDER_MODEL_ID="${ARCLINK_ORG_PROVIDER_MODEL_ID:-}"
+ARCLINK_ORG_PROVIDER_REASONING_EFFORT="${ARCLINK_ORG_PROVIDER_REASONING_EFFORT:-medium}"
+ARCLINK_ORG_PROVIDER_SECRET_PROVIDER="${ARCLINK_ORG_PROVIDER_SECRET_PROVIDER:-}"
+ARCLINK_ORG_PROVIDER_SECRET="${ARCLINK_ORG_PROVIDER_SECRET:-}"
+ARCLINK_EXTRA_MCP_NAME="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
+ARCLINK_EXTRA_MCP_LABEL="${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
+ARCLINK_EXTRA_MCP_URL="${ARCLINK_EXTRA_MCP_URL:-}"
+ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
+ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
 # Dependency pins are declared in config/pins.json; bin/pins.sh reads them.
 # For pinned components, pins.json is the source of truth. Existing env values
 # are only fallbacks for partially-bootstrapped hosts where pins.json or jq is
@@ -549,42 +549,42 @@ __pins_get_or_default() {
   fi
   printf '%s' "$value"
 }
-ALMANAC_HERMES_AGENT_REF="$(__pins_get_or_default hermes-agent ref "${ALMANAC_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
-ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
-ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
-ALMANAC_AGENT_CODE_PORT_BASE="${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
-ALMANAC_AGENT_PORT_SLOT_SPAN="${ALMANAC_AGENT_PORT_SLOT_SPAN:-5000}"
-__almanac_code_server_image_fallback="docker.io/codercom/code-server"
-__almanac_code_server_tag_fallback="4.116.0"
-if [[ -n "${ALMANAC_AGENT_CODE_SERVER_IMAGE:-}" && "$ALMANAC_AGENT_CODE_SERVER_IMAGE" == *:* ]]; then
-  __almanac_code_server_image_fallback="${ALMANAC_AGENT_CODE_SERVER_IMAGE%:*}"
-  __almanac_code_server_tag_fallback="${ALMANAC_AGENT_CODE_SERVER_IMAGE##*:}"
+ARCLINK_HERMES_AGENT_REF="$(__pins_get_or_default hermes-agent ref "${ARCLINK_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
+ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
+ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
+ARCLINK_AGENT_CODE_PORT_BASE="${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
+ARCLINK_AGENT_PORT_SLOT_SPAN="${ARCLINK_AGENT_PORT_SLOT_SPAN:-5000}"
+__arclink_code_server_image_fallback="docker.io/codercom/code-server"
+__arclink_code_server_tag_fallback="4.116.0"
+if [[ -n "${ARCLINK_AGENT_CODE_SERVER_IMAGE:-}" && "$ARCLINK_AGENT_CODE_SERVER_IMAGE" == *:* ]]; then
+  __arclink_code_server_image_fallback="${ARCLINK_AGENT_CODE_SERVER_IMAGE%:*}"
+  __arclink_code_server_tag_fallback="${ARCLINK_AGENT_CODE_SERVER_IMAGE##*:}"
 fi
-__almanac_code_server_image_default="$(__pins_get_or_default code-server image "$__almanac_code_server_image_fallback")"
-__almanac_code_server_tag_default="$(__pins_get_or_default code-server tag "$__almanac_code_server_tag_fallback")"
-ALMANAC_AGENT_CODE_SERVER_IMAGE="${__almanac_code_server_image_default}:${__almanac_code_server_tag_default}"
-unset __almanac_code_server_image_default __almanac_code_server_tag_default
-unset __almanac_code_server_image_fallback __almanac_code_server_tag_fallback
-ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
-ALMANAC_HERMES_DOCS_SYNC_ENABLED="${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}"
-ALMANAC_HERMES_DOCS_REPO_URL="${ALMANAC_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
+__arclink_code_server_image_default="$(__pins_get_or_default code-server image "$__arclink_code_server_image_fallback")"
+__arclink_code_server_tag_default="$(__pins_get_or_default code-server tag "$__arclink_code_server_tag_fallback")"
+ARCLINK_AGENT_CODE_SERVER_IMAGE="${__arclink_code_server_image_default}:${__arclink_code_server_tag_default}"
+unset __arclink_code_server_image_default __arclink_code_server_tag_default
+unset __arclink_code_server_image_fallback __arclink_code_server_tag_fallback
+ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
+ARCLINK_HERMES_DOCS_SYNC_ENABLED="${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}"
+ARCLINK_HERMES_DOCS_REPO_URL="${ARCLINK_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
 # Track the vetted Hermes docs pin for the default repo so agent-facing docs
 # cannot silently drift ahead of the pinned runtime they describe. Custom docs
 # repos keep their explicit ref.
-if [[ "$ALMANAC_HERMES_DOCS_REPO_URL" == "https://github.com/NousResearch/hermes-agent.git" ]]; then
-  ALMANAC_HERMES_DOCS_REF="$(__pins_get_or_default hermes-docs ref "${ALMANAC_HERMES_DOCS_REF:-$ALMANAC_HERMES_AGENT_REF}")"
+if [[ "$ARCLINK_HERMES_DOCS_REPO_URL" == "https://github.com/NousResearch/hermes-agent.git" ]]; then
+  ARCLINK_HERMES_DOCS_REF="$(__pins_get_or_default hermes-docs ref "${ARCLINK_HERMES_DOCS_REF:-$ARCLINK_HERMES_AGENT_REF}")"
 else
-  ALMANAC_HERMES_DOCS_REF="${ALMANAC_HERMES_DOCS_REF:-$ALMANAC_HERMES_AGENT_REF}"
+  ARCLINK_HERMES_DOCS_REF="${ARCLINK_HERMES_DOCS_REF:-$ARCLINK_HERMES_AGENT_REF}"
 fi
-ALMANAC_HERMES_DOCS_SOURCE_SUBDIR="${ALMANAC_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
-ALMANAC_HERMES_DOCS_STATE_DIR="${ALMANAC_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
-__almanac_hermes_docs_vault_default="$VAULT_DIR/Agents_KB/hermes-agent-docs"
-__almanac_hermes_docs_vault_legacy_default="$VAULT_DIR/Repos/hermes-agent-docs"
-ALMANAC_HERMES_DOCS_VAULT_DIR="${ALMANAC_HERMES_DOCS_VAULT_DIR:-$__almanac_hermes_docs_vault_default}"
-if [[ "$ALMANAC_HERMES_DOCS_VAULT_DIR" == "$__almanac_hermes_docs_vault_legacy_default" ]]; then
-  ALMANAC_HERMES_DOCS_VAULT_DIR="$__almanac_hermes_docs_vault_default"
+ARCLINK_HERMES_DOCS_SOURCE_SUBDIR="${ARCLINK_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
+ARCLINK_HERMES_DOCS_STATE_DIR="${ARCLINK_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
+__arclink_hermes_docs_vault_default="$VAULT_DIR/Agents_KB/hermes-agent-docs"
+__arclink_hermes_docs_vault_legacy_default="$VAULT_DIR/Repos/hermes-agent-docs"
+ARCLINK_HERMES_DOCS_VAULT_DIR="${ARCLINK_HERMES_DOCS_VAULT_DIR:-$__arclink_hermes_docs_vault_default}"
+if [[ "$ARCLINK_HERMES_DOCS_VAULT_DIR" == "$__arclink_hermes_docs_vault_legacy_default" ]]; then
+  ARCLINK_HERMES_DOCS_VAULT_DIR="$__arclink_hermes_docs_vault_default"
 fi
-unset __almanac_hermes_docs_vault_default __almanac_hermes_docs_vault_legacy_default
+unset __arclink_hermes_docs_vault_default __arclink_hermes_docs_vault_legacy_default
 
 qmd_normalize_index_name() {
   local index_name="${1:-index}"
@@ -746,11 +746,11 @@ PY
 }
 
 has_curator_gateway_channels() {
-  [[ ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",discord,"* || ",${ALMANAC_CURATOR_CHANNELS:-tui-only}," == *",telegram,"* ]]
+  [[ ",${ARCLINK_CURATOR_CHANNELS:-tui-only}," == *",discord,"* || ",${ARCLINK_CURATOR_CHANNELS:-tui-only}," == *",telegram,"* ]]
 }
 
 has_curator_non_onboarding_gateway_channels() {
-  local raw_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
+  local raw_channels="${ARCLINK_CURATOR_CHANNELS:-tui-only}"
   local channel=""
   local channels=()
 
@@ -758,10 +758,10 @@ has_curator_non_onboarding_gateway_channels() {
   for channel in "${channels[@]}"; do
     channel="${channel//[[:space:]]/}"
     [[ -z "$channel" || "$channel" == "tui-only" ]] && continue
-    if [[ "$channel" == "telegram" && "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+    if [[ "$channel" == "telegram" && "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
       continue
     fi
-    if [[ "$channel" == "discord" && "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+    if [[ "$channel" == "discord" && "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
       continue
     fi
     return 0
@@ -774,11 +774,11 @@ has_curator_non_telegram_gateway_channels() {
 }
 
 has_curator_telegram_onboarding() {
-  [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]
+  [[ "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]
 }
 
 has_curator_discord_onboarding() {
-  [[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]
+  [[ "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]
 }
 
 has_curator_onboarding() {
@@ -787,7 +787,7 @@ has_curator_onboarding() {
 
 resolve_hermes_agent_ref_commit() {
   local repo_dir="$1"
-  local ref="${2:-$ALMANAC_HERMES_AGENT_REF}"
+  local ref="${2:-$ARCLINK_HERMES_AGENT_REF}"
   local candidate=""
   local resolved=""
 
@@ -813,7 +813,7 @@ resolve_hermes_agent_ref_commit() {
 ensure_hermes_agent_checkout() {
   local repo_dir="$1"
   local remote_url="https://github.com/NousResearch/hermes-agent.git"
-  local ref="${ALMANAC_HERMES_AGENT_REF:-}"
+  local ref="${ARCLINK_HERMES_AGENT_REF:-}"
   local current_remote=""
   local is_shallow="false"
   local resolved_commit=""
@@ -821,7 +821,7 @@ ensure_hermes_agent_checkout() {
   local head_ref=""
 
   if [[ -z "$ref" ]]; then
-    echo "ALMANAC_HERMES_AGENT_REF must not be empty." >&2
+    echo "ARCLINK_HERMES_AGENT_REF must not be empty." >&2
     return 1
   fi
 
@@ -909,7 +909,7 @@ ensure_hermes_dashboard_assets() {
   local web_dir="$repo_dir/web"
   local dist_dir="$repo_dir/hermes_cli/web_dist"
   local dist_index="$dist_dir/index.html"
-  local stamp_file="$dist_dir/.almanac-build-stamp"
+  local stamp_file="$dist_dir/.arclink-build-stamp"
   local current_rev=""
 
   if [[ ! -d "$web_dir" ]]; then
@@ -1025,7 +1025,7 @@ PY
 
 configure_qmd_collections() {
   ensure_qmd_collection "$QMD_COLLECTION_NAME" "$VAULT_DIR" "$VAULT_QMD_COLLECTION_MASK"
-  ensure_qmd_collection "$ALMANAC_NOTION_INDEX_COLLECTION_NAME" "$ALMANAC_NOTION_INDEX_MARKDOWN_DIR" "**/*.md"
+  ensure_qmd_collection "$ARCLINK_NOTION_INDEX_COLLECTION_NAME" "$ARCLINK_NOTION_INDEX_MARKDOWN_DIR" "**/*.md"
 
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     ensure_qmd_collection "$PDF_INGEST_COLLECTION_NAME" "$PDF_INGEST_MARKDOWN_DIR" "**/*.md"
@@ -1035,25 +1035,25 @@ configure_qmd_collections() {
 }
 
 using_repo_local_scaffold_defaults() {
-  [[ -z "${CONFIG_FILE:-}" && "$ALMANAC_PRIV_DIR" == "$BOOTSTRAP_DIR/almanac-priv" && -d "$ALMANAC_PRIV_DIR" ]]
+  [[ -z "${CONFIG_FILE:-}" && "$ARCLINK_PRIV_DIR" == "$BOOTSTRAP_DIR/arclink-priv" && -d "$ARCLINK_PRIV_DIR" ]]
 }
 
 require_real_layout() {
   local action="${1:-this command}"
 
-  if [[ "${ALMANAC_ALLOW_SCAFFOLD_DEFAULTS:-0}" == "1" ]]; then
+  if [[ "${ARCLINK_ALLOW_SCAFFOLD_DEFAULTS:-0}" == "1" ]]; then
     return 0
   fi
 
-  if using_repo_local_scaffold_defaults && [[ ! -f "$ALMANAC_PRIV_DIR/config/almanac.env" ]]; then
+  if using_repo_local_scaffold_defaults && [[ ! -f "$ARCLINK_PRIV_DIR/config/arclink.env" ]]; then
     cat >&2 <<EOF
-No almanac.env was found, and this checkout is falling back to the repo-local scaffold:
-  $ALMANAC_PRIV_DIR
+No arclink.env was found, and this checkout is falling back to the repo-local scaffold:
+  $ARCLINK_PRIV_DIR
 
 Refusing to run $action against the scaffold default.
 
-Provide ALMANAC_CONFIG_FILE pointing at the deployed config, or set
-ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 if you intentionally want to use the
+Provide ARCLINK_CONFIG_FILE pointing at the deployed config, or set
+ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 if you intentionally want to use the
 repo-local scaffold.
 EOF
     return 1
@@ -1063,7 +1063,7 @@ EOF
 }
 
 nextcloud_pod_name() {
-  printf '%s-nextcloud' "$ALMANAC_NAME"
+  printf '%s-nextcloud' "$ARCLINK_NAME"
 }
 
 nextcloud_db_container_name() {
@@ -1214,7 +1214,7 @@ request = urllib.request.Request(
     f"{base}/repos/{owner_repo}",
     headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "almanac-backup-visibility-check",
+        "User-Agent": "arclink-backup-visibility-check",
     },
 )
 try:
@@ -1245,14 +1245,14 @@ require_private_github_backup_remote() {
   [[ -n "$remote" ]] || return 0
   owner_repo="$(backup_github_owner_repo_from_remote "$remote")"
   if [[ -z "$owner_repo" ]]; then
-    echo "almanac-priv backups currently support GitHub remotes only." >&2
+    echo "arclink-priv backups currently support GitHub remotes only." >&2
     echo "Use a remote like git@github.com:owner/private-repo.git" >&2
     return 1
   fi
 
   visibility="$(github_repo_visibility "$owner_repo")"
   if [[ "$visibility" == "public" ]]; then
-    echo "Refusing to back up almanac-priv to a public GitHub repository: $owner_repo" >&2
+    echo "Refusing to back up arclink-priv to a public GitHub repository: $owner_repo" >&2
     return 1
   fi
   if [[ "$visibility" == error:* || "$visibility" == "unsupported" ]]; then
@@ -1435,15 +1435,15 @@ with_nextcloud_compose_env() {
     export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
     export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD
     export NEXTCLOUD_DB_DIR NEXTCLOUD_REDIS_DIR NEXTCLOUD_HTML_DIR NEXTCLOUD_DATA_DIR
-    export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ALMANAC_CONFIG_FILE
+    export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ARCLINK_CONFIG_FILE
     export NEXTCLOUD_HOOKS_DIR NEXTCLOUD_PRE_INSTALL_HOOK_DIR NEXTCLOUD_POST_INSTALL_HOOK_DIR NEXTCLOUD_BEFORE_STARTING_HOOK_DIR
     export NEXTCLOUD_PRE_INSTALL_HOOK_FILE NEXTCLOUD_POST_INSTALL_HOOK_FILE NEXTCLOUD_BEFORE_STARTING_HOOK_FILE VAULT_DIR
-    export ALMANAC_POSTGRES_IMAGE="${ALMANAC_POSTGRES_IMAGE:-$_postgres_image}"
-    export ALMANAC_POSTGRES_TAG="${ALMANAC_POSTGRES_TAG:-$_postgres_tag}"
-    export ALMANAC_REDIS_IMAGE="${ALMANAC_REDIS_IMAGE:-$_redis_image}"
-    export ALMANAC_REDIS_TAG="${ALMANAC_REDIS_TAG:-$_redis_tag}"
-    export ALMANAC_NEXTCLOUD_IMAGE="${ALMANAC_NEXTCLOUD_IMAGE:-$_nextcloud_image}"
-    export ALMANAC_NEXTCLOUD_TAG="${ALMANAC_NEXTCLOUD_TAG:-$_nextcloud_tag}"
+    export ARCLINK_POSTGRES_IMAGE="${ARCLINK_POSTGRES_IMAGE:-$_postgres_image}"
+    export ARCLINK_POSTGRES_TAG="${ARCLINK_POSTGRES_TAG:-$_postgres_tag}"
+    export ARCLINK_REDIS_IMAGE="${ARCLINK_REDIS_IMAGE:-$_redis_image}"
+    export ARCLINK_REDIS_TAG="${ARCLINK_REDIS_TAG:-$_redis_tag}"
+    export ARCLINK_NEXTCLOUD_IMAGE="${ARCLINK_NEXTCLOUD_IMAGE:-$_nextcloud_image}"
+    export ARCLINK_NEXTCLOUD_TAG="${ARCLINK_NEXTCLOUD_TAG:-$_nextcloud_tag}"
     "$@"
   )
 }
@@ -1454,21 +1454,21 @@ ensure_layout() {
   qmd_db_dir="$(dirname "$QMD_INDEX_DB_PATH")"
 
   mkdir -p \
-    "$ALMANAC_PRIV_DIR" \
-    "$ALMANAC_PRIV_CONFIG_DIR" \
+    "$ARCLINK_PRIV_DIR" \
+    "$ARCLINK_PRIV_CONFIG_DIR" \
     "$VAULT_DIR" \
     "$STATE_DIR" \
     "$NEXTCLOUD_STATE_DIR" \
     "$PDF_INGEST_DIR" \
     "$PDF_INGEST_MARKDOWN_DIR" \
-    "$ALMANAC_NOTION_INDEX_DIR" \
-    "$ALMANAC_NOTION_INDEX_MARKDOWN_DIR" \
+    "$ARCLINK_NOTION_INDEX_DIR" \
+    "$ARCLINK_NOTION_INDEX_MARKDOWN_DIR" \
     "$RUNTIME_DIR" \
-    "$ALMANAC_AGENTS_STATE_DIR" \
-    "$ALMANAC_CURATOR_DIR" \
-    "$ALMANAC_CURATOR_HERMES_HOME" \
-    "$ALMANAC_ARCHIVED_AGENTS_DIR" \
-    "$ALMANAC_MEMORY_SYNTH_STATE_DIR" \
+    "$ARCLINK_AGENTS_STATE_DIR" \
+    "$ARCLINK_CURATOR_DIR" \
+    "$ARCLINK_CURATOR_HERMES_HOME" \
+    "$ARCLINK_ARCHIVED_AGENTS_DIR" \
+    "$ARCLINK_MEMORY_SYNTH_STATE_DIR" \
     "$PUBLISHED_DIR" \
     "$QUARTO_PROJECT_DIR" \
     "$NEXTCLOUD_DB_DIR" \
@@ -1480,6 +1480,6 @@ ensure_layout() {
     "$NEXTCLOUD_PRE_INSTALL_HOOK_DIR" \
     "$NEXTCLOUD_POST_INSTALL_HOOK_DIR" \
     "$NEXTCLOUD_BEFORE_STARTING_HOOK_DIR" \
-    "$(dirname "$ALMANAC_DB_PATH")" \
+    "$(dirname "$ARCLINK_DB_PATH")" \
     "$qmd_db_dir"
 }

@@ -38,7 +38,7 @@ def memory_db(control):
 
 
 def test_product_surface_renders_usable_first_screen_and_checkout_flow() -> None:
-    control = load_module("almanac_control.py", "almanac_control_product_surface_flow_test")
+    control = load_module("arclink_control.py", "arclink_control_product_surface_flow_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_product_surface_flow_test")
     surface = load_module("arclink_product_surface.py", "arclink_product_surface_flow_test")
     conn = memory_db(control)
@@ -83,7 +83,7 @@ def test_product_surface_renders_usable_first_screen_and_checkout_flow() -> None
 
 
 def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_only() -> None:
-    control = load_module("almanac_control.py", "almanac_control_product_surface_dashboard_test")
+    control = load_module("arclink_control.py", "arclink_control_product_surface_dashboard_test")
     api_auth = load_module("arclink_api_auth.py", "arclink_api_auth_product_surface_dashboard_test")
     surface = load_module("arclink_product_surface.py", "arclink_product_surface_dashboard_test")
     conn = memory_db(control)
@@ -187,7 +187,7 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
 
 
 def test_product_surface_css_contains_mobile_overflow_guards() -> None:
-    control = load_module("almanac_control.py", "almanac_control_product_surface_responsive_test")
+    control = load_module("arclink_control.py", "arclink_control_product_surface_responsive_test")
     surface = load_module("arclink_product_surface.py", "arclink_product_surface_responsive_test")
     conn = memory_db(control)
     surface.seed_arclink_product_surface_fixture(conn, env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -209,7 +209,7 @@ def test_product_surface_css_contains_mobile_overflow_guards() -> None:
 
 
 def test_product_surface_favicon_does_not_fall_through_to_404() -> None:
-    control = load_module("almanac_control.py", "almanac_control_product_surface_favicon_test")
+    control = load_module("arclink_control.py", "arclink_control_product_surface_favicon_test")
     surface = load_module("arclink_product_surface.py", "arclink_product_surface_favicon_test")
     conn = memory_db(control)
 
@@ -221,7 +221,7 @@ def test_product_surface_favicon_does_not_fall_through_to_404() -> None:
 
 
 def test_product_surface_generic_errors_do_not_expose_internal_exception_text() -> None:
-    control = load_module("almanac_control.py", "almanac_control_product_surface_generic_error_test")
+    control = load_module("arclink_control.py", "arclink_control_product_surface_generic_error_test")
     surface = load_module("arclink_product_surface.py", "arclink_product_surface_generic_error_test")
     conn = memory_db(control)
     raw_detail = "raw internal failure sk_test_should_not_render"

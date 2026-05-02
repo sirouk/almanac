@@ -40,7 +40,7 @@ def test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts() -> None:
         key_path.write_text("private", encoding="utf-8")
         script = f"""
 {snippet}
-BACKUP_GIT_REMOTE=git@github.com:acme/almanac-priv.git
+BACKUP_GIT_REMOTE=git@github.com:acme/arclink-priv.git
 BACKUP_GIT_DEPLOY_KEY_PATH={key_path}
 BACKUP_GIT_KNOWN_HOSTS_FILE={known_hosts_path}
 ssh-keyscan() {{
@@ -72,7 +72,7 @@ def test_shared_backup_refuses_public_github_remote() -> None:
 github_repo_visibility() {{
   printf '%s\\n' public
 }}
-BACKUP_GIT_REMOTE=git@github.com:acme/almanac-priv.git
+BACKUP_GIT_REMOTE=git@github.com:acme/arclink-priv.git
 if require_private_github_backup_remote "$BACKUP_GIT_REMOTE"; then
   echo should-have-failed
   exit 1
@@ -80,7 +80,7 @@ fi
 """
     result = bash(script)
     expect(result.returncode == 0, f"public shared backup refusal failed: stdout={result.stdout!r} stderr={result.stderr!r}")
-    expect("Refusing to back up almanac-priv to a public GitHub repository" in result.stderr, result.stderr)
+    expect("Refusing to back up arclink-priv to a public GitHub repository" in result.stderr, result.stderr)
     print("PASS test_shared_backup_refuses_public_github_remote")
 
 
@@ -88,33 +88,33 @@ def test_backup_to_github_excludes_repo_local_key_material() -> None:
     common_text = COMMON_SH.read_text()
     backup_text = BACKUP_SH.read_text()
     common_snippet = extract(common_text, "path_is_within_dir() {", "run_compose() {")
-    backup_snippet = extract(backup_text, "exclude_paths=()", '\nif ! git -C "$ALMANAC_PRIV_DIR" diff --cached --quiet --exit-code; then')
+    backup_snippet = extract(backup_text, "exclude_paths=()", '\nif ! git -C "$ARCLINK_PRIV_DIR" diff --cached --quiet --exit-code; then')
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        repo_path = tmp_path / "almanac-priv"
+        repo_path = tmp_path / "arclink-priv"
         (repo_path / "config" / "keys").mkdir(parents=True)
         (repo_path / "config" / "ssh").mkdir(parents=True)
         (repo_path / "vault").mkdir(parents=True)
         (repo_path / "vault" / "note.md").write_text("hello\n", encoding="utf-8")
-        (repo_path / "config" / "keys" / "almanac-backup-ed25519").write_text("private\n", encoding="utf-8")
-        (repo_path / "config" / "keys" / "almanac-backup-ed25519.pub").write_text("public\n", encoding="utf-8")
+        (repo_path / "config" / "keys" / "arclink-backup-ed25519").write_text("private\n", encoding="utf-8")
+        (repo_path / "config" / "keys" / "arclink-backup-ed25519.pub").write_text("public\n", encoding="utf-8")
         (repo_path / "config" / "ssh" / "known_hosts").write_text("github.com key\n", encoding="utf-8")
         run(["git", "init", "-b", "main", str(repo_path)])
         script = f"""
 {common_snippet}
-ALMANAC_PRIV_DIR={repo_path}
-BACKUP_GIT_DEPLOY_KEY_PATH={repo_path / 'config' / 'keys' / 'almanac-backup-ed25519'}
+ARCLINK_PRIV_DIR={repo_path}
+BACKUP_GIT_DEPLOY_KEY_PATH={repo_path / 'config' / 'keys' / 'arclink-backup-ed25519'}
 BACKUP_GIT_KNOWN_HOSTS_FILE={repo_path / 'config' / 'ssh' / 'known_hosts'}
 {backup_snippet}
-git -C "$ALMANAC_PRIV_DIR" diff --cached --name-only
+git -C "$ARCLINK_PRIV_DIR" diff --cached --name-only
 """
         result = bash(script)
         expect(result.returncode == 0, f"backup exclusion case failed: {result.stderr}")
         staged = {line.strip() for line in result.stdout.splitlines() if line.strip()}
         expect("vault/note.md" in staged, f"expected normal content to stage, got: {staged!r}")
         expect(
-            "config/keys/almanac-backup-ed25519" not in staged
-            and "config/keys/almanac-backup-ed25519.pub" not in staged
+            "config/keys/arclink-backup-ed25519" not in staged
+            and "config/keys/arclink-backup-ed25519.pub" not in staged
             and "config/ssh/known_hosts" not in staged,
             f"expected repo-local key material to be excluded, got: {staged!r}",
         )
@@ -125,10 +125,10 @@ def test_backup_to_github_skips_nested_git_checkouts_without_submodule_dirt() ->
     common_text = COMMON_SH.read_text()
     backup_text = BACKUP_SH.read_text()
     common_snippet = extract(common_text, "path_is_within_dir() {", "run_compose() {")
-    backup_snippet = extract(backup_text, "exclude_paths=()", '\nif ! git -C "$ALMANAC_PRIV_DIR" diff --cached --quiet --exit-code; then')
+    backup_snippet = extract(backup_text, "exclude_paths=()", '\nif ! git -C "$ARCLINK_PRIV_DIR" diff --cached --quiet --exit-code; then')
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        repo_path = tmp_path / "almanac-priv"
+        repo_path = tmp_path / "arclink-priv"
         nested = repo_path / "vault" / "Repos" / "team-docs"
         nested.mkdir(parents=True)
         run(["git", "init", "-b", "main", str(nested)])
@@ -153,11 +153,11 @@ def test_backup_to_github_skips_nested_git_checkouts_without_submodule_dirt() ->
         run(["git", "init", "-b", "main", str(repo_path)])
         script = f"""
 {common_snippet}
-ALMANAC_PRIV_DIR={repo_path}
+ARCLINK_PRIV_DIR={repo_path}
 BACKUP_GIT_DEPLOY_KEY_PATH=
 BACKUP_GIT_KNOWN_HOSTS_FILE=
 {backup_snippet}
-git -C "$ALMANAC_PRIV_DIR" diff --cached --name-only
+git -C "$ARCLINK_PRIV_DIR" diff --cached --name-only
 """
         result = bash(script)
         expect(result.returncode == 0, f"backup nested checkout case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
@@ -174,10 +174,10 @@ def test_backup_to_github_skips_ignored_state_tree_with_nested_git_checkout() ->
     common_text = COMMON_SH.read_text()
     backup_text = BACKUP_SH.read_text()
     common_snippet = extract(common_text, "path_is_within_dir() {", "run_compose() {")
-    backup_snippet = extract(backup_text, "exclude_paths=()", '\nif ! git -C "$ALMANAC_PRIV_DIR" diff --cached --quiet --exit-code; then')
+    backup_snippet = extract(backup_text, "exclude_paths=()", '\nif ! git -C "$ARCLINK_PRIV_DIR" diff --cached --quiet --exit-code; then')
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        repo_path = tmp_path / "almanac-priv"
+        repo_path = tmp_path / "arclink-priv"
         runtime_repo = repo_path / "state" / "runtime" / "hermes-agent-src"
         runtime_repo.mkdir(parents=True)
         run(["git", "init", "-b", "main", str(runtime_repo)])
@@ -188,11 +188,11 @@ def test_backup_to_github_skips_ignored_state_tree_with_nested_git_checkout() ->
         run(["git", "init", "-b", "main", str(repo_path)])
         script = f"""
 {common_snippet}
-ALMANAC_PRIV_DIR={repo_path}
+ARCLINK_PRIV_DIR={repo_path}
 BACKUP_GIT_DEPLOY_KEY_PATH=
 BACKUP_GIT_KNOWN_HOSTS_FILE=
 {backup_snippet}
-git -C "$ALMANAC_PRIV_DIR" diff --cached --name-only
+git -C "$ARCLINK_PRIV_DIR" diff --cached --name-only
 """
         result = bash(script)
         expect(result.returncode == 0, f"backup ignored state case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
@@ -205,7 +205,7 @@ git -C "$ALMANAC_PRIV_DIR" diff --cached --name-only
 
 def test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main() -> None:
     backup_text = BACKUP_SH.read_text()
-    snippet = extract(backup_text, "reconcile_backup_git_remote_branch() {", '\nif [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then')
+    snippet = extract(backup_text, "reconcile_backup_git_remote_branch() {", '\nif [[ ! -d "$ARCLINK_PRIV_DIR/.git" ]]; then')
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         local_repo = tmp_path / "local"
@@ -280,7 +280,7 @@ printf 'archives=%s\\n' "$(git -C {shlex.quote(str(bare_remote))} for-each-ref -
 
 def test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push() -> None:
     backup_text = BACKUP_SH.read_text()
-    snippet = extract(backup_text, "reconcile_backup_git_remote_branch() {", '\nif [[ ! -d "$ALMANAC_PRIV_DIR/.git" ]]; then')
+    snippet = extract(backup_text, "reconcile_backup_git_remote_branch() {", '\nif [[ ! -d "$ARCLINK_PRIV_DIR/.git" ]]; then')
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         local_repo = tmp_path / "local"

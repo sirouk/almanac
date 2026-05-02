@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 from typing import Any, Mapping
 
-from almanac_control import (
+from arclink_control import (
     advance_arclink_entitlement_gate,
     arclink_deployment_can_provision,
     reserve_arclink_deployment_prefix,

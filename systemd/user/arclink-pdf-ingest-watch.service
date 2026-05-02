@@ -1,0 +1,11 @@
+[Unit]
+Description=Compatibility wrapper for the ArcLink vault watcher
+After=network.target
+
+[Service]
+ExecStart=%h/arclink/bin/pdf-ingest-watch.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

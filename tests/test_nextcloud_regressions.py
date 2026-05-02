@@ -99,7 +99,7 @@ def test_nextcloud_bootstrap_disables_default_files_and_clears_admin_home() -> N
 {hook_scripts}
 NEXTCLOUD_CUSTOM_CONFIG_DIR={config_dir}
 NEXTCLOUD_EMPTY_SKELETON_DIR={skeleton_dir}
-NEXTCLOUD_ALMANAC_CONFIG_FILE={config_dir / 'almanac.config.php'}
+NEXTCLOUD_ARCLINK_CONFIG_FILE={config_dir / 'arclink.config.php'}
 NEXTCLOUD_PRE_INSTALL_HOOK_FILE={pre_hook_path}
 NEXTCLOUD_POST_INSTALL_HOOK_FILE={hook_path}
 NEXTCLOUD_BEFORE_STARTING_HOOK_FILE={before_hook_path}
@@ -109,14 +109,14 @@ write_nextcloud_hook_scripts
         result = bash(script)
         expect(result.returncode == 0, f"nextcloud bootstrap snippet failed: {result.stderr}")
 
-        config_body = (config_dir / "almanac.config.php").read_text(encoding="utf-8")
+        config_body = (config_dir / "arclink.config.php").read_text(encoding="utf-8")
         expect("skeletondirectory" in config_body, config_body)
         expect("'skeletondirectory' => ''" in config_body, config_body)
         expect("'templatedirectory' => ''" in config_body, config_body)
 
         pre_hook_body = pre_hook_path.read_text(encoding="utf-8")
-        expect("/almanac-config/almanac.config.php" in pre_hook_body, pre_hook_body)
-        expect("/var/www/html/config/almanac.config.php" in pre_hook_body, pre_hook_body)
+        expect("/arclink-config/arclink.config.php" in pre_hook_body, pre_hook_body)
+        expect("/var/www/html/config/arclink.config.php" in pre_hook_body, pre_hook_body)
 
         before_hook_body = before_hook_path.read_text(encoding="utf-8")
         expect(before_hook_body == pre_hook_body, before_hook_body)
@@ -146,7 +146,7 @@ def test_nextcloud_vault_acl_skips_git_internals() -> None:
 def test_nextcloud_docker_mode_uses_compose_backend() -> None:
     script_body = NEXTCLOUD_UP.read_text(encoding="utf-8")
     expect('run_compose_nextcloud() {' in script_body, script_body)
-    expect('[[ "${ALMANAC_CONTAINER_RUNTIME:-}" == "docker" || "${ALMANAC_DOCKER_MODE:-0}" == "1" ]]' in script_body, script_body)
+    expect('[[ "${ARCLINK_CONTAINER_RUNTIME:-}" == "docker" || "${ARCLINK_DOCKER_MODE:-0}" == "1" ]]' in script_body, script_body)
     expect('NEXTCLOUD_RUNTIME="compose"' in script_body, script_body)
     expect('if nextcloud_using_podman; then' in script_body, script_body)
     docker_mode = extract(script_body, "if nextcloud_docker_mode_requested; then", "if command -v podman")

@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink Curator refresh job
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/curator-refresh.sh

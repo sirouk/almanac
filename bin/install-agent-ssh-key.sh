@@ -69,7 +69,7 @@ if [[ -z "$HOME_DIR" ]]; then
   exit 1
 fi
 
-ALLOWED_FROM="${ALMANAC_AGENT_REMOTE_SSH_FROM:-100.64.0.0/10,fd7a:115c:a1e0::/48}"
+ALLOWED_FROM="${ARCLINK_AGENT_REMOTE_SSH_FROM:-100.64.0.0/10,fd7a:115c:a1e0::/48}"
 KEY_OPTIONS="from=\"$ALLOWED_FROM\",no-agent-forwarding,no-port-forwarding,no-user-rc,no-X11-forwarding"
 AUTHORIZED_KEY_LINE="$KEY_OPTIONS $PUBKEY_VALUE"
 

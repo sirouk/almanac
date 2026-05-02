@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pins.sh — read/write the Almanac dependency pins file (config/pins.json).
+# pins.sh — read/write the ArcLink dependency pins file (config/pins.json).
 #
 # This is the single source of truth for every external dependency the deploy
 # hard-installs. Hot-path callers (bin/common.sh, install scripts, deploy.sh
@@ -16,7 +16,7 @@ __pins_default_path() {
   printf '%s/../config/pins.json' "$script_dir"
 }
 
-ALMANAC_PINS_FILE="${ALMANAC_PINS_FILE:-$(__pins_default_path)}"
+ARCLINK_PINS_FILE="${ARCLINK_PINS_FILE:-$(__pins_default_path)}"
 
 # pins_require — exit nonzero with a clear message if the prerequisites aren't met.
 pins_require() {
@@ -24,8 +24,8 @@ pins_require() {
     echo "pins.sh: jq is required (apt install jq)" >&2
     return 1
   fi
-  if [[ ! -f "$ALMANAC_PINS_FILE" ]]; then
-    echo "pins.sh: pins file not found at $ALMANAC_PINS_FILE" >&2
+  if [[ ! -f "$ARCLINK_PINS_FILE" ]]; then
+    echo "pins.sh: pins file not found at $ARCLINK_PINS_FILE" >&2
     return 1
   fi
   return 0
@@ -47,7 +47,7 @@ pins_get() {
       ($entry | getpath($parts)) // "" |
       if (type == "object") or (type == "array") then tojson else . end
     end
-  ' "$ALMANAC_PINS_FILE"
+  ' "$ARCLINK_PINS_FILE"
 }
 
 # pins_kind <component>  →  shorthand for pins_get <c> kind
@@ -81,8 +81,8 @@ pins_set() {
   jq --arg c "$component" --arg p "$path" --arg v "$value" '
     ($p | split(".")) as $parts |
     .components[$c] |= (. // {} | setpath($parts; $v))
-  ' "$ALMANAC_PINS_FILE" > "$tmp"
-  mv "$tmp" "$ALMANAC_PINS_FILE"
+  ' "$ARCLINK_PINS_FILE" > "$tmp"
+  mv "$tmp" "$ARCLINK_PINS_FILE"
 }
 
 # pins_set_raw <component> <jq-dotted-path> <jq-expr>
@@ -95,14 +95,14 @@ pins_set_raw() {
   jq --arg c "$component" --arg p "$path" --argjson v "$raw" '
     ($p | split(".")) as $parts |
     .components[$c] |= (. // {} | setpath($parts; $v))
-  ' "$ALMANAC_PINS_FILE" > "$tmp"
-  mv "$tmp" "$ALMANAC_PINS_FILE"
+  ' "$ARCLINK_PINS_FILE" > "$tmp"
+  mv "$tmp" "$ARCLINK_PINS_FILE"
 }
 
 # pins_components — print the list of all component keys, one per line.
 pins_components() {
   pins_require || return 1
-  jq -r '.components | keys[]' "$ALMANAC_PINS_FILE"
+  jq -r '.components | keys[]' "$ARCLINK_PINS_FILE"
 }
 
 # pins_show — pretty-print every pin in human-readable form. Stable ordering.
@@ -115,7 +115,7 @@ pins_show() {
       if .key == "description" then "  \(.key): \(.value | gsub("\\n"; " "))"
       else "  \(.key): \(.value | tojson)" end
     ) | join("\n")) + "\n"
-  ' "$ALMANAC_PINS_FILE"
+  ' "$ARCLINK_PINS_FILE"
 }
 
 # pins_validate — quick structural check. Returns 0 if every component has the
@@ -135,7 +135,7 @@ pins_validate() {
       ($c.kind == "uv-python"      and ($c.preferred == null or $c.minimum == null)),
       ($c.kind == "installer-url"  and ($c.url == null))
     ] | any | if . then $name else empty end
-  ' "$ALMANAC_PINS_FILE")"
+  ' "$ARCLINK_PINS_FILE")"
   if [[ -n "$missing" ]]; then
     echo "pins.sh: component(s) failed kind-required-field validation: $missing" >&2
     return 1

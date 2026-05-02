@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/example/almanac/config/pins.schema.json",
-  "title": "Almanac dependency pins",
-  "description": "Single source of truth for every external dependency the Almanac deployment hard-installs. Each entry's kind selects the resolver + applier pair.",
+  "$id": "https://github.com/example/arclink/config/pins.schema.json",
+  "title": "ArcLink dependency pins",
+  "description": "Single source of truth for every external dependency the ArcLink deployment hard-installs. Each entry's kind selects the resolver + applier pair.",
   "type": "object",
   "required": ["version", "components"],
   "properties": {

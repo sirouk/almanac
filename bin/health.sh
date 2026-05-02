@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
-STRICT_MODE="${ALMANAC_HEALTH_STRICT:-0}"
+STRICT_MODE="${ARCLINK_HEALTH_STRICT:-0}"
 
 pass() {
   PASS_COUNT=$((PASS_COUNT + 1))
@@ -125,7 +125,7 @@ check_placeholder_secrets() {
 check_curator_gateway_runtime() {
   local output=""
   local status=0
-  local runtime_channels="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
+  local runtime_channels="${ARCLINK_CURATOR_CHANNELS:-tui-only}"
   local channel=""
   local filtered_channels=()
 
@@ -144,10 +144,10 @@ check_curator_gateway_runtime() {
     for channel in "${filtered_channels[@]}"; do
       channel="${channel//[[:space:]]/}"
       [[ -z "$channel" || "$channel" == "tui-only" ]] && continue
-      if [[ "$channel" == "telegram" && "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      if [[ "$channel" == "telegram" && "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
         continue
       fi
-      if [[ "$channel" == "discord" && "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      if [[ "$channel" == "discord" && "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
         continue
       fi
       runtime_channels="${runtime_channels:+$runtime_channels,}$channel"
@@ -178,7 +178,7 @@ except Exception:
 else:
     hermes_path = pathlib.Path(hermes_cli.__file__).resolve()
     if not hermes_path.is_relative_to(runtime_dir):
-        print(f"Curator runtime is importing Hermes from outside Almanac runtime: {hermes_path}")
+        print(f"Curator runtime is importing Hermes from outside ArcLink runtime: {hermes_path}")
         raise SystemExit(3)
     print(f"Curator runtime imports Hermes from {hermes_path}")
 
@@ -449,15 +449,15 @@ PY
   fi
 }
 
-check_almanac_mcp_status() {
+check_arclink_mcp_status() {
   local output=""
 
-  if [[ ! -x "$BOOTSTRAP_DIR/bin/almanac-rpc" ]]; then
-    warn_or_fail "almanac-rpc helper is missing"
+  if [[ ! -x "$BOOTSTRAP_DIR/bin/arclink-rpc" ]]; then
+    warn_or_fail "arclink-rpc helper is missing"
     return 0
   fi
 
-  if output="$("$BOOTSTRAP_DIR/bin/almanac-rpc" --url "$ALMANAC_MCP_URL" --tool status 2>/dev/null)"; then
+  if output="$("$BOOTSTRAP_DIR/bin/arclink-rpc" --url "$ARCLINK_MCP_URL" --tool status 2>/dev/null)"; then
     while IFS= read -r line; do
       [[ -n "$line" ]] && pass "$line"
     done < <(python3 - "$output" <<'PY'
@@ -466,11 +466,11 @@ import sys
 
 payload = json.loads(sys.argv[1])
 count = int(payload.get("vault_warning_count", 0))
-print(f"almanac-mcp status ok; qmd_url={payload.get('qmd_url', 'unknown')}; vault_warning_count={count}")
+print(f"arclink-mcp status ok; qmd_url={payload.get('qmd_url', 'unknown')}; vault_warning_count={count}")
 PY
 )
   else
-    warn_or_fail "could not query almanac-mcp status via $ALMANAC_MCP_URL"
+    warn_or_fail "could not query arclink-mcp status via $ARCLINK_MCP_URL"
   fi
 }
 
@@ -502,8 +502,8 @@ check_notion_webhook_funnel() {
     TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
       "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
       "$funnel_path" \
-      "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" \
-      "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" <<'PY'
+      "${ARCLINK_NOTION_WEBHOOK_PORT:-8283}" \
+      "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" <<'PY'
 import json
 import os
 import sys
@@ -544,7 +544,7 @@ PY
   )"; then
     pass "Tailscale Funnel publishes only the configured Notion webhook route: $output"
   elif [[ "$output" == mismatch:* ]]; then
-    warn_or_fail "Tailscale Funnel is live for the Notion webhook, but it does not match ALMANAC_NOTION_WEBHOOK_PUBLIC_URL: ${output#mismatch:}"
+    warn_or_fail "Tailscale Funnel is live for the Notion webhook, but it does not match ARCLINK_NOTION_WEBHOOK_PUBLIC_URL: ${output#mismatch:}"
   else
     warn_or_fail "Tailscale Funnel is enabled for the Notion webhook, but the expected public route is not live"
   fi
@@ -565,7 +565,7 @@ check_tailscale_serve_routes() {
 
   ts_json="$(tailscale serve status --json 2>/dev/null || true)"
   if [[ -z "$ts_json" ]]; then
-    warn_or_fail "tailscale serve status returned no JSON for the tailnet-only Almanac routes"
+    warn_or_fail "tailscale serve status returned no JSON for the tailnet-only ArcLink routes"
     return 0
   fi
 
@@ -573,20 +573,20 @@ check_tailscale_serve_routes() {
     TAILSCALE_SERVE_JSON="$ts_json" python3 - \
       "${TAILSCALE_SERVE_PORT:-443}" \
       "${TAILSCALE_QMD_PATH:-/mcp}" \
-      "${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}" \
+      "${TAILSCALE_ARCLINK_MCP_PATH:-/arclink-mcp}" \
       "${NEXTCLOUD_PORT:-18080}" \
       "${QMD_MCP_PORT:-8181}" \
-      "${ALMANAC_MCP_PORT:-8282}" <<'PY'
+      "${ARCLINK_MCP_PORT:-8282}" <<'PY'
 import json
 import os
 import sys
 
 serve_port = str(sys.argv[1])
 qmd_path = sys.argv[2]
-almanac_mcp_path = sys.argv[3]
+arclink_mcp_path = sys.argv[3]
 nextcloud_port = str(sys.argv[4])
 qmd_port = str(sys.argv[5])
-almanac_mcp_port = str(sys.argv[6])
+arclink_mcp_port = str(sys.argv[6])
 
 try:
     data = json.loads(os.environ["TAILSCALE_SERVE_JSON"])
@@ -604,11 +604,11 @@ for hostport, entry in web.items():
     handlers = (entry or {}).get("Handlers") or {}
     root = handlers.get("/") or {}
     qmd = handlers.get(qmd_path) or {}
-    almanac = handlers.get(almanac_mcp_path) or {}
+    arclink = handlers.get(arclink_mcp_path) or {}
     if (
         root.get("Proxy") == f"http://127.0.0.1:{nextcloud_port}"
         and qmd.get("Proxy") == f"http://127.0.0.1:{qmd_port}/mcp"
-        and almanac.get("Proxy") == f"http://127.0.0.1:{almanac_mcp_port}/mcp"
+        and arclink.get("Proxy") == f"http://127.0.0.1:{arclink_mcp_port}/mcp"
     ):
         base = f"https://{actual_host}" if serve_port == "443" else f"https://{actual_host}:{serve_port}"
         print(base)
@@ -632,7 +632,7 @@ check_activation_trigger_write_access() {
     return 0
   fi
 
-  if probe_path="$(mktemp "$trigger_dir/.almanac-health-trigger-XXXXXX" 2>/dev/null)"; then
+  if probe_path="$(mktemp "$trigger_dir/.arclink-health-trigger-XXXXXX" 2>/dev/null)"; then
     rm -f "$probe_path"
     pass "activation trigger directory is writable: $trigger_dir"
   else
@@ -650,7 +650,7 @@ check_vault_definition_health() {
   fi
 
   if output="$(PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
-from almanac_control import Config, connect_db, reload_vault_definitions
+from arclink_control import Config, connect_db, reload_vault_definitions
 
 cfg = Config.from_env()
 with connect_db(cfg) as conn:
@@ -693,13 +693,13 @@ check_curator_state() {
   local output=""
   local status=0
 
-  if [[ -f "$ALMANAC_CURATOR_MANIFEST" ]]; then
-    pass "Curator manifest exists: $ALMANAC_CURATOR_MANIFEST"
+  if [[ -f "$ARCLINK_CURATOR_MANIFEST" ]]; then
+    pass "Curator manifest exists: $ARCLINK_CURATOR_MANIFEST"
   else
-    fail "Curator manifest missing: $ALMANAC_CURATOR_MANIFEST"
+    fail "Curator manifest missing: $ARCLINK_CURATOR_MANIFEST"
   fi
 
-  if output="$(python3 - "$ALMANAC_DB_PATH" <<'PY'
+  if output="$(python3 - "$ARCLINK_DB_PATH" <<'PY'
 import datetime as dt
 import json
 import sqlite3
@@ -756,7 +756,7 @@ PY
         done <<<"$output"
         ;;
       *)
-        warn_or_fail "could not inspect Curator state in $ALMANAC_DB_PATH"
+        warn_or_fail "could not inspect Curator state in $ARCLINK_DB_PATH"
         ;;
     esac
   fi
@@ -770,7 +770,7 @@ check_active_agent_state() {
     return 0
   fi
 
-if output="$(python3 - "$ALMANAC_DB_PATH" "$VAULT_DIR" "${ALMANAC_HOME:-}" <<'PY'
+if output="$(python3 - "$ARCLINK_DB_PATH" "$VAULT_DIR" "${ARCLINK_HOME:-}" <<'PY'
 import datetime as dt
 import json
 import os
@@ -782,7 +782,7 @@ from pathlib import Path
 
 db_path = sys.argv[1]
 vault_dir_raw = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("VAULT_DIR", "").strip()
-almanac_home_raw = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ALMANAC_HOME", "").strip()
+arclink_home_raw = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ARCLINK_HOME", "").strip()
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 
@@ -809,15 +809,15 @@ if not agents:
 
 failures = 0
 required_skill_names = [
-    "almanac-qmd-mcp",
-    "almanac-vault-reconciler",
-    "almanac-first-contact",
-    "almanac-vaults",
-    "almanac-ssot",
-    "almanac-notion-knowledge",
-    "almanac-ssot-connect",
-    "almanac-notion-mcp",
-    "almanac-resources",
+    "arclink-qmd-mcp",
+    "arclink-vault-reconciler",
+    "arclink-first-contact",
+    "arclink-vaults",
+    "arclink-ssot",
+    "arclink-notion-knowledge",
+    "arclink-ssot-connect",
+    "arclink-notion-mcp",
+    "arclink-resources",
 ]
 required_bundled_skill_paths = [
     ("email/himalaya", "himalaya"),
@@ -854,7 +854,7 @@ def acl_has_perms(text, prefix, required):
 
 
 def first_subuid_for_user(unix_user):
-    subuid_file = Path(os.environ.get("ALMANAC_ROOTLESS_SUBUID_FILE", "/etc/subuid"))
+    subuid_file = Path(os.environ.get("ARCLINK_ROOTLESS_SUBUID_FILE", "/etc/subuid"))
     try:
         lines = subuid_file.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -901,20 +901,20 @@ def shared_vault_acl_dirs(vault_dir):
     return dirs, warnings
 
 
-def shared_vault_mount_source_dirs(vault_dir, almanac_home):
-    if not almanac_home:
+def shared_vault_mount_source_dirs(vault_dir, arclink_home):
+    if not arclink_home:
         return []
     try:
-        almanac_home_path = Path(almanac_home)
+        arclink_home_path = Path(arclink_home)
     except TypeError:
         return []
     dirs = []
     for parent in vault_dir.parents:
         try:
-            under_almanac_home = parent == almanac_home_path or parent.is_relative_to(almanac_home_path)
+            under_arclink_home = parent == arclink_home_path or parent.is_relative_to(arclink_home_path)
         except ValueError:
-            under_almanac_home = False
-        if under_almanac_home:
+            under_arclink_home = False
+        if under_arclink_home:
             dirs.append(parent)
     return dirs
 
@@ -950,7 +950,7 @@ def check_shared_vault_acl(vault_dir_raw, unix_user):
             if not acl_has_rwx(result.stdout, f"default:user:{subject}"):
                 failures.append(f"shared vault default ACL for {label} is missing rwx on {path}")
 
-    for path in shared_vault_mount_source_dirs(vault_dir, almanac_home_raw):
+    for path in shared_vault_mount_source_dirs(vault_dir, arclink_home_raw):
         result = subprocess.run([getfacl, "-cp", str(path)], capture_output=True, text=True, check=False)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "unknown getfacl error").strip()
@@ -981,7 +981,7 @@ def check_agent_backup_cron(hermes_home):
     failures = []
     warnings = []
     notes = []
-    state_file = hermes_home / "state" / "almanac-agent-backup.env"
+    state_file = hermes_home / "state" / "arclink-agent-backup.env"
     try:
         configured = state_file.is_file()
     except PermissionError:
@@ -989,7 +989,7 @@ def check_agent_backup_cron(hermes_home):
     if not configured:
         return [], [], ["agent backup not configured"]
 
-    script_path = hermes_home / "scripts" / "almanac_agent_backup.py"
+    script_path = hermes_home / "scripts" / "arclink_agent_backup.py"
     jobs_path = hermes_home / "cron" / "jobs.json"
     try:
         if not script_path.is_file():
@@ -1009,7 +1009,7 @@ def check_agent_backup_cron(hermes_home):
         if isinstance(job, dict)
         and (
             job.get("id") == "a1bac0ffee42"
-            or (job.get("managed_by") == "almanac" and job.get("managed_kind") == "agent-home-backup")
+            or (job.get("managed_by") == "arclink" and job.get("managed_kind") == "agent-home-backup")
         )
     ]
     if not jobs:
@@ -1019,7 +1019,7 @@ def check_agent_backup_cron(hermes_home):
     job = jobs[0]
     if not job.get("enabled", True):
         failures.append(f"agent backup Hermes cron job is disabled (state={job.get('state', 'unknown')})")
-    if job.get("script") != "almanac_agent_backup.py":
+    if job.get("script") != "arclink_agent_backup.py":
         failures.append(f"agent backup Hermes cron job uses unexpected script {job.get('script')!r}")
     schedule = job.get("schedule") or {}
     try:
@@ -1098,7 +1098,7 @@ for agent in agents:
         privacy_notes.append("skills private")
     if missing_skills:
         print(
-            f"FAIL {agent_id}: missing managed Almanac skills in {skill_root}: "
+            f"FAIL {agent_id}: missing managed ArcLink skills in {skill_root}: "
             + ", ".join(missing_skills)
         )
         failures += 1
@@ -1133,7 +1133,7 @@ for agent in agents:
     ).fetchone()
     active_token_count = int(token_count_row["count"] if token_count_row is not None else 0)
     if active_token_count <= 0:
-        print(f"FAIL {agent_id}: no active Almanac MCP bootstrap token row")
+        print(f"FAIL {agent_id}: no active ArcLink MCP bootstrap token row")
         failures += 1
         continue
     status_notes.append("MCP bootstrap token row active")
@@ -1201,7 +1201,7 @@ for agent in agents:
             f"WARN {agent_id}: central managed context updated at "
             f"{central_payload_updated.isoformat().replace('+00:00', '+00:00')} "
             f"but user-owned refresh last ran at {job['last_run_at']}; "
-            "start almanac-user-agent-refresh.service for this user to apply it immediately"
+            "start arclink-user-agent-refresh.service for this user to apply it immediately"
         )
 
     trigger_path = state_dir / "activation-triggers" / f"{agent_id}.json"
@@ -1212,7 +1212,7 @@ for agent in agents:
                 print(
                     f"WARN {agent_id}: activation trigger is newer than the last user-owned refresh "
                     f"(trigger={trigger_updated.isoformat().replace('+00:00', '+00:00')}, "
-                    f"refresh={job['last_run_at']}); verify almanac-user-agent-activate.path is active"
+                    f"refresh={job['last_run_at']}); verify arclink-user-agent-activate.path is active"
                 )
     except OSError:
         pass
@@ -1254,7 +1254,7 @@ check_auto_provision_state() {
     return 0
   fi
 
-if output="$(python3 - "$ALMANAC_DB_PATH" "${ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS:-5}" <<'PY'
+if output="$(python3 - "$ARCLINK_DB_PATH" "${ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS:-5}" <<'PY'
 import datetime as dt
 import sqlite3
 import sys
@@ -1363,7 +1363,7 @@ check_notification_delivery_state() {
   fi
 
   local output=""
-  if ! output="$(python3 - "$ALMANAC_DB_PATH" <<'PY'
+  if ! output="$(python3 - "$ARCLINK_DB_PATH" <<'PY'
 import datetime as dt
 import sqlite3
 import sys
@@ -1453,10 +1453,10 @@ check_upgrade_state() {
 
   local output=""
   local status_code=0
-  if ! output="$(ALMANAC_RELEASE_STATE_FILE="$ALMANAC_RELEASE_STATE_FILE" \
-                ALMANAC_DB_PATH="$ALMANAC_DB_PATH" \
-                ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
-                ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}" \
+  if ! output="$(ARCLINK_RELEASE_STATE_FILE="$ARCLINK_RELEASE_STATE_FILE" \
+                ARCLINK_DB_PATH="$ARCLINK_DB_PATH" \
+                ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
+                ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
                 python3 - <<'PY'
 import datetime as dt
 import json
@@ -1465,10 +1465,10 @@ import sqlite3
 import sys
 from pathlib import Path
 
-release_path = Path(os.environ.get("ALMANAC_RELEASE_STATE_FILE") or "")
-db_path = os.environ.get("ALMANAC_DB_PATH") or ""
-upstream_repo = os.environ.get("ALMANAC_UPSTREAM_REPO_URL") or ""
-upstream_branch = os.environ.get("ALMANAC_UPSTREAM_BRANCH") or "main"
+release_path = Path(os.environ.get("ARCLINK_RELEASE_STATE_FILE") or "")
+db_path = os.environ.get("ARCLINK_DB_PATH") or ""
+upstream_repo = os.environ.get("ARCLINK_UPSTREAM_REPO_URL") or ""
+upstream_branch = os.environ.get("ARCLINK_UPSTREAM_BRANCH") or "main"
 
 release_state = {}
 if release_path.is_file():
@@ -1483,27 +1483,27 @@ tracked_repo = str(release_state.get("tracked_upstream_repo_url") or upstream_re
 tracked_branch = str(release_state.get("tracked_upstream_branch") or upstream_branch or "main").strip() or "main"
 
 if not release_path.is_file() or not deployed_commit:
-    print(f"WARN Almanac release state missing or empty at {release_path}; run ./deploy.sh install or upgrade")
+    print(f"WARN ArcLink release state missing or empty at {release_path}; run ./deploy.sh install or upgrade")
     raise SystemExit(1)
 
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 job = conn.execute(
-    "SELECT last_run_at, last_status, last_note FROM refresh_jobs WHERE job_name = 'almanac-upgrade-check'"
+    "SELECT last_run_at, last_status, last_note FROM refresh_jobs WHERE job_name = 'arclink-upgrade-check'"
 ).fetchone()
 last_seen_sha_row = conn.execute(
-    "SELECT value FROM settings WHERE key = 'almanac_upgrade_last_seen_sha'"
+    "SELECT value FROM settings WHERE key = 'arclink_upgrade_last_seen_sha'"
 ).fetchone()
 relation_row = conn.execute(
-    "SELECT value FROM settings WHERE key = 'almanac_upgrade_relation'"
+    "SELECT value FROM settings WHERE key = 'arclink_upgrade_relation'"
 ).fetchone()
 last_seen_sha = str(last_seen_sha_row["value"]) if last_seen_sha_row else ""
 relation = str(relation_row["value"] or "") if relation_row else ""
 
 if job is None or not job["last_run_at"]:
     print(
-        f"WARN Almanac upgrade-check has never run; deployed {deployed_short} "
-        f"from {tracked_repo}#{tracked_branch}. Run ./bin/almanac-ctl upgrade check."
+        f"WARN ArcLink upgrade-check has never run; deployed {deployed_short} "
+        f"from {tracked_repo}#{tracked_branch}. Run ./bin/arclink-ctl upgrade check."
     )
     raise SystemExit(1)
 
@@ -1516,44 +1516,44 @@ age_seconds = (dt.datetime.now(dt.timezone.utc) - last_run).total_seconds()
 # Curator itself is dead. Flag anything older than 2h15m.
 if age_seconds > 2 * 3600 + 900:
     print(
-        f"FAIL Almanac upgrade-check is stale (last_run_at={job['last_run_at']}, "
+        f"FAIL ArcLink upgrade-check is stale (last_run_at={job['last_run_at']}, "
         f"age={int(age_seconds / 60)}m); Curator hourly refresh may be dead"
     )
     raise SystemExit(2)
 
 if relation == "behind" and last_seen_sha and last_seen_sha != deployed_commit:
     print(
-        f"WARN Almanac upstream ahead of deployed: deployed {deployed_short} -> "
+        f"WARN ArcLink upstream ahead of deployed: deployed {deployed_short} -> "
         f"upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
         "run ./deploy.sh upgrade"
     )
     raise SystemExit(1)
 if relation == "ahead" and last_seen_sha and last_seen_sha != deployed_commit:
     print(
-        f"WARN Almanac deployed release is ahead of tracked upstream: deployed {deployed_short} "
+        f"WARN ArcLink deployed release is ahead of tracked upstream: deployed {deployed_short} "
         f"vs upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
         "review local commits before running ./deploy.sh upgrade"
     )
     raise SystemExit(1)
 if relation in {"diverged", "different"} and last_seen_sha and last_seen_sha != deployed_commit:
     print(
-        f"WARN Almanac deployed release differs from tracked upstream: deployed {deployed_short} "
+        f"WARN ArcLink deployed release differs from tracked upstream: deployed {deployed_short} "
         f"vs upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
         "review repo state before upgrading"
     )
     raise SystemExit(1)
 if last_seen_sha and last_seen_sha != deployed_commit and not relation:
     print(
-        f"WARN Almanac deployed release differs from tracked upstream: deployed {deployed_short} "
+        f"WARN ArcLink deployed release differs from tracked upstream: deployed {deployed_short} "
         f"vs upstream {last_seen_sha[:12]} on {tracked_repo}#{tracked_branch}; "
-        "run ./bin/almanac-ctl upgrade check to refresh relation state"
+        "run ./bin/arclink-ctl upgrade check to refresh relation state"
     )
     raise SystemExit(1)
 
 status = str(job["last_status"] or "unknown")
 note = str(job["last_note"] or "")
 print(
-    f"OK Almanac up to date at {deployed_short} on {tracked_repo}#{tracked_branch}; "
+    f"OK ArcLink up to date at {deployed_short} on {tracked_repo}#{tracked_branch}; "
     f"last upgrade-check {status} ({int(age_seconds / 60)}m ago)"
 )
 raise SystemExit(0)
@@ -1632,7 +1632,7 @@ try:
             "params": {
                 "protocolVersion": "2025-03-26",
                 "capabilities": {},
-                "clientInfo": {"name": "almanac-health", "version": "1.0"},
+                "clientInfo": {"name": "arclink-health", "version": "1.0"},
             },
         }
     )
@@ -1897,10 +1897,10 @@ PY
 }
 
 check_memory_synth_status() {
-  local enabled_raw="${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
-  local endpoint="${ALMANAC_MEMORY_SYNTH_ENDPOINT:-${PDF_VISION_ENDPOINT:-}}"
-  local model="${ALMANAC_MEMORY_SYNTH_MODEL:-${PDF_VISION_MODEL:-}}"
-  local api_key="${ALMANAC_MEMORY_SYNTH_API_KEY:-${PDF_VISION_API_KEY:-}}"
+  local enabled_raw="${ARCLINK_MEMORY_SYNTH_ENABLED:-auto}"
+  local endpoint="${ARCLINK_MEMORY_SYNTH_ENDPOINT:-${PDF_VISION_ENDPOINT:-}}"
+  local model="${ARCLINK_MEMORY_SYNTH_MODEL:-${PDF_VISION_MODEL:-}}"
+  local api_key="${ARCLINK_MEMORY_SYNTH_API_KEY:-${PDF_VISION_API_KEY:-}}"
   local explicit_enabled=1
   local enabled=0
   local resolved_endpoint=""
@@ -1930,18 +1930,18 @@ check_memory_synth_status() {
     resolved_endpoint="$(resolve_pdf_vision_endpoint "$endpoint" 2>/dev/null || printf '%s' "$endpoint")"
     pass "memory synthesis configured via $resolved_endpoint (model $model)"
   else
-    warn_or_fail "memory synthesis is enabled, but ALMANAC_MEMORY_SYNTH_ENDPOINT, MODEL, and API_KEY are not complete"
+    warn_or_fail "memory synthesis is enabled, but ARCLINK_MEMORY_SYNTH_ENDPOINT, MODEL, and API_KEY are not complete"
   fi
 
-  if [[ -f "$ALMANAC_MEMORY_SYNTH_STATUS_FILE" ]]; then
+  if [[ -f "$ARCLINK_MEMORY_SYNTH_STATUS_FILE" ]]; then
     local memory_status_output=""
     local memory_status_rc=0
     memory_status_output="$(
-      ALMANAC_MEMORY_SYNTH_STATUS_JSON="$(cat "$ALMANAC_MEMORY_SYNTH_STATUS_FILE")" python3 - <<'PY'
+      ARCLINK_MEMORY_SYNTH_STATUS_JSON="$(cat "$ARCLINK_MEMORY_SYNTH_STATUS_FILE")" python3 - <<'PY'
 import json
 import os
 
-status = json.loads(os.environ["ALMANAC_MEMORY_SYNTH_STATUS_JSON"])
+status = json.loads(os.environ["ARCLINK_MEMORY_SYNTH_STATUS_JSON"])
 state = str(status.get("status") or "unknown")
 candidate_count = int(status.get("candidate_count") or 0)
 changed = int(status.get("changed") or 0)
@@ -1953,7 +1953,7 @@ raise SystemExit(2 if state in {"fail", "failed"} or failed else 0)
 PY
     )" || memory_status_rc=$?
     if [[ "$memory_status_rc" != "0" && -z "$memory_status_output" ]]; then
-      warn_or_fail "could not parse $ALMANAC_MEMORY_SYNTH_STATUS_FILE"
+      warn_or_fail "could not parse $ARCLINK_MEMORY_SYNTH_STATUS_FILE"
       return 0
     fi
     while IFS= read -r line; do
@@ -1967,20 +1967,20 @@ PY
       fi
     done <<<"$memory_status_output"
   else
-    warn "memory synthesis status file not found yet at $ALMANAC_MEMORY_SYNTH_STATUS_FILE"
+    warn "memory synthesis status file not found yet at $ARCLINK_MEMORY_SYNTH_STATUS_FILE"
   fi
 }
 
 if [[ -n "${CONFIG_FILE:-}" ]]; then
   pass "config loaded from $CONFIG_FILE"
 else
-  warn "no almanac.env found; using script defaults"
+  warn "no arclink.env found; using script defaults"
 fi
 
-if [[ -d "$ALMANAC_PRIV_DIR" ]]; then
-  pass "private repo dir exists: $ALMANAC_PRIV_DIR"
+if [[ -d "$ARCLINK_PRIV_DIR" ]]; then
+  pass "private repo dir exists: $ARCLINK_PRIV_DIR"
 else
-  fail "private repo dir missing: $ALMANAC_PRIV_DIR"
+  fail "private repo dir missing: $ARCLINK_PRIV_DIR"
 fi
 
 if [[ -d "$VAULT_DIR" ]]; then
@@ -2015,16 +2015,16 @@ if command -v qmd >/dev/null 2>&1; then
   else
     fail "qmd collection '$QMD_COLLECTION_NAME' is missing from index '$QMD_INDEX_NAME'"
   fi
-  if qmd --index "$QMD_INDEX_NAME" collection show "$ALMANAC_NOTION_INDEX_COLLECTION_NAME" >/dev/null 2>&1; then
-    if [[ -n "${ALMANAC_NOTION_INDEX_ROOTS:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
-      pass "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' exists for shared Notion knowledge"
+  if qmd --index "$QMD_INDEX_NAME" collection show "$ARCLINK_NOTION_INDEX_COLLECTION_NAME" >/dev/null 2>&1; then
+    if [[ -n "${ARCLINK_NOTION_INDEX_ROOTS:-}" || -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then
+      pass "qmd collection '$ARCLINK_NOTION_INDEX_COLLECTION_NAME' exists for shared Notion knowledge"
     else
-      pass "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' is provisioned for optional shared Notion indexing"
+      pass "qmd collection '$ARCLINK_NOTION_INDEX_COLLECTION_NAME' is provisioned for optional shared Notion indexing"
     fi
-  elif [[ -n "${ALMANAC_NOTION_INDEX_ROOTS:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
-    fail "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' is missing from index '$QMD_INDEX_NAME'"
+  elif [[ -n "${ARCLINK_NOTION_INDEX_ROOTS:-}" || -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then
+    fail "qmd collection '$ARCLINK_NOTION_INDEX_COLLECTION_NAME' is missing from index '$QMD_INDEX_NAME'"
   else
-    warn "qmd collection '$ALMANAC_NOTION_INDEX_COLLECTION_NAME' is not provisioned yet"
+    warn "qmd collection '$ARCLINK_NOTION_INDEX_COLLECTION_NAME' is not provisioned yet"
   fi
 fi
 
@@ -2051,10 +2051,10 @@ case "${QMD_EMBED_PROVIDER:-local}" in
     ;;
 esac
 
-if [[ -d "$ALMANAC_PRIV_DIR/.git" ]]; then
+if [[ -d "$ARCLINK_PRIV_DIR/.git" ]]; then
   pass "private git repo initialized"
 else
-  warn "private git repo not initialized at $ALMANAC_PRIV_DIR"
+  warn "private git repo not initialized at $ARCLINK_PRIV_DIR"
 fi
 
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
@@ -2084,63 +2084,63 @@ else
 fi
 
 if set_user_systemd_bus_env; then
-  check_unit_state almanac-mcp.service required
-  check_unit_state almanac-notion-webhook.service required
-  check_unit_state almanac-ssot-batcher.timer required
-  check_unit_state almanac-notification-delivery.timer required
-  check_unit_state almanac-health-watch.timer required
-  if [[ "${ALMANAC_HEALTH_WATCH_CHILD:-0}" != "1" ]]; then
-    check_user_timer_job_result almanac-health-watch.service required
+  check_unit_state arclink-mcp.service required
+  check_unit_state arclink-notion-webhook.service required
+  check_unit_state arclink-ssot-batcher.timer required
+  check_unit_state arclink-notification-delivery.timer required
+  check_unit_state arclink-health-watch.timer required
+  if [[ "${ARCLINK_HEALTH_WATCH_CHILD:-0}" != "1" ]]; then
+    check_user_timer_job_result arclink-health-watch.service required
   fi
-  check_unit_state almanac-curator-refresh.timer required
-  check_unit_state almanac-memory-synth.timer required
-  check_user_timer_job_result almanac-memory-synth.service required
-  check_unit_state almanac-qmd-mcp.service required
-  check_unit_state almanac-qmd-update.timer required
-  check_unit_state almanac-vault-watch.service required
-  if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
-    check_unit_state almanac-hermes-docs-sync.timer required
+  check_unit_state arclink-curator-refresh.timer required
+  check_unit_state arclink-memory-synth.timer required
+  check_user_timer_job_result arclink-memory-synth.service required
+  check_unit_state arclink-qmd-mcp.service required
+  check_unit_state arclink-qmd-update.timer required
+  check_unit_state arclink-vault-watch.service required
+  if [[ "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
+    check_unit_state arclink-hermes-docs-sync.timer required
   fi
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
-    check_unit_state almanac-pdf-ingest.timer required
+    check_unit_state arclink-pdf-ingest.timer required
   else
     pass "PDF ingest timer disabled in config"
   fi
-  check_unit_state almanac-github-backup.timer required
+  check_unit_state arclink-github-backup.timer required
   if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
-    check_user_timer_job_result almanac-github-backup.service required
+    check_user_timer_job_result arclink-github-backup.service required
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     if [[ "$STRICT_MODE" == "1" ]]; then
-      check_unit_state almanac-nextcloud.service required
+      check_unit_state arclink-nextcloud.service required
     else
-      check_unit_state almanac-nextcloud.service optional
+      check_unit_state arclink-nextcloud.service optional
     fi
   else
     pass "Nextcloud disabled in config"
   fi
 
   if [[ "$ENABLE_QUARTO" == "1" ]]; then
-    check_unit_state almanac-quarto-render.timer optional
+    check_unit_state arclink-quarto-render.timer optional
   else
     pass "Quarto timer disabled in config"
   fi
 
   if has_curator_telegram_onboarding; then
-    check_unit_state almanac-curator-onboarding.service required
+    check_unit_state arclink-curator-onboarding.service required
   else
     pass "Curator Telegram onboarding disabled in config"
   fi
 
   if has_curator_discord_onboarding; then
-    check_unit_state almanac-curator-discord-onboarding.service required
+    check_unit_state arclink-curator-discord-onboarding.service required
   else
     pass "Curator Discord onboarding disabled in config"
   fi
 
   if has_curator_gateway_channels && { ! has_curator_onboarding || has_curator_non_onboarding_gateway_channels; }; then
-    check_unit_state almanac-curator-gateway.service required
+    check_unit_state arclink-curator-gateway.service required
   else
     pass "Curator gateway service not required for configured channels"
   fi
@@ -2149,30 +2149,30 @@ else
   warn "systemd user bus unavailable; skipping service status checks"
 fi
 
-check_port_listening "$ALMANAC_MCP_PORT"
-check_port_loopback_only "$ALMANAC_MCP_PORT" "almanac-mcp backend port $ALMANAC_MCP_PORT"
-check_http_json_health "http://127.0.0.1:$ALMANAC_MCP_PORT/health" "almanac-mcp health"
-check_almanac_mcp_status
+check_port_listening "$ARCLINK_MCP_PORT"
+check_port_loopback_only "$ARCLINK_MCP_PORT" "arclink-mcp backend port $ARCLINK_MCP_PORT"
+check_http_json_health "http://127.0.0.1:$ARCLINK_MCP_PORT/health" "arclink-mcp health"
+check_arclink_mcp_status
 check_activation_trigger_write_access
-check_port_listening "$ALMANAC_NOTION_WEBHOOK_PORT"
-check_port_loopback_only "$ALMANAC_NOTION_WEBHOOK_PORT" "almanac-notion-webhook backend port $ALMANAC_NOTION_WEBHOOK_PORT"
-check_http_json_health "http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/health" "almanac-notion-webhook health"
-if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
-  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
-    pass "Notion webhook public URL configured: $ALMANAC_NOTION_WEBHOOK_PUBLIC_URL"
+check_port_listening "$ARCLINK_NOTION_WEBHOOK_PORT"
+check_port_loopback_only "$ARCLINK_NOTION_WEBHOOK_PORT" "arclink-notion-webhook backend port $ARCLINK_NOTION_WEBHOOK_PORT"
+check_http_json_health "http://127.0.0.1:$ARCLINK_NOTION_WEBHOOK_PORT/health" "arclink-notion-webhook health"
+if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then
+  if [[ -n "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    pass "Notion webhook public URL configured: $ARCLINK_NOTION_WEBHOOK_PUBLIC_URL"
     if [[ "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
       check_notion_webhook_funnel
     fi
-    if command -v sqlite3 >/dev/null 2>&1 && [[ -n "${ALMANAC_DB_PATH:-}" && -f "$ALMANAC_DB_PATH" ]]; then
+    if command -v sqlite3 >/dev/null 2>&1 && [[ -n "${ARCLINK_DB_PATH:-}" && -f "$ARCLINK_DB_PATH" ]]; then
       notion_webhook_token_state="$(
-        sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verification_token' LIMIT 1;" 2>/dev/null || true
+        sqlite3 "$ARCLINK_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verification_token' LIMIT 1;" 2>/dev/null || true
       )"
       if [[ -n "${notion_webhook_token_state//[[:space:]]/}" ]]; then
         notion_webhook_verified_at="$(
-          sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verified_at' LIMIT 1;" 2>/dev/null || true
+          sqlite3 "$ARCLINK_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verified_at' LIMIT 1;" 2>/dev/null || true
         )"
         notion_webhook_verified_by="$(
-          sqlite3 "$ALMANAC_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verified_by' LIMIT 1;" 2>/dev/null || true
+          sqlite3 "$ARCLINK_DB_PATH" "SELECT value FROM settings WHERE key = 'notion_webhook_verified_by' LIMIT 1;" 2>/dev/null || true
         )"
         if [[ -n "${notion_webhook_verified_at//[[:space:]]/}" ]]; then
           if [[ -n "${notion_webhook_verified_by//[[:space:]]/}" ]]; then
@@ -2181,10 +2181,10 @@ if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
             pass "Notion webhook verification confirmed at ${notion_webhook_verified_at}"
           fi
         else
-          warn "Notion webhook verification token is installed, but operator confirmation is still pending: rerun \`$ALMANAC_REPO_DIR/deploy.sh notion-ssot\` or run \`almanac-ctl notion webhook-confirm-verified --actor <operator>\` after Notion accepts the token"
+          warn "Notion webhook verification token is installed, but operator confirmation is still pending: rerun \`$ARCLINK_REPO_DIR/deploy.sh notion-ssot\` or run \`arclink-ctl notion webhook-confirm-verified --actor <operator>\` after Notion accepts the token"
         fi
       else
-        warn "Notion webhook public URL is configured, but no verification token is installed yet: run \`almanac-ctl notion webhook-arm-install\` before completing the Notion webhook handshake"
+        warn "Notion webhook public URL is configured, but no verification token is installed yet: run \`arclink-ctl notion webhook-arm-install\` before completing the Notion webhook handshake"
       fi
     fi
   else
@@ -2227,8 +2227,8 @@ if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
   fi
 fi
 
-check_system_unit_state almanac-enrollment-provision.timer required
-check_system_unit_state almanac-notion-claim-poll.timer required
+check_system_unit_state arclink-enrollment-provision.timer required
+check_system_unit_state arclink-notion-claim-poll.timer required
 check_system_failed_units
 
 printf '\nSummary: %s ok, %s warn, %s fail\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"

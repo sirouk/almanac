@@ -41,17 +41,17 @@ confirm_default() {
 }
 
 choose_model_preset() {
-  local default="${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
+  local default="${ARCLINK_CURATOR_MODEL_PRESET:-codex}"
   local answer=""
-  if [[ -n "${ALMANAC_CURATOR_MODEL_PRESET:-}" ]]; then
-    printf '%s\n' "$ALMANAC_CURATOR_MODEL_PRESET"
+  if [[ -n "${ARCLINK_CURATOR_MODEL_PRESET:-}" ]]; then
+    printf '%s\n' "$ARCLINK_CURATOR_MODEL_PRESET"
     return 0
   fi
   cat <<EOF
 Curator model preset
-  1) codex  -> $ALMANAC_MODEL_PRESET_CODEX
-  2) opus   -> $ALMANAC_MODEL_PRESET_OPUS
-  3) chutes -> $ALMANAC_MODEL_PRESET_CHUTES
+  1) codex  -> $ARCLINK_MODEL_PRESET_CODEX
+  2) opus   -> $ARCLINK_MODEL_PRESET_OPUS
+  3) chutes -> $ARCLINK_MODEL_PRESET_CHUTES
 EOF
   answer="$(ask_default "Choose model preset" "$default")"
   case "$answer" in
@@ -63,10 +63,10 @@ EOF
 }
 
 choose_channels_csv() {
-  local existing_channels="${ALMANAC_CURATOR_CHANNELS:-}"
-  local reuse_existing="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
-  local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
-  local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
+  local existing_channels="${ARCLINK_CURATOR_CHANNELS:-}"
+  local reuse_existing="${ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
+  local skip_setup="${ARCLINK_CURATOR_SKIP_HERMES_SETUP:-0}"
+  local skip_gateway_setup="${ARCLINK_CURATOR_SKIP_GATEWAY_SETUP:-0}"
   local default_discord="no"
   local default_telegram="no"
   local normalized_discord="" normalized_telegram=""
@@ -84,7 +84,7 @@ choose_channels_csv() {
   fi
 
   if [[ -n "$existing_channels" && "$reuse_existing" != "1" ]]; then
-    if [[ "$existing_channels" != "tui-only" || -f "$ALMANAC_CURATOR_MANIFEST" ]]; then
+    if [[ "$existing_channels" != "tui-only" || -f "$ARCLINK_CURATOR_MANIFEST" ]]; then
       if [[ ! -t 0 ]] || confirm_default "Reuse existing Curator chat channels ($existing_channels)?" "yes"; then
         printf '%s\n' "$existing_channels"
         return 0
@@ -214,7 +214,7 @@ Curator chat gateway notes:
   - The operator notification channel is separate from Curator's user-facing chat
     gateway. A Discord webhook or Telegram operator chat ID only delivers
     operator notices; it does not make Curator reachable to users.
-  - Almanac manages the Curator gateway as an Almanac systemd user service.
+  - ArcLink manages the Curator gateway as an ArcLink systemd user service.
     Hermes-native service install prompts are skipped during setup.
 
 EOF
@@ -257,7 +257,7 @@ probe_hermes_state_json() {
     return 1
   fi
 
-  python3 - "$dump_file" "${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}" "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}" <<'PY'
+  python3 - "$dump_file" "${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" "${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}" "${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}" <<'PY'
 import json
 import re
 import sys
@@ -329,7 +329,7 @@ run_curator_gateway_setup() {
   local hermes_home="$3"
   local detected_channels_csv=""
   local state_file=""
-  local setup_cmd="$BOOTSTRAP_DIR/bin/almanac-hermes-gateway-setup.sh"
+  local setup_cmd="$BOOTSTRAP_DIR/bin/arclink-hermes-gateway-setup.sh"
 
   print_gateway_setup_guidance "$requested_channels_csv"
   echo "Running curator Hermes gateway setup ..."
@@ -353,11 +353,11 @@ PY
   rm -f "$state_file"
 
   if channels_csv_covers_requested "$detected_channels_csv" "$requested_channels_csv"; then
-    echo "Hermes saved the gateway config; Almanac will restart the configured gateway service below." >&2
+    echo "Hermes saved the gateway config; ArcLink will restart the configured gateway service below." >&2
     return 0
   fi
 
-  echo "Hermes gateway setup returned non-zero before Almanac could confirm the saved gateway config. Almanac will keep going and restart the configured gateway itself if present." >&2
+  echo "Hermes gateway setup returned non-zero before ArcLink could confirm the saved gateway config. ArcLink will keep going and restart the configured gateway itself if present." >&2
   return 1
 }
 
@@ -366,13 +366,13 @@ configure_operator_notify_channel() {
   local requested_channel_id="${2:-}"
 
   requested_platform="$(printf '%s' "$requested_platform" | tr '[:upper:]' '[:lower:]')"
-  if "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "$requested_platform" --channel-id "$requested_channel_id" >/dev/null; then
+  if "$BOOTSTRAP_DIR/bin/arclink-ctl" channel reconfigure operator --platform "$requested_platform" --channel-id "$requested_channel_id" >/dev/null; then
     printf '%s\n%s\n' "$requested_platform" "$requested_channel_id"
     return 0
   fi
 
-  echo "Operator notification target verification failed. Curator chat is still configured, but operator notifications will stay on tui-only until you reconfigure a reachable Discord or Telegram target with 'almanac-ctl channel reconfigure operator'." >&2
-  "$BOOTSTRAP_DIR/bin/almanac-ctl" channel reconfigure operator --platform "tui-only" --channel-id "" >/dev/null || true
+  echo "Operator notification target verification failed. Curator chat is still configured, but operator notifications will stay on tui-only until you reconfigure a reachable Discord or Telegram target with 'arclink-ctl channel reconfigure operator'." >&2
+  "$BOOTSTRAP_DIR/bin/arclink-ctl" channel reconfigure operator --platform "tui-only" --channel-id "" >/dev/null || true
   printf '%s\n%s\n' "tui-only" ""
 }
 
@@ -384,7 +384,7 @@ should_rerun_setup() {
     return 0
   fi
 
-  if [[ ! -f "$ALMANAC_CURATOR_MANIFEST" ]]; then
+  if [[ ! -f "$ARCLINK_CURATOR_MANIFEST" ]]; then
     return 0
   fi
 
@@ -396,14 +396,14 @@ should_rerun_setup() {
 }
 
 resolve_notify_channel() {
-  local channels_csv="${1:-${ALMANAC_CURATOR_CHANNELS:-tui-only}}"
+  local channels_csv="${1:-${ARCLINK_CURATOR_CHANNELS:-tui-only}}"
   local existing_platform="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
   local existing_channel_id="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
-  local platform="${ALMANAC_CURATOR_NOTIFY_PLATFORM:-}"
-  local channel_id="${ALMANAC_CURATOR_NOTIFY_CHANNEL_ID:-}"
-  local reuse_existing="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
-  local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
-  local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
+  local platform="${ARCLINK_CURATOR_NOTIFY_PLATFORM:-}"
+  local channel_id="${ARCLINK_CURATOR_NOTIFY_CHANNEL_ID:-}"
+  local reuse_existing="${ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE:-0}"
+  local skip_setup="${ARCLINK_CURATOR_SKIP_HERMES_SETUP:-0}"
+  local skip_gateway_setup="${ARCLINK_CURATOR_SKIP_GATEWAY_SETUP:-0}"
   local meaningful_existing="0"
   local existing_label=""
   local inferred_platform=""
@@ -457,14 +457,14 @@ resolve_notify_channel() {
 set_config_value() {
   local key="$1"
   local value="$2"
-  local config_file="${ALMANAC_CONFIG_FILE:-${ALMANAC_PRIV_CONFIG_DIR}/almanac.env}"
+  local config_file="${ARCLINK_CONFIG_FILE:-${ARCLINK_PRIV_CONFIG_DIR}/arclink.env}"
 
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
     python3 - "$config_file" "$key" "$value" <<'PY'
 import sys
 from pathlib import Path
 
-from almanac_control import ensure_config_file_update
+from arclink_control import ensure_config_file_update
 
 path = Path(sys.argv[1])
 ensure_config_file_update(path, {sys.argv[2]: sys.argv[3]})
@@ -472,16 +472,16 @@ PY
 }
 
 sync_org_provider_from_curator_codex() {
-  local auth_file="$ALMANAC_CURATOR_HERMES_HOME/auth.json"
+  local auth_file="$ARCLINK_CURATOR_HERMES_HOME/auth.json"
   local secret_json=""
 
-  if [[ "${ALMANAC_ORG_PROVIDER_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_ORG_PROVIDER_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
-  if [[ "${ALMANAC_ORG_PROVIDER_PRESET:-}" != "codex" ]]; then
+  if [[ "${ARCLINK_ORG_PROVIDER_PRESET:-}" != "codex" ]]; then
     return 0
   fi
-  if [[ -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; then
+  if [[ -n "${ARCLINK_ORG_PROVIDER_SECRET:-}" ]]; then
     return 0
   fi
   if [[ ! -r "$auth_file" ]]; then
@@ -521,23 +521,23 @@ PY
     return 0
   fi
 
-  set_config_value "ALMANAC_ORG_PROVIDER_SECRET_PROVIDER" "codex"
-  set_config_value "ALMANAC_ORG_PROVIDER_SECRET" "$secret_json"
+  set_config_value "ARCLINK_ORG_PROVIDER_SECRET_PROVIDER" "codex"
+  set_config_value "ARCLINK_ORG_PROVIDER_SECRET" "$secret_json"
   echo "Org-provided Codex credential captured from Curator Codex sign-in."
 }
 
 ensure_hermes_agent_defaults() {
   local hermes_home="$1"
   local hermes_python="${2:-$RUNTIME_DIR/hermes-venv/bin/python3}"
-  local shared_skills_dir="${ALMANAC_SHARED_SKILLS_DIR:-}"
-  local agent_vault_dir="${ALMANAC_AGENT_VAULT_DIR:-${VAULT_DIR:-}}"
+  local shared_skills_dir="${ARCLINK_SHARED_SKILLS_DIR:-}"
+  local agent_vault_dir="${ARCLINK_AGENT_VAULT_DIR:-${VAULT_DIR:-}}"
 
   if [[ -z "$shared_skills_dir" && -n "${VAULT_DIR:-}" ]]; then
     shared_skills_dir="${VAULT_DIR%/}/Agents_Skills"
   fi
 
-  ALMANAC_SHARED_SKILLS_DIR="$shared_skills_dir" \
-    ALMANAC_AGENT_VAULT_DIR="$agent_vault_dir" \
+  ARCLINK_SHARED_SKILLS_DIR="$shared_skills_dir" \
+    ARCLINK_AGENT_VAULT_DIR="$agent_vault_dir" \
     VAULT_DIR="${VAULT_DIR:-}" \
     HERMES_HOME="$hermes_home" \
     "$hermes_python" <<'PY'
@@ -637,16 +637,16 @@ def external_dirs_list(raw_value) -> list[str]:
 
 def discover_org_skill_external_dirs(home: Path) -> list[str]:
     bases: list[Path] = []
-    for env_key in ("ALMANAC_SHARED_SKILLS_DIR",):
+    for env_key in ("ARCLINK_SHARED_SKILLS_DIR",):
         value = str(os.environ.get(env_key) or "").strip()
         if value:
             bases.append(Path(value).expanduser())
-    for env_key in ("VAULT_DIR", "ALMANAC_AGENT_VAULT_DIR"):
+    for env_key in ("VAULT_DIR", "ARCLINK_AGENT_VAULT_DIR"):
         value = str(os.environ.get(env_key) or "").strip()
         if value:
             bases.append(Path(value).expanduser() / "Agents_Skills")
-    bases.append(Path(os.environ.get("HOME") or str(Path.home())).expanduser() / "Almanac" / "Agents_Skills")
-    bases.append(home / "Almanac" / "Agents_Skills")
+    bases.append(Path(os.environ.get("HOME") or str(Path.home())).expanduser() / "ArcLink" / "Agents_Skills")
+    bases.append(home / "ArcLink" / "Agents_Skills")
     bases.append(home / "Vault" / "Agents_Skills")
 
     discovered: list[str] = []
@@ -810,7 +810,7 @@ curator_native_gateway_unit_name() {
     return 1
   fi
 
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$python_bin" <<'PY'
+  HERMES_HOME="$ARCLINK_CURATOR_HERMES_HOME" "$python_bin" <<'PY'
 try:
     from hermes_cli.gateway import get_service_name
 except Exception:
@@ -845,10 +845,10 @@ main() {
   local notify_channel_id=""
   local general_platform=""
   local general_channel_id=""
-  local skip_setup="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-0}"
-  local skip_gateway_setup="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-0}"
-  local force_setup="${ALMANAC_CURATOR_FORCE_HERMES_SETUP:-0}"
-  local force_gateway_setup="${ALMANAC_CURATOR_FORCE_GATEWAY_SETUP:-0}"
+  local skip_setup="${ARCLINK_CURATOR_SKIP_HERMES_SETUP:-0}"
+  local skip_gateway_setup="${ARCLINK_CURATOR_SKIP_GATEWAY_SETUP:-0}"
+  local force_setup="${ARCLINK_CURATOR_FORCE_HERMES_SETUP:-0}"
+  local force_gateway_setup="${ARCLINK_CURATOR_FORCE_GATEWAY_SETUP:-0}"
   local hermes_bin="$RUNTIME_DIR/hermes-venv/bin/hermes"
   local notify_values=()
   local reuse_note=""
@@ -859,10 +859,10 @@ main() {
 
   model_preset="$(choose_model_preset)"
   case "$model_preset" in
-    codex) model_string="$ALMANAC_MODEL_PRESET_CODEX" ;;
-    opus) model_string="$ALMANAC_MODEL_PRESET_OPUS" ;;
-    chutes) model_string="$ALMANAC_MODEL_PRESET_CHUTES" ;;
-    *) model_string="$ALMANAC_MODEL_PRESET_CODEX" ;;
+    codex) model_string="$ARCLINK_MODEL_PRESET_CODEX" ;;
+    opus) model_string="$ARCLINK_MODEL_PRESET_OPUS" ;;
+    chutes) model_string="$ARCLINK_MODEL_PRESET_CHUTES" ;;
+    *) model_string="$ARCLINK_MODEL_PRESET_CODEX" ;;
   esac
   channels_csv="$(choose_channels_csv)"
   channels_json="$(
@@ -887,26 +887,26 @@ PY
     reuse_note=" (reused existing channel config)"
   fi
 
-  general_platform="${ALMANAC_CURATOR_GENERAL_PLATFORM:-${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}}"
-  general_channel_id="${ALMANAC_CURATOR_GENERAL_CHANNEL_ID:-${OPERATOR_GENERAL_CHANNEL_ID:-}}"
+  general_platform="${ARCLINK_CURATOR_GENERAL_PLATFORM:-${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}}"
+  general_channel_id="${ARCLINK_CURATOR_GENERAL_CHANNEL_ID:-${OPERATOR_GENERAL_CHANNEL_ID:-}}"
 
-  mkdir -p "$ALMANAC_CURATOR_HERMES_HOME"
+  mkdir -p "$ARCLINK_CURATOR_HERMES_HOME"
 
   if [[ "$skip_setup" != "1" && -t 0 ]] && should_rerun_setup "Hermes model/provider setup" "$force_setup"; then
-    echo "Running curator Hermes model/provider setup in $ALMANAC_CURATOR_HERMES_HOME ..."
-    HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" setup model
+    echo "Running curator Hermes model/provider setup in $ARCLINK_CURATOR_HERMES_HOME ..."
+    HERMES_HOME="$ARCLINK_CURATOR_HERMES_HOME" "$hermes_bin" setup model
     ran_model_setup="1"
   fi
-  ensure_hermes_agent_defaults "$ALMANAC_CURATOR_HERMES_HOME" "$RUNTIME_DIR/hermes-venv/bin/python3"
+  ensure_hermes_agent_defaults "$ARCLINK_CURATOR_HERMES_HOME" "$RUNTIME_DIR/hermes-venv/bin/python3"
 
   if [[ "$skip_gateway_setup" != "1" && -t 0 ]] && [[ "$channels_csv" == *discord* || "$channels_csv" == *telegram* ]] && should_rerun_setup "Hermes gateway setup" "$force_gateway_setup"; then
-    if run_curator_gateway_setup "$channels_csv" "$hermes_bin" "$ALMANAC_CURATOR_HERMES_HOME"; then
+    if run_curator_gateway_setup "$channels_csv" "$hermes_bin" "$ARCLINK_CURATOR_HERMES_HOME"; then
       ran_gateway_setup="1"
     fi
   fi
 
   hermes_state_file="$(mktemp)"
-  if probe_hermes_state_json "$ALMANAC_CURATOR_HERMES_HOME" "$hermes_bin" >"$hermes_state_file"; then
+  if probe_hermes_state_json "$ARCLINK_CURATOR_HERMES_HOME" "$hermes_bin" >"$hermes_state_file"; then
     local detected_model_preset="" detected_model_string="" detected_channels_csv=""
     detected_model_preset="$(python3 - "$hermes_state_file" <<'PY'
 import json, sys
@@ -943,10 +943,10 @@ print(json.dumps(channels))
 PY
   )"
 
-  ALMANAC_CURATOR_MODEL_PRESET="$model_preset"
-  ALMANAC_CURATOR_CHANNELS="$channels_csv"
-  set_config_value "ALMANAC_CURATOR_MODEL_PRESET" "$model_preset"
-  set_config_value "ALMANAC_CURATOR_CHANNELS" "$channels_csv"
+  ARCLINK_CURATOR_MODEL_PRESET="$model_preset"
+  ARCLINK_CURATOR_CHANNELS="$channels_csv"
+  set_config_value "ARCLINK_CURATOR_MODEL_PRESET" "$model_preset"
+  set_config_value "ARCLINK_CURATOR_CHANNELS" "$channels_csv"
   sync_org_provider_from_curator_codex
   notify_values=()
   while IFS= read -r line; do
@@ -960,82 +960,82 @@ PY
   set_config_value "OPERATOR_GENERAL_CHANNEL_PLATFORM" "$general_platform"
   set_config_value "OPERATOR_GENERAL_CHANNEL_ID" "$general_channel_id"
   if [[ ",${channels_csv}," == *",telegram,"* || "$notify_platform" == "telegram" ]]; then
-    set_config_value "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED" "1"
+    set_config_value "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED" "1"
   else
-    set_config_value "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED" "0"
+    set_config_value "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED" "0"
   fi
   if [[ ",${channels_csv}," == *",discord,"* ]]; then
-    set_config_value "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED" "1"
+    set_config_value "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED" "1"
   else
-    set_config_value "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED" "0"
+    set_config_value "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED" "0"
   fi
 
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" internal register-curator \
-      --unix-user "$ALMANAC_USER" \
+    python3 "$BOOTSTRAP_DIR/python/arclink_ctl.py" internal register-curator \
+      --unix-user "$ARCLINK_USER" \
       --display-name "Curator" \
-      --hermes-home "$ALMANAC_CURATOR_HERMES_HOME" \
+      --hermes-home "$ARCLINK_CURATOR_HERMES_HOME" \
       --model-preset "$model_preset" \
       --model-string "$model_string" \
       --channels-json "$channels_json" \
       --notify-platform "$notify_platform" \
       --notify-channel-id "$notify_channel_id" >/dev/null
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 "$BOOTSTRAP_DIR/python/almanac_ctl.py" internal curator-refresh >/dev/null
+    python3 "$BOOTSTRAP_DIR/python/arclink_ctl.py" internal curator-refresh >/dev/null
 
   "$BOOTSTRAP_DIR/bin/sync-hermes-bundled-skills.sh" \
-    "$ALMANAC_CURATOR_HERMES_HOME" \
+    "$ARCLINK_CURATOR_HERMES_HOME" \
     "$RUNTIME_DIR"
 
-  "$BOOTSTRAP_DIR/bin/install-almanac-skills.sh" \
+  "$BOOTSTRAP_DIR/bin/install-arclink-skills.sh" \
     "$BOOTSTRAP_DIR" \
-    "$ALMANAC_CURATOR_HERMES_HOME" \
-    almanac-qmd-mcp \
-    almanac-vault-reconciler \
-    almanac-first-contact \
-    almanac-vaults \
-    almanac-ssot \
-    almanac-notion-knowledge \
-    almanac-ssot-connect \
-    almanac-notion-mcp \
-    almanac-resources \
-    almanac-upgrade-orchestrator
+    "$ARCLINK_CURATOR_HERMES_HOME" \
+    arclink-qmd-mcp \
+    arclink-vault-reconciler \
+    arclink-first-contact \
+    arclink-vaults \
+    arclink-ssot \
+    arclink-notion-knowledge \
+    arclink-ssot-connect \
+    arclink-notion-mcp \
+    arclink-resources \
+    arclink-upgrade-orchestrator
 
-  "$BOOTSTRAP_DIR/bin/install-almanac-plugins.sh" \
+  "$BOOTSTRAP_DIR/bin/install-arclink-plugins.sh" \
     "$BOOTSTRAP_DIR" \
-    "$ALMANAC_CURATOR_HERMES_HOME" \
-    almanac-managed-context
+    "$ARCLINK_CURATOR_HERMES_HOME" \
+    arclink-managed-context
 
   if [[ -x "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" ]]; then
-    "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" "$ALMANAC_CURATOR_HERMES_HOME" "$RUNTIME_DIR"
+    "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" "$ARCLINK_CURATOR_HERMES_HOME" "$RUNTIME_DIR"
   fi
 
   if set_user_systemd_bus_env; then
     systemctl --user daemon-reload
     disable_curator_native_gateway_unit
-    systemctl --user enable almanac-curator-refresh.timer >/dev/null
-    systemctl --user restart almanac-curator-refresh.timer >/dev/null || true
+    systemctl --user enable arclink-curator-refresh.timer >/dev/null
+    systemctl --user restart arclink-curator-refresh.timer >/dev/null || true
     if has_curator_telegram_onboarding; then
-      systemctl --user enable almanac-curator-onboarding.service >/dev/null
-      systemctl --user restart almanac-curator-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user enable arclink-curator-onboarding.service >/dev/null
+      systemctl --user restart arclink-curator-onboarding.service >/dev/null 2>&1 || true
     else
-      systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-curator-onboarding.service >/dev/null 2>&1 || true
     fi
     if has_curator_discord_onboarding; then
-      systemctl --user enable almanac-curator-discord-onboarding.service >/dev/null
-      systemctl --user restart almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user enable arclink-curator-discord-onboarding.service >/dev/null
+      systemctl --user restart arclink-curator-discord-onboarding.service >/dev/null 2>&1 || true
     else
-      systemctl --user disable --now almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-curator-discord-onboarding.service >/dev/null 2>&1 || true
     fi
     if ! has_curator_gateway_channels; then
-      systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
-      systemctl --user disable --now almanac-curator-onboarding.service >/dev/null 2>&1 || true
-      systemctl --user disable --now almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-curator-gateway.service >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-curator-onboarding.service >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-curator-discord-onboarding.service >/dev/null 2>&1 || true
     elif has_curator_non_onboarding_gateway_channels || ! has_curator_onboarding; then
-      systemctl --user enable almanac-curator-gateway.service >/dev/null
-      systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
+      systemctl --user enable arclink-curator-gateway.service >/dev/null
+      systemctl --user restart arclink-curator-gateway.service >/dev/null 2>&1 || true
     else
-      systemctl --user disable --now almanac-curator-gateway.service >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-curator-gateway.service >/dev/null 2>&1 || true
     fi
   fi
 
@@ -1044,7 +1044,7 @@ PY
 Curator bootstrap complete.
 
 Curator Hermes home:
-  $ALMANAC_CURATOR_HERMES_HOME
+  $ARCLINK_CURATOR_HERMES_HOME
 Model preset:
   $model_preset -> $model_string
 Channels:
@@ -1053,7 +1053,7 @@ Operator notification:
   $(describe_operator_channel "$notify_platform" "$notify_channel_id")$reuse_note
 
 Recovery path:
-  HERMES_HOME=$ALMANAC_CURATOR_HERMES_HOME $hermes_bin
+  HERMES_HOME=$ARCLINK_CURATOR_HERMES_HOME $hermes_bin
 
 EOF
 

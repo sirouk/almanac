@@ -20,7 +20,7 @@ QMD_REFRESH_SH = REPO / "bin" / "qmd-refresh.sh"
 VAULT_WATCH_SH = REPO / "bin" / "vault-watch.sh"
 TAILSCALE_NEXTCLOUD_SERVE_SH = REPO / "bin" / "tailscale-nextcloud-serve.sh"
 TAILSCALE_NOTION_FUNNEL_SH = REPO / "bin" / "tailscale-notion-webhook-funnel.sh"
-CONTROL_PY = REPO / "python" / "almanac_control.py"
+CONTROL_PY = REPO / "python" / "arclink_control.py"
 BOOTSTRAP_SYSTEM_SH = REPO / "bin" / "bootstrap-system.sh"
 
 
@@ -59,7 +59,7 @@ def bash(script: str) -> subprocess.CompletedProcess[str]:
     # regression harness independent of deploy.sh growth.
     if len(script.encode("utf-8")) < 100_000:
         return run(["bash", "-lc", script], cwd=REPO)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="almanac-deploy-regression-", suffix=".sh") as handle:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="arclink-deploy-regression-", suffix=".sh") as handle:
         handle.write(script)
         script_path = Path(handle.name)
     try:
@@ -77,7 +77,7 @@ def expect(condition: bool, message: str) -> None:
 
 
 def test_bool_env_blank_uses_default() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_regression")
+    mod = load_module(CONTROL_PY, "arclink_control_regression")
     expect(mod.bool_env("X", default=True, env={"X": ""}) is True, "blank string should fall back to default=True")
     expect(mod.bool_env("X", default=False, env={"X": ""}) is False, "blank string should fall back to default=False")
     expect(mod.bool_env("X", default=True, env={"X": "   "}) is True, "whitespace string should fall back to default=True")
@@ -132,18 +132,18 @@ def render_runtime_config(
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
     script = f"""
 {snippet}
-ALMANAC_NAME=almanac
-ALMANAC_USER=almanac
-ALMANAC_HOME=/home/almanac
-ALMANAC_REPO_DIR=/home/almanac/almanac
-ALMANAC_PRIV_DIR=/home/almanac/almanac/almanac-priv
-ALMANAC_PRIV_CONFIG_DIR=/home/almanac/almanac/almanac-priv/config
-VAULT_DIR=/home/almanac/almanac/almanac-priv/vault
-STATE_DIR=/home/almanac/almanac/almanac-priv/state
-NEXTCLOUD_STATE_DIR=/home/almanac/almanac/almanac-priv/state/nextcloud
-RUNTIME_DIR=/home/almanac/almanac/almanac-priv/state/runtime
-PUBLISHED_DIR=/home/almanac/almanac/almanac-priv/published
-QMD_INDEX_NAME=almanac
+ARCLINK_NAME=arclink
+ARCLINK_USER=arclink
+ARCLINK_HOME=/home/arclink
+ARCLINK_REPO_DIR=/home/arclink/arclink
+ARCLINK_PRIV_DIR=/home/arclink/arclink/arclink-priv
+ARCLINK_PRIV_CONFIG_DIR=/home/arclink/arclink/arclink-priv/config
+VAULT_DIR=/home/arclink/arclink/arclink-priv/vault
+STATE_DIR=/home/arclink/arclink/arclink-priv/state
+NEXTCLOUD_STATE_DIR=/home/arclink/arclink/arclink-priv/state/nextcloud
+RUNTIME_DIR=/home/arclink/arclink/arclink-priv/state/runtime
+PUBLISHED_DIR=/home/arclink/arclink/arclink-priv/published
+QMD_INDEX_NAME=arclink
 QMD_COLLECTION_NAME=vault
 QMD_RUN_EMBED=1
 QMD_EMBED_PROVIDER={shlex.quote(qmd_embed_provider)}
@@ -154,34 +154,34 @@ QMD_EMBED_DIMENSIONS={shlex.quote(qmd_embed_dimensions)}
 QMD_EMBED_FORCE_ON_NEXT_REFRESH={shlex.quote(qmd_embed_force_on_next_refresh)}
 BACKUP_GIT_BRANCH=main
 NEXTCLOUD_PORT=18080
-NEXTCLOUD_TRUSTED_DOMAIN=almanac.example.ts.net
+NEXTCLOUD_TRUSTED_DOMAIN=arclink.example.ts.net
 POSTGRES_DB=nextcloud
 POSTGRES_USER=nextcloud
 POSTGRES_PASSWORD=dbpass
 NEXTCLOUD_ADMIN_USER=admin
 NEXTCLOUD_ADMIN_PASSWORD=adminpass
-ALMANAC_SSOT_NOTION_ROOT_PAGE_URL={shlex.quote(notion_root_page_url)}
-ALMANAC_SSOT_NOTION_ROOT_PAGE_ID={shlex.quote(notion_root_page_id)}
-ALMANAC_SSOT_NOTION_SPACE_URL={shlex.quote(notion_space_url)}
-ALMANAC_SSOT_NOTION_SPACE_ID={shlex.quote(notion_space_id)}
-ALMANAC_SSOT_NOTION_SPACE_KIND={shlex.quote(notion_space_kind)}
-ALMANAC_SSOT_NOTION_API_VERSION={shlex.quote(notion_api_version)}
-ALMANAC_SSOT_NOTION_TOKEN={shlex.quote(notion_token)}
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL={shlex.quote(notion_public_webhook_url)}
-ALMANAC_ORG_NAME={shlex.quote(org_name)}
-ALMANAC_ORG_MISSION={shlex.quote(org_mission)}
-ALMANAC_ORG_PRIMARY_PROJECT={shlex.quote(org_primary_project)}
-ALMANAC_ORG_TIMEZONE={shlex.quote(org_timezone)}
-ALMANAC_ORG_QUIET_HOURS={shlex.quote(org_quiet_hours)}
-ALMANAC_ORG_PROVIDER_ENABLED={shlex.quote(org_provider_enabled)}
-ALMANAC_ORG_PROVIDER_PRESET={shlex.quote(org_provider_preset)}
-ALMANAC_ORG_PROVIDER_MODEL_ID={shlex.quote(org_provider_model_id)}
-ALMANAC_ORG_PROVIDER_REASONING_EFFORT={shlex.quote(org_provider_reasoning_effort)}
-ALMANAC_ORG_PROVIDER_SECRET_PROVIDER={shlex.quote(org_provider_secret_provider)}
-ALMANAC_ORG_PROVIDER_SECRET={shlex.quote(org_provider_secret)}
-ALMANAC_HERMES_DOCS_REPO_URL={shlex.quote(hermes_docs_repo_url)}
-ALMANAC_HERMES_DOCS_REF={shlex.quote(hermes_docs_ref)}
-ALMANAC_EXTRA_MCP_URL={shlex.quote(extra_mcp_url)}
+ARCLINK_SSOT_NOTION_ROOT_PAGE_URL={shlex.quote(notion_root_page_url)}
+ARCLINK_SSOT_NOTION_ROOT_PAGE_ID={shlex.quote(notion_root_page_id)}
+ARCLINK_SSOT_NOTION_SPACE_URL={shlex.quote(notion_space_url)}
+ARCLINK_SSOT_NOTION_SPACE_ID={shlex.quote(notion_space_id)}
+ARCLINK_SSOT_NOTION_SPACE_KIND={shlex.quote(notion_space_kind)}
+ARCLINK_SSOT_NOTION_API_VERSION={shlex.quote(notion_api_version)}
+ARCLINK_SSOT_NOTION_TOKEN={shlex.quote(notion_token)}
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL={shlex.quote(notion_public_webhook_url)}
+ARCLINK_ORG_NAME={shlex.quote(org_name)}
+ARCLINK_ORG_MISSION={shlex.quote(org_mission)}
+ARCLINK_ORG_PRIMARY_PROJECT={shlex.quote(org_primary_project)}
+ARCLINK_ORG_TIMEZONE={shlex.quote(org_timezone)}
+ARCLINK_ORG_QUIET_HOURS={shlex.quote(org_quiet_hours)}
+ARCLINK_ORG_PROVIDER_ENABLED={shlex.quote(org_provider_enabled)}
+ARCLINK_ORG_PROVIDER_PRESET={shlex.quote(org_provider_preset)}
+ARCLINK_ORG_PROVIDER_MODEL_ID={shlex.quote(org_provider_model_id)}
+ARCLINK_ORG_PROVIDER_REASONING_EFFORT={shlex.quote(org_provider_reasoning_effort)}
+ARCLINK_ORG_PROVIDER_SECRET_PROVIDER={shlex.quote(org_provider_secret_provider)}
+ARCLINK_ORG_PROVIDER_SECRET={shlex.quote(org_provider_secret)}
+ARCLINK_HERMES_DOCS_REPO_URL={shlex.quote(hermes_docs_repo_url)}
+ARCLINK_HERMES_DOCS_REF={shlex.quote(hermes_docs_ref)}
+ARCLINK_EXTRA_MCP_URL={shlex.quote(extra_mcp_url)}
 ENABLE_NEXTCLOUD=0
 ENABLE_TAILSCALE_SERVE={shlex.quote(enable_tailscale_serve)}
 TAILSCALE_SERVE_PORT={shlex.quote(tailscale_serve_port)}
@@ -193,11 +193,11 @@ ENABLE_QUARTO=1
 SEED_SAMPLE_VAULT=1
 QUARTO_PROJECT_DIR=/tmp/quarto
 QUARTO_OUTPUT_DIR=/tmp/published
-ALMANAC_CURATOR_CHANNELS={shlex.quote(channels)}
+ARCLINK_CURATOR_CHANNELS={shlex.quote(channels)}
 OPERATOR_NOTIFY_CHANNEL_PLATFORM={shlex.quote(notify_platform)}
-ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED={shlex.quote(tg_flag)}
-ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED={shlex.quote(dc_flag)}
-ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE={shlex.quote(agent_enable_tailscale_serve)}
+ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED={shlex.quote(tg_flag)}
+ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED={shlex.quote(dc_flag)}
+ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE={shlex.quote(agent_enable_tailscale_serve)}
 VAULT_WATCH_DEBOUNCE_SECONDS={shlex.quote(vault_watch_debounce_seconds)}
 VAULT_WATCH_MAX_BATCH_SECONDS={shlex.quote(vault_watch_max_batch_seconds)}
 emit_runtime_config
@@ -213,8 +213,8 @@ def render_agent_install_payload() -> str:
     script = f"""
 {snippet}
 detect_github_repo() {{
-  GITHUB_REPO_URL="https://github.com/example/almanac"
-  GITHUB_REPO_OWNER_REPO="example/almanac"
+  GITHUB_REPO_URL="https://github.com/example/arclink"
+  GITHUB_REPO_OWNER_REPO="example/arclink"
   GITHUB_REPO_BRANCH="feature/smoke"
 }}
 resolve_agent_qmd_endpoint() {{
@@ -227,17 +227,17 @@ resolve_agent_qmd_endpoint() {{
   TAILSCALE_QMD_PATH="/mcp"
 }}
 resolve_agent_control_plane_endpoint() {{
-  AGENT_ALMANAC_MCP_URL="https://agent.example.test/almanac-mcp"
-  ALMANAC_MCP_HOST="127.0.0.1"
-  ALMANAC_MCP_PORT="8282"
-  AGENT_ALMANAC_MCP_URL_MODE="tailnet"
-  AGENT_ALMANAC_MCP_ROUTE_STATUS="live"
-  TAILSCALE_ALMANAC_MCP_PATH="/almanac-mcp"
+  AGENT_ARCLINK_MCP_URL="https://agent.example.test/arclink-mcp"
+  ARCLINK_MCP_HOST="127.0.0.1"
+  ARCLINK_MCP_PORT="8282"
+  AGENT_ARCLINK_MCP_URL_MODE="tailnet"
+  AGENT_ARCLINK_MCP_ROUTE_STATUS="live"
+  TAILSCALE_ARCLINK_MCP_PATH="/arclink-mcp"
 }}
-ALMANAC_REPO_DIR="/repo"
-ALMANAC_MODEL_PRESET_CODEX="openai:codex"
-ALMANAC_MODEL_PRESET_OPUS="anthropic:claude-opus"
-ALMANAC_MODEL_PRESET_CHUTES="chutes:model-router"
+ARCLINK_REPO_DIR="/repo"
+ARCLINK_MODEL_PRESET_CODEX="openai:codex"
+ARCLINK_MODEL_PRESET_OPUS="anthropic:claude-opus"
+ARCLINK_MODEL_PRESET_CHUTES="chutes:model-router"
 render_agent_install_payload_body
 """
     result = bash(script)
@@ -260,14 +260,14 @@ def source_value(config_text: str, key: str) -> str:
 
 def test_emit_runtime_config_normalizes_curator_onboarding_flags() -> None:
     config = render_runtime_config("tui-only,telegram,discord", "telegram", "", "")
-    tg = source_value(config, "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED")
-    dc = source_value(config, "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED")
+    tg = source_value(config, "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED")
+    dc = source_value(config, "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED")
     expect(tg == "1", f"expected telegram onboarding flag to normalize to 1, got {tg!r}")
     expect(dc == "1", f"expected discord onboarding flag to normalize to 1, got {dc!r}")
 
     config = render_runtime_config("tui-only", "tui-only", "", "")
-    tg = source_value(config, "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED")
-    dc = source_value(config, "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED")
+    tg = source_value(config, "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED")
+    dc = source_value(config, "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED")
     expect(tg == "0", f"expected telegram onboarding flag to normalize to 0, got {tg!r}")
     expect(dc == "0", f"expected discord onboarding flag to normalize to 0, got {dc!r}")
     print("PASS test_emit_runtime_config_normalizes_curator_onboarding_flags")
@@ -280,7 +280,7 @@ def test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag() -> N
         enable_tailscale_serve="1",
         agent_enable_tailscale_serve="0",
     )
-    agent_flag = source_value(config, "ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE")
+    agent_flag = source_value(config, "ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE")
     expect(agent_flag == "1", f"expected agent tailscale serve flag to follow global enable, got {agent_flag!r}")
     print("PASS test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag")
 
@@ -313,7 +313,7 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
         tailscale_serve_port="8443",
         tailscale_notion_webhook_funnel_port="443",
         tailscale_notion_webhook_funnel_path="/notion/webhook",
-        notion_root_page_url="https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        notion_root_page_url="https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
         notion_root_page_id="aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
         notion_space_url="https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         notion_space_id="12345678-90ab-cdef-1234-567890abcdef",
@@ -323,28 +323,28 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
         notion_public_webhook_url="https://hooks.example.com/notion/webhook",
     )
     expect(
-        source_value(config, "ALMANAC_SSOT_NOTION_ROOT_PAGE_URL")
-        == "https://www.notion.so/The-Almanac-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+        source_value(config, "ARCLINK_SSOT_NOTION_ROOT_PAGE_URL")
+        == "https://www.notion.so/The-ArcLink-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
         config,
     )
     expect(
-        source_value(config, "ALMANAC_SSOT_NOTION_ROOT_PAGE_ID") == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
+        source_value(config, "ARCLINK_SSOT_NOTION_ROOT_PAGE_ID") == "aaaaaaaa-aaaa-bbbb-bbbb-bbbbbbbbbbbb",
         config,
     )
     expect(
-        source_value(config, "ALMANAC_SSOT_NOTION_SPACE_URL") == "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
+        source_value(config, "ARCLINK_SSOT_NOTION_SPACE_URL") == "https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef",
         config,
     )
-    expect(source_value(config, "ALMANAC_SSOT_NOTION_SPACE_ID") == "12345678-90ab-cdef-1234-567890abcdef", config)
-    expect(source_value(config, "ALMANAC_SSOT_NOTION_SPACE_KIND") == "database", config)
-    expect(source_value(config, "ALMANAC_SSOT_NOTION_API_VERSION") == "2026-03-11", config)
-    expect(source_value(config, "ALMANAC_SSOT_NOTION_TOKEN") == "secret_test", config)
+    expect(source_value(config, "ARCLINK_SSOT_NOTION_SPACE_ID") == "12345678-90ab-cdef-1234-567890abcdef", config)
+    expect(source_value(config, "ARCLINK_SSOT_NOTION_SPACE_KIND") == "database", config)
+    expect(source_value(config, "ARCLINK_SSOT_NOTION_API_VERSION") == "2026-03-11", config)
+    expect(source_value(config, "ARCLINK_SSOT_NOTION_TOKEN") == "secret_test", config)
     expect(source_value(config, "ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL") == "1", config)
     expect(source_value(config, "TAILSCALE_SERVE_PORT") == "8443", config)
     expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT") == "443", config)
     expect(source_value(config, "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH") == "/notion/webhook", config)
     expect(
-        source_value(config, "ALMANAC_NOTION_WEBHOOK_PUBLIC_URL") == "https://hooks.example.com/notion/webhook",
+        source_value(config, "ARCLINK_NOTION_WEBHOOK_PUBLIC_URL") == "https://hooks.example.com/notion/webhook",
         config,
     )
     print("PASS test_emit_runtime_config_persists_notion_ssot_fields")
@@ -353,30 +353,30 @@ def test_emit_runtime_config_persists_notion_ssot_fields() -> None:
 def test_emit_runtime_config_persists_hermes_docs_sync_fields() -> None:
     config = render_runtime_config("tui-only", "tui-only")
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_SYNC_ENABLED") == "1",
+        source_value(config, "ARCLINK_HERMES_DOCS_SYNC_ENABLED") == "1",
         config,
     )
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_REPO_URL") == "https://github.com/NousResearch/hermes-agent.git",
+        source_value(config, "ARCLINK_HERMES_DOCS_REPO_URL") == "https://github.com/NousResearch/hermes-agent.git",
         config,
     )
     # Docs ref must default to the pinned runtime ref so in-vault docs cannot
     # silently drift ahead of the pinned runtime they describe.
-    hermes_agent_ref = source_value(config, "ALMANAC_HERMES_AGENT_REF")
+    hermes_agent_ref = source_value(config, "ARCLINK_HERMES_AGENT_REF")
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_REF") == hermes_agent_ref,
+        source_value(config, "ARCLINK_HERMES_DOCS_REF") == hermes_agent_ref,
         config,
     )
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_REF") != "main",
-        "ALMANAC_HERMES_DOCS_REF must not default to 'main' (silent-drift regression)",
+        source_value(config, "ARCLINK_HERMES_DOCS_REF") != "main",
+        "ARCLINK_HERMES_DOCS_REF must not default to 'main' (silent-drift regression)",
     )
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_SOURCE_SUBDIR") == "website/docs",
+        source_value(config, "ARCLINK_HERMES_DOCS_SOURCE_SUBDIR") == "website/docs",
         config,
     )
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_VAULT_DIR").endswith("/vault/Agents_KB/hermes-agent-docs"),
+        source_value(config, "ARCLINK_HERMES_DOCS_VAULT_DIR").endswith("/vault/Agents_KB/hermes-agent-docs"),
         config,
     )
     print("PASS test_emit_runtime_config_persists_hermes_docs_sync_fields")
@@ -390,11 +390,11 @@ def test_emit_runtime_config_preserves_custom_hermes_docs_ref() -> None:
         hermes_docs_ref="main",
     )
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_REPO_URL") == "https://example.test/custom-hermes-docs.git",
+        source_value(config, "ARCLINK_HERMES_DOCS_REPO_URL") == "https://example.test/custom-hermes-docs.git",
         config,
     )
     expect(
-        source_value(config, "ALMANAC_HERMES_DOCS_REF") == "main",
+        source_value(config, "ARCLINK_HERMES_DOCS_REF") == "main",
         config,
     )
     print("PASS test_emit_runtime_config_preserves_custom_hermes_docs_ref")
@@ -407,7 +407,7 @@ def test_emit_runtime_config_persists_extra_mcp_url() -> None:
         extra_mcp_url="https://kb.example/mcp",
     )
     expect(
-        source_value(config, "ALMANAC_EXTRA_MCP_URL") == "https://kb.example/mcp",
+        source_value(config, "ARCLINK_EXTRA_MCP_URL") == "https://kb.example/mcp",
         config,
     )
     print("PASS test_emit_runtime_config_persists_extra_mcp_url")
@@ -436,7 +436,7 @@ def test_emit_runtime_config_persists_qmd_embedding_endpoint_fields() -> None:
 def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
     text = DEPLOY_SH.read_text()
     expect("If a subscription already exists for this exact URL, edit that subscription." in text, "expected explicit reuse guidance for existing Notion webhook subscription")
-    expect("Do not create a second webhook subscription for the same Almanac endpoint." in text, "expected explicit no-duplicate Notion webhook guidance")
+    expect("Do not create a second webhook subscription for the same ArcLink endpoint." in text, "expected explicit no-duplicate Notion webhook guidance")
     expect("- Page: select all Page events" in text, "expected explicit Page event instruction")
     expect("- Database: select all Database events" in text, "expected explicit Database event instruction")
     expect("- Data source: select all Data source events" in text, "expected explicit Data source event instruction")
@@ -453,15 +453,15 @@ def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
 
 def test_deploy_uses_stable_copy_for_privileged_reexec() -> None:
     text = DEPLOY_SH.read_text()
-    expect("ALMANAC_DEPLOY_STABLE_COPY" in text, "expected deploy.sh to support stable self execution")
+    expect("ARCLINK_DEPLOY_STABLE_COPY" in text, "expected deploy.sh to support stable self execution")
     expect('exec bash "$DEPLOY_EXEC_PATH" "$@"' in text, "expected deploy.sh to re-exec from a temp copy")
     expect("sudo_deploy()" in text, "expected privileged deploy reexecs to preserve stable-copy env")
     expect(
-        'sudo_deploy ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-install' in text,
+        'sudo_deploy ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-install' in text,
         "expected install apply step to invoke the stable deploy copy",
     )
     expect(
-        'sudo env ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-install' not in text,
+        'sudo env ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$SELF_PATH" --apply-install' not in text,
         "install apply step must not run the mutable checkout script directly",
     )
     print("PASS test_deploy_uses_stable_copy_for_privileged_reexec")
@@ -492,8 +492,8 @@ def test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified() 
     script = f"""
 {snippet}
 SELF_PATH=/tmp/deploy.sh
-CONFIG_TARGET=/tmp/almanac.env
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=https://hooks.example.com/notion/webhook
+CONFIG_TARGET=/tmp/arclink.env
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL=https://hooks.example.com/notion/webhook
 notion_webhook_status_json() {{
   printf '%s' '{{"verified": false, "configured": false, "public_url": "https://hooks.example.com/notion/webhook", "verification_token": ""}}'
 }}
@@ -512,7 +512,7 @@ cat /tmp/notion-flow.err
     print("PASS test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified")
 
 
-def test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes() -> None:
+def test_detect_tailscale_serve_distinguishes_qmd_from_arclink_routes() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "detect_tailscale_serve() {", "normalize_http_path() {")
     script = f"""
@@ -520,20 +520,20 @@ def test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes() -> None:
 TAILSCALE_SERVE_PORT=443
 QMD_MCP_PORT=8181
 TAILSCALE_QMD_PATH=/mcp
-ALMANAC_MCP_PORT=8282
-TAILSCALE_ALMANAC_MCP_PATH=/almanac-mcp
+ARCLINK_MCP_PORT=8282
+TAILSCALE_ARCLINK_MCP_PATH=/arclink-mcp
 tailscale() {{
   cat <<'JSON'
-{{"Web": {{"host.example.com:443": {{"Handlers": {{"/almanac-mcp": {{"Proxy": "http://127.0.0.1:8282/mcp"}}}}}}}}}}
+{{"Web": {{"host.example.com:443": {{"Handlers": {{"/arclink-mcp": {{"Proxy": "http://127.0.0.1:8282/mcp"}}}}}}}}}}
 JSON
 }}
 detect_tailscale_serve
-printf 'qmd=%s almanac=%s\\n' "$TAILSCALE_SERVE_HAS_QMD" "$TAILSCALE_SERVE_HAS_ALMANAC_MCP"
+printf 'qmd=%s arclink=%s\\n' "$TAILSCALE_SERVE_HAS_QMD" "$TAILSCALE_SERVE_HAS_ARCLINK_MCP"
 """
     result = bash(script)
     expect(result.returncode == 0, f"detect_tailscale_serve probe failed: {result.stderr}")
-    expect("qmd=0 almanac=1" in result.stdout, f"expected exact route detection, got: {result.stdout!r}")
-    print("PASS test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes")
+    expect("qmd=0 arclink=1" in result.stdout, f"expected exact route detection, got: {result.stdout!r}")
+    print("PASS test_detect_tailscale_serve_distinguishes_qmd_from_arclink_routes")
 
 
 def test_path_is_within_and_safe_remove_use_canonical_paths() -> None:
@@ -578,7 +578,7 @@ def test_run_health_check_falls_back_when_user_bus_is_missing() -> None:
         "expected run_health_check to check whether the service-user bus socket exists",
     )
     expect(
-        'run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE=\'$CONFIG_TARGET\' \'$ALMANAC_REPO_DIR/bin/health.sh\'"' in snippet,
+        'run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE=\'$CONFIG_TARGET\' \'$ARCLINK_REPO_DIR/bin/health.sh\'"' in snippet,
         "expected run_health_check to fall back to plain user-shell execution when the bus is absent",
     )
     print("PASS test_run_health_check_falls_back_when_user_bus_is_missing")
@@ -589,7 +589,7 @@ def test_install_and_upgrade_run_live_agent_tool_smoke_after_health() -> None:
     smoke_script = REPO / "bin" / "live-agent-tool-smoke.sh"
     install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
-    smoke_call = 'env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"'
+    smoke_call = 'env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/live-agent-tool-smoke.sh"'
     expect(os.access(smoke_script, os.X_OK), "live-agent-tool-smoke.sh must be executable or deploy will skip it")
     expect(smoke_call in install_snippet, install_snippet)
     expect(smoke_call in upgrade_snippet, upgrade_snippet)
@@ -608,10 +608,10 @@ def test_install_and_upgrade_refresh_upgrade_check_before_health() -> None:
         refresh_index = snippet.index("refresh_upgrade_check_state_root", release_index)
         health_index = snippet.index('echo "Running health check..."', refresh_index)
         expect(release_index < refresh_index < health_index, f"{name} must refresh upgrade-check state before health")
-    expect("almanac_upgrade_last_seen_sha" in text and "almanac_upgrade_relation" in text, text)
-    expect("Almanac update available:%" in text, "successful deploy should clear stale operator update notifications")
+    expect("arclink_upgrade_last_seen_sha" in text and "arclink_upgrade_relation" in text, text)
+    expect("ArcLink update available:%" in text, "successful deploy should clear stale operator update notifications")
     expect(
-        "Curator reports an Almanac host update is available:%" in text,
+        "Curator reports an ArcLink host update is available:%" in text,
         "successful deploy should clear stale user-agent update notifications",
     )
     print("PASS test_install_and_upgrade_refresh_upgrade_check_before_health")
@@ -623,14 +623,14 @@ def test_install_and_upgrade_mark_deploy_operation_window() -> None:
     upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     docker_snippet = extract(text, "run_docker_install_flow() {", "run_docker_reconfigure_flow() {")
     expect("begin_deploy_operation() {" in text, "expected deploy-operation marker helper")
-    expect("almanac-deploy-operation.json" in text, "expected deploy-operation marker file")
+    expect("arclink-deploy-operation.json" in text, "expected deploy-operation marker file")
     expect('begin_deploy_operation "install" "$STATE_DIR"' in install_snippet, install_snippet)
     expect('begin_deploy_operation "upgrade" "$STATE_DIR"' in upgrade_snippet, upgrade_snippet)
     expect("finish_deploy_operation" in install_snippet, install_snippet)
     expect("finish_deploy_operation" in upgrade_snippet, upgrade_snippet)
     expect('operation="docker-install"' in docker_snippet, docker_snippet)
     expect('operation="docker-upgrade"' in docker_snippet, docker_snippet)
-    expect('begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/almanac-priv/state"' in docker_snippet, docker_snippet)
+    expect('begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/arclink-priv/state"' in docker_snippet, docker_snippet)
     expect("finish_deploy_operation" in docker_snippet, docker_snippet)
     print("PASS test_install_and_upgrade_mark_deploy_operation_window")
 
@@ -641,11 +641,11 @@ def test_install_and_upgrade_run_user_agent_refresh_before_health() -> None:
     install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     expect("runuser -u \"$unix_user\" -- env" in helper, helper)
-    expect('"$ALMANAC_REPO_DIR/bin/user-agent-refresh.sh"' in helper, helper)
-    expect("ALMANAC_AGENT_ID=\"$agent_id\"" in helper, helper)
-    expect("ALMANAC_MCP_URL=\"$mcp_url\"" in helper, helper)
+    expect('"$ARCLINK_REPO_DIR/bin/user-agent-refresh.sh"' in helper, helper)
+    expect("ARCLINK_AGENT_ID=\"$agent_id\"" in helper, helper)
+    expect("ARCLINK_MCP_URL=\"$mcp_url\"" in helper, helper)
     for name, snippet in [("install", install_snippet), ("upgrade", upgrade_snippet)]:
-        wait_index = snippet.index('wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT"')
+        wait_index = snippet.index('wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT"')
         refresh_index = snippet.index("refresh_active_agent_context_root", wait_index)
         health_index = snippet.index('echo "Running health check..."', refresh_index)
         expect(wait_index < refresh_index < health_index, f"{name} must refresh user-agent context after MCP is up and before health")
@@ -662,8 +662,8 @@ def test_install_offers_optional_notion_ssot_setup_before_health() -> None:
     expect("Shared Notion SSOT is not configured yet." in helper, helper)
     expect('ask_yes_no "Configure the shared Notion SSOT page now" "0"' in helper, helper)
     expect("run_notion_ssot_setup" in helper, helper)
-    expect("Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot" in helper, helper)
-    expect("ALMANAC_INSTALL_OFFER_NOTION_SSOT" in helper, helper)
+    expect("Run $ARCLINK_REPO_DIR/deploy.sh notion-ssot" in helper, helper)
+    expect("ARCLINK_INSTALL_OFFER_NOTION_SSOT" in helper, helper)
     print("PASS test_install_offers_optional_notion_ssot_setup_before_health")
 
 
@@ -675,8 +675,8 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("missing_tool_token_injected_but_brokered_tool_succeeded" in body, body)
     expect("telemetry_missing_but_brokered_tool_succeeded" in body, body)
     expect("Hermes quota monitoring" in body, body)
-    expect("mcp_almanac_mcp_vault_search_and_fetch" in body, body)
-    expect("session did not invoke the brokered Almanac knowledge/vault MCP rail" in body, body)
+    expect("mcp_arclink_mcp_vault_search_and_fetch" in body, body)
+    expect("session did not invoke the brokered ArcLink knowledge/vault MCP rail" in body, body)
     expect("missing or invalid mcp-session-id" in body, body)
     expect("session attempted raw curl/MCP debugging" in body, body)
     expect("provider_auth_failed" in body, body)
@@ -684,15 +684,15 @@ def test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants() -> None:
     expect("no instances available" in body, body)
     expect("authentication_error" in body, body)
     expect("stale_mcp_transport_session" in body, body)
-    expect("ALMANAC_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS" in body, body)
+    expect("ARCLINK_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS" in body, body)
     expect('timeout --foreground --kill-after=30s "${TARGET_TIMEOUT_SECONDS}s"' in body, body)
     expect("timed_out_after_brokered_tool_returned" in body, body)
     expect("hermes chat exited with status" in body, body)
     expect("tool_result_texts" in body, body)
-    expect("ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT" in body, body)
+    expect("ARCLINK_LIVE_AGENT_SMOKE_RETRY_ATTEMPT" in body, body)
     expect("retrying once with a fresh chat session" in body, body)
     expect("Live agent tool smoke skipped" in body, body)
-    expect("almanac-bootstrap-token" in body, body)
+    expect("arclink-bootstrap-token" in body, body)
     print("PASS test_live_agent_tool_smoke_blocks_broader_python_heredoc_variants")
 
 
@@ -722,7 +722,7 @@ def test_live_agent_tool_smoke_inspects_private_home_as_target_user() -> None:
 
 
 def test_discord_onboarding_dedupes_message_ids_before_state_transitions() -> None:
-    body = (REPO / "python" / "almanac_curator_discord_onboarding.py").read_text(encoding="utf-8")
+    body = (REPO / "python" / "arclink_curator_discord_onboarding.py").read_text(encoding="utf-8")
     expect("_claim_discord_message_once" in body, body)
     expect("curator_discord_onboarding_seen_message:" in body, body)
     expect("INSERT OR IGNORE INTO settings" in body, body)
@@ -739,7 +739,7 @@ def test_live_agent_tool_smoke_parses_explicit_selectors() -> None:
     expect("TAIL_LINES=40" in body, body)
     expect('tail -"$TAIL_LINES" "$output_file"' in body, body)
     expect("Unknown option:" in body, "live smoke should fail closed on unknown flags")
-    expect('"$ALMANAC_DB_PATH" "$TARGET_UNIX_USER" "$TARGET_AGENT_SELECTOR"' in body, body)
+    expect('"$ARCLINK_DB_PATH" "$TARGET_UNIX_USER" "$TARGET_AGENT_SELECTOR"' in body, body)
     expect("lower(agent_id) = ?" in body, body)
     expect("lower(unix_user) = ?" in body, body)
     expect("lower(coalesce(display_name, '')) = ?" in body, body)
@@ -749,18 +749,18 @@ def test_live_agent_tool_smoke_parses_explicit_selectors() -> None:
 def test_agent_install_payload_tracks_current_agent_contract() -> None:
     payload = render_agent_install_payload()
     expected_skills = [
-        "almanac-qmd-mcp",
-        "almanac-vault-reconciler",
-        "almanac-first-contact",
-        "almanac-vaults",
-        "almanac-ssot",
-        "almanac-notion-knowledge",
-        "almanac-ssot-connect",
-        "almanac-notion-mcp",
-        "almanac-resources",
+        "arclink-qmd-mcp",
+        "arclink-vault-reconciler",
+        "arclink-first-contact",
+        "arclink-vaults",
+        "arclink-ssot",
+        "arclink-notion-knowledge",
+        "arclink-ssot-connect",
+        "arclink-notion-mcp",
+        "arclink-resources",
     ]
     expected_keys = [
-        "[managed:almanac-skill-ref]",
+        "[managed:arclink-skill-ref]",
         "[managed:vault-ref]",
         "[managed:resource-ref]",
         "[managed:qmd-ref]",
@@ -775,18 +775,18 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
 
     for skill_name in expected_skills:
         expect(
-            f"https://raw.githubusercontent.com/example/almanac/feature/smoke/skills/{skill_name}/SKILL.md" in payload,
+            f"https://raw.githubusercontent.com/example/arclink/feature/smoke/skills/{skill_name}/SKILL.md" in payload,
             payload,
         )
-        expect(f"example/almanac/skills/{skill_name}" in payload, payload)
+        expect(f"example/arclink/skills/{skill_name}" in payload, payload)
         expect(f'/repo/skills/{skill_name}' in payload, payload)
 
     for managed_key in expected_keys:
         expect(managed_key in payload, payload)
 
     expect("scripts/curate-vaults.sh" not in payload, payload)
-    expect("almanac-managed-context" in payload, payload)
-    expect("inject Almanac MCP auth" in payload, payload)
+    expect("arclink-managed-context" in payload, payload)
+    expect("inject ArcLink MCP auth" in payload, payload)
     expect("do not read HERMES_HOME secrets files" in payload, payload)
     expect("do not pass token" in payload, payload)
     expect("plugin-managed context state" in payload, payload)
@@ -805,11 +805,11 @@ def test_emit_runtime_config_persists_org_interview_fields() -> None:
         org_timezone="America/New_York",
         org_quiet_hours="22:00-08:00 weekdays",
     )
-    expect(source_value(config, "ALMANAC_ORG_NAME") == "Acme Labs", config)
-    expect(source_value(config, "ALMANAC_ORG_MISSION") == "Make serious research more legible and actionable.", config)
-    expect(source_value(config, "ALMANAC_ORG_PRIMARY_PROJECT") == "Hermes deployment lane", config)
-    expect(source_value(config, "ALMANAC_ORG_TIMEZONE") == "America/New_York", config)
-    expect(source_value(config, "ALMANAC_ORG_QUIET_HOURS") == "22:00-08:00 weekdays", config)
+    expect(source_value(config, "ARCLINK_ORG_NAME") == "Acme Labs", config)
+    expect(source_value(config, "ARCLINK_ORG_MISSION") == "Make serious research more legible and actionable.", config)
+    expect(source_value(config, "ARCLINK_ORG_PRIMARY_PROJECT") == "Hermes deployment lane", config)
+    expect(source_value(config, "ARCLINK_ORG_TIMEZONE") == "America/New_York", config)
+    expect(source_value(config, "ARCLINK_ORG_QUIET_HOURS") == "22:00-08:00 weekdays", config)
     print("PASS test_emit_runtime_config_persists_org_interview_fields")
 
 
@@ -824,12 +824,12 @@ def test_emit_runtime_config_persists_org_provider_fields() -> None:
         org_provider_secret_provider="chutes",
         org_provider_secret="cpk_test_secret",
     )
-    expect(source_value(config, "ALMANAC_ORG_PROVIDER_ENABLED") == "1", config)
-    expect(source_value(config, "ALMANAC_ORG_PROVIDER_PRESET") == "chutes", config)
-    expect(source_value(config, "ALMANAC_ORG_PROVIDER_MODEL_ID") == "moonshotai/Kimi-K2.6-TEE", config)
-    expect(source_value(config, "ALMANAC_ORG_PROVIDER_REASONING_EFFORT") == "xhigh", config)
-    expect(source_value(config, "ALMANAC_ORG_PROVIDER_SECRET_PROVIDER") == "chutes", config)
-    expect(source_value(config, "ALMANAC_ORG_PROVIDER_SECRET") == "cpk_test_secret", config)
+    expect(source_value(config, "ARCLINK_ORG_PROVIDER_ENABLED") == "1", config)
+    expect(source_value(config, "ARCLINK_ORG_PROVIDER_PRESET") == "chutes", config)
+    expect(source_value(config, "ARCLINK_ORG_PROVIDER_MODEL_ID") == "moonshotai/Kimi-K2.6-TEE", config)
+    expect(source_value(config, "ARCLINK_ORG_PROVIDER_REASONING_EFFORT") == "xhigh", config)
+    expect(source_value(config, "ARCLINK_ORG_PROVIDER_SECRET_PROVIDER") == "chutes", config)
+    expect(source_value(config, "ARCLINK_ORG_PROVIDER_SECRET") == "cpk_test_secret", config)
     print("PASS test_emit_runtime_config_persists_org_provider_fields")
 
 
@@ -841,23 +841,23 @@ def test_collect_org_provider_answers_defaults_yes_and_collects_chutes() -> None
 {helpers}
 {snippet}
 BOOTSTRAP_DIR={shlex.quote(str(REPO))}
-ALMANAC_MODEL_PRESET_CODEX="openai:codex"
-ALMANAC_MODEL_PRESET_OPUS="anthropic:claude-opus"
-ALMANAC_MODEL_PRESET_CHUTES="chutes:model-router"
-ALMANAC_ORG_PROVIDER_ENABLED=""
-ALMANAC_ORG_PROVIDER_PRESET=""
-ALMANAC_ORG_PROVIDER_MODEL_ID=""
-ALMANAC_ORG_PROVIDER_REASONING_EFFORT="medium"
-ALMANAC_ORG_PROVIDER_SECRET_PROVIDER=""
-ALMANAC_ORG_PROVIDER_SECRET=""
-ALMANAC_ORG_PROVIDER_PROMPT_NONINTERACTIVE=1
+ARCLINK_MODEL_PRESET_CODEX="openai:codex"
+ARCLINK_MODEL_PRESET_OPUS="anthropic:claude-opus"
+ARCLINK_MODEL_PRESET_CHUTES="chutes:model-router"
+ARCLINK_ORG_PROVIDER_ENABLED=""
+ARCLINK_ORG_PROVIDER_PRESET=""
+ARCLINK_ORG_PROVIDER_MODEL_ID=""
+ARCLINK_ORG_PROVIDER_REASONING_EFFORT="medium"
+ARCLINK_ORG_PROVIDER_SECRET_PROVIDER=""
+ARCLINK_ORG_PROVIDER_SECRET=""
+ARCLINK_ORG_PROVIDER_PROMPT_NONINTERACTIVE=1
 collect_org_provider_answers
-printf 'enabled=%s\\n' "$ALMANAC_ORG_PROVIDER_ENABLED"
-printf 'preset=%s\\n' "$ALMANAC_ORG_PROVIDER_PRESET"
-printf 'model=%s\\n' "$ALMANAC_ORG_PROVIDER_MODEL_ID"
-printf 'reasoning=%s\\n' "$ALMANAC_ORG_PROVIDER_REASONING_EFFORT"
-printf 'secret_provider=%s\\n' "$ALMANAC_ORG_PROVIDER_SECRET_PROVIDER"
-printf 'secret=%s\\n' "$ALMANAC_ORG_PROVIDER_SECRET"
+printf 'enabled=%s\\n' "$ARCLINK_ORG_PROVIDER_ENABLED"
+printf 'preset=%s\\n' "$ARCLINK_ORG_PROVIDER_PRESET"
+printf 'model=%s\\n' "$ARCLINK_ORG_PROVIDER_MODEL_ID"
+printf 'reasoning=%s\\n' "$ARCLINK_ORG_PROVIDER_REASONING_EFFORT"
+printf 'secret_provider=%s\\n' "$ARCLINK_ORG_PROVIDER_SECRET_PROVIDER"
+printf 'secret=%s\\n' "$ARCLINK_ORG_PROVIDER_SECRET"
 """
     result = subprocess.run(
         ["bash", "-lc", script],
@@ -934,15 +934,15 @@ def run_install_reexec_case(config_mode: int) -> tuple[int, str, str]:
         tmp_path = Path(tmp)
         protected_dir = tmp_path / "protected"
         protected_dir.mkdir()
-        config_path = protected_dir / "almanac.env"
-        config_path.write_text("ALMANAC_USER=almanac\n")
+        config_path = protected_dir / "arclink.env"
+        config_path.write_text("ARCLINK_USER=arclink\n")
         if config_mode == 0:
             protected_dir.chmod(0)
         else:
             config_path.chmod(config_mode)
 
-        artifact_path = tmp_path / ".almanac-operator.env"
-        artifact_path.write_text(f"ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE={shlex.quote(str(config_path))}\n")
+        artifact_path = tmp_path / ".arclink-operator.env"
+        artifact_path.write_text(f"ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE={shlex.quote(str(config_path))}\n")
         log_path = tmp_path / "sudo.log"
 
         script = f"""
@@ -951,7 +951,7 @@ sudo() {{ printf '%s\n' "$@" >\"$LOG\"; return 0; }}
 BOOTSTRAP_DIR={shlex.quote(str(REPO))}
 SELF_PATH=/fake/deploy.sh
 MODE=install
-ALMANAC_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
+ARCLINK_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
 {snippet}
 maybe_reexec_install_for_config_defaults install
 status=$?
@@ -980,7 +980,7 @@ def test_install_reexecs_for_unreadable_breadcrumb_config() -> None:
     status, output, sudo_log = run_install_reexec_case(0)
     expect(status == 0, f"expected unreadable-config case to reexec via sudo, got status {status}")
     expect("Switching to sudo before prompting" in output, "expected install flow to announce sudo-before-prompting path")
-    expect("env" in sudo_log and "ALMANAC_CONFIG_FILE=" in sudo_log and "/fake/deploy.sh" in sudo_log and "install" in sudo_log,
+    expect("env" in sudo_log and "ARCLINK_CONFIG_FILE=" in sudo_log and "/fake/deploy.sh" in sudo_log and "install" in sudo_log,
            f"unexpected sudo invocation: {sudo_log!r}")
     print("PASS test_install_reexecs_for_unreadable_breadcrumb_config")
 
@@ -998,9 +998,9 @@ def test_run_install_flow_stops_after_failed_sudo_reexec() -> None:
     snippet = extract(text, "run_install_flow() {", "run_remove_flow() {")
     script = f"""
 MODE=install
-ALMANAC_REEXEC_ATTEMPTED=0
+ARCLINK_REEXEC_ATTEMPTED=0
 maybe_reexec_install_for_config_defaults() {{
-  ALMANAC_REEXEC_ATTEMPTED=1
+  ARCLINK_REEXEC_ATTEMPTED=1
   return 42
 }}
 collect_install_answers() {{
@@ -1033,9 +1033,9 @@ def test_run_install_flow_stops_after_failed_sudo_reexec_exit_one() -> None:
     snippet = extract(text, "run_install_flow() {", "run_remove_flow() {")
     script = f"""
 MODE=install
-ALMANAC_REEXEC_ATTEMPTED=0
+ARCLINK_REEXEC_ATTEMPTED=0
 maybe_reexec_install_for_config_defaults() {{
-  ALMANAC_REEXEC_ATTEMPTED=1
+  ARCLINK_REEXEC_ATTEMPTED=1
   return 1
 }}
 collect_install_answers() {{
@@ -1068,19 +1068,19 @@ def test_write_operator_artifact_falls_back_to_discovered_config() -> None:
     snippet = extract(text, "probe_path_status() {", "run_as_user() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        config_path = tmp_path / "deployed" / "almanac.env"
+        config_path = tmp_path / "deployed" / "arclink.env"
         config_path.parent.mkdir(parents=True)
-        config_path.write_text("ALMANAC_USER=operator-svc\n", encoding="utf-8")
-        artifact_path = tmp_path / ".almanac-operator.env"
+        config_path.write_text("ARCLINK_USER=operator-svc\n", encoding="utf-8")
+        artifact_path = tmp_path / ".arclink-operator.env"
 
         script = f"""
 BOOTSTRAP_DIR={shlex.quote(str(tmp_path))}
-ALMANAC_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
+ARCLINK_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
 DISCOVERED_CONFIG={shlex.quote(str(config_path))}
 CONFIG_TARGET=""
-ALMANAC_USER=operator-svc
-ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+ARCLINK_USER=operator-svc
+ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
 {snippet}
 write_operator_checkout_artifact
 printf 'ARTIFACT_BEGIN\\n'
@@ -1091,11 +1091,11 @@ printf 'ARTIFACT_END\\n'
         expect(result.returncode == 0, f"artifact fallback case failed: {result.stderr}")
         artifact = result.stdout.split("ARTIFACT_BEGIN\n", 1)[1].split("\nARTIFACT_END", 1)[0]
         expect(
-            f"ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE={config_path}" in artifact,
+            f"ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE={config_path}" in artifact,
             f"expected artifact to record discovered config path, got: {artifact!r}",
         )
         expect(
-            "ALMANAC_OPERATOR_DEPLOYED_USER=operator-svc" in artifact,
+            "ARCLINK_OPERATOR_DEPLOYED_USER=operator-svc" in artifact,
             f"expected artifact to record service user, got: {artifact!r}",
         )
     print("PASS test_write_operator_artifact_falls_back_to_discovered_config")
@@ -1106,23 +1106,23 @@ def test_discover_existing_config_uses_artifact_priv_dir_hint() -> None:
     snippet = extract(text, "probe_path_status() {", "load_detected_config() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        priv_dir = tmp_path / "deployed" / "almanac-priv"
-        config_path = priv_dir / "config" / "almanac.env"
+        priv_dir = tmp_path / "deployed" / "arclink-priv"
+        config_path = priv_dir / "config" / "arclink.env"
         config_path.parent.mkdir(parents=True)
-        config_path.write_text("ALMANAC_USER=operator-svc\n")
-        artifact_path = tmp_path / ".almanac-operator.env"
+        config_path.write_text("ARCLINK_USER=operator-svc\n")
+        artifact_path = tmp_path / ".arclink-operator.env"
         artifact_path.write_text(
             "\n".join(
                 [
-                    "ALMANAC_OPERATOR_DEPLOYED_USER=operator-svc",
-                    f"ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR={shlex.quote(str(priv_dir))}",
+                    "ARCLINK_OPERATOR_DEPLOYED_USER=operator-svc",
+                    f"ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR={shlex.quote(str(priv_dir))}",
                     "",
                 ]
             )
         )
         script = f"""
 BOOTSTRAP_DIR={shlex.quote(str(REPO))}
-ALMANAC_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
+ARCLINK_OPERATOR_ARTIFACT_FILE={shlex.quote(str(artifact_path))}
 {snippet}
 discover_existing_config
 status=$?
@@ -1161,7 +1161,7 @@ nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 collect_upstream_git_answers() {{
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=0
 }}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
@@ -1169,10 +1169,10 @@ collect_backup_git_answers() {{
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   BACKUP_GIT_AUTHOR_NAME='Existing Backup'
   BACKUP_GIT_AUTHOR_EMAIL='operator-svc@example.test'
   NEXTCLOUD_ADMIN_USER='operator'
@@ -1181,17 +1181,17 @@ load_detected_config() {{
 }}
 MODE=write-config
 collect_install_answers
-printf 'ALMANAC_USER=%s\\n' "$ALMANAC_USER"
-printf 'ALMANAC_HOME=%s\\n' "$ALMANAC_HOME"
-printf 'ALMANAC_REPO_DIR=%s\\n' "$ALMANAC_REPO_DIR"
-printf 'ALMANAC_PRIV_DIR=%s\\n' "$ALMANAC_PRIV_DIR"
+printf 'ARCLINK_USER=%s\\n' "$ARCLINK_USER"
+printf 'ARCLINK_HOME=%s\\n' "$ARCLINK_HOME"
+printf 'ARCLINK_REPO_DIR=%s\\n' "$ARCLINK_REPO_DIR"
+printf 'ARCLINK_PRIV_DIR=%s\\n' "$ARCLINK_PRIV_DIR"
 """
     result = bash(script)
     expect(result.returncode == 0, f"collect_install_answers case failed: {result.stderr}")
-    expect("ALMANAC_USER=operator-svc" in result.stdout, f"expected detected service user default, got: {result.stdout!r}")
-    expect("ALMANAC_HOME=/srv/operator-svc" in result.stdout, f"expected detected home default, got: {result.stdout!r}")
-    expect("ALMANAC_REPO_DIR=/srv/operator-svc/almanac" in result.stdout, f"expected detected repo default, got: {result.stdout!r}")
-    expect("ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv" in result.stdout, f"expected detected priv default, got: {result.stdout!r}")
+    expect("ARCLINK_USER=operator-svc" in result.stdout, f"expected detected service user default, got: {result.stdout!r}")
+    expect("ARCLINK_HOME=/srv/operator-svc" in result.stdout, f"expected detected home default, got: {result.stdout!r}")
+    expect("ARCLINK_REPO_DIR=/srv/operator-svc/arclink" in result.stdout, f"expected detected repo default, got: {result.stdout!r}")
+    expect("ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv" in result.stdout, f"expected detected priv default, got: {result.stdout!r}")
     print("PASS test_collect_install_answers_defaults_to_detected_service_user")
 
 
@@ -1229,7 +1229,7 @@ normalize_http_path() {{
   esac
 }}
 random_secret() {{ printf '%s' "generated-secret"; }}
-collect_org_provider_answers() {{ ALMANAC_ORG_PROVIDER_ENABLED=0; }}
+collect_org_provider_answers() {{ ARCLINK_ORG_PROVIDER_ENABLED=0; }}
 detect_tailscale() {{
   TAILSCALE_DNS_NAME="operator.example.ts.net"
   TAILSCALE_IPV4="100.64.0.10"
@@ -1238,17 +1238,17 @@ detect_tailscale() {{
 nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
-collect_upstream_git_answers() {{ ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0; }}
+collect_upstream_git_answers() {{ ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=0; }}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
   BACKUP_GIT_DEPLOY_KEY_PATH=""
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   NEXTCLOUD_ADMIN_USER='operator'
   NEXTCLOUD_ADMIN_PASSWORD='keep-me'
   return 0
@@ -1331,7 +1331,7 @@ nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 collect_upstream_git_answers() {{
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=0
 }}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
@@ -1339,10 +1339,10 @@ collect_backup_git_answers() {{
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   NEXTCLOUD_ADMIN_USER='operator'
   NEXTCLOUD_ADMIN_PASSWORD='keep-me'
   TELEGRAM_BOT_TOKEN='preserve-me'
@@ -1418,7 +1418,7 @@ nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 collect_upstream_git_answers() {{
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=0
 }}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
@@ -1426,10 +1426,10 @@ collect_backup_git_answers() {{
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   POSTGRES_PASSWORD='change-me'
   NEXTCLOUD_ADMIN_PASSWORD='generated-at-deploy'
   NEXTCLOUD_ADMIN_USER='operator'
@@ -1482,7 +1482,7 @@ nextcloud_state_has_existing_data() {{ return 0; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 collect_upstream_git_answers() {{
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=0
 }}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
@@ -1490,10 +1490,10 @@ collect_backup_git_answers() {{
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   POSTGRES_PASSWORD='change-me'
   NEXTCLOUD_ADMIN_PASSWORD='change-me'
   NEXTCLOUD_ADMIN_USER='operator'
@@ -1533,7 +1533,7 @@ def test_collect_install_answers_guides_backup_remote_setup() -> None:
 github_repo_visibility() {{ printf '%s' private; }}
 ask() {{
   case "$1" in
-    GitHub\\ owner/repo\\ for\\ almanac-priv\\ backup*) printf '%s' 'acme/almanac-priv' ;;
+    GitHub\\ owner/repo\\ for\\ arclink-priv\\ backup*) printf '%s' 'acme/arclink-priv' ;;
     *) printf '%s' "${{2:-}}" ;;
   esac
 }}
@@ -1552,10 +1552,10 @@ nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   NEXTCLOUD_ADMIN_USER='operator'
   NEXTCLOUD_ADMIN_PASSWORD='keep-me'
   return 0
@@ -1569,15 +1569,15 @@ printf 'BACKUP_GIT_KNOWN_HOSTS_FILE=%s\\n' "$BACKUP_GIT_KNOWN_HOSTS_FILE"
     result = bash(script)
     expect(result.returncode == 0, f"backup-guidance collect_install_answers case failed: {result.stderr}")
     expect(
-        "BACKUP_GIT_REMOTE=git@github.com:acme/almanac-priv.git" in result.stdout,
+        "BACKUP_GIT_REMOTE=git@github.com:acme/arclink-priv.git" in result.stdout,
         f"expected GitHub SSH backup remote, got: {result.stdout!r}",
     )
     expect(
-        "BACKUP_GIT_DEPLOY_KEY_PATH=/srv/operator-svc/.ssh/almanac-backup-ed25519" in result.stdout,
+        "BACKUP_GIT_DEPLOY_KEY_PATH=/srv/operator-svc/.ssh/arclink-backup-ed25519" in result.stdout,
         f"expected default backup deploy key path, got: {result.stdout!r}",
     )
     expect(
-        "BACKUP_GIT_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/almanac-backup-known_hosts" in result.stdout,
+        "BACKUP_GIT_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/arclink-backup-known_hosts" in result.stdout,
         f"expected default backup known_hosts path, got: {result.stdout!r}",
     )
     expect(
@@ -1596,13 +1596,13 @@ def test_collect_install_answers_guides_upstream_deploy_key_setup() -> None:
 {collect}
 ask() {{
   case "$1" in
-    GitHub\\ owner/repo\\ for\\ Almanac\\ upstream\\ deploy\\ key*) printf '%s' "${{2:-}}" ;;
+    GitHub\\ owner/repo\\ for\\ ArcLink\\ upstream\\ deploy\\ key*) printf '%s' "${{2:-}}" ;;
     *) printf '%s' "${{2:-}}" ;;
   esac
 }}
 ask_yes_no() {{
   case "$1" in
-    Set\\ up\\ an\\ operator\\ deploy\\ key\\ for\\ the\\ Almanac\\ upstream\\ repo*) printf '%s' 1 ;;
+    Set\\ up\\ an\\ operator\\ deploy\\ key\\ for\\ the\\ ArcLink\\ upstream\\ repo*) printf '%s' 1 ;;
     *) printf '%s' "${{2:-0}}" ;;
   esac
 }}
@@ -1625,44 +1625,44 @@ collect_backup_git_answers() {{
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
-  ALMANAC_UPSTREAM_REPO_URL=https://github.com/example/almanac.git
-  ALMANAC_UPSTREAM_DEPLOY_KEY_USER=operator-svc
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
+  ARCLINK_UPSTREAM_REPO_URL=https://github.com/example/arclink.git
+  ARCLINK_UPSTREAM_DEPLOY_KEY_USER=operator-svc
   NEXTCLOUD_ADMIN_USER='operator'
   NEXTCLOUD_ADMIN_PASSWORD='keep-me'
   return 0
 }}
 MODE=write-config
 collect_install_answers
-printf 'ALMANAC_UPSTREAM_REPO_URL=%s\\n' "$ALMANAC_UPSTREAM_REPO_URL"
-printf 'ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=%s\\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED"
-printf 'ALMANAC_UPSTREAM_DEPLOY_KEY_USER=%s\\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
-printf 'ALMANAC_UPSTREAM_DEPLOY_KEY_PATH=%s\\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_PATH"
-printf 'ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE=%s\\n' "$ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE"
+printf 'ARCLINK_UPSTREAM_REPO_URL=%s\\n' "$ARCLINK_UPSTREAM_REPO_URL"
+printf 'ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=%s\\n' "$ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED"
+printf 'ARCLINK_UPSTREAM_DEPLOY_KEY_USER=%s\\n' "$ARCLINK_UPSTREAM_DEPLOY_KEY_USER"
+printf 'ARCLINK_UPSTREAM_DEPLOY_KEY_PATH=%s\\n' "$ARCLINK_UPSTREAM_DEPLOY_KEY_PATH"
+printf 'ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE=%s\\n' "$ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE"
 """
     result = bash(script)
     expect(result.returncode == 0, f"upstream deploy-key collect_install_answers case failed: {result.stderr}")
     expect(
-        "ALMANAC_UPSTREAM_REPO_URL=git@github.com:example/almanac.git" in result.stdout,
+        "ARCLINK_UPSTREAM_REPO_URL=git@github.com:example/arclink.git" in result.stdout,
         f"expected upstream remote to switch to SSH, got: {result.stdout!r}",
     )
-    expect("ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=1" in result.stdout, result.stdout)
-    expect("ALMANAC_UPSTREAM_DEPLOY_KEY_USER=operator-svc" in result.stdout, result.stdout)
+    expect("ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=1" in result.stdout, result.stdout)
+    expect("ARCLINK_UPSTREAM_DEPLOY_KEY_USER=operator-svc" in result.stdout, result.stdout)
     expect(
-        "ALMANAC_UPSTREAM_DEPLOY_KEY_PATH=/srv/operator-svc/.ssh/almanac-upstream-ed25519" in result.stdout,
+        "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH=/srv/operator-svc/.ssh/arclink-upstream-ed25519" in result.stdout,
         f"expected upstream deploy key under operator/service home, got: {result.stdout!r}",
     )
     expect(
-        "ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/almanac-upstream-known_hosts" in result.stdout,
+        "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE=/srv/operator-svc/.ssh/arclink-upstream-known_hosts" in result.stdout,
         f"expected upstream known_hosts path, got: {result.stdout!r}",
     )
     expect(
         "read/write deploy key for operator/agent code pushes" in result.stdout
         and "Allow write access" in result.stdout
-        and "almanac-priv backup and per-user Hermes-home backups use separate deploy keys" in result.stdout,
+        and "arclink-priv backup and per-user Hermes-home backups use separate deploy keys" in result.stdout,
         f"expected upstream deploy-key guidance to require write access and separate backup keys, got: {result.stdout!r}",
     )
     print("PASS test_collect_install_answers_guides_upstream_deploy_key_setup")
@@ -1698,7 +1698,7 @@ def test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access() ->
         "upstream deploy-key verification must prove write access with git push --dry-run",
     )
     expect(
-        "ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED" in text,
+        "ARCLINK_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED" in text,
         "upstream deploy-key verification should not prompt twice once it has passed",
     )
     print("PASS test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access")
@@ -1716,10 +1716,10 @@ def test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works()
         "prompt_and_verify_upstream_deploy_key_access must verify access silently before prompting the operator",
     )
     expect(
-        '"Reuse existing Almanac upstream deploy key"' in body,
+        '"Reuse existing ArcLink upstream deploy key"' in body,
         'prompt_and_verify_upstream_deploy_key_access must offer a "Reuse existing" choice when verification already passes',
     )
-    reuse_index = body.index('"Reuse existing Almanac upstream deploy key"')
+    reuse_index = body.index('"Reuse existing ArcLink upstream deploy key"')
     press_enter_index = body.index('Press ENTER after adding this deploy key')
     expect(
         reuse_index < press_enter_index,
@@ -1727,7 +1727,7 @@ def test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works()
     )
     expect(
         'rotate_upstream_git_deploy_key_material' in text,
-        'a helper must exist to rotate the Almanac upstream deploy key when the operator declines to reuse it',
+        'a helper must exist to rotate the ArcLink upstream deploy key when the operator declines to reuse it',
     )
     rotate_body = extract(
         text,
@@ -1747,16 +1747,16 @@ def test_collect_install_answers_reuses_private_repo_backup_remote_when_config_i
     collect = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        priv_dir = tmp_path / "almanac-priv"
+        priv_dir = tmp_path / "arclink-priv"
         priv_dir.mkdir(parents=True, exist_ok=True)
         run(["git", "init", "-b", "main", str(priv_dir)])
-        run(["git", "-C", str(priv_dir), "remote", "add", "origin", "git@github.com:remembered/almanac-priv.git"])
+        run(["git", "-C", str(priv_dir), "remote", "add", "origin", "git@github.com:remembered/arclink-priv.git"])
         script = f"""
 {helpers}
 {collect}
 ask() {{
   case "$1" in
-    GitHub\\ owner/repo\\ for\\ almanac-priv\\ backup*) printf '%s' "${{2:-}}" ;;
+    GitHub\\ owner/repo\\ for\\ arclink-priv\\ backup*) printf '%s' "${{2:-}}" ;;
     *) printf '%s' "${{2:-}}" ;;
   esac
 }}
@@ -1775,10 +1775,10 @@ nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR={shlex.quote(str(priv_dir))}
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR={shlex.quote(str(priv_dir))}
   NEXTCLOUD_ADMIN_USER='operator'
   NEXTCLOUD_ADMIN_PASSWORD='keep-me'
   return 1
@@ -1790,7 +1790,7 @@ printf 'BACKUP_GIT_REMOTE=%s\\n' "$BACKUP_GIT_REMOTE"
         result = bash(script)
         expect(result.returncode == 0, f"backup remote reuse collect_install_answers case failed: {result.stderr}")
         expect(
-            "BACKUP_GIT_REMOTE=git@github.com:remembered/almanac-priv.git" in result.stdout,
+            "BACKUP_GIT_REMOTE=git@github.com:remembered/arclink-priv.git" in result.stdout,
             f"expected existing private repo backup remote to be reused, got: {result.stdout!r}",
         )
     print("PASS test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable")
@@ -1808,7 +1808,7 @@ require_supported_host_mode install
 """
     result = bash(script)
     expect(result.returncode != 0, "expected native macOS install preflight to fail closed")
-    expect("Native macOS is not a supported Almanac host or runtime environment." in result.stderr, result.stderr)
+    expect("Native macOS is not a supported ArcLink host or runtime environment." in result.stderr, result.stderr)
     expect("Helper-only commands like `./deploy.sh write-config`" in result.stderr, result.stderr)
     print("PASS test_require_supported_host_mode_rejects_native_macos_install")
 
@@ -1870,7 +1870,7 @@ nextcloud_state_has_existing_data() {{ return 1; }}
 read_operator_artifact_hints() {{ return 1; }}
 resolve_user_home() {{ return 1; }}
 collect_upstream_git_answers() {{
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED=0
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=0
 }}
 collect_backup_git_answers() {{
   BACKUP_GIT_REMOTE=""
@@ -1878,26 +1878,26 @@ collect_backup_git_answers() {{
   BACKUP_GIT_KNOWN_HOSTS_FILE=""
 }}
 load_detected_config() {{
-  ALMANAC_USER=operator-svc
-  ALMANAC_HOME=/srv/operator-svc
-  ALMANAC_REPO_DIR=/srv/operator-svc/almanac
-  ALMANAC_PRIV_DIR=/srv/operator-svc/almanac-priv
+  ARCLINK_USER=operator-svc
+  ARCLINK_HOME=/srv/operator-svc
+  ARCLINK_REPO_DIR=/srv/operator-svc/arclink
+  ARCLINK_PRIV_DIR=/srv/operator-svc/arclink-priv
   NEXTCLOUD_ADMIN_USER='operator'
   NEXTCLOUD_ADMIN_PASSWORD='keep-me'
   return 0
 }}
 MODE=install
 collect_install_answers
-printf 'ALMANAC_INSTALL_PODMAN=%s\\n' "$ALMANAC_INSTALL_PODMAN"
-printf 'ALMANAC_INSTALL_TAILSCALE=%s\\n' "$ALMANAC_INSTALL_TAILSCALE"
+printf 'ARCLINK_INSTALL_PODMAN=%s\\n' "$ARCLINK_INSTALL_PODMAN"
+printf 'ARCLINK_INSTALL_TAILSCALE=%s\\n' "$ARCLINK_INSTALL_TAILSCALE"
 printf 'PROMPTS_BEGIN\\n'
 cat "$PROMPT_LOG"
 printf 'PROMPTS_END\\n'
 """
         result = bash(script)
         expect(result.returncode == 0, f"host dependency prompt case failed: {result.stderr}")
-        expect("ALMANAC_INSTALL_PODMAN=1" in result.stdout, result.stdout)
-        expect("ALMANAC_INSTALL_TAILSCALE=1" in result.stdout, result.stdout)
+        expect("ARCLINK_INSTALL_PODMAN=1" in result.stdout, result.stdout)
+        expect("ARCLINK_INSTALL_TAILSCALE=1" in result.stdout, result.stdout)
         prompts = result.stdout.split("PROMPTS_BEGIN\n", 1)[1].split("\nPROMPTS_END", 1)[0]
         expect("Podman is not installed." in prompts, prompts)
         expect("Tailscale is not installed." in prompts, prompts)
@@ -1907,26 +1907,26 @@ printf 'PROMPTS_END\\n'
 def test_write_answers_file_persists_host_dependency_choices() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_answers_file() {", "seed_private_repo() {")
-    expect("write_kv ALMANAC_INSTALL_PODMAN" in snippet, snippet)
-    expect("write_kv ALMANAC_INSTALL_TAILSCALE" in snippet, snippet)
+    expect("write_kv ARCLINK_INSTALL_PODMAN" in snippet, snippet)
+    expect("write_kv ARCLINK_INSTALL_TAILSCALE" in snippet, snippet)
     print("PASS test_write_answers_file_persists_host_dependency_choices")
 
 
 def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
-    expect("Almanac Docker control center" in text, "expected Docker submenu")
+    expect("ArcLink Docker control center" in text, "expected Docker submenu")
     expect('MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
     expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
     expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")
     expect("docker-install|docker-upgrade|docker-reconfigure" in text, "expected Docker shortcut aliases")
-    expect('local helper="$BOOTSTRAP_DIR/bin/almanac-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
+    expect('local helper="$BOOTSTRAP_DIR/bin/arclink-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
     expect("run_docker_install_flow()" in text, "expected idempotent Docker install flow")
     expect("run_docker_reconfigure_flow()" in text, "expected Docker reconfigure flow")
-    expect("run_almanac_docker reconcile" in text, "expected Docker install flow to apply org-profile/agent reconciliation")
-    expect("run_almanac_docker record-release" in text, "expected Docker install flow to record release state")
-    expect("run_almanac_docker health" in text, "expected Docker install flow to run health")
-    expect("run_almanac_docker live-smoke" in text, "expected Docker install flow to run live agent smoke")
+    expect("run_arclink_docker reconcile" in text, "expected Docker install flow to apply org-profile/agent reconciliation")
+    expect("run_arclink_docker record-release" in text, "expected Docker install flow to record release state")
+    expect("run_arclink_docker health" in text, "expected Docker install flow to run health")
+    expect("run_arclink_docker live-smoke" in text, "expected Docker install flow to run live agent smoke")
     print("PASS test_deploy_sh_exposes_docker_control_center")
 
 
@@ -1945,8 +1945,8 @@ def test_deploy_sh_guides_notion_workspace_migration() -> None:
     expect("notion_migration_pause_write_surfaces" in migration, "expected migration to pause Notion write surfaces")
     expect("trap notion_migration_restore_paused_services EXIT" in migration, "expected migration to restore paused services if the shell exits")
     expect("trap notion_migration_restore_paused_services RETURN" not in migration, "migration must not use RETURN traps that fire after every helper function")
-    expect("ALMANAC_NOTION_MIGRATION_FRESH_DEFAULTS=1" in migration, "expected migration to require fresh Notion URL/token defaults")
-    expect("ALMANAC_NOTION_MIGRATION_FORCE_WEBHOOK_RESET=1" in migration, "expected migration to force a fresh webhook handshake")
+    expect("ARCLINK_NOTION_MIGRATION_FRESH_DEFAULTS=1" in migration, "expected migration to require fresh Notion URL/token defaults")
+    expect("ARCLINK_NOTION_MIGRATION_FORCE_WEBHOOK_RESET=1" in migration, "expected migration to force a fresh webhook handshake")
     expect("Continuing workspace-state cleanup so old Notion identities" in migration, "expected migration to keep clearing old identities if webhook verification stops after config save")
     expect("No Notion webhook public URL is configured; clearing any stored webhook verification token" in migration, "expected migration to clear old webhook tokens when webhooks are disabled")
     expect("notion index-sync --full" in migration, "expected migration to run a full Notion index sync")
@@ -1960,10 +1960,10 @@ def test_deploy_sh_guides_notion_workspace_migration() -> None:
     expect("ssot_pending_writes" in cleanup, "expected old workspace pending writes to be archived/cleared")
     expect("notion_webhook_events" in cleanup, "expected old webhook events to be archived/cleared")
     expect("notion_index_documents" in cleanup and "notion-index" in cleanup, "expected old notion-shared index rows/files to be rebuilt")
-    expect("ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT" in notion_setup, "expected SSOT setup to default indexing to the new root during migration")
+    expect("ARCLINK_NOTION_MIGRATION_DEFAULT_INDEX_ROOT" in notion_setup, "expected SSOT setup to default indexing to the new root during migration")
     expect("webhook-reset-token" in notion_setup, "expected SSOT setup to clear stale webhook verification during migration")
-    expect("run_service_user_cmd \"$ctl_bin\" --json notion index-sync --full --actor \"$actor\"" in text, "expected baremetal migration index sync to run as the Almanac service user")
-    expect("env ALMANAC_CONFIG_FILE=\"$CONFIG_TARGET\" \"$BOOTSTRAP_DIR/bin/almanac-ctl\" --json notion index-sync --full" not in migration, "migration must not run qmd-backed index sync as root from the deploy checkout")
+    expect("run_service_user_cmd \"$ctl_bin\" --json notion index-sync --full --actor \"$actor\"" in text, "expected baremetal migration index sync to run as the ArcLink service user")
+    expect("env ARCLINK_CONFIG_FILE=\"$CONFIG_TARGET\" \"$BOOTSTRAP_DIR/bin/arclink-ctl\" --json notion index-sync --full" not in migration, "migration must not run qmd-backed index sync as root from the deploy checkout")
     print("PASS test_deploy_sh_guides_notion_workspace_migration")
 
 
@@ -1995,7 +1995,7 @@ def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
         "expected deploy notion-ssot guidance to include the create-new-integration step",
     )
     expect(
-        "Name it something like Almanac Curator" in text,
+        "Name it something like ArcLink Curator" in text,
         "expected deploy notion-ssot guidance to suggest a concrete internal integration name",
     )
     expect(
@@ -2015,7 +2015,7 @@ def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
         "expected deploy notion-ssot guidance to tell operators to grant page access from the integration itself",
     )
     expect(
-        "parent page or Teamspace root Almanac should live under" in text,
+        "parent page or Teamspace root ArcLink should live under" in text,
         "expected deploy notion-ssot guidance to explain which parent/root to grant in Manage page access",
     )
     expect(
@@ -2023,7 +2023,7 @@ def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
         "expected deploy notion-ssot guidance to explain that child pages inherit access from the granted parent page",
     )
     expect(
-        "Almanac cannot press Notion's Manage page access buttons for you via" in text,
+        "ArcLink cannot press Notion's Manage page access buttons for you via" in text,
         "expected deploy notion-ssot guidance to explain that the Manage page access UI cannot be automated through a supported API",
     )
     expect(
@@ -2031,15 +2031,15 @@ def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
         "expected deploy notion-ssot setup to require an explicit typed acknowledgment of Notion's subtree access model",
     )
     expect(
-        "Shared Notion page URL for Almanac (use a normal page, not the workspace Home screen)" in text,
+        "Shared Notion page URL for ArcLink (use a normal page, not the workspace Home screen)" in text,
         "expected deploy notion-ssot prompt to steer operators toward a normal page and away from the workspace Home screen",
     )
     expect(
-        "Make one normal Notion page for Almanac" in text,
-        "expected deploy notion-ssot guidance to tell operators to create a normal Almanac page first",
+        "Make one normal Notion page for ArcLink" in text,
+        "expected deploy notion-ssot guidance to tell operators to create a normal ArcLink page first",
     )
     expect(
-        "Almanac will use the page you paste below as its shared Notion home" in text,
+        "ArcLink will use the page you paste below as its shared Notion home" in text,
         "expected deploy notion-ssot guidance to explain the role of the pasted page in simpler language",
     )
     expect(
@@ -2061,12 +2061,12 @@ def test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
     notion_setup = extract(text, "run_notion_ssot_setup() {", "run_upgrade_flow() {")
     expect(
-        '"$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion handshake' in notion_setup,
-        "expected notion-ssot setup to use the current checkout's almanac-ctl for handshake",
+        '"$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion handshake' in notion_setup,
+        "expected notion-ssot setup to use the current checkout's arclink-ctl for handshake",
     )
     expect(
-        '"$ALMANAC_REPO_DIR/bin/almanac-ctl" --json notion handshake' not in notion_setup,
-        "expected notion-ssot setup not to depend on an older deployed almanac-ctl during handshake",
+        '"$ARCLINK_REPO_DIR/bin/arclink-ctl" --json notion handshake' not in notion_setup,
+        "expected notion-ssot setup not to depend on an older deployed arclink-ctl during handshake",
     )
     expect(
         '--space-url "$notion_space_url"' in notion_setup,
@@ -2085,7 +2085,7 @@ def test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake() -> None:
         "expected notion-ssot setup to pass the Notion API version to handshake explicitly",
     )
     expect(
-        '"$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion preflight-root' in notion_setup,
+        '"$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion preflight-root' in notion_setup,
         "expected notion-ssot setup to preflight child page/database creation under the resolved root page",
     )
     expect(
@@ -2093,11 +2093,11 @@ def test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake() -> None:
         "expected notion-ssot setup to pass the resolved root page id explicitly to the preflight check",
     )
     expect(
-        'ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"' in notion_setup,
+        'ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"' in notion_setup,
         "expected notion-ssot setup to persist the resolved Notion root page URL",
     )
     expect(
-        'ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"' in notion_setup,
+        'ARCLINK_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"' in notion_setup,
         "expected notion-ssot setup to persist the resolved Notion root page id",
     )
     print("PASS test_notion_ssot_setup_uses_current_checkout_ctl_for_handshake")
@@ -2130,7 +2130,7 @@ def test_qmd_refresh_bounds_embedding_work() -> None:
     common = (REPO / "bin" / "common.sh").read_text(encoding="utf-8")
     deploy = DEPLOY_SH.read_text(encoding="utf-8")
     health = HEALTH_SH.read_text(encoding="utf-8")
-    example = (REPO / "config" / "almanac.env.example").read_text(encoding="utf-8")
+    example = (REPO / "config" / "arclink.env.example").read_text(encoding="utf-8")
     vault_watch = VAULT_WATCH_SH.read_text(encoding="utf-8")
     expect("timeout --foreground" in refresh, refresh)
     expect("--max-docs-per-batch" in refresh and "--max-batch-mb" in refresh, refresh)
@@ -2159,7 +2159,7 @@ def test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected() -> 
     snippet = extract(text, "run_qmd_embed() {", "exec 9>")
     script = f"""
 set -euo pipefail
-QMD_INDEX_NAME=almanac
+QMD_INDEX_NAME=arclink
 QMD_EMBED_PROVIDER=endpoint
 QMD_EMBED_ENDPOINT=https://embed.example.test/v1
 QMD_EMBED_ENDPOINT_MODEL=text-embedding-3-small
@@ -2177,12 +2177,12 @@ def test_qmd_refresh_forces_and_consumes_local_rebuild_flag() -> None:
     text = QMD_REFRESH_SH.read_text(encoding="utf-8")
     snippet = extract(text, "clear_qmd_embed_force_flag() {", "exec 9>")
     with tempfile.TemporaryDirectory() as tmp:
-        config_path = Path(tmp) / "almanac.env"
+        config_path = Path(tmp) / "arclink.env"
         log_path = Path(tmp) / "qmd.log"
         config_path.write_text("QMD_EMBED_FORCE_ON_NEXT_REFRESH=1\nKEEP=ok\n", encoding="utf-8")
         script = f"""
 set -euo pipefail
-QMD_INDEX_NAME=almanac
+QMD_INDEX_NAME=arclink
 QMD_EMBED_PROVIDER=local
 QMD_EMBED_FORCE_ON_NEXT_REFRESH=1
 QMD_EMBED_TIMEOUT_SECONDS=0
@@ -2204,7 +2204,7 @@ printf 'qmd:%s\\n' "$(cat "$LOG_FILE")"
     expect("QMD local embedding force refresh requested" in result.stderr, result.stderr)
     expect("flag:QMD_EMBED_FORCE_ON_NEXT_REFRESH=0" in result.stdout, result.stdout)
     expect("keep:KEEP=ok" in result.stdout, result.stdout)
-    expect("qmd:--index almanac embed -f --max-docs-per-batch 8 --max-batch-mb 16" in result.stdout, result.stdout)
+    expect("qmd:--index arclink embed -f --max-docs-per-batch 8 --max-batch-mb 16" in result.stdout, result.stdout)
     print("PASS test_qmd_refresh_forces_and_consumes_local_rebuild_flag")
 
 
@@ -2269,17 +2269,17 @@ def test_placeholder_upstream_default_uses_checkout_origin() -> None:
         repo = Path(tmp) / "repo"
         repo.mkdir()
         run(["git", "init"], cwd=repo)
-        run(["git", "remote", "add", "origin", "https://github.com/acme/almanac"], cwd=repo)
+        run(["git", "remote", "add", "origin", "https://github.com/acme/arclink"], cwd=repo)
         script = f"""
 {snippet}
 BOOTSTRAP_DIR={shlex.quote(str(repo))}
-ALMANAC_UPSTREAM_REPO_URL=https://github.com/example/almanac.git
+ARCLINK_UPSTREAM_REPO_URL=https://github.com/example/arclink.git
 use_detected_upstream_repo_url_if_placeholder
-printf '%s\\n' "$ALMANAC_UPSTREAM_REPO_URL"
+printf '%s\\n' "$ARCLINK_UPSTREAM_REPO_URL"
 """
         result = bash(script)
     expect(result.returncode == 0, f"upstream default probe failed: {result.stderr}\n{result.stdout}")
-    expect(result.stdout.strip() == "https://github.com/acme/almanac", result.stdout)
+    expect(result.stdout.strip() == "https://github.com/acme/arclink", result.stdout)
     print("PASS test_placeholder_upstream_default_uses_checkout_origin")
 
 
@@ -2317,14 +2317,14 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "active-agent realignment should reinstall user-owned Hermes assets and services",
     )
     daemon_reload_index = refresh_helper.find('daemon-reload')
-    refresh_start_index = refresh_helper.find('start almanac-user-agent-refresh.service')
+    refresh_start_index = refresh_helper.find('start arclink-user-agent-refresh.service')
     expect(
         daemon_reload_index >= 0 and refresh_start_index >= 0 and daemon_reload_index < refresh_start_index,
         "refresh-agent-install should reload the user manager before starting/restarting user units",
     )
     expect(
         'rm -f "$timer_path"' in refresh_helper
-        and 'disable --now almanac-user-agent-backup.timer' in refresh_helper,
+        and 'disable --now arclink-user-agent-backup.timer' in refresh_helper,
         "refresh-agent-install should disable and remove the legacy systemd backup timer during active-agent realignment",
     )
     expect(
@@ -2335,10 +2335,10 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     )
     expect(
         "ensure_agent_mcp_auth" in refresh_helper
-        and "almanac-bootstrap-token" in refresh_helper
+        and "arclink-bootstrap-token" in refresh_helper
         and "ensure_agent_mcp_bootstrap_token" in refresh_helper
         and "bootstrap token checked/repaired" in refresh_helper,
-        "refresh-agent-install should validate or repair the per-agent Almanac MCP bootstrap token during install/upgrade realignment",
+        "refresh-agent-install should validate or repair the per-agent ArcLink MCP bootstrap token during install/upgrade realignment",
     )
     expect(
         "TELEGRAM_REACTIONS" in refresh_helper
@@ -2352,7 +2352,7 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     )
     expect(
         "ensure_gateway_running_without_interrupting_active_turns" in refresh_helper
-        and "is-active almanac-user-agent-gateway.service" in refresh_helper
+        and "is-active arclink-user-agent-gateway.service" in refresh_helper
         and 'if [[ "$RESTART_GATEWAY" == "1" ]]' in refresh_helper
         and "restart deferred to avoid interrupting user work" in refresh_helper,
         "refresh-agent-install should defer active gateway restarts unless explicitly told the shared runtime changed",
@@ -2370,7 +2370,7 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "refresh-agent-install should repair old user service units and restart gateways when the bundled skills env is added",
     )
     expect(
-        'restart almanac-user-agent-code.service' in refresh_helper
+        'restart arclink-user-agent-code.service' in refresh_helper
         and 'code workspace' in refresh_helper,
         "refresh-agent-install should restart the code workspace so launcher/mount fixes take effect",
     )
@@ -2423,7 +2423,7 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "org-profile apply should run as the service user so generated vault/state files remain rootless-service writable",
     )
     expect(
-        'find "$ALMANAC_PRIV_DIR" -ignore_readdir_race' in chown_helper
+        'find "$ARCLINK_PRIV_DIR" -ignore_readdir_race' in chown_helper
         and "*.sqlite3-shm" in chown_helper
         and "*.sqlite3-wal" in chown_helper,
         "scoped ownership repair should tolerate transient SQLite sidecar files during live upgrades",
@@ -2433,23 +2433,23 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "install ownership repair should not dereference stale or broken vault symlinks",
     )
     expect(
-        '-path "$ALMANAC_PRIV_DIR" -prune' in chown_helper
+        '-path "$ARCLINK_PRIV_DIR" -prune' in chown_helper
         and '-path "$NEXTCLOUD_STATE_DIR" -prune' in chown_helper,
         "scoped ownership repair should preserve rootless Nextcloud bind-mount ownership",
     )
     expect(
-        'chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"' not in install
-        and 'chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_PRIV_DIR"' not in upgrade,
+        'chown -hR "$ARCLINK_USER:$ARCLINK_USER" "$ARCLINK_PRIV_DIR"' not in install
+        and 'chown -hR "$ARCLINK_USER:$ARCLINK_USER" "$ARCLINK_PRIV_DIR"' not in upgrade,
         "install/upgrade should not blanket-chown private state after Nextcloud normalizes rootless bind mounts",
     )
     expect(
         "chown_tree_excluding_path" in bootstrap_system
-        and 'chown_tree_excluding_path "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"' in bootstrap_system
-        and 'chown_tree_excluding_path "$ALMANAC_PRIV_DIR" "$NEXTCLOUD_STATE_DIR"' in bootstrap_system,
+        and 'chown_tree_excluding_path "$ARCLINK_REPO_DIR" "$ARCLINK_PRIV_DIR"' in bootstrap_system
+        and 'chown_tree_excluding_path "$ARCLINK_PRIV_DIR" "$NEXTCLOUD_STATE_DIR"' in bootstrap_system,
         "system bootstrap should preserve rootless Nextcloud state ownership while repairing managed paths",
     )
     expect(
-        'chown -hR "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_REPO_DIR" "$ALMANAC_PRIV_DIR"' not in bootstrap_system,
+        'chown -hR "$ARCLINK_USER:$ARCLINK_USER" "$ARCLINK_REPO_DIR" "$ARCLINK_PRIV_DIR"' not in bootstrap_system,
         "system bootstrap should not blanket-chown private Nextcloud runtime state",
     )
     expect(
@@ -2488,7 +2488,7 @@ def test_restart_services_disables_only_curator_native_system_gateway_unit() -> 
 set -euo pipefail
 export PYTHONPATH={shlex.quote(str(tmp_path))}
 RUNTIME_DIR={shlex.quote(str(runtime_dir))}
-ALMANAC_CURATOR_HERMES_HOME={shlex.quote(str(tmp_path / "curator-home"))}
+ARCLINK_CURATOR_HERMES_HOME={shlex.quote(str(tmp_path / "curator-home"))}
 SYSTEMCTL_LOG={shlex.quote(str(systemctl_log))}
 systemctl() {{
   printf '%s\\n' "$*" >> "$SYSTEMCTL_LOG"
@@ -2526,7 +2526,7 @@ def test_tailscale_serve_command_timeout_surfaces_enablement_guidance() -> None:
         fake_cmd.chmod(0o755)
         script = f"""
 set -euo pipefail
-ALMANAC_TAILSCALE_COMMAND_TIMEOUT=0.2s
+ARCLINK_TAILSCALE_COMMAND_TIMEOUT=0.2s
 {snippet}
 if run_serve_cmd {shlex.quote(str(fake_cmd))}; then
   echo unexpected-success
@@ -2561,7 +2561,7 @@ def test_tailscale_funnel_command_timeout_surfaces_enablement_guidance() -> None
         fake_cmd.chmod(0o755)
         script = f"""
 set -euo pipefail
-ALMANAC_TAILSCALE_COMMAND_TIMEOUT=0.2s
+ARCLINK_TAILSCALE_COMMAND_TIMEOUT=0.2s
 {snippet}
 if run_funnel_cmd {shlex.quote(str(fake_cmd))}; then
   echo unexpected-success
@@ -2581,7 +2581,7 @@ fi
 
 
 def test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools() -> None:
-    server_text = (REPO / "python" / "almanac_mcp_server.py").read_text(encoding="utf-8")
+    server_text = (REPO / "python" / "arclink_mcp_server.py").read_text(encoding="utf-8")
     expect('"ssot.preflight"' in server_text, "agents should be able to check Notion writeability before writing")
     expect('"ssot.approve"' in server_text and '"ssot.deny"' in server_text, "queued Notion writes should be user-approvable by the agent lane")
     expect("approve_ssot_pending_write(" in server_text, "MCP ssot.approve should apply queued writes")
@@ -2591,21 +2591,21 @@ def test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools() -> None:
 
 
 def test_control_py_discovers_artifact_priv_dir_config() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_artifact_discovery")
+    mod = load_module(CONTROL_PY, "arclink_control_artifact_discovery")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
-        priv_dir = tmp_path / "deployed" / "almanac-priv"
-        config_path = priv_dir / "config" / "almanac.env"
+        priv_dir = tmp_path / "deployed" / "arclink-priv"
+        config_path = priv_dir / "config" / "arclink.env"
         config_path.parent.mkdir(parents=True)
-        config_path.write_text("ALMANAC_USER=operator-svc\n", encoding="utf-8")
-        artifact_path = tmp_path / ".almanac-operator.env"
+        config_path.write_text("ARCLINK_USER=operator-svc\n", encoding="utf-8")
+        artifact_path = tmp_path / ".arclink-operator.env"
         artifact_path.write_text(
             "\n".join(
                 [
-                    "ALMANAC_OPERATOR_DEPLOYED_USER=operator-svc",
-                    f"ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR={shlex.quote(str(priv_dir))}",
+                    "ARCLINK_OPERATOR_DEPLOYED_USER=operator-svc",
+                    f"ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR={shlex.quote(str(priv_dir))}",
                     "",
                 ]
             ),
@@ -2614,9 +2614,9 @@ def test_control_py_discovers_artifact_priv_dir_config() -> None:
 
         old_env = os.environ.copy()
         try:
-            os.environ.pop("ALMANAC_CONFIG_FILE", None)
-            os.environ["ALMANAC_REPO_DIR"] = str(repo_root)
-            os.environ["ALMANAC_OPERATOR_ARTIFACT_FILE"] = str(artifact_path)
+            os.environ.pop("ARCLINK_CONFIG_FILE", None)
+            os.environ["ARCLINK_REPO_DIR"] = str(repo_root)
+            os.environ["ARCLINK_OPERATOR_ARTIFACT_FILE"] = str(artifact_path)
             discovered = mod._discover_config_file()
         finally:
             os.environ.clear()
@@ -2626,29 +2626,29 @@ def test_control_py_discovers_artifact_priv_dir_config() -> None:
     print("PASS test_control_py_discovers_artifact_priv_dir_config")
 
 
-def test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo() -> None:
+def test_sync_public_repo_preserves_template_arclink_priv_while_excluding_top_level_private_repo() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "sync_public_repo_from_source() {", "git_head_commit() {")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         source_dir = tmp_path / "source"
         target_dir = tmp_path / "target"
-        (source_dir / "almanac-priv").mkdir(parents=True)
-        (source_dir / "almanac-priv" / "secret.txt").write_text("should-not-copy\n", encoding="utf-8")
-        (source_dir / "templates" / "almanac-priv" / "vault" / "Research").mkdir(parents=True)
-        (source_dir / "templates" / "almanac-priv" / "vault" / "Research" / ".vault").write_text("name: Research\n", encoding="utf-8")
+        (source_dir / "arclink-priv").mkdir(parents=True)
+        (source_dir / "arclink-priv" / "secret.txt").write_text("should-not-copy\n", encoding="utf-8")
+        (source_dir / "templates" / "arclink-priv" / "vault" / "Research").mkdir(parents=True)
+        (source_dir / "templates" / "arclink-priv" / "vault" / "Research" / ".vault").write_text("name: Research\n", encoding="utf-8")
         (source_dir / "bin").mkdir(parents=True)
         (source_dir / "bin" / "bootstrap-userland.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
         (source_dir / ".git").write_text("gitdir: /tmp/not-for-deploy\n", encoding="utf-8")
         script = f"""
 {snippet}
 sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
-if [[ -e {shlex.quote(str(target_dir / 'almanac-priv'))} ]]; then
+if [[ -e {shlex.quote(str(target_dir / 'arclink-priv'))} ]]; then
   echo 'TOP_LEVEL_PRIVATE_PRESENT=1'
 else
   echo 'TOP_LEVEL_PRIVATE_PRESENT=0'
 fi
-if [[ -f {shlex.quote(str(target_dir / 'templates' / 'almanac-priv' / 'vault' / 'Research' / '.vault'))} ]]; then
+if [[ -f {shlex.quote(str(target_dir / 'templates' / 'arclink-priv' / 'vault' / 'Research' / '.vault'))} ]]; then
   echo 'TEMPLATE_PRIVATE_PRESENT=1'
 else
   echo 'TEMPLATE_PRIVATE_PRESENT=0'
@@ -2664,7 +2664,7 @@ fi
         expect("TOP_LEVEL_PRIVATE_PRESENT=0" in result.stdout, result.stdout)
         expect("TEMPLATE_PRIVATE_PRESENT=1" in result.stdout, result.stdout)
         expect("GIT_POINTER_PRESENT=0" in result.stdout, result.stdout)
-    print("PASS test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo")
+    print("PASS test_sync_public_repo_preserves_template_arclink_priv_while_excluding_top_level_private_repo")
 
 
 def test_sync_public_repo_repairs_existing_git_metadata_from_source() -> None:
@@ -2677,8 +2677,8 @@ def test_sync_public_repo_repairs_existing_git_metadata_from_source() -> None:
         source_dir.mkdir()
         target_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main", str(source_dir)], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "Almanac Test"], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "ArcLink Test"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "arclink-test@example.com"], check=True, capture_output=True, text=True)
         (source_dir / "README.md").write_text("ready\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(source_dir), "add", "README.md"], check=True, capture_output=True, text=True)
         subprocess.run(["git", "-C", str(source_dir), "commit", "-m", "ready"], check=True, capture_output=True, text=True)
@@ -2712,8 +2712,8 @@ def test_sync_public_repo_copies_git_metadata_when_public_git_requested() -> Non
         target_dir = tmp_path / "target"
         source_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main", str(source_dir)], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "Almanac Test"], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "almanac-test@example.com"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "ArcLink Test"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "arclink-test@example.com"], check=True, capture_output=True, text=True)
         (source_dir / "README.md").write_text("ready\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(source_dir), "add", "README.md"], check=True, capture_output=True, text=True)
         subprocess.run(["git", "-C", str(source_dir), "commit", "-m", "ready"], check=True, capture_output=True, text=True)
@@ -2726,7 +2726,7 @@ def test_sync_public_repo_copies_git_metadata_when_public_git_requested() -> Non
 
         script = f"""
 {snippet}
-ALMANAC_INSTALL_PUBLIC_GIT=1 sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
+ARCLINK_INSTALL_PUBLIC_GIT=1 sync_public_repo_from_source {shlex.quote(str(source_dir))} {shlex.quote(str(target_dir))}
 git -C {shlex.quote(str(target_dir))} rev-parse HEAD
 """
         result = bash(script)
@@ -2743,8 +2743,8 @@ def test_enrollment_reset_supports_full_forget_purge() -> None:
         "expected enrollment reset flow to offer a full forget-history purge path",
     )
     expect(
-        '"$ALMANAC_REPO_DIR/bin/almanac-ctl"' in reset and "purge-enrollment" in reset,
-        "expected enrollment reset flow to call almanac-ctl user purge-enrollment",
+        '"$ARCLINK_REPO_DIR/bin/arclink-ctl"' in reset and "purge-enrollment" in reset,
+        "expected enrollment reset flow to call arclink-ctl user purge-enrollment",
     )
     expect(
         "--remove-nextcloud-user" in reset,
@@ -2761,7 +2761,7 @@ def test_enrollment_align_reseeds_agent_identity() -> None:
     expect("--identity-only" in helper, "expected refresh-agent-install to run headless identity reseed")
     expect("--user-name" in helper, "expected refresh-agent-install identity reseed to pass the saved user name")
     expect("SELECT linked_agent_id, answers_json, sender_display_name" in text, text)
-    expect("ALMANAC_ORG_NAME" in text, "expected deploy config to persist org interview fields")
+    expect("ARCLINK_ORG_NAME" in text, "expected deploy config to persist org interview fields")
     print("PASS test_enrollment_align_reseeds_agent_identity")
 
 
@@ -2774,7 +2774,7 @@ def test_root_install_and_upgrade_do_not_globally_export_runtime_secrets() -> No
     expect('env \\' in install and '"$BOOTSTRAP_DIR/bin/bootstrap-system.sh"' in install, install)
     expect("export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD" not in upgrade, upgrade)
     expect("export NEXTCLOUD_ADMIN_USER NEXTCLOUD_ADMIN_PASSWORD" not in upgrade, upgrade)
-    expect('env \\' in upgrade and '"$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"' in upgrade, upgrade)
+    expect('env \\' in upgrade and '"$ARCLINK_REPO_DIR/bin/bootstrap-system.sh"' in upgrade, upgrade)
     print("PASS test_root_install_and_upgrade_do_not_globally_export_runtime_secrets")
 
 
@@ -2796,8 +2796,8 @@ def test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch() -> None:
 
 def test_install_system_services_includes_independent_notion_claim_poller() -> None:
     text = INSTALL_SYSTEM_SERVICES_SH.read_text(encoding="utf-8")
-    expect("almanac-notion-claim-poll.service" in text, "expected dedicated notion claim poll service")
-    expect("almanac-notion-claim-poll.timer" in text, "expected dedicated notion claim poll timer")
+    expect("arclink-notion-claim-poll.service" in text, "expected dedicated notion claim poll service")
+    expect("arclink-notion-claim-poll.timer" in text, "expected dedicated notion claim poll timer")
     expect("--claims-only" in text, "expected claim poller to use provisioner claims-only mode")
     expect("OnUnitActiveSec=2m" in text, "expected claim poll cadence to be configured")
     print("PASS test_install_system_services_includes_independent_notion_claim_poller")
@@ -2809,21 +2809,21 @@ def test_install_system_services_units_pass_systemd_analyze_verify() -> None:
         print("PASS test_install_system_services_units_pass_systemd_analyze_verify (skipped: systemd-analyze unavailable)")
         return
     text = INSTALL_SYSTEM_SERVICES_SH.read_text(encoding="utf-8")
-    enrollment_service = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-enrollment-provision.service" <<EOF')
-    enrollment_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-enrollment-provision.timer" <<EOF')
-    claim_service = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-notion-claim-poll.service" <<EOF')
-    claim_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/almanac-notion-claim-poll.timer" <<EOF')
+    enrollment_service = extract_heredoc(text, 'cat >"$TARGET_DIR/arclink-enrollment-provision.service" <<EOF')
+    enrollment_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/arclink-enrollment-provision.timer" <<EOF')
+    claim_service = extract_heredoc(text, 'cat >"$TARGET_DIR/arclink-notion-claim-poll.service" <<EOF')
+    claim_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/arclink-notion-claim-poll.timer" <<EOF')
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         repo_dir = root / "repo"
         (repo_dir / "bin").mkdir(parents=True, exist_ok=True)
-        provision_script = repo_dir / "bin" / "almanac-enrollment-provision.sh"
+        provision_script = repo_dir / "bin" / "arclink-enrollment-provision.sh"
         provision_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         provision_script.chmod(0o755)
         replacements = {
-            "$CONFIG_PATH": str(root / "almanac.env"),
-            "$ALMANAC_REPO_DIR": str(repo_dir),
+            "$CONFIG_PATH": str(root / "arclink.env"),
+            "$ARCLINK_REPO_DIR": str(repo_dir),
         }
 
         def materialize(content: str) -> str:
@@ -2832,10 +2832,10 @@ def test_install_system_services_units_pass_systemd_analyze_verify() -> None:
                 rendered = rendered.replace(needle, value)
             return rendered
 
-        service_path = root / "almanac-enrollment-provision.service"
-        timer_path = root / "almanac-enrollment-provision.timer"
-        claim_service_path = root / "almanac-notion-claim-poll.service"
-        claim_timer_path = root / "almanac-notion-claim-poll.timer"
+        service_path = root / "arclink-enrollment-provision.service"
+        timer_path = root / "arclink-enrollment-provision.timer"
+        claim_service_path = root / "arclink-notion-claim-poll.service"
+        claim_timer_path = root / "arclink-notion-claim-poll.timer"
         service_path.write_text(materialize(enrollment_service) + "\n", encoding="utf-8")
         timer_path.write_text(materialize(enrollment_timer) + "\n", encoding="utf-8")
         claim_service_path.write_text(materialize(claim_service) + "\n", encoding="utf-8")
@@ -2861,7 +2861,7 @@ def test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh() -> No
     expect("GIT_ASKPASS=/bin/false" in checkout, checkout)
     expect("SSH_ASKPASS=/bin/false" in checkout, checkout)
     expect("GCM_INTERACTIVE=Never" in checkout, checkout)
-    expect("Refusing SSH upstream without the Almanac upstream deploy-key lane enabled" in checkout, checkout)
+    expect("Refusing SSH upstream without the ArcLink upstream deploy-key lane enabled" in checkout, checkout)
     print("PASS test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh")
 
 
@@ -2870,7 +2870,7 @@ def test_upgrade_refuses_non_main_branch_without_explicit_override() -> None:
     guard = extract(text, "require_main_upstream_branch_for_upgrade() {", "write_operator_checkout_artifact() {")
     upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     flow = extract(text, "run_upgrade_flow() {", "run_agent_payload() {")
-    expect('ALMANAC_ALLOW_NON_MAIN_UPGRADE:-0' in guard, guard)
+    expect('ARCLINK_ALLOW_NON_MAIN_UPGRADE:-0' in guard, guard)
     expect("Refusing production upgrade from non-main upstream branch" in guard, guard)
     expect("require_main_upstream_branch_for_upgrade" in upgrade, upgrade)
     expect("require_main_upstream_branch_for_upgrade" in flow, flow)
@@ -2881,8 +2881,8 @@ def test_install_answer_file_has_exit_trap_cleanup() -> None:
     text = DEPLOY_SH.read_text()
     install_flow = extract(text, "run_install_flow() {", "run_remove_flow() {")
     remove_flow = extract(text, "run_remove_flow() {", 'if [[ -n "$PRIVILEGED_MODE" ]]; then')
-    expect("mktemp /tmp/almanac-install" in install_flow and "trap 'rm -f" in install_flow, install_flow)
-    expect("mktemp /tmp/almanac-remove" in remove_flow and "trap 'rm -f" in remove_flow, remove_flow)
+    expect("mktemp /tmp/arclink-install" in install_flow and "trap 'rm -f" in install_flow, install_flow)
+    expect("mktemp /tmp/arclink-remove" in remove_flow and "trap 'rm -f" in remove_flow, remove_flow)
     print("PASS test_install_answer_file_has_exit_trap_cleanup")
 
 
@@ -2914,7 +2914,7 @@ def main() -> int:
         test_placeholder_upstream_default_uses_checkout_origin,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,
-        test_detect_tailscale_serve_distinguishes_qmd_from_almanac_routes,
+        test_detect_tailscale_serve_distinguishes_qmd_from_arclink_routes,
         test_path_is_within_and_safe_remove_use_canonical_paths,
         test_run_health_check_falls_back_when_user_bus_is_missing,
         test_install_and_upgrade_run_live_agent_tool_smoke_after_health,
@@ -2968,7 +2968,7 @@ def main() -> int:
         test_tailscale_funnel_command_timeout_surfaces_enablement_guidance,
         test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
-        test_sync_public_repo_preserves_template_almanac_priv_while_excluding_top_level_private_repo,
+        test_sync_public_repo_preserves_template_arclink_priv_while_excluding_top_level_private_repo,
         test_sync_public_repo_repairs_existing_git_metadata_from_source,
         test_sync_public_repo_copies_git_metadata_when_public_git_requested,
         test_enrollment_reset_supports_full_forget_purge,

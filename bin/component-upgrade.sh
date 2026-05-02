@@ -335,7 +335,7 @@ do_check() {
       ;;
     uv-python)
       local preferred minimum
-      preferred="$(jq -r --arg name "$name" '.components[$name].preferred // [] | join(",")' "$ALMANAC_PINS_FILE")"
+      preferred="$(jq -r --arg name "$name" '.components[$name].preferred // [] | join(",")' "$ARCLINK_PINS_FILE")"
       minimum="$(pins_get "$name" minimum)"
       note "  pinned: preferred=${preferred:-<none>} minimum=${minimum:-<none>}"
       note "  status: uv-python components resolve through uv preferred[] fallback; no upstream-check resolver."
@@ -356,7 +356,7 @@ write_inherited_components() {
   local children
   children="$(jq -r --arg b "$bumped" \
     '.components | to_entries[] | select(.value.inherits_from == $b) | .key' \
-    "$ALMANAC_PINS_FILE" 2>/dev/null)"
+    "$ARCLINK_PINS_FILE" 2>/dev/null)"
   if [[ -z "$children" ]]; then
     return 0
   fi
@@ -369,24 +369,24 @@ write_inherited_components() {
 
 # commit_and_push_pins <commit-message-summary>
 require_upstream_push_ready() {
-  if [[ -z "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" || ! -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
-    fatal "ALMANAC_UPSTREAM_DEPLOY_KEY_PATH not set or missing; cannot commit + push pins.json. Re-run with deploy-key env vars, or use --skip-push for a local-only bump."
+  if [[ -z "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" || ! -f "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
+    fatal "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH not set or missing; cannot commit + push pins.json. Re-run with deploy-key env vars, or use --skip-push for a local-only bump."
   fi
 }
 
 upstream_ssh_command() {
-  local known_hosts="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-${HOME:-}/.ssh/known_hosts}"
+  local known_hosts="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-${HOME:-}/.ssh/known_hosts}"
   printf 'ssh -i %q -o BatchMode=yes -o IPQoS=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%q' \
-    "$ALMANAC_UPSTREAM_DEPLOY_KEY_PATH" \
+    "$ARCLINK_UPSTREAM_DEPLOY_KEY_PATH" \
     "$known_hosts"
 }
 
 configure_origin_for_upstream() {
-  if [[ -n "${ALMANAC_UPSTREAM_REPO_URL:-}" ]]; then
+  if [[ -n "${ARCLINK_UPSTREAM_REPO_URL:-}" ]]; then
     if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
-      git -C "$REPO_DIR" remote set-url origin "$ALMANAC_UPSTREAM_REPO_URL"
+      git -C "$REPO_DIR" remote set-url origin "$ARCLINK_UPSTREAM_REPO_URL"
     else
-      git -C "$REPO_DIR" remote add origin "$ALMANAC_UPSTREAM_REPO_URL"
+      git -C "$REPO_DIR" remote add origin "$ARCLINK_UPSTREAM_REPO_URL"
     fi
   fi
 }
@@ -401,7 +401,7 @@ upstream_git() {
 fetch_upstream_branch() {
   require_upstream_push_ready
   configure_origin_for_upstream
-  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
   local fetch_output="" fetch_status=0
   fetch_output="$(upstream_git fetch -q origin "$upstream_branch" 2>&1)" || fetch_status=$?
   if [[ "$fetch_status" -eq 0 ]]; then
@@ -420,7 +420,7 @@ tracked_worktree_is_clean() {
 }
 
 sync_current_head_with_upstream_branch() {
-  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
   local fetch_status=0
   fetch_upstream_branch || fetch_status=$?
   if [[ "$fetch_status" -eq 2 ]]; then
@@ -443,8 +443,8 @@ sync_current_head_with_upstream_branch() {
   fi
 
   local git_author_name git_author_email
-  git_author_name="${ALMANAC_UPSTREAM_GIT_AUTHOR_NAME:-Almanac Upgrade Bot}"
-  git_author_email="${ALMANAC_UPSTREAM_GIT_AUTHOR_EMAIL:-almanac-upgrade@localhost}"
+  git_author_name="${ARCLINK_UPSTREAM_GIT_AUTHOR_NAME:-ArcLink Upgrade Bot}"
+  git_author_email="${ARCLINK_UPSTREAM_GIT_AUTHOR_EMAIL:-arclink-upgrade@localhost}"
   note "Rebasing local pins commit onto origin/$upstream_branch before push..."
   if ! git -C "$REPO_DIR" \
       -c user.name="$git_author_name" \
@@ -457,14 +457,14 @@ sync_current_head_with_upstream_branch() {
 
 push_current_head() {
   require_upstream_push_ready
-  local upstream_branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
   sync_current_head_with_upstream_branch
-  note "Pushing to ${ALMANAC_UPSTREAM_REPO_URL:-origin}#$upstream_branch..."
+  note "Pushing to ${ARCLINK_UPSTREAM_REPO_URL:-origin}#$upstream_branch..."
   upstream_git push origin "HEAD:$upstream_branch" >/dev/null
 }
 
 upstream_branch_contains_head() {
-  if [[ -z "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" || ! -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
+  if [[ -z "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" || ! -f "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
     return 0
   fi
   fetch_upstream_branch >/dev/null 2>&1 || return 1
@@ -475,8 +475,8 @@ commit_and_push_pins() {
   local summary="$1"
   require_upstream_push_ready
   local git_author_name git_author_email
-  git_author_name="${ALMANAC_UPSTREAM_GIT_AUTHOR_NAME:-Almanac Upgrade Bot}"
-  git_author_email="${ALMANAC_UPSTREAM_GIT_AUTHOR_EMAIL:-almanac-upgrade@localhost}"
+  git_author_name="${ARCLINK_UPSTREAM_GIT_AUTHOR_NAME:-ArcLink Upgrade Bot}"
+  git_author_email="${ARCLINK_UPSTREAM_GIT_AUTHOR_EMAIL:-arclink-upgrade@localhost}"
   note "Committing pins.json bump..."
   git -C "$REPO_DIR" add -- config/pins.json
   if git -C "$REPO_DIR" diff --cached --quiet -- config/pins.json; then
@@ -491,27 +491,27 @@ commit_and_push_pins() {
 }
 
 reexec_upgrade() {
-  if [[ "${ALMANAC_COMPONENT_UPGRADE_MODE:-}" == "docker" ]]; then
+  if [[ "${ARCLINK_COMPONENT_UPGRADE_MODE:-}" == "docker" ]]; then
     note "Re-exec ./deploy.sh docker upgrade to apply the new pin to the Docker stack..."
     exec env \
-      ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
-      ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}" \
-      ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
-      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
-      ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
-      ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
+      ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
+      ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+      ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
+      ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
+      ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+      ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
       "$REPO_DIR/deploy.sh" docker upgrade
   fi
 
   note "Re-exec ./deploy.sh upgrade to apply the new pin to the live host..."
   exec sudo env \
-    ALMANAC_CONFIG_FILE="${ALMANAC_CONFIG_FILE:-/home/almanac/almanac/almanac-priv/config/almanac.env}" \
-    ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
-    ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-1}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
-    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
+    ARCLINK_CONFIG_FILE="${ARCLINK_CONFIG_FILE:-/home/arclink/arclink/arclink-priv/config/arclink.env}" \
+    ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-1}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+    ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
     "$REPO_DIR/deploy.sh" --apply-upgrade
 }
 
@@ -663,7 +663,7 @@ main() {
   [[ -z "$component" || -z "$subcommand" ]] && { usage >&2; exit 1; }
   pins_require
   if [[ -z "$(pins_kind "$component")" ]]; then
-    fatal "no component named '$component' in $ALMANAC_PINS_FILE"
+    fatal "no component named '$component' in $ARCLINK_PINS_FILE"
   fi
 
   case "$subcommand" in

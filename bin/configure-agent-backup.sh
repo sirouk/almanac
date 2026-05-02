@@ -10,8 +10,8 @@ usage() {
 Usage: configure-agent-backup.sh <hermes-home> [--remote git@github.com:owner/repo.git] [--branch main] [--include-sessions 0|1] [--verify]
 
 Configure a private GitHub backup for one enrolled user's Hermes home.
-This uses a per-user read/write deploy key. Do not reuse the Almanac upstream
-code-push key or the shared almanac-priv backup key.
+This uses a per-user read/write deploy key. Do not reuse the ArcLink upstream
+code-push key or the shared arclink-priv backup key.
 The backup snapshot is curated by default: SOUL, config, memories, sessions,
 installed skills/plugins, and selected state. Secrets and logs stay
 local to the host.
@@ -33,15 +33,15 @@ shift
 REMOTE_URL="${AGENT_BACKUP_REMOTE:-}"
 BRANCH_NAME="${AGENT_BACKUP_BRANCH:-main}"
 INCLUDE_SESSIONS="${AGENT_BACKUP_INCLUDE_SESSIONS:-1}"
-KEY_PATH="${AGENT_BACKUP_KEY_PATH:-$HOME/.ssh/almanac-agent-backup-ed25519}"
-KNOWN_HOSTS_FILE="${AGENT_BACKUP_KNOWN_HOSTS_FILE:-$HOME/.ssh/almanac-agent-backup-known_hosts}"
-STATE_FILE="$HERMES_HOME_TARGET/state/almanac-agent-backup.env"
-PENDING_STATE_FILE="$HERMES_HOME_TARGET/state/almanac-agent-backup.pending.env"
+KEY_PATH="${AGENT_BACKUP_KEY_PATH:-$HOME/.ssh/arclink-agent-backup-ed25519}"
+KNOWN_HOSTS_FILE="${AGENT_BACKUP_KNOWN_HOSTS_FILE:-$HOME/.ssh/arclink-agent-backup-known_hosts}"
+STATE_FILE="$HERMES_HOME_TARGET/state/arclink-agent-backup.env"
+PENDING_STATE_FILE="$HERMES_HOME_TARGET/state/arclink-agent-backup.pending.env"
 LOCAL_REPO_DIR="${AGENT_BACKUP_REPO_DIR:-$HERMES_HOME_TARGET/state/agent-home-backup/repo}"
 GITHUB_API_BASE="${AGENT_BACKUP_GITHUB_API_BASE:-https://api.github.com}"
 VERIFY_ONLY=0
 
-if [[ "${GITHUB_API_BASE%/}" != "https://api.github.com" && "${ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
+if [[ "${GITHUB_API_BASE%/}" != "https://api.github.com" && "${ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
   echo "Refusing non-default GitHub API base for backup visibility checks: $GITHUB_API_BASE" >&2
   echo "This override is reserved for tests; production backup safety must verify against https://api.github.com." >&2
   exit 1
@@ -156,7 +156,7 @@ request = urllib.request.Request(
     f"{base}/repos/{owner_repo}",
     headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "almanac-agent-backup-check",
+        "User-Agent": "arclink-agent-backup-check",
     },
 )
 try:
@@ -200,7 +200,7 @@ if [[ -z "$REMOTE_URL" ]]; then
   "$SCRIPT_DIR/install-agent-cron-jobs.sh" "$SCRIPT_DIR/.." "$HERMES_HOME_TARGET" >/dev/null 2>&1 || true
   if [[ -S "/run/user/$(id -u)/bus" ]]; then
     env XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
-      systemctl --user disable --now almanac-user-agent-backup.timer >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-user-agent-backup.timer >/dev/null 2>&1 || true
   fi
   exit 0
 fi
@@ -223,7 +223,7 @@ if [[ "$visibility" == error:* ]]; then
 fi
 
 if [[ ! -f "$KEY_PATH" ]]; then
-  key_comment="almanac-agent-backup@$(hostname -s 2>/dev/null || printf 'host')"
+  key_comment="arclink-agent-backup@$(hostname -s 2>/dev/null || printf 'host')"
   ssh-keygen -q -t ed25519 -N '' -C "$key_comment" -f "$KEY_PATH"
 fi
 chmod 600 "$KEY_PATH"
@@ -248,7 +248,7 @@ EOF
 }
 
 disable_legacy_backup_timer() {
-  local legacy_timer="$HOME/.config/systemd/user/almanac-user-agent-backup.timer"
+  local legacy_timer="$HOME/.config/systemd/user/arclink-user-agent-backup.timer"
   local runtime_dir="" bus_addr=""
   if [[ -S "/run/user/$(id -u)/bus" ]]; then
     runtime_dir="/run/user/$(id -u)"
@@ -256,7 +256,7 @@ disable_legacy_backup_timer() {
     env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$bus_addr" \
       systemctl --user daemon-reload >/dev/null
     env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$bus_addr" \
-      systemctl --user disable --now almanac-user-agent-backup.timer >/dev/null 2>&1 || true
+      systemctl --user disable --now arclink-user-agent-backup.timer >/dev/null 2>&1 || true
   fi
   rm -f "$legacy_timer"
 }
@@ -272,7 +272,7 @@ install_backup_cron_job() {
 }
 
 run_backup_cron_script_once() {
-  local cron_script="$HERMES_HOME_TARGET/scripts/almanac_agent_backup.py"
+  local cron_script="$HERMES_HOME_TARGET/scripts/arclink_agent_backup.py"
   if [[ -f "$cron_script" ]]; then
     env HERMES_HOME="$HERMES_HOME_TARGET" python3 "$cron_script" >/dev/null 2>&1 || true
   fi
@@ -285,7 +285,7 @@ activate_backup_scheduler() {
 }
 
 verify_backup_git_access() {
-  local tmp_dir="" output="" write_ref="refs/heads/almanac-agent-backup-write-check"
+  local tmp_dir="" output="" write_ref="refs/heads/arclink-agent-backup-write-check"
 
   echo "Verifying agent backup deploy-key read access with git ls-remote..."
   if ! output="$(git ls-remote "$REMOTE_URL" HEAD 2>&1)"; then
@@ -298,12 +298,12 @@ verify_backup_git_access() {
   tmp_dir="$(mktemp -d)"
   if ! (
     set -e
-    git -C "$tmp_dir" init -b almanac-agent-backup-write-check >/dev/null
-    git -C "$tmp_dir" config user.name "Almanac Agent Backup Key Check"
-    git -C "$tmp_dir" config user.email "almanac-agent-backup-check@localhost"
-    printf 'Almanac agent backup write check\n' >"$tmp_dir/README.md"
+    git -C "$tmp_dir" init -b arclink-agent-backup-write-check >/dev/null
+    git -C "$tmp_dir" config user.name "ArcLink Agent Backup Key Check"
+    git -C "$tmp_dir" config user.email "arclink-agent-backup-check@localhost"
+    printf 'ArcLink agent backup write check\n' >"$tmp_dir/README.md"
     git -C "$tmp_dir" add README.md
-    git -C "$tmp_dir" commit -m "Almanac agent backup write check" >/dev/null
+    git -C "$tmp_dir" commit -m "ArcLink agent backup write check" >/dev/null
   ); then
     rm -rf "$tmp_dir"
     echo "Failed to prepare a temporary dry-run push repo for agent backup verification." >&2
@@ -354,6 +354,6 @@ $(sed 's/^/    /' "${KEY_PATH}.pub")
 Add that public key to the private repository as a deploy key with write access.
 After GitHub accepts the key, run:
   $0 $(printf '%q' "$HERMES_HOME_TARGET") --verify
-This is a separate per-user backup key; do not reuse the Almanac upstream code-push key or the shared almanac-priv backup key.
+This is a separate per-user backup key; do not reuse the ArcLink upstream code-push key or the shared arclink-priv backup key.
 Session transcripts are included by default; prepare this helper with --include-sessions 0 if this repo should only hold the core soul/config/memory snapshot.
 EOF

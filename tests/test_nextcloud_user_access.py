@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-CONTROL_PY = REPO / "python" / "almanac_control.py"
-NEXTCLOUD_ACCESS_PY = REPO / "python" / "almanac_nextcloud_access.py"
+CONTROL_PY = REPO / "python" / "arclink_control.py"
+NEXTCLOUD_ACCESS_PY = REPO / "python" / "arclink_nextcloud_access.py"
 PYTHON_DIR = REPO / "python"
 
 
@@ -38,49 +38,49 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 
 def config_values(root: Path, *, enable_nextcloud: str) -> dict[str, str]:
     return {
-        "ALMANAC_USER": "almanac",
-        "ALMANAC_HOME": str(root / "home-almanac"),
-        "ALMANAC_REPO_DIR": str(REPO),
-        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(REPO),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
         "STATE_DIR": str(root / "state"),
         "RUNTIME_DIR": str(root / "state" / "runtime"),
         "VAULT_DIR": str(root / "vault"),
-        "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
-        "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
-        "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
-        "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
-        "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
-        "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
-        "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
-        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
-        "ALMANAC_MCP_HOST": "127.0.0.1",
-        "ALMANAC_MCP_PORT": "8282",
-        "ALMANAC_NOTION_WEBHOOK_HOST": "127.0.0.1",
-        "ALMANAC_NOTION_WEBHOOK_PORT": "8283",
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ARCLINK_MCP_HOST": "127.0.0.1",
+        "ARCLINK_MCP_PORT": "8282",
+        "ARCLINK_NOTION_WEBHOOK_HOST": "127.0.0.1",
+        "ARCLINK_NOTION_WEBHOOK_PORT": "8283",
         "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "tui-only",
         "OPERATOR_NOTIFY_CHANNEL_ID": "",
-        "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
-        "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
-        "ALMANAC_CURATOR_CHANNELS": "tui-only",
-        "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
-        "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+        "ARCLINK_MODEL_PRESET_CODEX": "openai:codex",
+        "ARCLINK_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+        "ARCLINK_MODEL_PRESET_CHUTES": "chutes:model-router",
+        "ARCLINK_CURATOR_CHANNELS": "tui-only",
+        "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+        "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
         "ENABLE_NEXTCLOUD": enable_nextcloud,
-        "ALMANAC_NAME": "almanac",
+        "ARCLINK_NAME": "arclink",
     }
 
 
 def test_sync_nextcloud_user_access_skips_when_disabled() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_disabled_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_disabled_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_access_disabled_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_disabled_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="0"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
 
@@ -104,14 +104,14 @@ def test_sync_nextcloud_user_access_skips_when_disabled() -> None:
 def test_sync_nextcloud_user_access_creates_missing_user() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_create_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_create_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_access_create_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_create_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="1"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             calls: list[tuple[list[str], dict[str, str] | None, bool]] = []
@@ -142,7 +142,7 @@ def test_sync_nextcloud_user_access_creates_missing_user() -> None:
             create_args, create_env, _ = calls[-1]
             expect(create_args[0:3] == ["user:add", "--password-from-env", "--no-interaction"], str(create_args))
             expect("--display-name=Alex Example" in create_args, str(create_args))
-            expect(create_args[-3:] == ["-g", "almanac-users", "sir-ouk"], str(create_args))
+            expect(create_args[-3:] == ["-g", "arclink-users", "sir-ouk"], str(create_args))
             expect(create_env == {"OC_PASS": "sup3rsecret"}, str(create_env))
             print("PASS test_sync_nextcloud_user_access_creates_missing_user")
         finally:
@@ -153,14 +153,14 @@ def test_sync_nextcloud_user_access_creates_missing_user() -> None:
 def test_sync_nextcloud_user_access_resets_existing_user_password() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_reset_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_reset_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_access_reset_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_reset_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="1"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             calls: list[tuple[list[str], dict[str, str] | None, bool]] = []
@@ -202,14 +202,14 @@ def test_sync_nextcloud_user_access_resets_existing_user_password() -> None:
 def test_delete_nextcloud_user_access_skips_when_disabled() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_delete_disabled_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_delete_disabled_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_access_delete_disabled_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_delete_disabled_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="0"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
 
@@ -228,14 +228,14 @@ def test_delete_nextcloud_user_access_skips_when_disabled() -> None:
 def test_delete_nextcloud_user_access_deletes_existing_user() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_delete_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_delete_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_access_delete_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_delete_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="1"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             calls: list[tuple[list[str], dict[str, str] | None, bool]] = []
@@ -269,23 +269,23 @@ def test_delete_nextcloud_user_access_deletes_existing_user() -> None:
 def test_nextcloud_occ_scrubs_ambient_env() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_access_env_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_env_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_access_env_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_env_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / "home-almanac").mkdir(parents=True, exist_ok=True)
-        config_path = root / "config" / "almanac.env"
+        (root / "home-arclink").mkdir(parents=True, exist_ok=True)
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="1"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
-        os.environ["ALMANAC_SSOT_NOTION_TOKEN"] = "sentinel-secret"
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_SSOT_NOTION_TOKEN"] = "sentinel-secret"
         os.environ["POSTGRES_PASSWORD"] = "db-secret"
         os.environ["PATH"] = "/tmp/tainted"
         try:
             cfg = control.Config.from_env()
             captured: dict[str, object] = {}
 
-            nextcloud_access._runtime_exec_base = lambda cfg_arg, extra_env=None: ["runuser", "-u", cfg_arg.almanac_user, "--", "podman", "exec", "app"]
+            nextcloud_access._runtime_exec_base = lambda cfg_arg, extra_env=None: ["runuser", "-u", cfg_arg.arclink_user, "--", "podman", "exec", "app"]
 
             def fake_run(cmd, **kwargs):
                 captured["cmd"] = cmd
@@ -299,9 +299,9 @@ def test_nextcloud_occ_scrubs_ambient_env() -> None:
             expect(isinstance(env, dict), str(captured))
             env = dict(env)
             expect(env.get("PATH") == nextcloud_access._SAFE_HOST_PATH, str(env))
-            expect(env.get("HOME") == str(cfg.almanac_home), str(env))
-            expect(env.get("USER") == cfg.almanac_user, str(env))
-            expect("ALMANAC_SSOT_NOTION_TOKEN" not in env, str(env))
+            expect(env.get("HOME") == str(cfg.arclink_home), str(env))
+            expect(env.get("USER") == cfg.arclink_user, str(env))
+            expect("ARCLINK_SSOT_NOTION_TOKEN" not in env, str(env))
             expect("POSTGRES_PASSWORD" not in env, str(env))
             print("PASS test_nextcloud_occ_scrubs_ambient_env")
         finally:
@@ -312,20 +312,20 @@ def test_nextcloud_occ_scrubs_ambient_env() -> None:
 def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_nextcloud_occ_cwd_test")
-    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "almanac_nextcloud_access_occ_cwd_test")
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_occ_cwd_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_access_occ_cwd_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / "home-almanac").mkdir(parents=True, exist_ok=True)
-        config_path = root / "config" / "almanac.env"
+        (root / "home-arclink").mkdir(parents=True, exist_ok=True)
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root, enable_nextcloud="1"))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             captured: dict[str, object] = {}
 
-            nextcloud_access._runtime_exec_base = lambda cfg_arg, extra_env=None: ["runuser", "-u", cfg_arg.almanac_user, "--", "podman", "exec", "app"]
+            nextcloud_access._runtime_exec_base = lambda cfg_arg, extra_env=None: ["runuser", "-u", cfg_arg.arclink_user, "--", "podman", "exec", "app"]
 
             def fake_run(cmd, **kwargs):
                 captured["cmd"] = cmd
@@ -335,7 +335,7 @@ def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
             nextcloud_access.subprocess.run = fake_run
             nextcloud_access._nextcloud_occ(cfg, "status", "--output=json")
 
-            expect(captured["cwd"] == str(root / "home-almanac"), str(captured))
+            expect(captured["cwd"] == str((root / "home-arclink").resolve()), str(captured))
             print("PASS test_nextcloud_occ_uses_service_user_safe_cwd")
         finally:
             os.environ.clear()

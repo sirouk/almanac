@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh synced Hermes documentation in the ArcLink vault every 4 hours
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=4h
+Unit=arclink-hermes-docs-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -13,7 +13,7 @@ Please do not open public GitHub issues for suspected security problems.
 Preferred reporting path:
 
 1. Use GitHub's private vulnerability reporting for this repository if it is enabled.
-2. If private reporting is not available, contact a maintainer through a non-public channel and include `almanac` in the subject or opening line.
+2. If private reporting is not available, contact a maintainer through a non-public channel and include `arclink` in the subject or opening line.
 
 Please include as much of the following as you can:
 

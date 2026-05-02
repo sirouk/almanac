@@ -8,7 +8,7 @@
 | `deploy.sh` | Thin wrapper around canonical deploy, install, upgrade, Docker, health, enrollment, Notion, and maintenance flows in `bin/deploy.sh`. |
 | `ralphie.sh` | Ralphie phase runner entrypoint. |
 | `test.sh` | Full preflight/install smoke; heavier than focused no-secret tests. |
-| `compose.yaml` | Docker-first Almanac/ArcLink runtime substrate. |
+| `compose.yaml` | Docker-first ArcLink/ArcLink runtime substrate. |
 | `Dockerfile` | Application image with Python, Node, Docker CLI, qmd, Hermes runtime, and supporting tools. |
 | `init.sh` | Local/remote bootstrap and enrollment helper. |
 | `README.md` | Operator-facing product and architecture documentation. |
@@ -20,31 +20,31 @@
 | Directory | Role |
 | --- | --- |
 | `bin/` | Deploy, Docker, health, onboarding, qmd, PDF, Nextcloud, code-server, backup, vault, CI, runtime, and ArcLink live-proof scripts. |
-| `python/` | Almanac control plane plus ArcLink product/API/provider/provisioning/executor/fleet modules. |
-| `tests/` | Almanac and ArcLink no-secret regression tests, fake E2E, live-gated E2E scaffolds, and helpers. |
+| `python/` | ArcLink control plane plus ArcLink product/API/provider/provisioning/executor/fleet modules. |
+| `tests/` | ArcLink and ArcLink no-secret regression tests, fake E2E, live-gated E2E scaffolds, and helpers. |
 | `web/` | Next.js 15 + Tailwind 4 app with public, onboarding, user dashboard, admin dashboard, API client, and web tests. |
 | `config/` | Env examples, model providers, pins, org-profile schemas/examples, and sample private manifests. |
 | `docs/` | Operator docs, ArcLink architecture/runbooks/brand/data-safety/live-proof docs, and OpenAPI spec. |
 | `research/` | Ralphie planning, steering, coverage, stack, and completion artifacts. |
 | `consensus/` | Plan/build/lint/test/document gate outputs and blocker notes. |
-| `systemd/user/` | Baremetal service-user units retained for Almanac compatibility. |
+| `systemd/user/` | Baremetal service-user units retained for ArcLink compatibility. |
 | `plugins/hermes-agent/` | Hermes plugins including managed context/bootstrap-token injection. |
 | `hooks/hermes-agent/` | Hermes hooks including Telegram `/start` behavior. |
-| `skills/` | Almanac-facing skills for qmd, vault, Notion, SSOT, resources, upgrades, first contact, and PDF export. |
+| `skills/` | ArcLink-facing skills for qmd, vault, Notion, SSOT, resources, upgrades, first contact, and PDF export. |
 | `compose/` | Supplemental Compose assets. |
 | `templates/` | Public templates used to seed private state. |
 | `specs/` | Project contract definitions. |
 
 ## Docker Runtime Shape
 
-`compose.yaml` keeps the existing Almanac shared runtime and is the preferred
+`compose.yaml` keeps the existing ArcLink shared runtime and is the preferred
 ArcLink MVP substrate. Key lanes are:
 
 | Lane | Services / files | Responsibility |
 | --- | --- | --- |
 | Data/cache | `postgres`, `redis` | Nextcloud database/cache now; future scale dependencies. |
 | Files | `nextcloud` | User vault/files surface. |
-| Control APIs | `almanac-mcp`, `notion-webhook`, qmd service | MCP, Notion webhook, and retrieval endpoints. |
+| Control APIs | `arclink-mcp`, `notion-webhook`, qmd service | MCP, Notion webhook, and retrieval endpoints. |
 | Agent/runtime | `agent-supervisor`, Curator profile services | Docker-mode user-agent reconciliation and chat gateways. |
 | Knowledge jobs | `qmd-refresh`, `pdf-ingest`, `memory-synth`, `hermes-docs-sync`, `vault-watch` | qmd/PDF/memory/docs maintenance. |
 | Operations jobs | `health-watch`, `curator-refresh`, `ssot-batcher`, `notification-delivery` | Health, operator actions, SSOT, notification delivery. |
@@ -78,21 +78,21 @@ ArcLink MVP substrate. Key lanes are:
 | `web/src/lib/api.ts` | Hosted API client. |
 | `web/tests/` | Node smoke/API tests and Playwright product checks. |
 
-## Core Almanac Substrate To Preserve
+## Core ArcLink Substrate To Preserve
 
 | Surface | Files |
 | --- | --- |
-| Control-plane DB/MCP | `python/almanac_control.py`, `python/almanac_mcp_server.py`, `bin/almanac-mcp-server.sh` |
-| Onboarding/enrollment | `python/almanac_onboarding_flow.py`, `python/almanac_enrollment_provisioner.py`, Curator onboarding modules, enrollment scripts |
-| Docker agent supervisor | `python/almanac_docker_agent_supervisor.py`, `bin/docker-agent-supervisor.sh` |
-| Provider setup | `python/almanac_model_providers.py`, `python/almanac_onboarding_provider_auth.py` |
-| qmd/vault/PDF/memory | `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, `bin/vault-watch.sh`, `bin/pdf-ingest.py`, `python/almanac_memory_synthesizer.py` |
-| Notion/SSOT | `python/almanac_notion_ssot.py`, `python/almanac_notion_webhook.py`, `python/almanac_ssot_batcher.py` |
-| Health/notifications | `python/almanac_health_watch.py`, `python/almanac_notification_delivery.py`, `bin/health.sh`, Docker health scripts |
+| Control-plane DB/MCP | `python/arclink_control.py`, `python/arclink_mcp_server.py`, `bin/arclink-mcp-server.sh` |
+| Onboarding/enrollment | `python/arclink_onboarding_flow.py`, `python/arclink_enrollment_provisioner.py`, Curator onboarding modules, enrollment scripts |
+| Docker agent supervisor | `python/arclink_docker_agent_supervisor.py`, `bin/docker-agent-supervisor.sh` |
+| Provider setup | `python/arclink_model_providers.py`, `python/arclink_onboarding_provider_auth.py` |
+| qmd/vault/PDF/memory | `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, `bin/vault-watch.sh`, `bin/pdf-ingest.py`, `python/arclink_memory_synthesizer.py` |
+| Notion/SSOT | `python/arclink_notion_ssot.py`, `python/arclink_notion_webhook.py`, `python/arclink_ssot_batcher.py` |
+| Health/notifications | `python/arclink_health_watch.py`, `python/arclink_notification_delivery.py`, `bin/health.sh`, Docker health scripts |
 
 ## Architecture Assumptions
 
-- ArcLink behavior is additive beside Almanac until live proof and compatibility
+- ArcLink behavior is additive beside ArcLink until live proof and compatibility
   are stable.
 - Commercial state lives in `arclink_*` tables and references operational state
   by stable IDs.

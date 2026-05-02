@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink notification delivery worker
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/arclink-notification-delivery.sh

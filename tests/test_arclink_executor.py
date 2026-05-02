@@ -38,7 +38,7 @@ def sample_intent() -> dict:
         "compose": {
             "services": {
                 "dashboard": {
-                    "image": "almanac/app:local",
+                    "image": "arclink/app:local",
                     "command": ["./bin/arclink-dashboard-placeholder.sh"],
                     "environment": {},
                     "volumes": [{"source": "/arcdata/deployments/dep_1/config", "target": "/config"}],
@@ -306,7 +306,7 @@ def test_fake_docker_compose_rejects_explicit_key_reuse_after_partial_failed_int
     )
     changed = sample_intent()
     changed["compose"]["services"]["worker"] = {
-        "image": "almanac/app:local",
+        "image": "arclink/app:local",
         "command": ["./bin/arclink-worker-placeholder.sh"],
         "environment": {},
         "volumes": [],

@@ -17,7 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_DIR / "python"))
 
-from almanac_rpc_client import mcp_call  # noqa: E402
+from arclink_rpc_client import mcp_call  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class Journey:
 
 
 def marker(run_id: str, name: str) -> str:
-    return f"ALMANAC_REPLAY_{run_id}_{name}"
+    return f"ARCLINK_REPLAY_{run_id}_{name}"
 
 
 def build_journeys(run_id: str, include_pdf: bool, include_notion: bool) -> list[Journey]:
@@ -151,7 +151,7 @@ def write_simple_pdf(path: Path, lines: list[str]) -> None:
 def seed_vault(root: Path, run_id: str, bulk_count: int, include_pdf: bool) -> Path:
     # qmd intentionally behaves like common glob/indexers and skips hidden path
     # segments. Keep the replay root visible so this exercises real recall.
-    replay_root = root / "Research" / "almanac-retrieval-replay" / run_id
+    replay_root = root / "Research" / "arclink-retrieval-replay" / run_id
     if replay_root.exists():
         shutil.rmtree(replay_root)
 
@@ -256,7 +256,7 @@ def seed_vault(root: Path, run_id: str, bulk_count: int, include_pdf: bool) -> P
 def seed_notion(notion_root: Path | None, run_id: str) -> Path | None:
     if notion_root is None:
         return None
-    path = notion_root / "almanac-replay" / f"shared-decision-{run_id}.md"
+    path = notion_root / "arclink-replay" / f"shared-decision-{run_id}.md"
     write_text(
         path,
         f"""
@@ -328,7 +328,7 @@ def call_journey(url: str, token: str, journey: Journey, timeout: float, poll_in
                 str(value)
                 for text in texts
                 for value in [text]
-                if value.startswith("vault/") or value.startswith("qmd://") or "/Almanac/" in value
+                if value.startswith("vault/") or value.startswith("qmd://") or "/ArcLink/" in value
             }
         )[:8]
         if not missing:
@@ -411,10 +411,10 @@ def append_scorecard(path: str, report: dict[str, Any], *, label: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Seed and replay cross-persona Almanac retrieval journeys.")
-    parser.add_argument("--mcp-url", default=os.environ.get("ALMANAC_MCP_URL", "http://127.0.0.1:8282/mcp"))
+    parser = argparse.ArgumentParser(description="Seed and replay cross-persona ArcLink retrieval journeys.")
+    parser.add_argument("--mcp-url", default=os.environ.get("ARCLINK_MCP_URL", "http://127.0.0.1:8282/mcp"))
     parser.add_argument("--token-file", required=True, help="Agent bootstrap token file readable by the current user.")
-    parser.add_argument("--vault-root", default=str(Path.home() / "Almanac"))
+    parser.add_argument("--vault-root", default=str(Path.home() / "ArcLink"))
     parser.add_argument("--notion-index-root", default="", help="Optional notion-shared markdown root to seed.")
     parser.add_argument("--after-seed-command", default="", help="Optional shell command after seeding, e.g. qmd-refresh for direct notion-index seeding.")
     parser.add_argument("--after-cleanup-command", default="", help="Optional shell command after cleanup.")

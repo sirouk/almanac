@@ -34,7 +34,7 @@ def seed_paid_deployment(control, onboarding, conn):
 
 
 def test_public_onboarding_routes_work_without_session_auth() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_pub_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_pub_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_pub_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -67,7 +67,7 @@ def test_public_onboarding_routes_work_without_session_auth() -> None:
 
 
 def test_user_dashboard_requires_session_auth() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_user_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_user_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_user_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_user_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_user_test")
@@ -101,7 +101,7 @@ def test_user_dashboard_requires_session_auth() -> None:
 
 
 def test_admin_dashboard_requires_admin_session() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_admin_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_admin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_admin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_admin_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_admin_test")
@@ -136,7 +136,7 @@ def test_admin_dashboard_requires_admin_session() -> None:
 
 
 def test_admin_action_requires_csrf_and_mutation_role() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_action_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_action_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_action_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_action_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_action_test")
@@ -182,7 +182,7 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
 
 
 def test_safe_error_shapes_never_leak_internal_details() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_error_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_error_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_error_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -215,7 +215,7 @@ def test_safe_error_shapes_never_leak_internal_details() -> None:
 
 
 def test_request_id_propagation_and_cors() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_reqid_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_reqid_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_reqid_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={
@@ -255,7 +255,7 @@ def test_request_id_propagation_and_cors() -> None:
 
 
 def test_admin_login_sets_session_cookies() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_login_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_login_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_login_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_login_test")
     conn = memory_db(control)
@@ -287,7 +287,7 @@ def test_admin_login_sets_session_cookies() -> None:
 
 
 def test_session_revoke_requires_admin_auth_and_csrf() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_revoke_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_revoke_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_revoke_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_revoke_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_revoke_test")
@@ -326,7 +326,7 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
 
 
 def test_stripe_webhook_route_skips_without_secret() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_webhook_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_webhook_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_webhook_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -346,7 +346,7 @@ def test_stripe_webhook_route_skips_without_secret() -> None:
 
 
 def test_user_billing_route_returns_entitlement_and_subscriptions() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_billing_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_billing_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_billing_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_billing_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_billing_test")
@@ -375,7 +375,7 @@ def test_user_billing_route_returns_entitlement_and_subscriptions() -> None:
 
 
 def test_user_provisioning_status_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_prov_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_prov_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_prov_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_prov_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_prov_test")
@@ -399,7 +399,7 @@ def test_user_provisioning_status_route() -> None:
 
 
 def test_admin_service_health_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_health_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_health_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_health_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_health_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_health_test")
@@ -429,7 +429,7 @@ def test_admin_service_health_route() -> None:
 
 
 def test_admin_provisioning_jobs_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_jobs_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_jobs_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_jobs_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_jobs_test")
     conn = memory_db(control)
@@ -449,7 +449,7 @@ def test_admin_provisioning_jobs_route() -> None:
 
 
 def test_admin_audit_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_audit_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_audit_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_audit_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_audit_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_audit_test")
@@ -478,7 +478,7 @@ def test_admin_audit_route() -> None:
 
 
 def test_admin_events_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_events_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_events_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_events_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_events_test")
     conn = memory_db(control)
@@ -498,7 +498,7 @@ def test_admin_events_route() -> None:
 
 
 def test_admin_queued_actions_list_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_qalist_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_qalist_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_qalist_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_qalist_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_qalist_test")
@@ -534,7 +534,7 @@ def test_admin_queued_actions_list_route() -> None:
 
 
 def test_user_portal_link_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_portal_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_portal_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_portal_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_portal_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_portal_test")
@@ -578,7 +578,7 @@ def test_user_portal_link_route() -> None:
 
 
 def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_userlogin_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_userlogin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_userlogin_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_userlogin_test")
     conn = memory_db(control)
@@ -656,7 +656,7 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
 
 
 def test_public_onboarding_checkout_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_checkout_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_checkout_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_checkout_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_checkout_test")
     conn = memory_db(control)
@@ -696,7 +696,7 @@ def test_public_onboarding_checkout_route() -> None:
 
 
 def test_web_telegram_discord_onboarding_parity() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_parity_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_parity_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_parity_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -748,7 +748,7 @@ def test_web_telegram_discord_onboarding_parity() -> None:
 
 
 def test_admin_dns_drift_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_dns_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_dns_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_dns_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dns_test")
     conn = memory_db(control)
@@ -768,7 +768,7 @@ def test_admin_dns_drift_route() -> None:
 
 
 def test_admin_logout_clears_cookies_and_revokes_session() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_adminlogout_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_adminlogout_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_adminlogout_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_adminlogout_test")
     conn = memory_db(control)
@@ -826,7 +826,7 @@ def test_admin_logout_clears_cookies_and_revokes_session() -> None:
 
 def test_stripe_webhook_processes_entitlement_transition() -> None:
     import time as _time
-    control = load_module("almanac_control.py", "almanac_control_hosted_whprocess_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_whprocess_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_whprocess_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_whprocess_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_whprocess_test")
@@ -878,7 +878,7 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
 
 
 def test_telegram_webhook_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_tg_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -913,7 +913,7 @@ def test_telegram_webhook_route() -> None:
 
 
 def test_discord_webhook_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_dc_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_dc_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dc_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -965,7 +965,7 @@ def test_discord_webhook_route() -> None:
 
 
 def test_health_endpoint_requires_no_auth() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_healthep_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_healthep_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_healthep_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -981,7 +981,7 @@ def test_health_endpoint_requires_no_auth() -> None:
 
 
 def test_user_provider_state_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_uprov_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_uprov_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_uprov_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_uprov_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_uprov_test")
@@ -1010,7 +1010,7 @@ def test_user_provider_state_route() -> None:
 
 
 def test_admin_provider_state_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_aprov_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_aprov_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_aprov_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_aprov_test")
     conn = memory_db(control)
@@ -1037,7 +1037,7 @@ def test_admin_provider_state_route() -> None:
 
 
 def test_admin_reconciliation_route() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_recon_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_recon_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_recon_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_recon_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_recon_test")
@@ -1068,7 +1068,7 @@ def test_admin_reconciliation_route() -> None:
 
 def test_stripe_webhook_rejects_bad_signature() -> None:
     import time as _time
-    control = load_module("almanac_control.py", "almanac_control_hosted_badsig_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_badsig_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_badsig_test")
     conn = memory_db(control)
     secret = "whsec_test_badsig"
@@ -1090,7 +1090,7 @@ def test_stripe_webhook_rejects_bad_signature() -> None:
 
 
 def test_unauthenticated_logout_and_portal_rejected() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_noauth_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_noauth_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_noauth_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1122,7 +1122,7 @@ def test_unauthenticated_logout_and_portal_rejected() -> None:
 
 def test_wsgi_adapter_smoke() -> None:
     from io import BytesIO
-    control = load_module("almanac_control.py", "almanac_control_hosted_wsgi_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_wsgi_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_wsgi_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1152,7 +1152,7 @@ def test_wsgi_adapter_smoke() -> None:
 
 
 def test_read_only_admin_blocked_from_mutations() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_ro_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_ro_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_ro_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_ro_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_ro_test")
@@ -1187,7 +1187,7 @@ def test_read_only_admin_blocked_from_mutations() -> None:
 
 
 def test_login_rejects_unknown_email() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_badlogin_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_badlogin_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_badlogin_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1220,7 +1220,7 @@ def test_login_rejects_unknown_email() -> None:
 
 
 def test_openapi_spec_route_serves_valid_contract() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_openapi_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_openapi_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1260,7 +1260,7 @@ def test_openapi_spec_matches_static_copy() -> None:
 
 
 def test_rate_limit_returns_429_with_headers() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_ratelimit_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_ratelimit_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_ratelimit_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1296,7 +1296,7 @@ def test_rate_limit_returns_429_with_headers() -> None:
 
 
 def test_rate_limit_onboarding_returns_429() -> None:
-    control = load_module("almanac_control.py", "almanac_control_hosted_rl_onb_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_rl_onb_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_rl_onb_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1325,7 +1325,7 @@ def test_rate_limit_onboarding_returns_429() -> None:
 
 def test_wsgi_503_status_text_for_degraded_health() -> None:
     from io import BytesIO
-    control = load_module("almanac_control.py", "almanac_control_hosted_503_test")
+    control = load_module("arclink_control.py", "arclink_control_hosted_503_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_503_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1354,7 +1354,7 @@ def test_wsgi_503_status_text_for_degraded_health() -> None:
 
 
 def test_onboarding_payload_validation_rejects_missing_fields() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onb_validation_test")
+    control = load_module("arclink_control.py", "arclink_control_onb_validation_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onb_validation_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1391,7 +1391,7 @@ def test_onboarding_payload_validation_rejects_missing_fields() -> None:
 
 
 def test_onboarding_payload_validation_rejects_invalid_channel() -> None:
-    control = load_module("almanac_control.py", "almanac_control_onb_channel_test")
+    control = load_module("arclink_control.py", "arclink_control_onb_channel_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onb_channel_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
@@ -1408,7 +1408,7 @@ def test_onboarding_payload_validation_rejects_invalid_channel() -> None:
 
 
 def test_admin_operator_snapshot_requires_auth_and_returns_snapshot() -> None:
-    control = load_module("almanac_control.py", "almanac_control_op_snap_test")
+    control = load_module("arclink_control.py", "arclink_control_op_snap_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_op_snap_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_op_snap_test")
     conn = memory_db(control)
@@ -1465,7 +1465,7 @@ def test_admin_operator_snapshot_requires_auth_and_returns_snapshot() -> None:
 
 
 def test_admin_scale_operations_requires_auth_and_returns_snapshot() -> None:
-    control = load_module("almanac_control.py", "almanac_control_scale_ops_test")
+    control = load_module("arclink_control.py", "arclink_control_scale_ops_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_scale_ops_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_scale_ops_test")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_scale_ops_test")

@@ -4,7 +4,7 @@
 
 | Data | Location | Method |
 |------|----------|--------|
-| Control database | `ALMANAC_DB_PATH` (SQLite) | File copy or `sqlite3 .backup` |
+| Control database | `ARCLINK_DB_PATH` (SQLite) | File copy or `sqlite3 .backup` |
 | Per-deployment state roots | `/srv/arclink/{deployment_id}/` | File copy or rsync |
 | Per-deployment Nextcloud data | Nextcloud volume in Compose stack | Docker volume export |
 | Per-deployment Postgres data | Postgres volume in Compose stack | `pg_dump` or volume export |
@@ -15,7 +15,7 @@
 
 | Frequency | Target |
 |-----------|--------|
-| Continuous | Vault via git auto-commit (existing Almanac behavior) |
+| Continuous | Vault via git auto-commit (existing ArcLink behavior) |
 | Daily | SQLite control database snapshot |
 | Daily | Per-deployment Postgres dumps |
 | Weekly | Full state root rsync |
@@ -24,7 +24,7 @@
 
 ```bash
 # Online backup (safe while API is running)
-sqlite3 "$ALMANAC_DB_PATH" ".backup /path/to/backup/arclink-control-$(date +%Y%m%d).sqlite3"
+sqlite3 "$ARCLINK_DB_PATH" ".backup /path/to/backup/arclink-control-$(date +%Y%m%d).sqlite3"
 ```
 
 The SQLite WAL mode allows concurrent reads during backup. Do not copy the

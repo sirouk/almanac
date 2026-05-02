@@ -2,7 +2,7 @@
 
 ## Goal
 
-Transform Almanac into ArcLink: a Chutes-first, self-serve, paid,
+Transform ArcLink into ArcLink: a Chutes-first, self-serve, paid,
 single-user AI deployment SaaS with web, Telegram, and Discord onboarding;
 Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
 user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
@@ -18,7 +18,7 @@ secret-gated live harness but still needs a credentialed run.
 
 ## Chosen Architecture
 
-Selected path: evolve the existing Docker/Python/Bash Almanac control plane
+Selected path: evolve the existing Docker/Python/Bash ArcLink control plane
 into ArcLink with additive `arclink_*` modules.
 
 Why this path:
@@ -32,7 +32,7 @@ Why this path:
 
 Rejected/deferred paths:
 
-- Separate SaaS wrapper around Almanac: viable later, but duplicates auth,
+- Separate SaaS wrapper around ArcLink: viable later, but duplicates auth,
   provisioning, entitlement, and health semantics before contracts settle.
 - Kubernetes/Nomad rewrite: useful only after real scale pressure appears;
   too much operational complexity for the MVP.

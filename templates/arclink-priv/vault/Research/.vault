@@ -1,0 +1,12 @@
+# managed: arclink-default-vault
+name: Research
+description: White papers, technical notes, standards, RFCs, vendor docs, and durable research artifacts shared across the organization.
+owner: organization
+default_subscribed: true
+category: research
+tags:
+  - research
+  - technical-docs
+  - white-papers
+  - shared
+brief_template: Shared research surface for durable technical references, papers, specs, and supporting analysis.

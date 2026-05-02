@@ -1,6 +1,0 @@
-[Unit]
-Description=Almanac PDF ingestion and qmd refresh
-
-[Service]
-Type=oneshot
-ExecStart=%h/almanac/bin/pdf-ingest.sh

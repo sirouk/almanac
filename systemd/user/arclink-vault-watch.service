@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch the ArcLink vault and keep qmd in sync
+After=network.target
+
+[Service]
+ExecStart=%h/arclink/bin/vault-watch.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -37,7 +37,7 @@ def test_vault_watch_defaults_to_low_latency_debounce() -> None:
         "vault hot reload should cap burst batching so continuous edits still refresh",
     )
     expect(
-        'ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE="${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"' in body,
+        'ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE="${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"' in body,
         "vault changes should request a low-latency memory synthesis pass by default",
     )
     print("PASS test_vault_watch_defaults_to_low_latency_debounce")
@@ -48,13 +48,14 @@ def test_vault_watch_accepts_fractional_debounce() -> None:
     snippet = extract(body, "read_next_event() {", "\ndrain_event_burst() {")
     script = f"""
 {snippet}
-exec {{vault_watch_fd}}< <(sleep 0.2)
-if read_next_event 0.05 >/tmp/almanac-vault-watch-fractional.out; then
+vault_watch_fd=9
+exec 9< <(sleep 0.2)
+if read_next_event 0.05 >/tmp/arclink-vault-watch-fractional.out; then
   printf 'unexpected_event\\n'
 else
   printf 'fractional_timeout_ok\\n'
 fi
-exec {{vault_watch_fd}}<&-
+exec 9<&-
 """
     result = bash(script)
     expect(result.returncode == 0, f"fractional debounce case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
@@ -90,16 +91,28 @@ lowercase() {{
   printf '%s\\n' "$1" | tr '[:upper:]' '[:lower:]'
 }}
 SCRIPT_DIR={bin_dir}
-ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE=0
-ALMANAC_MEMORY_SYNTH_ENABLED=1
+ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE=0
+ARCLINK_MEMORY_SYNTH_ENABLED=1
+count_log_lines() {{
+  if [[ -e {log_path} ]]; then
+    wc -l < {log_path} | tr -d '[:space:]'
+  else
+    printf 0
+  fi
+}}
 {snippet}
 request_memory_synth_refresh
 sleep 0.1
-printf 'disabled_count=%s\\n' "$(wc -l < {log_path} 2>/dev/null || printf 0)"
-ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE=1
+printf 'disabled_count=%s\\n' "$(count_log_lines)"
+ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE=1
 request_memory_synth_refresh
-sleep 0.2
-printf 'enabled_count=%s\\n' "$(wc -l < {log_path} 2>/dev/null || printf 0)"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if [[ "$(count_log_lines)" -ge 1 ]]; then
+    break
+  fi
+  sleep 0.1
+done
+printf 'enabled_count=%s\\n' "$(count_log_lines)"
 """
         result = bash(script)
         expect(result.returncode == 0, f"memory synth request case failed: stdout={result.stdout!r} stderr={result.stderr!r}")

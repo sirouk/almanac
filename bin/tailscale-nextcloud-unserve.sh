@@ -28,8 +28,8 @@ serve_port = str(sys.argv[1])
 expected_root = sys.argv[2]
 expected_qmd = sys.argv[3]
 expected_path = sys.argv[4]
-expected_almanac_mcp = sys.argv[5]
-expected_almanac_mcp_path = sys.argv[6]
+expected_arclink_mcp = sys.argv[5]
+expected_arclink_mcp_path = sys.argv[6]
 web = data.get("Web") or {}
 
 for hostport, host_cfg in web.items():
@@ -38,18 +38,18 @@ for hostport, host_cfg in web.items():
     if actual_port != serve_port:
         continue
     handlers = host_cfg.get("Handlers") or {}
-    if set(handlers) != {"/", expected_path, expected_almanac_mcp_path}:
+    if set(handlers) != {"/", expected_path, expected_arclink_mcp_path}:
         raise SystemExit(0)
     root = handlers.get("/") or {}
     qmd = handlers.get(expected_path) or {}
-    almanac_mcp = handlers.get(expected_almanac_mcp_path) or {}
+    arclink_mcp = handlers.get(expected_arclink_mcp_path) or {}
     if (
         root.get("Proxy") == expected_root
         and qmd.get("Proxy") == expected_qmd
-        and almanac_mcp.get("Proxy") == expected_almanac_mcp
+        and arclink_mcp.get("Proxy") == expected_arclink_mcp
     ):
         print("1")
-' "${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" || true
+' "${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ARCLINK_MCP_PORT}/mcp" "${TAILSCALE_ARCLINK_MCP_PATH}" || true
 )"
 
 if [[ "$owned_config" == "1" ]]; then

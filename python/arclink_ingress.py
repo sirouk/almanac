@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from almanac_control import append_arclink_event, utc_now_iso
+from arclink_control import append_arclink_event, utc_now_iso
 from arclink_adapters import DnsRecord, arclink_hostnames, render_traefik_http_labels
 
 

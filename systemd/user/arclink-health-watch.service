@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink health watch operator notifier
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/health-watch.sh

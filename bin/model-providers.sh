@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read Almanac model-provider defaults from config/model-providers.yaml.
+# Read ArcLink model-provider defaults from config/model-providers.yaml.
 
 __model_providers_repo_dir() {
   if [[ -n "${BOOTSTRAP_DIR:-}" ]]; then
@@ -28,7 +28,7 @@ fallback = sys.argv[5]
 sys.path.insert(0, str(repo_dir / "python"))
 
 try:
-    from almanac_model_providers import (
+    from arclink_model_providers import (
         provider_default_model,
         provider_preset_target,
         resolve_preset_target,

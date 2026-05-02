@@ -56,7 +56,7 @@ def _fake_executor(executor_mod):
 
 
 def test_restart_action_through_fake_executor() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_restart")
+    control = load_module("arclink_control.py", "arclink_control_aw_restart")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_restart")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_restart")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_restart")
@@ -74,7 +74,7 @@ def test_restart_action_through_fake_executor() -> None:
 
 
 def test_dns_repair_through_fake_executor() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_dns")
+    control = load_module("arclink_control.py", "arclink_control_aw_dns")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_dns")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_dns")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_dns")
@@ -88,7 +88,7 @@ def test_dns_repair_through_fake_executor() -> None:
 
 
 def test_rotate_chutes_key_uses_secret_ref() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_keyrot")
+    control = load_module("arclink_control.py", "arclink_control_aw_keyrot")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_keyrot")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_keyrot")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_keyrot")
@@ -102,7 +102,7 @@ def test_rotate_chutes_key_uses_secret_ref() -> None:
 
 
 def test_refund_through_stripe_fake() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_refund")
+    control = load_module("arclink_control.py", "arclink_control_aw_refund")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_refund")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_refund")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_refund")
@@ -115,7 +115,7 @@ def test_refund_through_stripe_fake() -> None:
 
 
 def test_cancel_through_stripe_fake() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_cancel")
+    control = load_module("arclink_control.py", "arclink_control_aw_cancel")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_cancel")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_cancel")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_cancel")
@@ -128,7 +128,7 @@ def test_cancel_through_stripe_fake() -> None:
 
 
 def test_comp_local_state() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_comp")
+    control = load_module("arclink_control.py", "arclink_control_aw_comp")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_comp")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_comp")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_comp")
@@ -141,7 +141,7 @@ def test_comp_local_state() -> None:
 
 
 def test_batch_processing() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_batch")
+    control = load_module("arclink_control.py", "arclink_control_aw_batch")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_batch")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_batch")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_batch")
@@ -156,7 +156,7 @@ def test_batch_processing() -> None:
 
 
 def test_empty_queue_returns_none() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_empty")
+    control = load_module("arclink_control.py", "arclink_control_aw_empty")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_empty")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_empty")
     conn = memory_db(control)
@@ -167,7 +167,7 @@ def test_empty_queue_returns_none() -> None:
 
 
 def test_action_attempt_recorded() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_att")
+    control = load_module("arclink_control.py", "arclink_control_aw_att")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_att")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_att")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_att")
@@ -182,7 +182,7 @@ def test_action_attempt_recorded() -> None:
 
 
 def test_stale_action_recovery() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_stale")
+    control = load_module("arclink_control.py", "arclink_control_aw_stale")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stale")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_stale")
     conn = memory_db(control)
@@ -202,7 +202,7 @@ def test_stale_action_recovery() -> None:
 
 
 def test_idempotent_retry() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_idem")
+    control = load_module("arclink_control.py", "arclink_control_aw_idem")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_idem")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_idem")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_idem")
@@ -226,7 +226,7 @@ def test_idempotent_retry() -> None:
 
 
 def test_executor_error_secret_material_is_redacted() -> None:
-    control = load_module("almanac_control.py", "almanac_control_aw_secret_err")
+    control = load_module("arclink_control.py", "arclink_control_aw_secret_err")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_secret_err")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_secret_err")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_secret_err")

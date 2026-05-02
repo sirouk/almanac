@@ -1,14 +1,14 @@
-# Ralphie Steering Brief: Build ArcLink From Almanac
+# Ralphie Steering Brief: Build ArcLink From ArcLink
 
-You are Ralphie running inside the cloned Almanac repository that must become ArcLink. You write the code. The human/operator has asked the supervising Codex instance to prep and babysit you, not to hand-write the product transformation.
+You are Ralphie running inside the cloned ArcLink repository that must become ArcLink. You write the code. The human/operator has asked the supervising Codex instance to prep and babysit you, not to hand-write the product transformation.
 
 ## Mission
 
-Transform Almanac into ArcLink: a polished, self-serve, single-user AI deployment product that preserves Almanac's robust Hermes/qmd/memory/health/provisioning system while adding SaaS onboarding, payment, DNS, dashboard, admin control plane, and Chutes-first inference.
+Transform ArcLink into ArcLink: a polished, self-serve, single-user AI deployment product that preserves ArcLink's robust Hermes/qmd/memory/health/provisioning system while adding SaaS onboarding, payment, DNS, dashboard, admin control plane, and Chutes-first inference.
 
 ## Non-Negotiables
 
-- Rebrand must reign throughout the codebase. Do not leave public product UI/docs/messages as Almanac unless intentionally marked as legacy compatibility.
+- Rebrand must reign throughout the codebase. Do not leave public product UI/docs/messages as ArcLink unless intentionally marked as legacy compatibility.
 - Preserve operational robustness. Do not delete services or tests just to make a simpler demo.
 - Chutes is the primary inference provider. Default model is `moonshotai/Kimi-K2.6-TEE`, but model catalog must be refreshable and validated.
 - Website form, Telegram bot, and Discord bot must converge into one workflow/state machine.
@@ -26,22 +26,22 @@ Read these before major changes:
 
 - `README.md`, `AGENTS.md`, `docs/docker.md`
 - `compose.yaml`
-- `bin/almanac-docker.sh`
+- `bin/arclink-docker.sh`
 - `bin/deploy.sh`
-- `python/almanac_control.py`
-- `python/almanac_onboarding_flow.py`
-- `python/almanac_enrollment_provisioner.py`
-- `python/almanac_docker_agent_supervisor.py`
-- `python/almanac_agent_access.py`
-- `python/almanac_onboarding_provider_auth.py`
-- `python/almanac_memory_synthesizer.py`
-- `plugins/hermes-agent/almanac-managed-context/`
+- `python/arclink_control.py`
+- `python/arclink_onboarding_flow.py`
+- `python/arclink_enrollment_provisioner.py`
+- `python/arclink_docker_agent_supervisor.py`
+- `python/arclink_agent_access.py`
+- `python/arclink_onboarding_provider_auth.py`
+- `python/arclink_memory_synthesizer.py`
+- `plugins/hermes-agent/arclink-managed-context/`
 - `config/model-providers.yaml`
-- `tests/test_almanac_docker.py`, `tests/test_almanac_auto_provision.py`, `tests/test_almanac_onboarding_prompts.py`, `tests/test_memory_synthesizer.py`, `tests/test_almanac_plugins.py`
+- `tests/test_arclink_docker.py`, `tests/test_arclink_auto_provision.py`, `tests/test_arclink_onboarding_prompts.py`, `tests/test_memory_synthesizer.py`, `tests/test_arclink_plugins.py`
 
 Prep docs created for you:
 
-- `research/ALMANAC_ARCHITECTURE_MAP.md`
+- `research/ARCLINK_ARCHITECTURE_MAP.md`
 - `research/CHUTES_ARCLINK_NOTES.md`
 - `research/ARCLINK_PRODUCT_AND_ADMIN_BRIEF.md`
 - `docs/arclink/brand-system.md`
@@ -51,7 +51,7 @@ Prep docs created for you:
 
 Do not try to finish the entire SaaS in one sweep. Build a coherent foundation that tests can execute:
 
-1. Establish ArcLink product identity/config while preserving compatibility aliases for existing `ALMANAC_*` runtime settings.
+1. Establish ArcLink product identity/config while preserving compatibility aliases for existing `ARCLINK_*` runtime settings.
 2. Add ArcLink SaaS/control-plane data model scaffolding and tests: deployments, subscriptions, DNS, provisioning jobs, audit log, admin users/events.
 3. Add Cloudflare routing planner code that can generate wildcard/service-host plans without requiring live credentials in tests.
 4. Add Chutes model catalog validation code and tests using fixture data; include auth caveat in docs/config.

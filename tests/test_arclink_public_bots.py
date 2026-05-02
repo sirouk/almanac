@@ -38,7 +38,7 @@ def memory_db(control):
 
 
 def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> None:
-    control = load_module("almanac_control.py", "almanac_control_public_bot_test")
+    control = load_module("arclink_control.py", "arclink_control_public_bot_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_test")
     conn = memory_db(control)
@@ -90,7 +90,7 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
 
 
 def test_public_bot_contract_rejects_wrong_channel_and_secret_metadata() -> None:
-    control = load_module("almanac_control.py", "almanac_control_public_bot_secret_test")
+    control = load_module("arclink_control.py", "arclink_control_public_bot_secret_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_secret_test")
     conn = memory_db(control)
     try:
@@ -118,7 +118,7 @@ def test_public_bot_contract_rejects_wrong_channel_and_secret_metadata() -> None
 
 
 def test_public_bot_turns_use_shared_onboarding_rate_limit() -> None:
-    control = load_module("almanac_control.py", "almanac_control_public_bot_rate_limit_test")
+    control = load_module("arclink_control.py", "arclink_control_public_bot_rate_limit_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_rate_limit_test")
     conn = memory_db(control)
 

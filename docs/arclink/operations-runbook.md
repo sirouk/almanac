@@ -330,7 +330,7 @@ The response includes `fleet_capacity`, `placements`, `stale_actions`,
 
 ```bash
 PYTHONPATH=python python3 - <<'PY'
-from almanac_control import Config, connect_db, ensure_schema
+from arclink_control import Config, connect_db, ensure_schema
 from arclink_action_worker import process_arclink_action_batch
 from arclink_executor import ArcLinkExecutor, ArcLinkExecutorConfig
 
@@ -345,7 +345,7 @@ PY
 
 ```bash
 PYTHONPATH=python python3 - <<'PY'
-from almanac_control import Config, connect_db, ensure_schema
+from arclink_control import Config, connect_db, ensure_schema
 from arclink_action_worker import recover_stale_actions
 
 conn = connect_db(Config.from_env())

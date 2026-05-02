@@ -7,7 +7,7 @@ import re
 import sqlite3
 from typing import Any, Mapping
 
-from almanac_control import (
+from arclink_control import (
     append_arclink_event,
     arclink_deployment_can_provision,
     arclink_deployment_entitlement_state,
@@ -37,8 +37,8 @@ ARCLINK_PROVISIONING_SERVICE_NAMES = (
     "managed-context-install",
 )
 
-CONTAINER_HERMES_HOME = "/home/almanac/.hermes"
-CONTAINER_QMD_STATE_DIR = "/home/almanac/.qmd"
+CONTAINER_HERMES_HOME = "/home/arclink/.hermes"
+CONTAINER_QMD_STATE_DIR = "/home/arclink/.qmd"
 CONTAINER_VAULT_DIR = "/srv/vault"
 CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
 
@@ -297,7 +297,7 @@ def _render_services(
     labels: Mapping[str, Mapping[str, str]],
     compose_secrets: Mapping[str, Mapping[str, str]],
 ) -> dict[str, dict[str, Any]]:
-    app_image = "${ALMANAC_DOCKER_IMAGE:-almanac/app:local}"
+    app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
 
     _limits = ARCLINK_DEFAULT_RESOURCE_LIMITS.get
@@ -355,7 +355,7 @@ def _render_services(
             deploy=_limits("memory-synth"),
         ),
         "nextcloud-db": _service(
-            image="${ALMANAC_POSTGRES_IMAGE:-docker.io/library/postgres}:${ALMANAC_POSTGRES_TAG:-16-alpine}",
+            image="${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}:${ARCLINK_POSTGRES_TAG:-16-alpine}",
             command=[],
             environment={
                 "POSTGRES_DB": f"nextcloud_{deployment_id}",
@@ -368,7 +368,7 @@ def _render_services(
             healthcheck=_hc("nextcloud-db"),
         ),
         "nextcloud-redis": _service(
-            image="${ALMANAC_REDIS_IMAGE:-docker.io/library/redis}:${ALMANAC_REDIS_TAG:-7-alpine}",
+            image="${ARCLINK_REDIS_IMAGE:-docker.io/library/redis}:${ARCLINK_REDIS_TAG:-7-alpine}",
             command=["redis-server", "--appendonly", "yes"],
             environment={},
             volumes=[{"source": roots["nextcloud_redis"], "target": "/data"}],
@@ -376,7 +376,7 @@ def _render_services(
             healthcheck=_hc("nextcloud-redis"),
         ),
         "nextcloud": _service(
-            image="${ALMANAC_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ALMANAC_NEXTCLOUD_TAG:-31-apache}",
+            image="${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ARCLINK_NEXTCLOUD_TAG:-31-apache}",
             command=["apache2-foreground"],
             environment={
                 "POSTGRES_HOST": "nextcloud-db",
@@ -402,7 +402,7 @@ def _render_services(
             healthcheck=_hc("nextcloud"),
         ),
         "code-server": _service(
-            image="${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}",
+            image="${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}",
             command=[
                 "sh",
                 "-lc",
@@ -420,7 +420,7 @@ def _render_services(
         ),
         "notification-delivery": _service(
             image=app_image,
-            command=["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/almanac-notification-delivery.sh"],
+            command=["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/arclink-notification-delivery.sh"],
             environment=env,
             deploy=_limits("notification-delivery"),
         ),
@@ -432,7 +432,7 @@ def _render_services(
         ),
         "managed-context-install": _service(
             image=app_image,
-            command=["./bin/install-almanac-plugins.sh", env["HERMES_HOME"]],
+            command=["./bin/install-arclink-plugins.sh", env["HERMES_HOME"]],
             environment={
                 "HERMES_HOME": env["HERMES_HOME"],
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
@@ -511,8 +511,8 @@ def render_arclink_provisioning_intent(
         "VAULT_DIR": CONTAINER_VAULT_DIR,
         "QMD_STATE_DIR": CONTAINER_QMD_STATE_DIR,
         "QMD_COLLECTION_NAME": f"vault-{deployment_id}",
-        "ALMANAC_MEMORY_SYNTH_ENABLED": "auto",
-        "ALMANAC_MEMORY_SYNTH_STATE_DIR": CONTAINER_MEMORY_STATE_DIR,
+        "ARCLINK_MEMORY_SYNTH_ENABLED": "auto",
+        "ARCLINK_MEMORY_SYNTH_STATE_DIR": CONTAINER_MEMORY_STATE_DIR,
         "TELEGRAM_BOT_TOKEN_REF": secret_refs["telegram_bot_token"],
         "DISCORD_BOT_TOKEN_REF": secret_refs["discord_bot_token"],
         "NOTION_TOKEN_REF": secret_refs["notion_token"],

@@ -9,12 +9,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MCP_URL="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp}"
-HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
-TOKEN_FILE="${ALMANAC_BOOTSTRAP_TOKEN_FILE:-$HERMES_HOME/secrets/almanac-bootstrap-token}"
-ENROLLMENT_STATE_FILE="${ALMANAC_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/almanac-enrollment.json}"
-ALMANAC_AGENT_ID="${ALMANAC_AGENT_ID:-}"
-ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$REPO_DIR/almanac-priv/state/agents}"
+MCP_URL="${ARCLINK_MCP_URL:-http://127.0.0.1:${ARCLINK_MCP_PORT:-8282}/mcp}"
+HERMES_HOME="${HERMES_HOME:-$HOME/.local/share/arclink-agent/hermes-home}"
+TOKEN_FILE="${ARCLINK_BOOTSTRAP_TOKEN_FILE:-$HERMES_HOME/secrets/arclink-bootstrap-token}"
+ENROLLMENT_STATE_FILE="${ARCLINK_ENROLLMENT_STATE_FILE:-$HERMES_HOME/state/arclink-enrollment.json}"
+ARCLINK_AGENT_ID="${ARCLINK_AGENT_ID:-}"
+ARCLINK_AGENTS_STATE_DIR="${ARCLINK_AGENTS_STATE_DIR:-$REPO_DIR/arclink-priv/state/agents}"
 
 if [[ ! -f "$TOKEN_FILE" ]]; then
   echo "Missing bootstrap token file at $TOKEN_FILE" >&2
@@ -31,22 +31,22 @@ trap 'rm -f "$tmp" "$notif_file" "$rpc_args_file"' EXIT
 write_rpc_args() {
   local output_file="$1"
   local limit="${2:-}"
-  ALMANAC_REFRESH_TOKEN="$token" ALMANAC_REFRESH_LIMIT="$limit" python3 - "$output_file" <<'PY'
+  ARCLINK_REFRESH_TOKEN="$token" ARCLINK_REFRESH_LIMIT="$limit" python3 - "$output_file" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
-payload = {"token": os.environ["ALMANAC_REFRESH_TOKEN"]}
-limit = os.environ.get("ALMANAC_REFRESH_LIMIT", "").strip()
+payload = {"token": os.environ["ARCLINK_REFRESH_TOKEN"]}
+limit = os.environ.get("ARCLINK_REFRESH_LIMIT", "").strip()
 if limit:
     payload["limit"] = int(limit)
 Path(sys.argv[1]).write_text(json.dumps(payload) + "\n", encoding="utf-8")
 PY
 }
 
-if [[ -z "$ALMANAC_AGENT_ID" && -f "$ENROLLMENT_STATE_FILE" ]]; then
-  ALMANAC_AGENT_ID="$(
+if [[ -z "$ARCLINK_AGENT_ID" && -f "$ENROLLMENT_STATE_FILE" ]]; then
+  ARCLINK_AGENT_ID="$(
     python3 - "$ENROLLMENT_STATE_FILE" <<'PY'
 import json
 import sys
@@ -88,7 +88,7 @@ fi
 
 # 1. subscription refresh (also backstops default fanout on the server side)
 write_rpc_args "$rpc_args_file"
-python3 "$REPO_DIR/python/almanac_rpc_client.py" \
+python3 "$REPO_DIR/python/arclink_rpc_client.py" \
   --url "$MCP_URL" \
   --tool "vaults.refresh" \
   --json-args-file "$rpc_args_file" >/dev/null
@@ -100,10 +100,10 @@ python3 "$REPO_DIR/python/almanac_rpc_client.py" \
 
 managed_payload_path=""
 managed_payload_source="live"
-if [[ -n "$ALMANAC_AGENT_ID" ]]; then
-  managed_payload_path="$ALMANAC_AGENTS_STATE_DIR/$ALMANAC_AGENT_ID/managed-memory.json"
+if [[ -n "$ARCLINK_AGENT_ID" ]]; then
+  managed_payload_path="$ARCLINK_AGENTS_STATE_DIR/$ARCLINK_AGENT_ID/managed-memory.json"
 fi
-if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$tmp" "${ALMANAC_AGENT_ID:-}" <<'PY'
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$tmp" "${ARCLINK_AGENT_ID:-}" <<'PY'
 import json
 import shutil
 import sys
@@ -145,25 +145,25 @@ then
   managed_payload_source="central"
 else
   write_rpc_args "$rpc_args_file"
-  python3 "$REPO_DIR/python/almanac_rpc_client.py" \
+  python3 "$REPO_DIR/python/arclink_rpc_client.py" \
     --url "$MCP_URL" \
     --tool "agents.managed-memory" \
     --json-args-file "$rpc_args_file" >"$tmp"
 fi
 
-ALMANAC_MANAGED_PAYLOAD="$tmp" ALMANAC_HERMES_HOME="$HERMES_HOME" ALMANAC_MANAGED_PAYLOAD_SOURCE="$managed_payload_source" \
+ARCLINK_MANAGED_PAYLOAD="$tmp" ARCLINK_HERMES_HOME="$HERMES_HOME" ARCLINK_MANAGED_PAYLOAD_SOURCE="$managed_payload_source" \
 PYTHONPATH="$REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
 python3 - <<'PY'
 import json
 import os
 from pathlib import Path
 
-import almanac_control
+import arclink_control
 
-payload = json.loads(Path(os.environ["ALMANAC_MANAGED_PAYLOAD"]).read_text())
-hermes_home = Path(os.environ["ALMANAC_HERMES_HOME"])
-paths = almanac_control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
-print(json.dumps({"agent_id": payload["agent_id"], "source": os.environ.get("ALMANAC_MANAGED_PAYLOAD_SOURCE", "live"), **paths}, sort_keys=True))
+payload = json.loads(Path(os.environ["ARCLINK_MANAGED_PAYLOAD"]).read_text())
+hermes_home = Path(os.environ["ARCLINK_HERMES_HOME"])
+paths = arclink_control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
+print(json.dumps({"agent_id": payload["agent_id"], "source": os.environ.get("ARCLINK_MANAGED_PAYLOAD_SOURCE", "live"), **paths}, sort_keys=True))
 PY
 
 # 3. drain agent-targeted notifications (SSOT nudges, subscription signals)
@@ -171,26 +171,26 @@ PY
 # its next session start.
 
 write_rpc_args "$rpc_args_file" 200
-python3 "$REPO_DIR/python/almanac_rpc_client.py" \
+python3 "$REPO_DIR/python/arclink_rpc_client.py" \
   --url "$MCP_URL" \
   --tool "agents.consume-notifications" \
   --json-args-file "$rpc_args_file" >"$notif_file"
 
-ALMANAC_NOTIF_FILE="$notif_file" ALMANAC_HERMES_HOME="$HERMES_HOME" \
+ARCLINK_NOTIF_FILE="$notif_file" ARCLINK_HERMES_HOME="$HERMES_HOME" \
 python3 - <<'PY'
 import json
 import os
 from pathlib import Path
 import tempfile
 
-notif_path = Path(os.environ["ALMANAC_NOTIF_FILE"])
-hermes_home = Path(os.environ["ALMANAC_HERMES_HOME"])
+notif_path = Path(os.environ["ARCLINK_NOTIF_FILE"])
+hermes_home = Path(os.environ["ARCLINK_HERMES_HOME"])
 payload = json.loads(notif_path.read_text())
 
 
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".almanac-events-", suffix=".tmp")
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-events-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
@@ -206,7 +206,7 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 events_dir = hermes_home / "state"
 events_dir.mkdir(parents=True, exist_ok=True)
-events_path = events_dir / "almanac-recent-events.json"
+events_path = events_dir / "arclink-recent-events.json"
 
 existing: list = []
 if events_path.is_file():

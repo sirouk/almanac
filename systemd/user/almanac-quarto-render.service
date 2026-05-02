@@ -1,6 +1,0 @@
-[Unit]
-Description=Almanac Quarto render
-
-[Service]
-Type=oneshot
-ExecStart=%h/almanac/bin/render-quarto.sh

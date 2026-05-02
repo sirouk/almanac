@@ -19,7 +19,7 @@ def test_discord_config_from_env() -> None:
 
 def test_discord_ping_pong() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_ping_test")
-    control = load_module("almanac_control.py", "almanac_control_dc_ping_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_ping_test")
     conn = memory_db(control)
     result = dc.handle_discord_interaction(conn, {"type": 1})
     expect(result == {"type": 1}, str(result))
@@ -28,7 +28,7 @@ def test_discord_ping_pong() -> None:
 
 def test_discord_slash_command_through_bot_contract() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_slash_test")
-    control = load_module("almanac_control.py", "almanac_control_dc_slash_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_slash_test")
     conn = memory_db(control)
 
     transport = dc.FakeDiscordTransport()
@@ -45,7 +45,7 @@ def test_discord_slash_command_through_bot_contract() -> None:
 
 def test_discord_message_event_through_bot_contract() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_msg_test")
-    control = load_module("almanac_control.py", "almanac_control_dc_msg_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_msg_test")
     conn = memory_db(control)
 
     transport = dc.FakeDiscordTransport()
@@ -64,7 +64,7 @@ def test_discord_message_event_through_bot_contract() -> None:
 
 def test_discord_full_onboarding_flow() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_flow_test")
-    control = load_module("almanac_control.py", "almanac_control_dc_flow_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_flow_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_dc_flow_test")
     conn = memory_db(control)
     stripe = adapters.FakeStripeClient()
@@ -106,7 +106,7 @@ def test_discord_verify_signature_test_mode() -> None:
 
 def test_discord_webhook_handler() -> None:
     import json
-    control = load_module("almanac_control.py", "almanac_control_dc_webhook_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_webhook_test")
     dc = load_module("arclink_discord.py", "arclink_discord_webhook_test")
     conn = memory_db(control)
     config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="test_public_key", guild_id="g1")

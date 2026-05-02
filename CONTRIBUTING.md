@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Almanac.
+Thanks for helping improve ArcLink.
 
 ## Before you start
 

@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
-from almanac_http import http_request, parse_json_object
+from arclink_http import http_request, parse_json_object
 
 
 VAULT_DIR = Path(os.environ["VAULT_DIR"]).resolve()
@@ -154,7 +154,7 @@ def extract_with_pdftotext(source_path: Path) -> str:
 
 
 def extract_with_docling(source_path: Path) -> str:
-    with tempfile.TemporaryDirectory(prefix="almanac-docling-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="arclink-docling-") as tmpdir:
         command = ["docling", "--from", "pdf", "--to", "md", "--output", tmpdir]
         if FORCE_DOCLING_OCR:
             command.append("--force-ocr")
@@ -328,7 +328,7 @@ def generate_visual_notes(source_path: Path) -> tuple[list[tuple[int, str]], dic
     if shutil.which("pdftoppm") is None:
         raise RuntimeError("pdftoppm is required for PDF vision captions")
 
-    with tempfile.TemporaryDirectory(prefix="almanac-pdf-vision-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="arclink-pdf-vision-") as tmpdir:
         prefix = Path(tmpdir) / "page"
         result = subprocess.run(
             [
@@ -390,13 +390,13 @@ def render_markdown(
     pipeline_signature: str,
 ) -> str:
     source_vault_path = f"{NEXTCLOUD_VAULT_MOUNT_POINT.rstrip('/')}/{relative_source_path}"
-    source_almanac_path = f"~/Almanac/{relative_source_path}"
+    source_arclink_path = f"~/ArcLink/{relative_source_path}"
     frontmatter = [
         "---",
-        "almanac_generated: true",
-        "almanac_source_type: pdf",
+        "arclink_generated: true",
+        "arclink_source_type: pdf",
         f"source_vault_path: {yaml_quote(source_vault_path)}",
-        f"source_almanac_path: {yaml_quote(source_almanac_path)}",
+        f"source_arclink_path: {yaml_quote(source_arclink_path)}",
         f"source_rel_path: {yaml_quote(relative_source_path)}",
         f"source_sha256: {yaml_quote(sha256)}",
         f"source_size_bytes: {size}",

@@ -51,7 +51,7 @@ Required finish behavior:
 Quality bar:
 
 - Prefer small, composable modules over broad rewrites.
-- Preserve Almanac's working orchestration surfaces while renaming and
+- Preserve ArcLink's working orchestration surfaces while renaming and
   streamlining public ArcLink surfaces.
 - Keep public UI and bot copy direct, operator-grade, and brand aligned.
 - Keep admin UI dense, useful, and action-oriented. Avoid decorative panels
@@ -220,7 +220,7 @@ are not blocked by those credentials.
 
 1. Prefer fake adapters and deterministic tests until live credentials exist.
 2. Never commit live secrets, local absolute paths, or tool transcripts.
-3. Preserve Almanac's proven orchestration and health machinery unless replacing
+3. Preserve ArcLink's proven orchestration and health machinery unless replacing
    it with a clearly better, tested production path.
 4. When a feature cannot be completed without credentials, ship the fake/live
    boundary, tests, docs, and admin visibility first.

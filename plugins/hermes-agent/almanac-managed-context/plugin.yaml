@@ -1,8 +1,0 @@
-name: almanac-managed-context
-version: 1.0.0
-description: Inject refreshed local Almanac managed context into Hermes turns without mutating built-in MEMORY.md snapshots.
-provides_hooks:
-  - pre_llm_call
-  - pre_tool_call
-provides_commands:
-  - start

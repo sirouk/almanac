@@ -12,16 +12,16 @@ fi
 
 HERMES_HOME_TARGET="$1"
 PYTHON_BIN="$(require_runtime_python)"
-ALMANAC_MCP_URL="${ALMANAC_MCP_URL:-http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp}"
-ALMANAC_QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
-ALMANAC_EXTRA_MCP_NAME="${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
-ALMANAC_EXTRA_MCP_URL="${ALMANAC_EXTRA_MCP_URL:-}"
+ARCLINK_MCP_URL="${ARCLINK_MCP_URL:-http://${ARCLINK_MCP_HOST:-127.0.0.1}:${ARCLINK_MCP_PORT:-8282}/mcp}"
+ARCLINK_QMD_URL="${ARCLINK_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
+ARCLINK_EXTRA_MCP_NAME="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
+ARCLINK_EXTRA_MCP_URL="${ARCLINK_EXTRA_MCP_URL:-}"
 
 HERMES_HOME="$HERMES_HOME_TARGET" \
-ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
-ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
-ALMANAC_EXTRA_MCP_NAME="$ALMANAC_EXTRA_MCP_NAME" \
-ALMANAC_EXTRA_MCP_URL="$ALMANAC_EXTRA_MCP_URL" \
+ARCLINK_MCP_URL="$ARCLINK_MCP_URL" \
+ARCLINK_QMD_URL="$ARCLINK_QMD_URL" \
+ARCLINK_EXTRA_MCP_NAME="$ARCLINK_EXTRA_MCP_NAME" \
+ARCLINK_EXTRA_MCP_URL="$ARCLINK_EXTRA_MCP_URL" \
 "$PYTHON_BIN" - <<'PY'
 import os
 
@@ -45,12 +45,12 @@ mcp_servers = config.get("mcp_servers")
 if not isinstance(mcp_servers, dict):
     mcp_servers = {}
 
-upsert_http_server(mcp_servers, name="almanac-mcp", url=os.environ["ALMANAC_MCP_URL"])
-upsert_http_server(mcp_servers, name="almanac-qmd", url=os.environ["ALMANAC_QMD_URL"])
+upsert_http_server(mcp_servers, name="arclink-mcp", url=os.environ["ARCLINK_MCP_URL"])
+upsert_http_server(mcp_servers, name="arclink-qmd", url=os.environ["ARCLINK_QMD_URL"])
 
-extra_url = str(os.environ.get("ALMANAC_EXTRA_MCP_URL") or "").strip()
+extra_url = str(os.environ.get("ARCLINK_EXTRA_MCP_URL") or "").strip()
 if extra_url:
-    extra_name = str(os.environ.get("ALMANAC_EXTRA_MCP_NAME") or "external-kb").strip() or "external-kb"
+    extra_name = str(os.environ.get("ARCLINK_EXTRA_MCP_NAME") or "external-kb").strip() or "external-kb"
     upsert_http_server(mcp_servers, name=extra_name, url=extra_url)
 
 config["mcp_servers"] = mcp_servers

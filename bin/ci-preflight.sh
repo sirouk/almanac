@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-TMP_ROOT="$(mktemp -d /tmp/almanac-preflight.XXXXXX)"
+TMP_ROOT="$(mktemp -d /tmp/arclink-preflight.XXXXXX)"
 
 cleanup() {
   rm -rf "$TMP_ROOT"
@@ -185,8 +185,8 @@ run_python_checks() {
   log "python compile check for control-plane and PDF ingest modules"
   PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile \
     "$ROOT_DIR/bin/pdf-ingest.py" \
-    "$ROOT_DIR/python/almanac_control.py" \
-    "$ROOT_DIR/python/almanac_ctl.py"
+    "$ROOT_DIR/python/arclink_control.py" \
+    "$ROOT_DIR/python/arclink_ctl.py"
 }
 
 run_systemd_verify() {
@@ -197,7 +197,7 @@ run_systemd_verify() {
     return 0
   fi
 
-  verify_log="$(mktemp /tmp/almanac-systemd-verify.XXXXXX.log)"
+  verify_log="$(mktemp /tmp/arclink-systemd-verify.XXXXXX.log)"
   if ! systemd-analyze verify \
     "$ROOT_DIR"/systemd/user/*.service \
     "$ROOT_DIR"/systemd/user/*.timer >"$verify_log" 2>&1; then
@@ -212,7 +212,7 @@ run_systemd_verify() {
 run_pdf_ingest_preflight() {
   local fakebin="$TMP_ROOT/fakebin"
   local repo_dir="$TMP_ROOT/repo"
-  local priv_dir="$repo_dir/almanac-priv"
+  local priv_dir="$repo_dir/arclink-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
   local runtime_dir="$state_dir/runtime"
@@ -229,14 +229,14 @@ run_pdf_ingest_preflight() {
 
   env \
     PATH="$fakebin:$PATH" \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_REPO_DIR="$repo_dir" \
-    ALMANAC_PRIV_DIR="$priv_dir" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_REPO_DIR="$repo_dir" \
+    ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
     PDF_INGEST_EXTRACTOR=auto \
     PDF_INGEST_TRIGGER_QMD_REFRESH=0 \
-    "$ROOT_DIR/bin/pdf-ingest.sh" >/tmp/almanac-preflight-ingest.log
+    "$ROOT_DIR/bin/pdf-ingest.sh" >/tmp/arclink-preflight-ingest.log
 
   [[ -f "$generated_md" ]]
   grep -q "Example Lattice preflight PDF" "$generated_md"
@@ -253,9 +253,9 @@ PY
 
   env \
     PATH="$fakebin:$PATH" \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_REPO_DIR="$repo_dir" \
-    ALMANAC_PRIV_DIR="$priv_dir" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_REPO_DIR="$repo_dir" \
+    ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
     PDF_INGEST_EXTRACTOR=auto \
@@ -276,9 +276,9 @@ PY
 
   env \
     PATH="$fakebin:$PATH" \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_REPO_DIR="$repo_dir" \
-    ALMANAC_PRIV_DIR="$priv_dir" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_REPO_DIR="$repo_dir" \
+    ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
     PDF_INGEST_EXTRACTOR=auto \
@@ -301,7 +301,7 @@ PY
 run_pdf_ingest_vision_preflight() {
   local fakebin="$TMP_ROOT/fakevision-bin"
   local repo_dir="$TMP_ROOT/vision-repo"
-  local priv_dir="$repo_dir/almanac-priv"
+  local priv_dir="$repo_dir/arclink-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
   local runtime_dir="$state_dir/runtime"
@@ -336,9 +336,9 @@ run_pdf_ingest_vision_preflight() {
 
   env \
     PATH="$fakebin:$PATH" \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_REPO_DIR="$repo_dir" \
-    ALMANAC_PRIV_DIR="$priv_dir" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_REPO_DIR="$repo_dir" \
+    ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
     PDF_INGEST_EXTRACTOR=auto \
@@ -379,9 +379,9 @@ PY
 
   env \
     PATH="$fakebin:$PATH" \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_REPO_DIR="$repo_dir" \
-    ALMANAC_PRIV_DIR="$priv_dir" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_REPO_DIR="$repo_dir" \
+    ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
     PDF_INGEST_EXTRACTOR=auto \
@@ -434,11 +434,11 @@ run_vault_watch_preflight() {
   local repo_dir="$TMP_ROOT/watch-repo"
   local bin_dir="$repo_dir/bin"
   local config_dir="$repo_dir/config"
-  local priv_dir="$repo_dir/almanac-priv"
+  local priv_dir="$repo_dir/arclink-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
   local generated_md="$state_dir/pdf-ingest/markdown/Inbox/example-lattice-watch-pdf.md"
-  local config_file="$config_dir/almanac.env"
+  local config_file="$config_dir/arclink.env"
   local watcher_pid=""
 
   if ! command -v inotifywait >/dev/null 2>&1; then
@@ -484,9 +484,9 @@ EOF
   chmod +x "$bin_dir/qmd-refresh.sh"
 
   cat >"$config_file" <<EOF
-ALMANAC_REPO_DIR=$repo_dir
-ALMANAC_PRIV_DIR=$priv_dir
-ALMANAC_PRIV_CONFIG_DIR=$priv_dir/config
+ARCLINK_REPO_DIR=$repo_dir
+ARCLINK_PRIV_DIR=$priv_dir
+ARCLINK_PRIV_CONFIG_DIR=$priv_dir/config
 VAULT_DIR=$vault_dir
 STATE_DIR=$state_dir
 PDF_INGEST_ENABLED=1
@@ -495,7 +495,7 @@ EOF
 
   log "exercising vault watcher create/delete flow while refresh work is in-flight"
 
-  env ALMANAC_CONFIG_FILE="$config_file" bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/watch.log" 2>&1 &
+  env ARCLINK_CONFIG_FILE="$config_file" bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/watch.log" 2>&1 &
   watcher_pid=$!
   sleep 1
 
@@ -513,11 +513,11 @@ run_vault_notification_preflight() {
   local repo_dir="$TMP_ROOT/notify-repo"
   local bin_dir="$repo_dir/bin"
   local config_dir="$repo_dir/config"
-  local priv_dir="$repo_dir/almanac-priv"
+  local priv_dir="$repo_dir/arclink-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
   local runtime_dir="$state_dir/runtime"
-  local config_file="$config_dir/almanac.env"
+  local config_file="$config_dir/arclink.env"
   local generated_md="$state_dir/pdf-ingest/markdown/Projects/notify-me-pdf.md"
   local trigger_default="$state_dir/activation-triggers/agent-default.json"
   local trigger_optin="$state_dir/activation-triggers/agent-optin.json"
@@ -545,37 +545,37 @@ exit 0
 EOF
   chmod +x "$bin_dir/qmd-refresh.sh"
 
-  cat >"$bin_dir/almanac-ctl" <<EOF
+  cat >"$bin_dir/arclink-ctl" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 REPO_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
-export ALMANAC_CONFIG_FILE="$config_file"
+export ARCLINK_CONFIG_FILE="$config_file"
 export PYTHONPATH="\$REPO_DIR/python\${PYTHONPATH:+:\$PYTHONPATH}"
-exec python3 "\$REPO_DIR/python/almanac_ctl.py" "\$@"
+exec python3 "\$REPO_DIR/python/arclink_ctl.py" "\$@"
 EOF
-  chmod +x "$bin_dir/almanac-ctl"
+  chmod +x "$bin_dir/arclink-ctl"
 
 
   cat >"$config_file" <<EOF
-ALMANAC_REPO_DIR=$repo_dir
-ALMANAC_PRIV_DIR=$priv_dir
-ALMANAC_PRIV_CONFIG_DIR=$priv_dir/config
+ARCLINK_REPO_DIR=$repo_dir
+ARCLINK_PRIV_DIR=$priv_dir
+ARCLINK_PRIV_CONFIG_DIR=$priv_dir/config
 VAULT_DIR=$vault_dir
 STATE_DIR=$state_dir
-ALMANAC_DB_PATH=$state_dir/almanac-control.sqlite3
-ALMANAC_AGENTS_STATE_DIR=$state_dir/agents
-ALMANAC_CURATOR_DIR=$state_dir/curator
-ALMANAC_CURATOR_MANIFEST=$state_dir/curator/manifest.json
-ALMANAC_CURATOR_HERMES_HOME=$state_dir/curator/hermes-home
-ALMANAC_ARCHIVED_AGENTS_DIR=$state_dir/archived-agents
-ALMANAC_RELEASE_STATE_FILE=$state_dir/almanac-release.json
-ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
-ALMANAC_MCP_HOST=127.0.0.1
-ALMANAC_MCP_PORT=8282
-ALMANAC_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
-ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
-ALMANAC_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
+ARCLINK_DB_PATH=$state_dir/arclink-control.sqlite3
+ARCLINK_AGENTS_STATE_DIR=$state_dir/agents
+ARCLINK_CURATOR_DIR=$state_dir/curator
+ARCLINK_CURATOR_MANIFEST=$state_dir/curator/manifest.json
+ARCLINK_CURATOR_HERMES_HOME=$state_dir/curator/hermes-home
+ARCLINK_ARCHIVED_AGENTS_DIR=$state_dir/archived-agents
+ARCLINK_RELEASE_STATE_FILE=$state_dir/arclink-release.json
+ARCLINK_QMD_URL=http://127.0.0.1:8181/mcp
+ARCLINK_MCP_HOST=127.0.0.1
+ARCLINK_MCP_PORT=8282
+ARCLINK_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
+ARCLINK_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
+ARCLINK_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
 OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
 OPERATOR_NOTIFY_CHANNEL_ID=operator
 PDF_INGEST_ENABLED=1
@@ -606,10 +606,10 @@ import sys
 from pathlib import Path
 
 config_file, repo_root = sys.argv[1:3]
-os.environ["ALMANAC_CONFIG_FILE"] = config_file
+os.environ["ARCLINK_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
-import almanac_control as mod
+import arclink_control as mod
 
 cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
@@ -639,7 +639,7 @@ for agent_id, unix_user, display_name in agents:
             unix_user,
             display_name,
             "active",
-            str(root / f"home-{unix_user}" / ".local" / "share" / "almanac-agent" / "hermes-home"),
+            str(root / f"home-{unix_user}" / ".local" / "share" / "arclink-agent" / "hermes-home"),
             str(cfg.state_dir / "agents" / agent_id / "manifest.json"),
             None,
             "codex",
@@ -666,8 +666,8 @@ PY
 
   env \
     PATH="$fakebin:$PATH" \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_CONFIG_FILE="$config_file" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_CONFIG_FILE="$config_file" \
     bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/notify-watch.log" 2>&1 &
   watcher_pid=$!
   sleep 1
@@ -685,10 +685,10 @@ import sys
 from pathlib import Path
 
 config_file, repo_root, generated_md, trigger_default, trigger_optin, trigger_optout = sys.argv[1:7]
-os.environ["ALMANAC_CONFIG_FILE"] = config_file
+os.environ["ARCLINK_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
-import almanac_control as mod
+import arclink_control as mod
 
 cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
@@ -719,10 +719,10 @@ run_repo_sync_preflight() {
   local repo_dir="$TMP_ROOT/repo-sync-repo"
   local bin_dir="$repo_dir/bin"
   local config_dir="$repo_dir/config"
-  local priv_dir="$repo_dir/almanac-priv"
+  local priv_dir="$repo_dir/arclink-priv"
   local vault_dir="$priv_dir/vault"
   local state_dir="$priv_dir/state"
-  local config_file="$config_dir/almanac.env"
+  local config_file="$config_dir/arclink.env"
   local source_repo="$TMP_ROOT/repo-sync-source"
   local remote_bare="$TMP_ROOT/repo-sync-remote.git"
   local local_repo="$vault_dir/Projects/demo-repo"
@@ -747,36 +747,36 @@ exit 0
 EOF
   chmod +x "$bin_dir/qmd-refresh.sh"
 
-  cat >"$bin_dir/almanac-ctl" <<EOF
+  cat >"$bin_dir/arclink-ctl" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 REPO_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
-export ALMANAC_CONFIG_FILE="$config_file"
+export ARCLINK_CONFIG_FILE="$config_file"
 export PYTHONPATH="\$REPO_DIR/python\${PYTHONPATH:+:\$PYTHONPATH}"
-exec python3 "\$REPO_DIR/python/almanac_ctl.py" "\$@"
+exec python3 "\$REPO_DIR/python/arclink_ctl.py" "\$@"
 EOF
-  chmod +x "$bin_dir/almanac-ctl"
+  chmod +x "$bin_dir/arclink-ctl"
 
   cat >"$config_file" <<EOF
-ALMANAC_REPO_DIR=$repo_dir
-ALMANAC_PRIV_DIR=$priv_dir
-ALMANAC_PRIV_CONFIG_DIR=$priv_dir/config
+ARCLINK_REPO_DIR=$repo_dir
+ARCLINK_PRIV_DIR=$priv_dir
+ARCLINK_PRIV_CONFIG_DIR=$priv_dir/config
 VAULT_DIR=$vault_dir
 STATE_DIR=$state_dir
-ALMANAC_DB_PATH=$state_dir/almanac-control.sqlite3
-ALMANAC_AGENTS_STATE_DIR=$state_dir/agents
-ALMANAC_CURATOR_DIR=$state_dir/curator
-ALMANAC_CURATOR_MANIFEST=$state_dir/curator/manifest.json
-ALMANAC_CURATOR_HERMES_HOME=$state_dir/curator/hermes-home
-ALMANAC_ARCHIVED_AGENTS_DIR=$state_dir/archived-agents
-ALMANAC_RELEASE_STATE_FILE=$state_dir/almanac-release.json
-ALMANAC_QMD_URL=http://127.0.0.1:8181/mcp
-ALMANAC_MCP_HOST=127.0.0.1
-ALMANAC_MCP_PORT=8282
-ALMANAC_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
-ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
-ALMANAC_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
+ARCLINK_DB_PATH=$state_dir/arclink-control.sqlite3
+ARCLINK_AGENTS_STATE_DIR=$state_dir/agents
+ARCLINK_CURATOR_DIR=$state_dir/curator
+ARCLINK_CURATOR_MANIFEST=$state_dir/curator/manifest.json
+ARCLINK_CURATOR_HERMES_HOME=$state_dir/curator/hermes-home
+ARCLINK_ARCHIVED_AGENTS_DIR=$state_dir/archived-agents
+ARCLINK_RELEASE_STATE_FILE=$state_dir/arclink-release.json
+ARCLINK_QMD_URL=http://127.0.0.1:8181/mcp
+ARCLINK_MCP_HOST=127.0.0.1
+ARCLINK_MCP_PORT=8282
+ARCLINK_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
+ARCLINK_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
+ARCLINK_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
 OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
 OPERATOR_NOTIFY_CHANNEL_ID=operator
 PDF_INGEST_ENABLED=0
@@ -794,8 +794,8 @@ EOF
 
   git init --bare "$remote_bare" >/dev/null
   git init -b main "$source_repo" >/dev/null
-  git -C "$source_repo" config user.name 'Almanac Preflight'
-  git -C "$source_repo" config user.email 'almanac-preflight@example.com'
+  git -C "$source_repo" config user.name 'ArcLink Preflight'
+  git -C "$source_repo" config user.email 'arclink-preflight@example.com'
   git -C "$source_repo" remote add origin "$remote_bare"
   mkdir -p "$source_repo/src"
   printf 'print("v1")\n' >"$source_repo/src/main.py"
@@ -812,10 +812,10 @@ import sys
 from pathlib import Path
 
 config_file, repo_root = sys.argv[1:3]
-os.environ["ALMANAC_CONFIG_FILE"] = config_file
+os.environ["ARCLINK_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
-import almanac_control as mod
+import arclink_control as mod
 
 cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
@@ -843,7 +843,7 @@ for agent_id, unix_user, display_name in agents:
             unix_user,
             display_name,
             "active",
-            str(root / f"home-{unix_user}" / ".local" / "share" / "almanac-agent" / "hermes-home"),
+            str(root / f"home-{unix_user}" / ".local" / "share" / "arclink-agent" / "hermes-home"),
             str(cfg.state_dir / "agents" / agent_id / "manifest.json"),
             None,
             "codex",
@@ -866,8 +866,8 @@ PY
   log "exercising watcher-driven in-vault git repo sync + notification routing"
 
   env \
-    ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 \
-    ALMANAC_CONFIG_FILE="$config_file" \
+    ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    ARCLINK_CONFIG_FILE="$config_file" \
     bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/repo-sync-watch.log" 2>&1 &
   watcher_pid=$!
   sleep 1
@@ -883,10 +883,10 @@ import sys
 from pathlib import Path
 
 config_file, repo_root, remote_bare = sys.argv[1:4]
-os.environ["ALMANAC_CONFIG_FILE"] = config_file
+os.environ["ARCLINK_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
-import almanac_control as mod
+import arclink_control as mod
 
 cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
@@ -910,10 +910,10 @@ import sys
 from pathlib import Path
 
 config_file, repo_root, local_repo, trigger_default, trigger_optout = sys.argv[1:6]
-os.environ["ALMANAC_CONFIG_FILE"] = config_file
+os.environ["ARCLINK_CONFIG_FILE"] = config_file
 sys.path.insert(0, str(Path(repo_root) / "python"))
 
-import almanac_control as mod
+import arclink_control as mod
 
 cfg = mod.Config.from_env()
 conn = mod.connect_db(cfg)
@@ -936,7 +936,7 @@ PY
 }
 
 main() {
-  log "running Almanac preflight checks"
+  log "running ArcLink preflight checks"
   run_shell_lint
   run_python_checks
   run_systemd_verify

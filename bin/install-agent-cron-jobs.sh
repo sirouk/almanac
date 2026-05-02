@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: install-agent-cron-jobs.sh <repo-dir> <hermes-home>
 
-Install Almanac-managed Hermes cron jobs for an enrolled user's Hermes home.
+Install ArcLink-managed Hermes cron jobs for an enrolled user's Hermes home.
 The jobs are stored in the agent's native Hermes cron/jobs.json file and are
 ticked by the Hermes gateway.
 EOF
@@ -39,9 +39,9 @@ else:
 hermes_home = hermes_home.resolve()
 
 MANAGED_JOB_ID = "a1bac0ffee42"
-MANAGED_BY = "almanac"
+MANAGED_BY = "arclink"
 MANAGED_KIND = "agent-home-backup"
-SCRIPT_NAME = "almanac_agent_backup.py"
+SCRIPT_NAME = "arclink_agent_backup.py"
 SCHEDULE_MINUTES = 240
 
 SCRIPT_TEMPLATE = r'''#!/usr/bin/env python3
@@ -61,7 +61,7 @@ try:
 except Exception:  # pragma: no cover - non-Unix fallback
     fcntl = None
 
-ALMANAC_REPO_DIR = Path(__ALMANAC_REPO_DIR__)
+ARCLINK_REPO_DIR = Path(__ARCLINK_REPO_DIR__)
 DEFAULT_HERMES_HOME = Path(__HERMES_HOME__)
 
 
@@ -144,7 +144,7 @@ def acquire_lock(lock_path: Path):
 
 def main() -> int:
     hermes_home = resolve_hermes_home()
-    backup_state = hermes_home / "state" / "almanac-agent-backup.env"
+    backup_state = hermes_home / "state" / "arclink-agent-backup.env"
     status_base = {
         "ran_at": now_iso(),
         "hermes_home": str(hermes_home),
@@ -156,13 +156,13 @@ def main() -> int:
             **status_base,
             "ok": True,
             "status": "inactive",
-            "summary": "Almanac agent backup is not configured.",
+            "summary": "ArcLink agent backup is not configured.",
         }
         write_status(hermes_home, payload)
         print_gate({"status": "inactive"})
         return 0
 
-    backup_script = ALMANAC_REPO_DIR / "bin" / "backup-agent-home.sh"
+    backup_script = ARCLINK_REPO_DIR / "bin" / "backup-agent-home.sh"
     if not backup_script.is_file():
         payload = {
             **status_base,
@@ -180,7 +180,7 @@ def main() -> int:
             **status_base,
             "ok": True,
             "status": "busy",
-            "summary": "Another Almanac agent backup run is already active.",
+            "summary": "Another ArcLink agent backup run is already active.",
         }
         write_status(hermes_home, payload)
         print_gate({"status": "busy"})
@@ -207,7 +207,7 @@ def main() -> int:
         or ("backup completed" if ok else "backup failed")
     )
 
-    log_path = hermes_home / "logs" / "almanac-agent-backup.log"
+    log_path = hermes_home / "logs" / "arclink-agent-backup.log"
     append_log(
         log_path,
         "\n".join(
@@ -309,9 +309,9 @@ def build_job(existing: dict | None, active: bool) -> dict:
 
     return {
         "id": MANAGED_JOB_ID,
-        "name": "Almanac private Hermes-home backup",
+        "name": "ArcLink private Hermes-home backup",
         "prompt": (
-            "Run the Almanac private Hermes-home backup check. The pre-run script "
+            "Run the ArcLink private Hermes-home backup check. The pre-run script "
             "performs the backup itself and suppresses the agent turn on success. "
             "If the pre-run script reports an error, briefly tell the user what "
             "failed and suggest contacting the operator if it persists."
@@ -329,7 +329,7 @@ def build_job(existing: dict | None, active: bool) -> dict:
         "enabled": bool(active),
         "state": "scheduled" if active else "paused",
         "paused_at": None if active else existing.get("paused_at") or now,
-        "paused_reason": None if active else "Almanac agent backup is not configured",
+        "paused_reason": None if active else "ArcLink agent backup is not configured",
         "created_at": existing.get("created_at") or now,
         "next_run_at": next_run,
         "last_run_at": existing.get("last_run_at"),
@@ -351,7 +351,7 @@ def install_backup_script() -> Path:
     script_path = scripts_dir / SCRIPT_NAME
     body = (
         SCRIPT_TEMPLATE
-        .replace("__ALMANAC_REPO_DIR__", json.dumps(str(repo_dir)))
+        .replace("__ARCLINK_REPO_DIR__", json.dumps(str(repo_dir)))
         .replace("__HERMES_HOME__", json.dumps(str(hermes_home)))
     )
     script_path.write_text(body, encoding="utf-8")
@@ -404,7 +404,7 @@ def ensure_cron_config() -> None:
 
 
 def upsert_backup_job() -> str:
-    active = (hermes_home / "state" / "almanac-agent-backup.env").is_file()
+    active = (hermes_home / "state" / "arclink-agent-backup.env").is_file()
     cron_dir = hermes_home / "cron"
     jobs_path = cron_dir / "jobs.json"
     cron_dir.mkdir(parents=True, exist_ok=True)

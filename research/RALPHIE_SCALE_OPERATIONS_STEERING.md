@@ -60,7 +60,7 @@ Expected file-level outputs unless existing modules clearly own the concern:
     rollout to executor or documented no-op-safe fake adapter calls;
   - records audit/events and result metadata without secret material;
   - is idempotent across retries and safe after partial failures.
-- Optional schema extension in `python/almanac_control.py`:
+- Optional schema extension in `python/arclink_control.py`:
   - fleet hosts table;
   - deployment placement table or host assignment fields;
   - action execution attempt table if needed;
@@ -92,13 +92,13 @@ Expected file-level outputs unless existing modules clearly own the concern:
 - Keep all mutating provider paths fail-closed unless live execution is
   explicitly enabled. Tests should use fake adapters.
 - Do not store plaintext secrets. Metadata may contain `secret://...` refs only.
-- Preserve existing Almanac compatibility. Do not rename mature Almanac runtime
+- Preserve existing ArcLink compatibility. Do not rename mature ArcLink runtime
   paths unless the touched code is explicitly ArcLink public/product surface.
 - Do not rebuild P1-11, P13-P16, live runner, brand system, or browser proof
   unless a focused test proves a regression.
 - Prefer small modules that compose with existing helpers:
   `arclink_dashboard`, `arclink_provisioning`, `arclink_executor`,
-  `arclink_api_auth`, and `almanac_control`.
+  `arclink_api_auth`, and `arclink_control`.
 
 ## Suggested Build Order
 
@@ -137,7 +137,7 @@ PYTHONPATH=python python3 tests/test_arclink_provisioning.py
 PYTHONPATH=python python3 tests/test_arclink_dashboard.py
 PYTHONPATH=python python3 tests/test_arclink_hosted_api.py
 PYTHONPATH=python python3 tests/test_arclink_live_runner.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
+python3 -m py_compile python/arclink_control.py python/arclink_*.py
 ```
 
 Run any new focused tests for fleet/action-worker/rollout modules.

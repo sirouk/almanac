@@ -1,0 +1,6 @@
+[Unit]
+Description=Sync Hermes documentation into the ArcLink vault
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/sync-hermes-docs-into-vault.sh

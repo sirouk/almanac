@@ -11,7 +11,7 @@ import secrets
 import sqlite3
 from typing import Any, Mapping
 
-from almanac_control import append_arclink_audit, parse_utc_iso, utc_after_seconds_iso, utc_now, utc_now_iso
+from arclink_control import append_arclink_audit, parse_utc_iso, utc_after_seconds_iso, utc_now, utc_now_iso
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_dashboard import queue_arclink_admin_action, read_arclink_admin_dashboard, read_arclink_user_dashboard
 from arclink_onboarding import (

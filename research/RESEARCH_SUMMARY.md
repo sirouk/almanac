@@ -5,7 +5,7 @@
 
 ## Goal
 
-Transform Almanac into ArcLink: a Chutes-first, self-serve, paid,
+Transform ArcLink into ArcLink: a Chutes-first, self-serve, paid,
 single-user AI deployment SaaS with web, Telegram, and Discord onboarding;
 Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
 user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
@@ -14,7 +14,7 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 ## Current Finding
 
 ArcLink is already being built as a staged evolution of the existing
-Docker/Python/Bash Almanac control plane. The repository now contains the
+Docker/Python/Bash ArcLink control plane. The repository now contains the
 ArcLink commercial/control-plane modules, fake/live provider boundaries,
 host-readiness and diagnostics tooling, fleet/action/rollout operations spine,
 Next.js dashboard shell, and extensive no-secret regression coverage.
@@ -52,8 +52,8 @@ Production 13-16:
 
 | Path | Strengths | Weaknesses | Decision |
 | --- | --- | --- | --- |
-| Evolve existing Docker/Python Almanac control plane | Preserves working Hermes/qmd/memory/deploy behavior, keeps no-secret tests deterministic, and avoids premature orchestration churn. | Requires staged naming and compatibility discipline. | Selected. |
-| Build a separate SaaS shell around Almanac | Cleaner commercial boundary later. | Duplicates auth, provisioning, health, and entitlement state before contracts settle. | Defer. |
+| Evolve existing Docker/Python ArcLink control plane | Preserves working Hermes/qmd/memory/deploy behavior, keeps no-secret tests deterministic, and avoids premature orchestration churn. | Requires staged naming and compatibility discipline. | Selected. |
+| Build a separate SaaS shell around ArcLink | Cleaner commercial boundary later. | Duplicates auth, provisioning, health, and entitlement state before contracts settle. | Defer. |
 | Replatform to Kubernetes/Nomad | Better long-term scheduling primitives. | Too heavy before live demand and provider proof exist. | Reject for MVP. |
 
 ## Key Assumptions
@@ -64,7 +64,7 @@ Production 13-16:
   contracts instead of duplicating business rules.
 - SQLite stays first for ArcLink commercial state, with schema choices kept
   portable for a later Postgres path.
-- `ARCLINK_*` configuration takes precedence while `ALMANAC_*` compatibility is
+- `ARCLINK_*` configuration takes precedence while `ARCLINK_*` compatibility is
   preserved where existing runtime paths depend on it.
 - Fake adapters are the default for unit and fake E2E tests.
 - Live provider execution requires explicit live flags and real credentials.
@@ -85,5 +85,5 @@ the existing live runner once external accounts are available.
   identity/edge configuration.
 - Dedicated Nextcloud per deployment is strong isolation for MVP but may become
   resource-heavy at scale.
-- Broad public rebrand from Almanac to ArcLink must avoid breaking preserved
-  Almanac deploy/runtime contracts.
+- Broad public rebrand from ArcLink to ArcLink must avoid breaking preserved
+  ArcLink deploy/runtime contracts.

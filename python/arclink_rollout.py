@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 from typing import Any, Mapping, Sequence
 
-from almanac_control import append_arclink_audit, append_arclink_event, utc_now_iso
+from arclink_control import append_arclink_audit, append_arclink_event, utc_now_iso
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material
 
 

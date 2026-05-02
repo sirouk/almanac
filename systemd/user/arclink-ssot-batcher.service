@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink SSOT / Notion batch processor
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/arclink-ssot-batcher.sh

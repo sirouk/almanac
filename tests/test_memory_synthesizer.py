@@ -12,8 +12,8 @@ PYTHON_DIR = REPO / "python"
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
-import almanac_control as control
-import almanac_memory_synthesizer as synth
+import arclink_control as control
+import arclink_memory_synthesizer as synth
 
 
 def expect(condition: bool, message: str) -> None:
@@ -28,39 +28,39 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 
 def base_config(root: Path) -> dict[str, str]:
     return {
-        "ALMANAC_USER": "almanac",
-        "ALMANAC_HOME": str(root / "home-almanac"),
-        "ALMANAC_REPO_DIR": str(root / "repo"),
-        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(root / "repo"),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
         "STATE_DIR": str(root / "state"),
         "RUNTIME_DIR": str(root / "state" / "runtime"),
         "VAULT_DIR": str(root / "vault"),
-        "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
-        "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
-        "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
-        "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
-        "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
-        "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
-        "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
-        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
-        "ALMANAC_MCP_HOST": "127.0.0.1",
-        "ALMANAC_MCP_PORT": "8282",
-        "ALMANAC_MEMORY_SYNTH_ENABLED": "1",
-        "ALMANAC_MEMORY_SYNTH_ENDPOINT": "https://llm.example.test/v1/chat/completions",
-        "ALMANAC_MEMORY_SYNTH_MODEL": "vision-model-test",
-        "ALMANAC_MEMORY_SYNTH_API_KEY": "test-key",
-        "ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN": "20",
-        "ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS": "60",
-        "ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT": "1",
-        "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
-        "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ARCLINK_MCP_HOST": "127.0.0.1",
+        "ARCLINK_MCP_PORT": "8282",
+        "ARCLINK_MEMORY_SYNTH_ENABLED": "1",
+        "ARCLINK_MEMORY_SYNTH_ENDPOINT": "https://llm.example.test/v1/chat/completions",
+        "ARCLINK_MEMORY_SYNTH_MODEL": "vision-model-test",
+        "ARCLINK_MEMORY_SYNTH_API_KEY": "test-key",
+        "ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN": "20",
+        "ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS": "60",
+        "ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT": "1",
+        "ARCLINK_MODEL_PRESET_CODEX": "openai:codex",
+        "ARCLINK_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+        "ARCLINK_MODEL_PRESET_CHUTES": "chutes:model-router",
     }
 
 
 def insert_agent(conn, root: Path) -> None:
     now = control.utc_now_iso()
-    hermes_home = root / "home-testuser" / ".local" / "share" / "almanac-agent" / "hermes-home"
+    hermes_home = root / "home-testuser" / ".local" / "share" / "arclink-agent" / "hermes-home"
     (hermes_home / "state").mkdir(parents=True, exist_ok=True)
     conn.execute(
         """
@@ -184,11 +184,11 @@ def seed_sources(root: Path, conn) -> None:
 def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, base_config(root))
         old_env = os.environ.copy()
         os.environ.update(base_config(root))
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             with control.connect_db(cfg) as conn:

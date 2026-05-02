@@ -1,4 +1,4 @@
-name: almanac
+name: arclink
 
 x-restart-unless-stopped: &restart-unless-stopped unless-stopped
 x-healthcheck-fast: &healthcheck-fast
@@ -10,49 +10,49 @@ x-healthcheck-http: &healthcheck-http
   timeout: 5s
   retries: 10
 
-x-almanac-app: &almanac-app
-  image: ${ALMANAC_DOCKER_IMAGE:-almanac/app:local}
+x-arclink-app: &arclink-app
+  image: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
   restart: *restart-unless-stopped
-  environment: &almanac-env
-    ALMANAC_DOCKER_MODE: "1"
-    ALMANAC_SQLITE_JOURNAL_MODE: ${ALMANAC_SQLITE_JOURNAL_MODE:-DELETE}
-    ALMANAC_BACKEND_ALLOWED_CIDRS: ${ALMANAC_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}
+  environment: &arclink-env
+    ARCLINK_DOCKER_MODE: "1"
+    ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}
+    ARCLINK_BACKEND_ALLOWED_CIDRS: ${ARCLINK_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}
     QMD_MCP_HOST_PORT: ${QMD_MCP_PORT:-8181}
-    ALMANAC_CONFIG_FILE: /home/almanac/almanac/almanac-priv/config/docker.env
-    ALMANAC_REPO_DIR: /home/almanac/almanac
-    ALMANAC_PRIV_DIR: /home/almanac/almanac/almanac-priv
-    ALMANAC_DOCKER_CONTAINER_PRIV_DIR: /home/almanac/almanac/almanac-priv
-    ALMANAC_DOCKER_AGENT_HOME_ROOT: /home/almanac/almanac/almanac-priv/state/docker/users
-    ALMANAC_DOCKER_HOST_REPO_DIR: ${ALMANAC_DOCKER_HOST_REPO_DIR:-}
-    ALMANAC_DOCKER_HOST_PRIV_DIR: ${ALMANAC_DOCKER_HOST_PRIV_DIR:-}
-    ALMANAC_DOCKER_IMAGE: ${ALMANAC_DOCKER_IMAGE:-almanac/app:local}
-    ALMANAC_DOCKER_NETWORK: ${ALMANAC_DOCKER_NETWORK:-almanac_default}
-    RUNTIME_DIR: /opt/almanac/runtime
-    HOME: /home/almanac
-    XDG_CONFIG_HOME: /home/almanac/.qmd/config
-    XDG_CACHE_HOME: /home/almanac/.qmd/cache
-    ALMANAC_MEMORY_SYNTH_ENABLED: ${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}
-    ALMANAC_MEMORY_SYNTH_ENDPOINT: ${ALMANAC_MEMORY_SYNTH_ENDPOINT:-}
-    ALMANAC_MEMORY_SYNTH_MODEL: ${ALMANAC_MEMORY_SYNTH_MODEL:-}
-    ALMANAC_MEMORY_SYNTH_API_KEY: ${ALMANAC_MEMORY_SYNTH_API_KEY:-}
-    ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN: ${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}
-    ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS: ${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}
-    ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS: ${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}
-    ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS: ${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}
-    ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS: ${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}
-    ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT: ${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}
-    ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE: ${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}
+    ARCLINK_CONFIG_FILE: /home/arclink/arclink/arclink-priv/config/docker.env
+    ARCLINK_REPO_DIR: /home/arclink/arclink
+    ARCLINK_PRIV_DIR: /home/arclink/arclink/arclink-priv
+    ARCLINK_DOCKER_CONTAINER_PRIV_DIR: /home/arclink/arclink/arclink-priv
+    ARCLINK_DOCKER_AGENT_HOME_ROOT: /home/arclink/arclink/arclink-priv/state/docker/users
+    ARCLINK_DOCKER_HOST_REPO_DIR: ${ARCLINK_DOCKER_HOST_REPO_DIR:-}
+    ARCLINK_DOCKER_HOST_PRIV_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:-}
+    ARCLINK_DOCKER_IMAGE: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
+    ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}
+    RUNTIME_DIR: /opt/arclink/runtime
+    HOME: /home/arclink
+    XDG_CONFIG_HOME: /home/arclink/.qmd/config
+    XDG_CACHE_HOME: /home/arclink/.qmd/cache
+    ARCLINK_MEMORY_SYNTH_ENABLED: ${ARCLINK_MEMORY_SYNTH_ENABLED:-auto}
+    ARCLINK_MEMORY_SYNTH_ENDPOINT: ${ARCLINK_MEMORY_SYNTH_ENDPOINT:-}
+    ARCLINK_MEMORY_SYNTH_MODEL: ${ARCLINK_MEMORY_SYNTH_MODEL:-}
+    ARCLINK_MEMORY_SYNTH_API_KEY: ${ARCLINK_MEMORY_SYNTH_API_KEY:-}
+    ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN: ${ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}
+    ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS: ${ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}
+    ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS: ${ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}
+    ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS: ${ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}
+    ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS: ${ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}
+    ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT: ${ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}
+    ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE: ${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}
   volumes:
-    - ./almanac-priv:/home/almanac/almanac/almanac-priv
-    - almanac-qmd:/home/almanac/.qmd
+    - ./arclink-priv:/home/arclink/arclink/arclink-priv
+    - arclink-qmd:/home/arclink/.qmd
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
-x-almanac-job: &almanac-job
-  <<: *almanac-app
+x-arclink-job: &arclink-job
+  <<: *arclink-app
   restart: *restart-unless-stopped
   depends_on:
-    almanac-mcp:
+    arclink-mcp:
       condition: service_started
     qmd-mcp:
       condition: service_started
@@ -63,37 +63,37 @@ x-nextcloud-db-env: &nextcloud-db-env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./deploy.sh docker bootstrap first}
 
 services:
-  almanac-app:
+  arclink-app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${ALMANAC_DOCKER_IMAGE:-almanac/app:local}
+    image: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
     profiles: ["build"]
     command: ["true"]
     restart: "no"
 
   postgres:
-    image: ${ALMANAC_POSTGRES_IMAGE:-docker.io/library/postgres}:${ALMANAC_POSTGRES_TAG:-16-alpine}
+    image: ${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}:${ARCLINK_POSTGRES_TAG:-16-alpine}
     restart: *restart-unless-stopped
     environment:
       <<: *nextcloud-db-env
     volumes:
-      - ./almanac-priv/state/nextcloud/db:/var/lib/postgresql/data
+      - ./arclink-priv/state/nextcloud/db:/var/lib/postgresql/data
     healthcheck:
       <<: *healthcheck-fast
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-nextcloud} -d $${POSTGRES_DB:-nextcloud}"]
 
   redis:
-    image: ${ALMANAC_REDIS_IMAGE:-docker.io/library/redis}:${ALMANAC_REDIS_TAG:-7-alpine}
+    image: ${ARCLINK_REDIS_IMAGE:-docker.io/library/redis}:${ARCLINK_REDIS_TAG:-7-alpine}
     restart: *restart-unless-stopped
     volumes:
-      - ./almanac-priv/state/nextcloud/redis:/data
+      - ./arclink-priv/state/nextcloud/redis:/data
     healthcheck:
       <<: *healthcheck-fast
       test: ["CMD", "redis-cli", "ping"]
 
   nextcloud:
-    image: ${ALMANAC_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ALMANAC_NEXTCLOUD_TAG:-31-apache}
+    image: ${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ARCLINK_NEXTCLOUD_TAG:-31-apache}
     restart: *restart-unless-stopped
     depends_on:
       postgres:
@@ -111,30 +111,30 @@ services:
       NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1 ${NEXTCLOUD_TRUSTED_DOMAIN:-localhost}
       OVERWRITEPROTOCOL: ${NEXTCLOUD_OVERWRITEPROTOCOL:-http}
     volumes:
-      - ./almanac-priv/state/nextcloud/config/almanac.config.php:/almanac-config/almanac.config.php:ro
-      - ./almanac-priv/state/nextcloud/html:/var/www/html
-      - ./almanac-priv/state/nextcloud/hooks/pre-installation:/docker-entrypoint-hooks.d/pre-installation
-      - ./almanac-priv/state/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation
-      - ./almanac-priv/state/nextcloud/hooks/before-starting:/docker-entrypoint-hooks.d/before-starting
-      - ./almanac-priv/state/nextcloud/empty-skeleton:/srv/nextcloud-empty-skeleton
-      - ./almanac-priv/vault:/srv/vault
+      - ./arclink-priv/state/nextcloud/config/arclink.config.php:/arclink-config/arclink.config.php:ro
+      - ./arclink-priv/state/nextcloud/html:/var/www/html
+      - ./arclink-priv/state/nextcloud/hooks/pre-installation:/docker-entrypoint-hooks.d/pre-installation
+      - ./arclink-priv/state/nextcloud/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation
+      - ./arclink-priv/state/nextcloud/hooks/before-starting:/docker-entrypoint-hooks.d/before-starting
+      - ./arclink-priv/state/nextcloud/empty-skeleton:/srv/nextcloud-empty-skeleton
+      - ./arclink-priv/vault:/srv/vault
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/status.php >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 10
 
-  almanac-mcp:
-    <<: *almanac-app
-    command: ["./bin/almanac-mcp-server.sh", "--host", "0.0.0.0", "--port", "8282"]
+  arclink-mcp:
+    <<: *arclink-app
+    command: ["./bin/arclink-mcp-server.sh", "--host", "0.0.0.0", "--port", "8282"]
     ports:
-      - "127.0.0.1:${ALMANAC_MCP_PORT:-8282}:8282"
+      - "127.0.0.1:${ARCLINK_MCP_PORT:-8282}:8282"
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8282/health >/dev/null"]
 
   qmd-mcp:
-    <<: *almanac-app
+    <<: *arclink-app
     command: ["bash", "-lc", "mkdir -p \"$${XDG_CONFIG_HOME}/qmd\" \"$${XDG_CACHE_HOME}/qmd\" && exec ./bin/qmd-daemon.sh"]
     ports:
       - "127.0.0.1:${QMD_MCP_PORT:-8181}:8181"
@@ -145,32 +145,32 @@ services:
       retries: 6
 
   notion-webhook:
-    <<: *almanac-app
-    command: ["./bin/almanac-notion-webhook.sh", "--host", "0.0.0.0", "--port", "8283"]
+    <<: *arclink-app
+    command: ["./bin/arclink-notion-webhook.sh", "--host", "0.0.0.0", "--port", "8283"]
     ports:
-      - "127.0.0.1:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}:8283"
+      - "127.0.0.1:${ARCLINK_NOTION_WEBHOOK_PORT:-8283}:8283"
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8283/health >/dev/null"]
 
   vault-watch:
-    <<: *almanac-app
+    <<: *arclink-app
     command: ["./bin/vault-watch.sh"]
     depends_on:
       qmd-mcp:
         condition: service_started
 
   agent-supervisor:
-    <<: *almanac-job
+    <<: *arclink-job
     environment:
-      <<: *almanac-env
-      ALMANAC_CONTAINER_RUNTIME: docker
-      ALMANAC_AGENT_SERVICE_MANAGER: docker-supervisor
+      <<: *arclink-env
+      ARCLINK_CONTAINER_RUNTIME: docker
+      ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor
     volumes:
-      - .:/home/almanac/almanac
-      - ./almanac-priv:/home/almanac/almanac/almanac-priv
-      - almanac-qmd:/home/almanac/.qmd
-      - ${ALMANAC_DOCKER_HOST_REPO_DIR:-.}:${ALMANAC_DOCKER_HOST_REPO_DIR:-/home/almanac/almanac}
+      - .:/home/arclink/arclink
+      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - arclink-qmd:/home/arclink/.qmd
+      - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Intentional trusted-host boundary: the supervisor needs Docker API
       # access to reconcile per-agent containers, dashboard proxies, and
       # queued Docker-mode operator upgrades.
@@ -178,75 +178,75 @@ services:
     command: ["./bin/docker-agent-supervisor.sh"]
 
   ssot-batcher:
-    <<: *almanac-job
-    command: ["./bin/docker-job-loop.sh", "ssot-batcher", "300", "./bin/almanac-ssot-batcher.sh"]
+    <<: *arclink-job
+    command: ["./bin/docker-job-loop.sh", "ssot-batcher", "300", "./bin/arclink-ssot-batcher.sh"]
 
   notification-delivery:
-    <<: *almanac-job
-    command: ["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/almanac-notification-delivery.sh"]
+    <<: *arclink-job
+    command: ["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/arclink-notification-delivery.sh"]
 
   health-watch:
-    <<: *almanac-job
+    <<: *arclink-job
     environment:
-      <<: *almanac-env
-      ALMANAC_HEALTH_WATCH_HEALTH_CMD: ./bin/docker-health.sh
+      <<: *arclink-env
+      ARCLINK_HEALTH_WATCH_HEALTH_CMD: ./bin/docker-health.sh
     command: ["./bin/docker-job-loop.sh", "health-watch", "300", "./bin/health-watch.sh"]
 
   curator-refresh:
-    <<: *almanac-job
+    <<: *arclink-job
     volumes:
-      - .:/home/almanac/almanac
-      - ./almanac-priv:/home/almanac/almanac/almanac-priv
-      - almanac-qmd:/home/almanac/.qmd
-      - ${ALMANAC_DOCKER_HOST_REPO_DIR:-.}:${ALMANAC_DOCKER_HOST_REPO_DIR:-/home/almanac/almanac}
+      - .:/home/arclink/arclink
+      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - arclink-qmd:/home/arclink/.qmd
+      - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Trusted operator-action boundary: Curator refresh consumes queued
       # operator upgrade requests and needs to run Docker Compose on the host.
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["./bin/docker-job-loop.sh", "curator-refresh", "900", "./bin/curator-refresh.sh"]
 
   qmd-refresh:
-    <<: *almanac-job
+    <<: *arclink-job
     command: ["./bin/docker-job-loop.sh", "qmd-refresh", "300", "./bin/qmd-refresh.sh", "--skip-embed"]
 
   pdf-ingest:
-    <<: *almanac-job
+    <<: *arclink-job
     command: ["./bin/docker-job-loop.sh", "pdf-ingest", "300", "./bin/pdf-ingest.sh", "--quiet"]
 
   memory-synth:
-    <<: *almanac-job
+    <<: *arclink-job
     command: ["./bin/docker-job-loop.sh", "memory-synth", "1800", "./bin/memory-synth.sh"]
 
   hermes-docs-sync:
-    <<: *almanac-job
+    <<: *arclink-job
     command: ["./bin/docker-job-loop.sh", "hermes-docs-sync", "3600", "./bin/sync-hermes-docs-into-vault.sh"]
 
   quarto-render:
-    <<: *almanac-job
+    <<: *arclink-job
     profiles: ["quarto"]
     command: ["./bin/docker-job-loop.sh", "quarto-render", "900", "./bin/render-quarto.sh"]
 
   backup:
-    <<: *almanac-job
+    <<: *arclink-job
     profiles: ["backup"]
     command: ["./bin/docker-job-loop.sh", "backup", "3600", "./bin/backup-to-github.sh"]
 
   curator-gateway:
-    <<: *almanac-app
+    <<: *arclink-app
     profiles: ["curator"]
     restart: on-failure
     command: ["./bin/curator-gateway.sh"]
 
   curator-onboarding:
-    <<: *almanac-app
+    <<: *arclink-app
     profiles: ["curator"]
     restart: on-failure
-    command: ["./bin/almanac-curator-onboarding.sh"]
+    command: ["./bin/arclink-curator-onboarding.sh"]
 
   curator-discord-onboarding:
-    <<: *almanac-app
+    <<: *arclink-app
     profiles: ["curator"]
     restart: on-failure
-    command: ["./bin/almanac-curator-discord-onboarding.sh"]
+    command: ["./bin/arclink-curator-discord-onboarding.sh"]
 
 volumes:
-  almanac-qmd:
+  arclink-qmd:

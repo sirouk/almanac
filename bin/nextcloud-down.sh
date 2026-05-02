@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 COMPOSE_FILE="$BOOTSTRAP_DIR/compose/nextcloud-compose.yml"
 
 nextcloud_docker_mode_requested() {
-  [[ "${ALMANAC_CONTAINER_RUNTIME:-}" == "docker" || "${ALMANAC_DOCKER_MODE:-0}" == "1" ]]
+  [[ "${ARCLINK_CONTAINER_RUNTIME:-}" == "docker" || "${ARCLINK_DOCKER_MODE:-0}" == "1" ]]
 }
 
 run_compose_nextcloud_down() {

@@ -1,6 +1,0 @@
-[Unit]
-Description=Almanac notification delivery worker
-
-[Service]
-Type=oneshot
-ExecStart=%h/almanac/bin/almanac-notification-delivery.sh

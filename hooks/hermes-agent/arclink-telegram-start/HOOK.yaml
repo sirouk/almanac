@@ -1,0 +1,4 @@
+name: arclink-telegram-start
+description: Rewrite Telegram /start into a normal first message for ArcLink agents.
+events:
+  - command:start

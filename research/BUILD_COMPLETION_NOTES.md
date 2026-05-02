@@ -44,7 +44,7 @@ Verification run:
 - `PYTHONPATH=python python3 tests/test_arclink_rollout.py` passed.
 - `PYTHONPATH=python python3 tests/test_arclink_hosted_api.py` passed.
 - `PYTHONPATH=python python3 tests/test_arclink_dashboard.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py`
   passed.
 
 Known risks:
@@ -81,7 +81,7 @@ Verification run:
 - `PYTHONPATH=python python3 tests/test_arclink_host_readiness.py` passed.
 - `PYTHONPATH=python python3 tests/test_arclink_diagnostics.py` passed.
 - `PYTHONPATH=python python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py`
   passed.
 
 Known risks:
@@ -189,7 +189,7 @@ Verification run:
 - `python3 tests/test_arclink_product_surface.py` passed.
 - `python3 tests/test_arclink_public_bots.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py`
   passed.
 - `python3 -m ruff check python/arclink_dashboard.py python/arclink_api_auth.py python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_dashboard.py tests/test_arclink_api_auth.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py`
   passed.
@@ -232,7 +232,7 @@ Verification run:
 - `python3 tests/test_arclink_onboarding.py` passed.
 - `python3 tests/test_arclink_api_auth.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py`
   passed.
 - `python3 -m ruff check python/arclink_dashboard.py python/arclink_product_surface.py tests/test_arclink_dashboard.py tests/test_arclink_product_surface.py`
   passed.
@@ -273,7 +273,7 @@ Verification run:
 - `python3 tests/test_arclink_executor.py` passed.
 - `python3 tests/test_arclink_schema.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py`
   passed.
 - `python3 -m ruff check python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py`
   passed.
@@ -317,7 +317,7 @@ Verification run:
 - `python3 tests/test_arclink_product_surface.py` passed.
 - `python3 tests/test_arclink_public_bots.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py` passed.
 - `git diff --check` passed.
 
 Known risks:
@@ -357,7 +357,7 @@ Verification run:
 - `python3 tests/test_arclink_admin_actions.py` passed.
 - `python3 tests/test_arclink_provisioning.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py` passed.
 - `python3 -m ruff check python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py` passed.
 - `git diff --check` passed.
 
@@ -494,7 +494,7 @@ Verification run:
 - `python3 tests/test_arclink_dashboard.py` passed.
 - `python3 tests/test_arclink_executor.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py` passed.
 - `python3 -m ruff check python/arclink_executor.py tests/test_arclink_executor.py` passed.
 - `git diff --check` passed.
 
@@ -535,7 +535,7 @@ Verification run:
 - `python3 tests/test_arclink_dashboard.py` passed.
 - `python3 tests/test_arclink_executor.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py` passed.
 - `python3 -m ruff check python/arclink_executor.py tests/test_arclink_executor.py` passed.
 - `git diff --check` passed.
 
@@ -576,7 +576,7 @@ Verification run:
 - `python3 tests/test_arclink_dashboard.py` passed.
 - `python3 tests/test_arclink_executor.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py` passed.
 - `git diff --check` passed.
 
 Known risks:
@@ -610,7 +610,7 @@ Verification run:
 - `python3 tests/test_arclink_entitlements.py` passed.
 - `python3 tests/test_arclink_provisioning.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
-- `python3 -m py_compile python/almanac_control.py python/arclink_onboarding.py python/arclink_entitlements.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_onboarding.py python/arclink_entitlements.py` passed.
 - `git diff --check` passed.
 
 Known risks:
@@ -628,7 +628,7 @@ Rationale:
 
 - Added durable `arclink_onboarding_sessions` and
   `arclink_onboarding_events` rows instead of binding website/bot state to the
-  private Almanac user-agent onboarding tables. Public Telegram and Discord ids
+  private ArcLink user-agent onboarding tables. Public Telegram and Discord ids
   are channel hints, not private deployment bot credentials.
 - Kept Stripe checkout behind the existing fake adapter boundary with
   deterministic idempotency-key session ids, instead of adding a live Stripe SDK
@@ -639,7 +639,7 @@ Rationale:
 
 Verification run:
 
-- `python3 -m py_compile python/almanac_control.py python/arclink_adapters.py python/arclink_entitlements.py python/arclink_onboarding.py python/arclink_provisioning.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_adapters.py python/arclink_entitlements.py python/arclink_onboarding.py python/arclink_provisioning.py` passed.
 - `python3 tests/test_arclink_product_config.py` passed.
 - `python3 tests/test_arclink_schema.py` passed.
 - `python3 tests/test_arclink_chutes_and_adapters.py` passed.
@@ -676,9 +676,9 @@ Rationale:
 Verification run:
 
 - `python3 tests/test_arclink_entitlements.py` passed.
-- `python3 -m py_compile python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
-- `python3 -m ruff check python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
-- `python3 -m pyflakes python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m py_compile python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m ruff check python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m pyflakes python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
 - `git diff --check` passed.
 
@@ -705,9 +705,9 @@ Rationale:
 Verification run:
 
 - `python3 tests/test_arclink_entitlements.py` passed.
-- `python3 -m py_compile python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
-- `python3 -m ruff check python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
-- `python3 -m pyflakes python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m py_compile python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m ruff check python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m pyflakes python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
 - `git diff --check` passed.
 
@@ -739,9 +739,9 @@ Verification run:
 - `python3 tests/test_arclink_provisioning.py` passed.
 - `python3 tests/test_arclink_ingress.py` passed.
 - `python3 tests/test_arclink_access.py` passed.
-- `python3 -m py_compile python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
-- `python3 -m ruff check python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
-- `python3 -m pyflakes python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m py_compile python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m ruff check python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
+- `python3 -m pyflakes python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py` passed.
 - `python3 tests/test_public_repo_hygiene.py` passed.
 - `git diff --check` passed.
 

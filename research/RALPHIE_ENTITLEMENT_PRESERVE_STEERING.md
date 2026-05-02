@@ -25,7 +25,7 @@ resuming onboarding for a returning paid customer.
 
 ## Completed Build Repair
 
-1. Make entitlement mutation explicit in `python/almanac_control.py`.
+1. Make entitlement mutation explicit in `python/arclink_control.py`.
 2. Prefer `entitlement_state: str | None = None` for `upsert_arclink_user()`.
 3. Preserve existing entitlement state and `entitlement_updated_at` on conflict
    when no explicit entitlement state is supplied.
@@ -46,7 +46,7 @@ python3 tests/test_arclink_onboarding.py
 python3 tests/test_arclink_entitlements.py
 python3 tests/test_arclink_provisioning.py
 python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/almanac_control.py python/arclink_onboarding.py python/arclink_entitlements.py
+python3 -m py_compile python/arclink_control.py python/arclink_onboarding.py python/arclink_entitlements.py
 git diff --check
 ```
 

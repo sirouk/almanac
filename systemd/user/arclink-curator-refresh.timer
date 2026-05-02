@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the ArcLink Curator refresh every hour
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=1h
+Unit=arclink-curator-refresh.service
+
+[Install]
+WantedBy=timers.target

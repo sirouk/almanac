@@ -15,10 +15,10 @@ runtime_candidates=()
 if [[ -n "$RUNTIME_DIR_ARG" ]]; then
   runtime_candidates+=("$RUNTIME_DIR_ARG")
 fi
-if [[ -n "${ALMANAC_HERMES_BIN:-}" ]]; then
-  runtime_candidates+=("$(cd "$(dirname "$ALMANAC_HERMES_BIN")/../.." 2>/dev/null && pwd -P || true)")
+if [[ -n "${ARCLINK_HERMES_BIN:-}" ]]; then
+  runtime_candidates+=("$(cd "$(dirname "$ARCLINK_HERMES_BIN")/../.." 2>/dev/null && pwd -P || true)")
 fi
-runtime_candidates+=("$REPO_DIR/almanac-priv/state/runtime")
+runtime_candidates+=("$REPO_DIR/arclink-priv/state/runtime")
 
 runtime_dir=""
 for candidate in "${runtime_candidates[@]}"; do

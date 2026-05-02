@@ -9,7 +9,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
 PRODUCT_PY = PYTHON_DIR / "arclink_product.py"
-CONTROL_PY = PYTHON_DIR / "almanac_control.py"
+CONTROL_PY = PYTHON_DIR / "arclink_control.py"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -29,33 +29,33 @@ def load_module(path: Path, name: str):
     return module
 
 
-def test_arclink_env_overrides_legacy_alias_without_exposing_values() -> None:
+def test_arclink_env_overrides_explicit_alias_without_exposing_values() -> None:
     mod = load_module(PRODUCT_PY, "arclink_product_config_override_test")
     env = {
         "ARCLINK_BASE_DOMAIN": "new.example",
-        "ALMANAC_BASE_DOMAIN": "legacy.example",
+        "ARC_BASE_DOMAIN": "fallback-alias.example",
     }
-    resolved = mod.resolve_env("ARCLINK_BASE_DOMAIN", default="fallback.test", env=env)
+    resolved = mod.resolve_env("ARCLINK_BASE_DOMAIN", legacy_key="ARC_BASE_DOMAIN", default="fallback.test", env=env)
     expect(resolved.value == "new.example", str(resolved))
     expect(resolved.source == "ARCLINK_BASE_DOMAIN", str(resolved))
     expect(resolved.conflict, str(resolved))
     diagnostic = resolved.diagnostic()
-    expect("ARCLINK_BASE_DOMAIN" in diagnostic and "ALMANAC_BASE_DOMAIN" in diagnostic, diagnostic)
-    expect("new.example" not in diagnostic and "legacy.example" not in diagnostic, diagnostic)
-    print("PASS test_arclink_env_overrides_legacy_alias_without_exposing_values")
+    expect("ARCLINK_BASE_DOMAIN" in diagnostic and "ARC_BASE_DOMAIN" in diagnostic, diagnostic)
+    expect("new.example" not in diagnostic and "fallback-alias.example" not in diagnostic, diagnostic)
+    print("PASS test_arclink_env_overrides_explicit_alias_without_exposing_values")
 
 
-def test_blank_arclink_value_falls_back_to_legacy_alias() -> None:
+def test_blank_arclink_value_falls_back_to_explicit_alias() -> None:
     mod = load_module(PRODUCT_PY, "arclink_product_config_blank_test")
     env = {
         "ARCLINK_BASE_DOMAIN": "  ",
-        "ALMANAC_BASE_DOMAIN": "legacy.example",
+        "ARC_BASE_DOMAIN": "fallback-alias.example",
     }
-    resolved = mod.resolve_env("ARCLINK_BASE_DOMAIN", default="fallback.test", env=env)
-    expect(resolved.value == "legacy.example", str(resolved))
-    expect(resolved.source == "ALMANAC_BASE_DOMAIN", str(resolved))
+    resolved = mod.resolve_env("ARCLINK_BASE_DOMAIN", legacy_key="ARC_BASE_DOMAIN", default="fallback.test", env=env)
+    expect(resolved.value == "fallback-alias.example", str(resolved))
+    expect(resolved.source == "ARC_BASE_DOMAIN", str(resolved))
     expect(not resolved.conflict, str(resolved))
-    print("PASS test_blank_arclink_value_falls_back_to_legacy_alias")
+    print("PASS test_blank_arclink_value_falls_back_to_explicit_alias")
 
 
 def test_arclink_defaults_are_chutes_first() -> None:
@@ -68,17 +68,17 @@ def test_arclink_defaults_are_chutes_first() -> None:
     print("PASS test_arclink_defaults_are_chutes_first")
 
 
-def test_existing_almanac_config_helper_still_reads_legacy_env() -> None:
-    mod = load_module(CONTROL_PY, "almanac_control_legacy_config_test")
-    expect(mod.bool_env("ALMANAC_LEGACY_FLAG", env={"ALMANAC_LEGACY_FLAG": "yes"}), "legacy bool env should still resolve")
-    print("PASS test_existing_almanac_config_helper_still_reads_legacy_env")
+def test_existing_arclink_config_helper_still_reads_legacy_env() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_legacy_config_test")
+    expect(mod.bool_env("ARCLINK_LEGACY_FLAG", env={"ARCLINK_LEGACY_FLAG": "yes"}), "legacy bool env should still resolve")
+    print("PASS test_existing_arclink_config_helper_still_reads_legacy_env")
 
 
 def main() -> int:
-    test_arclink_env_overrides_legacy_alias_without_exposing_values()
-    test_blank_arclink_value_falls_back_to_legacy_alias()
+    test_arclink_env_overrides_explicit_alias_without_exposing_values()
+    test_blank_arclink_value_falls_back_to_explicit_alias()
     test_arclink_defaults_are_chutes_first()
-    test_existing_almanac_config_helper_still_reads_legacy_env()
+    test_existing_arclink_config_helper_still_reads_legacy_env()
     print("PASS all 4 ArcLink product/config tests")
     return 0
 

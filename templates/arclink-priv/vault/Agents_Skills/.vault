@@ -1,0 +1,12 @@
+# managed: arclink-default-vault
+name: Agents_Skills
+description: Shared agent skills, operating playbooks, and reusable workflows that ship with ArcLink or are adopted by the organization.
+owner: organization
+default_subscribed: true
+category: skills
+tags:
+  - skills
+  - agents
+  - workflows
+  - operations
+brief_template: Shared agent skill library for reusable agent and operator workflows, with repo-shipped starter skills seeded automatically.

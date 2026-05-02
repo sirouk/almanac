@@ -1,13 +1,13 @@
-# Copy this file to almanac-priv/config/org-profile.yaml and replace every
+# Copy this file to arclink-priv/config/org-profile.yaml and replace every
 # fictional value with the operator's real solo practice, family/household,
 # project collective, organization, or hybrid operating context.
 # Do not commit the populated private file.
-$schema: https://almanac.local/schema/org-profile.schema.json
+$schema: https://arclink.local/schema/org-profile.schema.json
 version: 1
 
 organization:
-  id: northstar-almanac-demo
-  name: Northstar Almanac Demo
+  id: northstar-arclink-demo
+  name: Northstar ArcLink Demo
   profile_kind: hybrid
   scope: Fictional template demonstrating solo, family/household, project collective, and organization-style use from one ingestion contract.
   mission: Keep the people, agents, knowledge, decisions, and automations of the operating context aligned around work and life that matter.
@@ -16,13 +16,13 @@ organization:
   quiet_hours: "21:00-08:00 local time unless the human explicitly opts in."
   operating_modes:
     - id: solo_operator
-      description: One person runs Almanac for their own projects, notes, automations, and personal operating rhythm.
+      description: One person runs ArcLink for their own projects, notes, automations, and personal operating rhythm.
       applies_to: [solo-practice]
       default_boundaries:
         - The agent may help organize and execute personal workflows, but the human still owns all decisions and external commitments.
         - Private journals, medical records, legal records, finances, and credentials require explicit per-task permission.
     - id: family_household
-      description: A household or family uses Almanac for shared planning, routines, documents, care logistics, and decisions.
+      description: A household or family uses ArcLink for shared planning, routines, documents, care logistics, and decisions.
       applies_to: [household]
       default_boundaries:
         - Agents may coordinate shared reminders and drafts, but each person keeps consent over their own private context.
@@ -34,7 +34,7 @@ organization:
         - Agents preserve source pointers, owners, decisions, and open questions across contributors.
         - External publication, spending, production changes, and public commitments require named human approval.
     - id: organization_team
-      description: A formal team or company uses Almanac for departments, source-of-truth systems, onboarding, operations, and production workflows.
+      description: A formal team or company uses ArcLink for departments, source-of-truth systems, onboarding, operations, and production workflows.
       applies_to: [leadership, platform, operations, knowledge, communications]
       default_boundaries:
         - Shared work belongs in governed shared rails.
@@ -59,13 +59,13 @@ organization:
 
 roles:
   operator:
-    description: Owns Almanac deployment, policy, access, agent generation, and production alignment for any operating context.
+    description: Owns ArcLink deployment, policy, access, agent generation, and production alignment for any operating context.
     responsibilities:
       - Review and apply the private operating profile.
       - Maintain deployment health, source-of-truth rails, and upgrade policy.
       - Keep private state and credentials outside public examples and generated docs.
     decision_authority:
-      - Final approval for Almanac deployment and production-impacting configuration.
+      - Final approval for ArcLink deployment and production-impacting configuration.
       - Final approval for onboarding new humans and enabling high-privilege automations.
     agent_posture: Be exact, conservative, and explicit about what was verified.
 
@@ -125,7 +125,7 @@ roles:
     agent_posture: Draft well, verify claims, and ask before sending.
 
   solo_practice_owner:
-    description: Owns a personal Almanac lane for individual projects, learning, household-adjacent tasks, and life administration.
+    description: Owns a personal ArcLink lane for individual projects, learning, household-adjacent tasks, and life administration.
     responsibilities:
       - Maintain personal priorities, commitments, notes, routines, and reflection surfaces.
       - Decide which private materials may be summarized, indexed, or shared.
@@ -151,7 +151,7 @@ people:
     display_name: Alex Rivera
     preferred_name: Alex
     role: operator
-    title: Almanac Operator
+    title: ArcLink Operator
     teams: [solo-practice, platform, leadership]
     primary_team: solo-practice
     unix_user: alex
@@ -170,7 +170,7 @@ people:
       github_username: alex-example
       aliases: [alex, arivera]
     public_context:
-      external_title: Almanac operator
+      external_title: ArcLink operator
       social_posture: Can discuss operator patterns and release receipts after private details are removed.
       comfortable_with_public_posting: ask
       social_profiles:
@@ -186,10 +186,10 @@ people:
       username: alex-example
       profile_url: https://github.com/alex-example
       primary_repos:
-        - id: almanac-demo
-          owner_repo: northstar-demo/almanac-demo
-          url: https://github.com/northstar-demo/almanac-demo
-          purpose: Fictional Almanac operator repo used to demonstrate deployment and profile-ingestion source pointers.
+        - id: arclink-demo
+          owner_repo: northstar-demo/arclink-demo
+          url: https://github.com/northstar-demo/arclink-demo
+          purpose: Fictional ArcLink operator repo used to demonstrate deployment and profile-ingestion source pointers.
           role: maintainer
           permission: write
           default_branch: main
@@ -206,7 +206,7 @@ people:
       notes: Repos are references and permissions expectations only; credentials and deploy keys stay outside this profile.
     human_accountability:
       accountable_for:
-        - Almanac deployment health
+        - ArcLink deployment health
         - Agent generation policy
         - Access and production boundaries
       final_decision_for:
@@ -223,11 +223,11 @@ people:
       - Keep deployment, onboarding, and backup policies documented.
       - Confirm which generated profiles become production-ready.
     decision_authority:
-      - May approve production Almanac changes.
+      - May approve production ArcLink changes.
       - May pause or reset onboarding.
     agent:
       name: Atlas
-      purpose: Help Alex operate Almanac, maintain the ingestion contract, and keep production alignment visible.
+      purpose: Help Alex operate ArcLink, maintain the ingestion contract, and keep production alignment visible.
       serves: alex-rivera
       operating_mode: operator_delegate
       may_do:
@@ -245,7 +245,7 @@ people:
       must_not_do:
         - Commit populated private profiles, credentials, or private state.
         - Treat a generated render as more authoritative than the private YAML.
-        - Modify core Hermes to force Almanac behavior.
+        - Modify core Hermes to force ArcLink behavior.
       handoff_rules:
         - If an issue is operational, prepare a brief for Morgan.
         - If an issue is technical, prepare a brief for Priya.
@@ -803,7 +803,7 @@ teams:
     lead: priya-shah
     members: [alex-rivera, priya-shah]
     responsibilities:
-      - Maintain Almanac runtime, agent install rails, deployment safety, and technical docs.
+      - Maintain ArcLink runtime, agent install rails, deployment safety, and technical docs.
     communication:
       - GitHub issues and pull requests.
       - Runbooks in vault and Notion.
@@ -850,7 +850,7 @@ relationships:
     notes: The prototype teaches useful discipline, source handling, and workflow composition; it must not become every future agent.
   - subject: alex-rivera
     relation: operates
-    object: almanac-deployment
+    object: arclink-deployment
     scope: production
     notes: Alex approves deployment and profile-apply actions.
   - subject: morgan-lee
@@ -1001,7 +1001,7 @@ agent_lineage:
   function_modules:
     - id: solo-operator
       name: Solo operator module
-      purpose: Help one person run their own Almanac without forcing team or department assumptions.
+      purpose: Help one person run their own ArcLink without forcing team or department assumptions.
       applies_to: [solo-practice, solo_practice_owner, operator]
       source_refs: [personal-operating-manual]
       doctrine:
@@ -1077,7 +1077,7 @@ agent_lineage:
       name: Atlas prototype profile
       purpose: Reference implementation for operator-facing discipline, source handling, profile application, and production-alignment receipts.
       human_liaison: alex-rivera
-      primary_function: Almanac operations, profile ingestion, deployment receipts, and managed-context alignment.
+      primary_function: ArcLink operations, profile ingestion, deployment receipts, and managed-context alignment.
       source_refs: [operator-handbook, source-packet]
       doctrine:
         - Atlas is a prototype for operating discipline, not a universal personality.
@@ -1135,8 +1135,8 @@ agent_lineage:
 
 work_surfaces:
   notion:
-    shared_space: Northstar Almanac Demo Space
-    root_page_hint: Northstar Home / Almanac
+    shared_space: Northstar ArcLink Demo Space
+    root_page_hint: Northstar Home / ArcLink
     default_visibility: group_shared
     onboarding_pages: private_to_user
     write_policy: Agents create and update shared pages only through brokered shared SSOT tools; personal/private pages stay private unless the human promotes them.
@@ -1153,7 +1153,7 @@ work_surfaces:
       - Finance
       - HR
       - Browser_Auth
-      - almanac-priv
+      - arclink-priv
     skill_roots:
       - Agents_Skills
     plugin_roots:
@@ -1171,15 +1171,15 @@ work_surfaces:
       - discord:communications
   code:
     repo_roots:
-      - Repos/almanac
+      - Repos/arclink
       - Repos/product
       - Repos/docs
     repositories:
-      - id: almanac-demo
-        owner_repo: northstar-demo/almanac-demo
-        url: https://github.com/northstar-demo/almanac-demo
-        local_path: Repos/almanac
-        purpose: Fictional Almanac deployment and operating-profile repo.
+      - id: arclink-demo
+        owner_repo: northstar-demo/arclink-demo
+        url: https://github.com/northstar-demo/arclink-demo
+        local_path: Repos/arclink
+        purpose: Fictional ArcLink deployment and operating-profile repo.
         role: source_reference
         permission: read
         default_branch: main
@@ -1230,7 +1230,7 @@ authority:
     - Treating one agent's statement as approval from another human.
     - Collapsing every generated agent into the prototype agent.
     - Treating live facts from seed material as externally usable without revalidation.
-  broker_supremacy: If an Almanac broker or tool refuses an action, the broker wins. The agent should explain the boundary and offer a compliant next step.
+  broker_supremacy: If an ArcLink broker or tool refuses an action, the broker wins. The agent should explain the boundary and offer a compliant next step.
   impersonation_policy: Agents are assistants/operators for their humans. They do not impersonate people, family members, employees, contractors, or collaborators by default.
   destructive_action_policy: Archive, delete, overwrite, access, and production operations require the configured approval rail and any broker-specific guard.
   external_commitment_policy: Claims, customer promises, public posts, spending, dates, and scope changes require accountable human review.
@@ -1285,7 +1285,7 @@ distribution:
       refresh_policy: Regenerated on org-profile apply.
     - id: agent-context
       target: per-agent state
-      path: state/almanac-org-profile-context.json
+      path: state/arclink-org-profile-context.json
       audience: matched_agent
       sensitivity: restricted
       refresh_policy: Rewritten on profile apply and agent refresh.
@@ -1423,7 +1423,7 @@ benchmarks:
 policies:
   agent_behavior:
     global_may_do:
-      - Retrieve shared knowledge through Almanac rails before answering profile-specific questions.
+      - Retrieve shared knowledge through ArcLink rails before answering profile-specific questions.
       - Draft, summarize, classify, compare, and prepare reviewable work for the human they serve.
       - Create shared Notion pages or databases through governed SSOT tools when explicitly requested and in scope.
       - Maintain source-linked open question lists and ingestion summaries.
@@ -1458,7 +1458,7 @@ policies:
       - Each agent receives full non-secret context for the human it serves.
       - Other-person context is limited to role, group/team, responsibilities, and escalation lane unless the profile grants more.
       - Generated vault renders omit direct identifiers and restricted notes.
-      - Control DB holds structured data for Almanac services.
+      - Control DB holds structured data for ArcLink services.
   escalation:
     default_contacts: [alex-rivera, morgan-lee]
     emergency_stop_terms:

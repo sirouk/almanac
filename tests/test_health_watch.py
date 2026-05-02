@@ -11,8 +11,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
-CONTROL_PY = PYTHON_DIR / "almanac_control.py"
-HEALTH_WATCH_PY = PYTHON_DIR / "almanac_health_watch.py"
+CONTROL_PY = PYTHON_DIR / "arclink_control.py"
+HEALTH_WATCH_PY = PYTHON_DIR / "arclink_health_watch.py"
 
 
 def load_module(path: Path, name: str):
@@ -42,23 +42,23 @@ def write_health_script(path: Path, *, body: str, exit_code: int) -> None:
 
 def config_values(root: Path) -> dict[str, str]:
     return {
-        "ALMANAC_USER": "almanac",
-        "ALMANAC_HOME": str(root / "home-almanac"),
-        "ALMANAC_REPO_DIR": str(REPO),
-        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(REPO),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
         "STATE_DIR": str(root / "state"),
         "RUNTIME_DIR": str(root / "state" / "runtime"),
         "VAULT_DIR": str(root / "vault"),
-        "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
-        "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
-        "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
-        "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
-        "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
-        "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
-        "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
         "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
         "OPERATOR_NOTIFY_CHANNEL_ID": "1000000001",
-        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
     }
 
 
@@ -75,22 +75,22 @@ def notification_messages(db_path: Path) -> list[str]:
 def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_health_watch_test")
-    health_watch = load_module(HEALTH_WATCH_PY, "almanac_health_watch_test")
+    control = load_module(CONTROL_PY, "arclink_control_health_watch_test")
+    health_watch = load_module(HEALTH_WATCH_PY, "arclink_health_watch_test")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         health_script = root / "fake-health.sh"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
-        os.environ["ALMANAC_HEALTH_WATCH_HEALTH_CMD"] = str(health_script)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_HEALTH_WATCH_HEALTH_CMD"] = str(health_script)
         try:
             cfg = control.Config.from_env()
             write_health_script(
                 health_script,
-                body="[ok]   qmd active\n[fail] almanac-github-backup.service last result is exit-code\n\nSummary: 1 ok, 0 warn, 1 fail",
+                body="[ok]   qmd active\n[fail] arclink-github-backup.service last result is exit-code\n\nSummary: 1 ok, 0 warn, 1 fail",
                 exit_code=1,
             )
             first = health_watch.run_once(cfg, timeout_seconds=5)
@@ -99,7 +99,7 @@ def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
             expect(first["status"] == "fail" and first["notified"] is True, str(first))
             expect(second["status"] == "fail" and second["notified"] is False, str(second))
             expect(len(messages) == 1, str(messages))
-            expect("almanac-github-backup.service last result is exit-code" in messages[0], messages[0])
+            expect("arclink-github-backup.service last result is exit-code" in messages[0], messages[0])
 
             write_health_script(
                 health_script,
@@ -119,7 +119,7 @@ def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
             messages = notification_messages(cfg.db_path)
             expect(recovered["status"] == "ok" and recovered["notified"] is True, str(recovered))
             expect(len(messages) == 3, str(messages))
-            expect("Almanac health-watch recovered" in messages[-1], messages[-1])
+            expect("ArcLink health-watch recovered" in messages[-1], messages[-1])
             print("PASS test_health_watch_notifies_on_changed_failures_and_recovery")
         finally:
             os.environ.clear()
@@ -129,12 +129,12 @@ def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
 def test_health_watch_skips_during_deploy_operation() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_health_watch_deploy_marker_test")
-    health_watch = load_module(HEALTH_WATCH_PY, "almanac_health_watch_deploy_marker_test")
+    control = load_module(CONTROL_PY, "arclink_control_health_watch_deploy_marker_test")
+    health_watch = load_module(HEALTH_WATCH_PY, "arclink_health_watch_deploy_marker_test")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         health_script = root / "fake-health.sh"
         ran_marker = root / "health-ran"
         write_config(config_path, config_values(root))
@@ -153,7 +153,7 @@ def test_health_watch_skips_during_deploy_operation() -> None:
         health_script.chmod(0o755)
         state_dir = root / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "almanac-deploy-operation.json").write_text(
+        (state_dir / "arclink-deploy-operation.json").write_text(
             json.dumps(
                 {
                     "operation": "upgrade",
@@ -166,8 +166,8 @@ def test_health_watch_skips_during_deploy_operation() -> None:
             encoding="utf-8",
         )
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
-        os.environ["ALMANAC_HEALTH_WATCH_HEALTH_CMD"] = str(health_script)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_HEALTH_WATCH_HEALTH_CMD"] = str(health_script)
         try:
             cfg = control.Config.from_env()
             control.connect_db(cfg).close()

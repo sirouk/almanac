@@ -1,6 +1,0 @@
-[Unit]
-Description=Almanac health watch operator notifier
-
-[Service]
-Type=oneshot
-ExecStart=%h/almanac/bin/health-watch.sh

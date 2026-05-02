@@ -1,0 +1,12 @@
+[Unit]
+Description=ArcLink Curator Telegram onboarding worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/arclink/bin/arclink-curator-onboarding.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -37,7 +37,7 @@ def test_telegram_parse_update() -> None:
 
 
 def test_telegram_handle_update_through_bot_contract() -> None:
-    control = load_module("almanac_control.py", "almanac_control_tg_handle_test")
+    control = load_module("arclink_control.py", "arclink_control_tg_handle_test")
     tg = load_module("arclink_telegram.py", "arclink_telegram_handle_test")
     conn = memory_db(control)
 
@@ -54,7 +54,7 @@ def test_telegram_handle_update_through_bot_contract() -> None:
 
 
 def test_telegram_fake_transport_polling() -> None:
-    control = load_module("almanac_control.py", "almanac_control_tg_poll_test")
+    control = load_module("arclink_control.py", "arclink_control_tg_poll_test")
     tg = load_module("arclink_telegram.py", "arclink_telegram_poll_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_tg_poll_test")
     conn = memory_db(control)

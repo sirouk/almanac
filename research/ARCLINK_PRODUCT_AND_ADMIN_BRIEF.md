@@ -2,7 +2,7 @@
 
 ## Product Promise
 
-ArcLink turns Almanac into a self-serve private AI workforce deployment. A user can start from a website form, Telegram conversation, or Discord conversation; pay; pick a model lane; connect a bot; and receive a fully isolated agentic workspace with Hermes, qmd-powered vault retrieval, hot memory stubs, files, code workspace, dashboard, and optional Notion/backup/SSH rails.
+ArcLink turns ArcLink into a self-serve private AI workforce deployment. A user can start from a website form, Telegram conversation, or Discord conversation; pay; pick a model lane; connect a bot; and receive a fully isolated agentic workspace with Hermes, qmd-powered vault retrieval, hot memory stubs, files, code workspace, dashboard, and optional Notion/backup/SSH rails.
 
 It should feel premium and potent, not like a devops checklist. The interface should surface the underlying technology with confidence: Hermes, qmd, Chutes, memory stubs, skills, vault, Notion rails, code workspace, and agentic harness are part of the value.
 

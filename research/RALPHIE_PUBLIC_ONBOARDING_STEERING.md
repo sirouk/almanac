@@ -28,7 +28,7 @@ the shared backend contract that all public entrypoints will use later.
 - Do not create live containers, DNS records, or Chutes API keys.
 - Do not store private bot tokens, provider API keys, or checkout secrets in
   public onboarding session rows.
-- Do not rework mature Almanac onboarding logic beyond the ArcLink contract
+- Do not rework mature ArcLink onboarding logic beyond the ArcLink contract
   boundary needed for this slice.
 
 ## Expected Tests

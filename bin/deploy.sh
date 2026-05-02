@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -n "${ALMANAC_DEPLOY_BOOTSTRAP_DIR:-}" ]]; then
-  BOOTSTRAP_DIR="$(cd "$ALMANAC_DEPLOY_BOOTSTRAP_DIR" && pwd)"
+if [[ -n "${ARCLINK_DEPLOY_BOOTSTRAP_DIR:-}" ]]; then
+  BOOTSTRAP_DIR="$(cd "$ARCLINK_DEPLOY_BOOTSTRAP_DIR" && pwd)"
 else
   BOOTSTRAP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 SELF_PATH="$BOOTSTRAP_DIR/bin/deploy.sh"
-DEPLOY_EXEC_PATH="${ALMANAC_DEPLOY_EXEC_PATH:-$SELF_PATH}"
-if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" != "1" && "${ALMANAC_DEPLOY_DISABLE_STABLE_COPY:-0}" != "1" ]]; then
-  DEPLOY_EXEC_PATH="$(mktemp "${TMPDIR:-/tmp}/almanac-deploy.XXXXXX")"
+DEPLOY_EXEC_PATH="${ARCLINK_DEPLOY_EXEC_PATH:-$SELF_PATH}"
+if [[ "${ARCLINK_DEPLOY_STABLE_COPY:-0}" != "1" && "${ARCLINK_DEPLOY_DISABLE_STABLE_COPY:-0}" != "1" ]]; then
+  DEPLOY_EXEC_PATH="$(mktemp "${TMPDIR:-/tmp}/arclink-deploy.XXXXXX")"
   cp "$SELF_PATH" "$DEPLOY_EXEC_PATH"
   chmod 700 "$DEPLOY_EXEC_PATH"
-  export ALMANAC_DEPLOY_BOOTSTRAP_DIR="$BOOTSTRAP_DIR"
-  export ALMANAC_DEPLOY_EXEC_PATH="$DEPLOY_EXEC_PATH"
-  export ALMANAC_DEPLOY_STABLE_COPY=1
-  export ALMANAC_DEPLOY_STABLE_OWNER_PID="$$"
+  export ARCLINK_DEPLOY_BOOTSTRAP_DIR="$BOOTSTRAP_DIR"
+  export ARCLINK_DEPLOY_EXEC_PATH="$DEPLOY_EXEC_PATH"
+  export ARCLINK_DEPLOY_STABLE_COPY=1
+  export ARCLINK_DEPLOY_STABLE_OWNER_PID="$$"
   exec bash "$DEPLOY_EXEC_PATH" "$@"
 fi
-if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" == "1" && "${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
-  trap 'almanac_deploy_stable_copy_cleanup' EXIT
+if [[ "${ARCLINK_DEPLOY_STABLE_COPY:-0}" == "1" && "${ARCLINK_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
 fi
-ANSWERS_FILE="${ALMANAC_INSTALL_ANSWERS_FILE:-}"
+ANSWERS_FILE="${ARCLINK_INSTALL_ANSWERS_FILE:-}"
 MODE=""
 PRIVILEGED_MODE=""
 DOCKER_DEPLOY_COMMAND=""
 DOCKER_DEPLOY_ARGS=()
 DISCOVERED_CONFIG=""
-ALMANAC_REEXEC_ATTEMPTED=0
-ALMANAC_NAME="${ALMANAC_NAME:-almanac}"
+ARCLINK_REEXEC_ATTEMPTED=0
+ARCLINK_NAME="${ARCLINK_NAME:-arclink}"
 TRACE_UNIX_USER="${TRACE_UNIX_USER:-}"
 TRACE_SESSION_ID="${TRACE_SESSION_ID:-}"
 TRACE_REQUEST_ID="${TRACE_REQUEST_ID:-}"
@@ -51,27 +51,27 @@ PDF_VISION_ENDPOINT="${PDF_VISION_ENDPOINT:-}"
 PDF_VISION_MODEL="${PDF_VISION_MODEL:-}"
 PDF_VISION_API_KEY="${PDF_VISION_API_KEY:-}"
 PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
-ALMANAC_MEMORY_SYNTH_ENABLED="${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
-ALMANAC_MEMORY_SYNTH_ENDPOINT="${ALMANAC_MEMORY_SYNTH_ENDPOINT:-}"
-ALMANAC_MEMORY_SYNTH_MODEL="${ALMANAC_MEMORY_SYNTH_MODEL:-}"
-ALMANAC_MEMORY_SYNTH_API_KEY="${ALMANAC_MEMORY_SYNTH_API_KEY:-}"
-ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN="${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
-ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS="${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
-ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS="${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
-ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS="${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
-ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS="${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
-ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT="${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
-ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE="${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"
-NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
+ARCLINK_MEMORY_SYNTH_ENABLED="${ARCLINK_MEMORY_SYNTH_ENABLED:-auto}"
+ARCLINK_MEMORY_SYNTH_ENDPOINT="${ARCLINK_MEMORY_SYNTH_ENDPOINT:-}"
+ARCLINK_MEMORY_SYNTH_MODEL="${ARCLINK_MEMORY_SYNTH_MODEL:-}"
+ARCLINK_MEMORY_SYNTH_API_KEY="${ARCLINK_MEMORY_SYNTH_API_KEY:-}"
+ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN="${ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
+ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS="${ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
+ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS="${ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
+ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS="${ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
+ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS="${ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
+ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT="${ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
+ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE="${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"
+NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-arclink.your-tailnet.ts.net}"
 NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
 ENABLE_NEXTCLOUD="${ENABLE_NEXTCLOUD:-1}"
 ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
 TAILSCALE_SERVE_PORT="${TAILSCALE_SERVE_PORT:-443}"
-ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}"
-ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}"
+ARCLINK_INSTALL_PODMAN="${ARCLINK_INSTALL_PODMAN:-auto}"
+ARCLINK_INSTALL_TAILSCALE="${ARCLINK_INSTALL_TAILSCALE:-auto}"
 TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
 TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
-TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
+TAILSCALE_ARCLINK_MCP_PATH="${TAILSCALE_ARCLINK_MCP_PATH:-/arclink-mcp}"
 ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
 TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
@@ -84,37 +84,37 @@ SEED_SAMPLE_VAULT="${SEED_SAMPLE_VAULT:-1}"
 BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
 BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-}"
 BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-}"
-ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
-ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
-ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
-ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
-ALMANAC_MCP_HOST="${ALMANAC_MCP_HOST:-127.0.0.1}"
-ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
-ALMANAC_NOTION_WEBHOOK_HOST="${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}"
-ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
-ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
-ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
-ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
-ALMANAC_SSOT_NOTION_SPACE_URL="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
-ALMANAC_SSOT_NOTION_SPACE_ID="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
-ALMANAC_SSOT_NOTION_SPACE_KIND="${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
-ALMANAC_SSOT_NOTION_API_VERSION="${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
-ALMANAC_SSOT_NOTION_TOKEN="${ALMANAC_SSOT_NOTION_TOKEN:-}"
-ALMANAC_NOTION_INDEX_ROOTS="${ALMANAC_NOTION_INDEX_ROOTS:-}"
-ALMANAC_NOTION_INDEX_RUN_EMBED="${ALMANAC_NOTION_INDEX_RUN_EMBED:-1}"
-ALMANAC_ORG_NAME="${ALMANAC_ORG_NAME:-}"
-ALMANAC_ORG_MISSION="${ALMANAC_ORG_MISSION:-}"
-ALMANAC_ORG_PRIMARY_PROJECT="${ALMANAC_ORG_PRIMARY_PROJECT:-}"
-ALMANAC_ORG_TIMEZONE="${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
-ALMANAC_ORG_QUIET_HOURS="${ALMANAC_ORG_QUIET_HOURS:-}"
-ALMANAC_ORG_PROFILE_BUILDER_ENABLED="${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-}"
-ALMANAC_BOOTSTRAP_WINDOW_SECONDS="${ALMANAC_BOOTSTRAP_WINDOW_SECONDS:-3600}"
-ALMANAC_BOOTSTRAP_PER_IP_LIMIT="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
-ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
-ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS="${ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS:-900}"
-ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS="${ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS:-5}"
-ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS="${ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS:-60}"
-ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS="${ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS:-900}"
+ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
+ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
+ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}"
+ARCLINK_MCP_HOST="${ARCLINK_MCP_HOST:-127.0.0.1}"
+ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
+ARCLINK_NOTION_WEBHOOK_HOST="${ARCLINK_NOTION_WEBHOOK_HOST:-127.0.0.1}"
+ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
+ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
+ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}"
+ARCLINK_SSOT_NOTION_ROOT_PAGE_ID="${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}"
+ARCLINK_SSOT_NOTION_SPACE_URL="${ARCLINK_SSOT_NOTION_SPACE_URL:-}"
+ARCLINK_SSOT_NOTION_SPACE_ID="${ARCLINK_SSOT_NOTION_SPACE_ID:-}"
+ARCLINK_SSOT_NOTION_SPACE_KIND="${ARCLINK_SSOT_NOTION_SPACE_KIND:-}"
+ARCLINK_SSOT_NOTION_API_VERSION="${ARCLINK_SSOT_NOTION_API_VERSION:-2026-03-11}"
+ARCLINK_SSOT_NOTION_TOKEN="${ARCLINK_SSOT_NOTION_TOKEN:-}"
+ARCLINK_NOTION_INDEX_ROOTS="${ARCLINK_NOTION_INDEX_ROOTS:-}"
+ARCLINK_NOTION_INDEX_RUN_EMBED="${ARCLINK_NOTION_INDEX_RUN_EMBED:-1}"
+ARCLINK_ORG_NAME="${ARCLINK_ORG_NAME:-}"
+ARCLINK_ORG_MISSION="${ARCLINK_ORG_MISSION:-}"
+ARCLINK_ORG_PRIMARY_PROJECT="${ARCLINK_ORG_PRIMARY_PROJECT:-}"
+ARCLINK_ORG_TIMEZONE="${ARCLINK_ORG_TIMEZONE:-Etc/UTC}"
+ARCLINK_ORG_QUIET_HOURS="${ARCLINK_ORG_QUIET_HOURS:-}"
+ARCLINK_ORG_PROFILE_BUILDER_ENABLED="${ARCLINK_ORG_PROFILE_BUILDER_ENABLED:-}"
+ARCLINK_BOOTSTRAP_WINDOW_SECONDS="${ARCLINK_BOOTSTRAP_WINDOW_SECONDS:-3600}"
+ARCLINK_BOOTSTRAP_PER_IP_LIMIT="${ARCLINK_BOOTSTRAP_PER_IP_LIMIT:-5}"
+ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT="${ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT:-20}"
+ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS="${ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS:-900}"
+ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS="${ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS:-5}"
+ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS:-60}"
+ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS:-900}"
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
@@ -122,49 +122,49 @@ OPERATOR_GENERAL_CHANNEL_ID="${OPERATOR_GENERAL_CHANNEL_ID:-}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 . "$BOOTSTRAP_DIR/bin/model-providers.sh" 2>/dev/null || true
 if declare -f model_provider_resolve_target_or_default >/dev/null 2>&1; then
-  ALMANAC_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ALMANAC_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
-  ALMANAC_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ALMANAC_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
-  ALMANAC_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ALMANAC_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
+  ARCLINK_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ARCLINK_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
+  ARCLINK_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ARCLINK_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
+  ARCLINK_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ARCLINK_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
 else
-  ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
-  ALMANAC_MODEL_PRESET_OPUS="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
-  ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
+  ARCLINK_MODEL_PRESET_CODEX="${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
+  ARCLINK_MODEL_PRESET_OPUS="${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
+  ARCLINK_MODEL_PRESET_CHUTES="${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
 fi
-ALMANAC_ORG_PROVIDER_ENABLED="${ALMANAC_ORG_PROVIDER_ENABLED:-}"
-ALMANAC_ORG_PROVIDER_PRESET="${ALMANAC_ORG_PROVIDER_PRESET:-}"
-ALMANAC_ORG_PROVIDER_MODEL_ID="${ALMANAC_ORG_PROVIDER_MODEL_ID:-}"
-ALMANAC_ORG_PROVIDER_REASONING_EFFORT="${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}"
-ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
-ALMANAC_ORG_PROVIDER_SECRET="${ALMANAC_ORG_PROVIDER_SECRET:-}"
-ALMANAC_CURATOR_MODEL_PRESET="${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
-ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-tui-only}"
-ALMANAC_EXTRA_MCP_NAME="${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
-ALMANAC_EXTRA_MCP_LABEL="${ALMANAC_EXTRA_MCP_LABEL:-External knowledge rail}"
-ALMANAC_EXTRA_MCP_URL="${ALMANAC_EXTRA_MCP_URL:-}"
-__almanac_upstream_repo_default=""
+ARCLINK_ORG_PROVIDER_ENABLED="${ARCLINK_ORG_PROVIDER_ENABLED:-}"
+ARCLINK_ORG_PROVIDER_PRESET="${ARCLINK_ORG_PROVIDER_PRESET:-}"
+ARCLINK_ORG_PROVIDER_MODEL_ID="${ARCLINK_ORG_PROVIDER_MODEL_ID:-}"
+ARCLINK_ORG_PROVIDER_REASONING_EFFORT="${ARCLINK_ORG_PROVIDER_REASONING_EFFORT:-medium}"
+ARCLINK_ORG_PROVIDER_SECRET_PROVIDER="${ARCLINK_ORG_PROVIDER_SECRET_PROVIDER:-}"
+ARCLINK_ORG_PROVIDER_SECRET="${ARCLINK_ORG_PROVIDER_SECRET:-}"
+ARCLINK_CURATOR_MODEL_PRESET="${ARCLINK_CURATOR_MODEL_PRESET:-codex}"
+ARCLINK_CURATOR_CHANNELS="${ARCLINK_CURATOR_CHANNELS:-tui-only}"
+ARCLINK_EXTRA_MCP_NAME="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
+ARCLINK_EXTRA_MCP_LABEL="${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
+ARCLINK_EXTRA_MCP_URL="${ARCLINK_EXTRA_MCP_URL:-}"
+__arclink_upstream_repo_default=""
 if command -v git >/dev/null 2>&1; then
-  __almanac_upstream_repo_default="$(git -C "$BOOTSTRAP_DIR" remote get-url origin 2>/dev/null || true)"
+  __arclink_upstream_repo_default="$(git -C "$BOOTSTRAP_DIR" remote get-url origin 2>/dev/null || true)"
 fi
-ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-${__almanac_upstream_repo_default:-https://github.com/example/almanac.git}}"
-unset __almanac_upstream_repo_default
-ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
-ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
-ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE="${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
-ALMANAC_AGENT_CODE_PORT_BASE="${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
-ALMANAC_AGENT_PORT_SLOT_SPAN="${ALMANAC_AGENT_PORT_SLOT_SPAN:-5000}"
-ALMANAC_AGENT_CODE_SERVER_IMAGE="${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}"
-ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
-ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-}"
-ALMANAC_OPERATOR_ARTIFACT_FILE="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-${__arclink_upstream_repo_default:-https://github.com/example/arclink.git}}"
+unset __arclink_upstream_repo_default
+ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
+ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
+ARCLINK_AGENT_CODE_PORT_BASE="${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
+ARCLINK_AGENT_PORT_SLOT_SPAN="${ARCLINK_AGENT_PORT_SLOT_SPAN:-5000}"
+ARCLINK_AGENT_CODE_SERVER_IMAGE="${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}"
+ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
+ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-}"
+ARCLINK_OPERATOR_ARTIFACT_FILE="${ARCLINK_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.arclink-operator.env}"
 NEXTCLOUD_ROTATE_POSTGRES_PASSWORD="${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-}"
 NEXTCLOUD_ROTATE_ADMIN_PASSWORD="${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-}"
 NEXTCLOUD_ROTATE_ASSUME_YES="${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
-ALMANAC_DEPLOY_OPERATION_TTL_SECONDS="${ALMANAC_DEPLOY_OPERATION_TTL_SECONDS:-21600}"
-ALMANAC_DEPLOY_OPERATION_MARKER=""
+ARCLINK_DEPLOY_OPERATION_TTL_SECONDS="${ARCLINK_DEPLOY_OPERATION_TTL_SECONDS:-21600}"
+ARCLINK_DEPLOY_OPERATION_MARKER=""
 
-almanac_deploy_stable_copy_cleanup() {
-  if [[ "${ALMANAC_DEPLOY_STABLE_COPY:-0}" == "1" && "${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
-    rm -f "${ALMANAC_DEPLOY_EXEC_PATH:-}"
+arclink_deploy_stable_copy_cleanup() {
+  if [[ "${ARCLINK_DEPLOY_STABLE_COPY:-0}" == "1" && "${ARCLINK_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
+    rm -f "${ARCLINK_DEPLOY_EXEC_PATH:-}"
   fi
 }
 
@@ -230,23 +230,23 @@ read_operator_artifact_config_file() {
 }
 
 read_operator_artifact_hints() {
-  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local artifact="${ARCLINK_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.arclink-operator.env}"
 
   if [[ ! -r "$artifact" ]]; then
     return 1
   fi
 
   (
-    ALMANAC_OPERATOR_DEPLOYED_USER=""
-    ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=""
-    ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=""
-    ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=""
+    ARCLINK_OPERATOR_DEPLOYED_USER=""
+    ARCLINK_OPERATOR_DEPLOYED_REPO_DIR=""
+    ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR=""
+    ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE=""
     # shellcheck disable=SC1090
     source "$artifact"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_USER:-}"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_REPO_DIR:-}"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR:-}"
-    printf '%s\n' "${ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_USER:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_REPO_DIR:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR:-}"
+    printf '%s\n' "${ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
   )
 }
 
@@ -348,7 +348,7 @@ require_supported_host_mode() {
 
   if host_is_macos; then
     cat >&2 <<'EOF'
-Native macOS is not a supported Almanac host or runtime environment.
+Native macOS is not a supported ArcLink host or runtime environment.
 Helper-only commands like `./deploy.sh write-config` and `./deploy.sh agent-payload`
 may still be useful from an operator checkout, but install, upgrade, remove,
 health, and service management must run on Debian/Ubuntu Linux or WSL2 Ubuntu
@@ -359,8 +359,8 @@ EOF
 
   if host_is_wsl; then
     cat >&2 <<'EOF'
-WSL2 was detected, but the Linux guest is not ready for full Almanac deployment yet.
-Almanac needs `apt`, `systemd`, and `loginctl` inside the Ubuntu instance.
+WSL2 was detected, but the Linux guest is not ready for full ArcLink deployment yet.
+ArcLink needs `apt`, `systemd`, and `loginctl` inside the Ubuntu instance.
 
 If systemd is not enabled yet, add this to /etc/wsl.conf inside Ubuntu:
   [boot]
@@ -375,7 +375,7 @@ EOF
   fi
 
   cat >&2 <<'EOF'
-Full Almanac host deployment currently supports Debian/Ubuntu-style Linux hosts with
+Full ArcLink host deployment currently supports Debian/Ubuntu-style Linux hosts with
 `apt`, `systemd`, and `loginctl` available.
 EOF
   return 1
@@ -385,18 +385,18 @@ collect_host_dependency_answers() {
   local podman_default="1"
   local tailscale_default="0"
 
-  ALMANAC_INSTALL_PODMAN="0"
-  ALMANAC_INSTALL_TAILSCALE="0"
+  ARCLINK_INSTALL_PODMAN="0"
+  ARCLINK_INSTALL_TAILSCALE="0"
 
   if ! command_exists podman; then
-    ALMANAC_INSTALL_PODMAN="$(ask_yes_no "Podman is not installed. Install it now for Nextcloud and per-agent code workspaces" "$podman_default")"
+    ARCLINK_INSTALL_PODMAN="$(ask_yes_no "Podman is not installed. Install it now for Nextcloud and per-agent code workspaces" "$podman_default")"
   fi
 
   if ! command_exists tailscale; then
-    if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" == "1" ]]; then
+    if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" == "1" ]]; then
       tailscale_default="1"
     fi
-    ALMANAC_INSTALL_TAILSCALE="$(ask_yes_no "Tailscale is not installed. Install it now for tailnet-only access and HTTPS serve" "$tailscale_default")"
+    ARCLINK_INSTALL_TAILSCALE="$(ask_yes_no "Tailscale is not installed. Install it now for tailnet-only access and HTTPS serve" "$tailscale_default")"
   fi
 }
 
@@ -780,7 +780,7 @@ PY
 
 notion_webhook_status_json() {
   local ctl_bin="$1"
-  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
     "$ctl_bin" --json notion webhook-status --show-public-url --show-secret
 }
 
@@ -789,7 +789,7 @@ run_notion_webhook_setup_flow() {
   local actor="$2"
   local status_json="" configured="" verified="" token="" public_url="" verified_at="" verified_by="" armed_json="" armed_until=""
 
-  if [[ -z "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+  if [[ -z "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     return 0
   fi
 
@@ -833,9 +833,9 @@ run_notion_webhook_setup_flow() {
 
   echo
   echo "Step 2. Use this exact webhook URL."
-  echo "  ${public_url:-${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}}"
+  echo "  ${public_url:-${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL}}"
   echo "  - If a subscription already exists for this exact URL, edit it."
-  echo "  - Do not create a duplicate subscription for the same Almanac endpoint."
+  echo "  - Do not create a duplicate subscription for the same ArcLink endpoint."
   read -r -p "Press ENTER when the webhook URL is entered or the existing matching subscription is open for editing. " _
 
   echo
@@ -852,9 +852,9 @@ run_notion_webhook_setup_flow() {
   if [[ "$configured" != "1" || -z "${token//[[:space:]]/}" ]]; then
     echo "Step 4. Deploy will arm a fresh 30-minute verification window."
     echo "  - After the window is armed, immediately click Create subscription or Save in Notion."
-    echo "  - That click is what causes Notion to send the verification token to Almanac."
+    echo "  - That click is what causes Notion to send the verification token to ArcLink."
     read -r -p "Press ENTER when you are ready for deploy to arm the window. " _
-    armed_json="$(env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+    armed_json="$(env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
       "$ctl_bin" --json notion webhook-arm-install --actor "$actor" --minutes 30)"
     armed_until="$(json_field "$armed_json" "armed_until" 2>/dev/null || true)"
     echo "  Verification window armed."
@@ -899,7 +899,7 @@ run_notion_webhook_setup_flow() {
     return 1
   fi
 
-  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
     "$ctl_bin" --json notion webhook-confirm-verified --actor "$actor" >/dev/null
   status_json="$(notion_webhook_status_json "$ctl_bin")"
   verified_at="$(json_field "$status_json" "verified_at" 2>/dev/null || true)"
@@ -919,14 +919,14 @@ require_notion_subtree_ack() {
 
   echo
   echo "Important Notion access model:"
-  echo "  - Almanac cannot press Notion's Manage page access buttons for you via"
+  echo "  - ArcLink cannot press Notion's Manage page access buttons for you via"
   echo "    a supported API."
   echo "  - The internal integration only automatically inherits access to child"
   echo "    pages and databases created under a granted parent/root subtree."
   echo "  - Anything created outside that granted subtree will need manual page"
   echo "    access later."
   echo "  - The sane setup is to grant one stable Teamspace root page or parent"
-  echo "    page, then keep Almanac-managed content under it."
+  echo "    page, then keep ArcLink-managed content under it."
   echo
 
   while true; do
@@ -942,7 +942,7 @@ choose_mode() {
   local answer=""
 
   cat <<'EOF'
-Almanac deploy menu
+ArcLink deploy menu
 
   1) Install / repair from current checkout
   2) Upgrade deployed host from configured upstream
@@ -1037,7 +1037,7 @@ choose_docker_mode() {
   local answer=""
 
   cat <<'EOF'
-Almanac Docker control center
+ArcLink Docker control center
 
   1) Install / repair Docker stack from current checkout
   2) Upgrade / rebuild Docker stack from current checkout
@@ -1139,7 +1139,7 @@ detect_tailscale_serve() {
   TAILSCALE_SERVE_HOST=""
   TAILSCALE_SERVE_HAS_ROOT="0"
   TAILSCALE_SERVE_HAS_QMD="0"
-  TAILSCALE_SERVE_HAS_ALMANAC_MCP="0"
+  TAILSCALE_SERVE_HAS_ARCLINK_MCP="0"
 
   if ! command -v tailscale >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     return 0
@@ -1153,7 +1153,7 @@ detect_tailscale_serve() {
 
   local ts_info=""
   ts_info="$(
-    TAILSCALE_SERVE_JSON="$ts_json" python3 - "${TAILSCALE_SERVE_PORT:-443}" "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" "$ALMANAC_MCP_PORT" "$TAILSCALE_ALMANAC_MCP_PATH" <<'PY'
+    TAILSCALE_SERVE_JSON="$ts_json" python3 - "${TAILSCALE_SERVE_PORT:-443}" "$QMD_MCP_PORT" "$TAILSCALE_QMD_PATH" "$ARCLINK_MCP_PORT" "$TAILSCALE_ARCLINK_MCP_PATH" <<'PY'
 import json
 import os
 import sys
@@ -1166,14 +1166,14 @@ except Exception:
 serve_port = str(sys.argv[1])
 qmd_port = sys.argv[2]
 qmd_path = sys.argv[3]
-almanac_mcp_port = sys.argv[4]
-almanac_mcp_path = sys.argv[5]
+arclink_mcp_port = sys.argv[4]
+arclink_mcp_path = sys.argv[5]
 web = data.get("Web") or {}
 
 host = ""
 has_root = False
 has_qmd = False
-has_almanac_mcp = False
+has_arclink_mcp = False
 
 for hostport, entry in web.items():
     parsed_host, sep, parsed_port = hostport.rpartition(":")
@@ -1186,25 +1186,25 @@ for hostport, entry in web.items():
     if "/" in handlers:
         has_root = True
     qmd_handler = handlers.get(qmd_path) or {}
-    almanac_handler = handlers.get(almanac_mcp_path) or {}
+    arclink_handler = handlers.get(arclink_mcp_path) or {}
     qmd_proxy = str(qmd_handler.get("Proxy") or "")
-    almanac_proxy = str(almanac_handler.get("Proxy") or "")
+    arclink_proxy = str(arclink_handler.get("Proxy") or "")
     if qmd_proxy == f"http://127.0.0.1:{qmd_port}/mcp":
         has_qmd = True
-    if almanac_proxy == f"http://127.0.0.1:{almanac_mcp_port}/mcp":
-        has_almanac_mcp = True
+    if arclink_proxy == f"http://127.0.0.1:{arclink_mcp_port}/mcp":
+        has_arclink_mcp = True
     for path, handler in handlers.items():
         proxy = str((handler or {}).get("Proxy") or "")
         if path == qmd_path and proxy == f"http://127.0.0.1:{qmd_port}/mcp":
             has_qmd = True
-        if path == almanac_mcp_path and proxy == f"http://127.0.0.1:{almanac_mcp_port}/mcp":
-            has_almanac_mcp = True
+        if path == arclink_mcp_path and proxy == f"http://127.0.0.1:{arclink_mcp_port}/mcp":
+            has_arclink_mcp = True
 
 values = {
     "host": host,
     "root": "1" if has_root else "0",
     "qmd": "1" if has_qmd else "0",
-    "almanac_mcp": "1" if has_almanac_mcp else "0",
+    "arclink_mcp": "1" if has_arclink_mcp else "0",
 }
 
 for key, value in values.items():
@@ -1218,7 +1218,7 @@ PY
       host) TAILSCALE_SERVE_HOST="$value" ;;
       root) TAILSCALE_SERVE_HAS_ROOT="$value" ;;
       qmd) TAILSCALE_SERVE_HAS_QMD="$value" ;;
-      almanac_mcp) TAILSCALE_SERVE_HAS_ALMANAC_MCP="$value" ;;
+      arclink_mcp) TAILSCALE_SERVE_HAS_ARCLINK_MCP="$value" ;;
     esac
   done <<<"$ts_info"
 }
@@ -1264,10 +1264,10 @@ refresh_notion_webhook_public_url_from_tailscale() {
 
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     if [[ -n "$derived_url" ]]; then
-      ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="$derived_url"
+      ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="$derived_url"
     fi
-  elif [[ -n "$derived_url" && "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" == "$derived_url" ]]; then
-    ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
+  elif [[ -n "$derived_url" && "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" == "$derived_url" ]]; then
+    ARCLINK_NOTION_WEBHOOK_PUBLIC_URL=""
   fi
 }
 
@@ -1291,7 +1291,7 @@ detect_tailscale_notion_webhook_funnel() {
 
   local ts_info=""
   ts_info="$(
-    TAILSCALE_FUNNEL_JSON="$ts_json" python3 - "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "$funnel_path" "$ALMANAC_NOTION_WEBHOOK_PORT" <<'PY'
+    TAILSCALE_FUNNEL_JSON="$ts_json" python3 - "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "$funnel_path" "$ARCLINK_NOTION_WEBHOOK_PORT" <<'PY'
 import json
 import os
 import sys
@@ -1373,24 +1373,24 @@ resolve_agent_control_plane_endpoint() {
   detect_tailscale
   detect_tailscale_serve
 
-  AGENT_ALMANAC_MCP_TAILNET_HOST="${TAILSCALE_SERVE_HOST:-${TAILSCALE_DNS_NAME:-$NEXTCLOUD_TRUSTED_DOMAIN}}"
-  AGENT_ALMANAC_MCP_TAILNET_URL=""
-  AGENT_ALMANAC_MCP_URL="http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp"
-  AGENT_ALMANAC_MCP_URL_MODE="local"
-  AGENT_ALMANAC_MCP_ROUTE_STATUS="local_only"
+  AGENT_ARCLINK_MCP_TAILNET_HOST="${TAILSCALE_SERVE_HOST:-${TAILSCALE_DNS_NAME:-$NEXTCLOUD_TRUSTED_DOMAIN}}"
+  AGENT_ARCLINK_MCP_TAILNET_URL=""
+  AGENT_ARCLINK_MCP_URL="http://${ARCLINK_MCP_HOST:-127.0.0.1}:${ARCLINK_MCP_PORT:-8282}/mcp"
+  AGENT_ARCLINK_MCP_URL_MODE="local"
+  AGENT_ARCLINK_MCP_ROUTE_STATUS="local_only"
 
-  if [[ -n "$AGENT_ALMANAC_MCP_TAILNET_HOST" ]]; then
-    AGENT_ALMANAC_MCP_TAILNET_URL="$(build_public_https_url "$AGENT_ALMANAC_MCP_TAILNET_HOST" "${TAILSCALE_SERVE_PORT:-443}" "${TAILSCALE_ALMANAC_MCP_PATH}")"
+  if [[ -n "$AGENT_ARCLINK_MCP_TAILNET_HOST" ]]; then
+    AGENT_ARCLINK_MCP_TAILNET_URL="$(build_public_https_url "$AGENT_ARCLINK_MCP_TAILNET_HOST" "${TAILSCALE_SERVE_PORT:-443}" "${TAILSCALE_ARCLINK_MCP_PATH}")"
   fi
 
   if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_SERVE_HOST" || "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    if [[ -n "$AGENT_ALMANAC_MCP_TAILNET_URL" ]]; then
-      AGENT_ALMANAC_MCP_URL="$AGENT_ALMANAC_MCP_TAILNET_URL"
-      AGENT_ALMANAC_MCP_URL_MODE="tailnet"
-      if [[ "$TAILSCALE_SERVE_HAS_ALMANAC_MCP" == "1" ]]; then
-        AGENT_ALMANAC_MCP_ROUTE_STATUS="live"
+    if [[ -n "$AGENT_ARCLINK_MCP_TAILNET_URL" ]]; then
+      AGENT_ARCLINK_MCP_URL="$AGENT_ARCLINK_MCP_TAILNET_URL"
+      AGENT_ARCLINK_MCP_URL_MODE="tailnet"
+      if [[ "$TAILSCALE_SERVE_HAS_ARCLINK_MCP" == "1" ]]; then
+        AGENT_ARCLINK_MCP_ROUTE_STATUS="live"
       else
-        AGENT_ALMANAC_MCP_ROUTE_STATUS="expected"
+        AGENT_ARCLINK_MCP_ROUTE_STATUS="expected"
       fi
     fi
   fi
@@ -1402,14 +1402,14 @@ detect_github_repo() {
   GITHUB_REPO_BRANCH="main"
 
   if ! command -v git >/dev/null 2>&1; then
-    GITHUB_REPO_URL="https://github.com/example/almanac"
-    GITHUB_REPO_OWNER_REPO="example/almanac"
+    GITHUB_REPO_URL="https://github.com/example/arclink"
+    GITHUB_REPO_OWNER_REPO="example/arclink"
     return 0
   fi
 
   local remote_url="" branch="" owner_repo=""
-  remote_url="$(git -C "$ALMANAC_REPO_DIR" remote get-url origin 2>/dev/null || true)"
-  branch="$(git -C "$ALMANAC_REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  remote_url="$(git -C "$ARCLINK_REPO_DIR" remote get-url origin 2>/dev/null || true)"
+  branch="$(git -C "$ARCLINK_REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   GITHUB_REPO_BRANCH="${branch:-main}"
 
   case "$remote_url" in
@@ -1429,8 +1429,8 @@ detect_github_repo() {
     GITHUB_REPO_URL="https://github.com/$owner_repo"
     GITHUB_REPO_OWNER_REPO="$owner_repo"
   else
-    GITHUB_REPO_URL="https://github.com/example/almanac"
-    GITHUB_REPO_OWNER_REPO="example/almanac"
+    GITHUB_REPO_URL="https://github.com/example/arclink"
+    GITHUB_REPO_OWNER_REPO="example/arclink"
     GITHUB_REPO_BRANCH="main"
   fi
 }
@@ -1443,7 +1443,7 @@ discover_existing_config() {
   local artifact_user="" artifact_repo="" artifact_priv="" artifact_home=""
   local status=""
   local line=""
-  explicit_config="${ALMANAC_CONFIG_FILE:-}"
+  explicit_config="${ARCLINK_CONFIG_FILE:-}"
   while IFS= read -r line; do
     artifact_hints+=("$line")
   done < <(read_operator_artifact_hints || true)
@@ -1467,15 +1467,15 @@ discover_existing_config() {
 
   if [[ -n "$artifact_priv" ]]; then
     candidates+=(
-      "$artifact_priv/config/almanac.env"
-      "$artifact_priv/almanac.env"
+      "$artifact_priv/config/arclink.env"
+      "$artifact_priv/arclink.env"
     )
   fi
 
   if [[ -n "$artifact_repo" ]]; then
     candidates+=(
-      "$artifact_repo/almanac-priv/config/almanac.env"
-      "$artifact_repo/config/almanac.env"
+      "$artifact_repo/arclink-priv/config/arclink.env"
+      "$artifact_repo/config/arclink.env"
     )
   fi
 
@@ -1483,18 +1483,18 @@ discover_existing_config() {
     artifact_home="$(resolve_user_home "$artifact_user" || true)"
     if [[ -n "$artifact_home" ]]; then
       candidates+=(
-        "$artifact_home/almanac/almanac-priv/config/almanac.env"
-        "$artifact_home/almanac-priv/config/almanac.env"
+        "$artifact_home/arclink/arclink-priv/config/arclink.env"
+        "$artifact_home/arclink-priv/config/arclink.env"
       )
     fi
   fi
 
   candidates+=(
-    "/home/almanac/almanac/almanac-priv/config/almanac.env"
-    "$HOME/almanac/almanac-priv/config/almanac.env"
-    "$HOME/almanac/almanac/almanac-priv/config/almanac.env"
-    "$BOOTSTRAP_DIR/almanac-priv/config/almanac.env"
-    "$BOOTSTRAP_DIR/config/almanac.env"
+    "/home/arclink/arclink/arclink-priv/config/arclink.env"
+    "$HOME/arclink/arclink-priv/config/arclink.env"
+    "$HOME/arclink/arclink/arclink-priv/config/arclink.env"
+    "$BOOTSTRAP_DIR/arclink-priv/config/arclink.env"
+    "$BOOTSTRAP_DIR/config/arclink.env"
   )
 
   for candidate in "${candidates[@]}"; do
@@ -1505,7 +1505,7 @@ discover_existing_config() {
     fi
   done
 
-  candidate="$(find /home -maxdepth 5 -path '*/almanac/almanac-priv/config/almanac.env' -print -quit 2>/dev/null || true)"
+  candidate="$(find /home -maxdepth 5 -path '*/arclink/arclink-priv/config/arclink.env' -print -quit 2>/dev/null || true)"
   status="$(probe_path_status "$candidate")"
   if [[ "$status" == "exists" || "$status" == "exists-unreadable" ]]; then
     DISCOVERED_CONFIG="$candidate"
@@ -1532,9 +1532,9 @@ load_detected_config() {
 
 resolve_model_provider_presets() {
   if declare -f model_provider_resolve_target_or_default >/dev/null 2>&1; then
-    ALMANAC_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ALMANAC_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
-    ALMANAC_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ALMANAC_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
-    ALMANAC_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ALMANAC_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
+    ARCLINK_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ARCLINK_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
+    ARCLINK_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ARCLINK_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
+    ARCLINK_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ARCLINK_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
   fi
 }
 
@@ -1766,8 +1766,8 @@ write_kv() {
 deploy_pins_file() {
   local candidate=""
   for candidate in \
-    "${ALMANAC_PINS_FILE:-}" \
-    "${ALMANAC_REPO_DIR:-}/config/pins.json" \
+    "${ARCLINK_PINS_FILE:-}" \
+    "${ARCLINK_REPO_DIR:-}/config/pins.json" \
     "${BOOTSTRAP_DIR:-}/config/pins.json" \
     "./config/pins.json"; do
     if [[ -n "$candidate" && -r "$candidate" ]]; then
@@ -1809,7 +1809,7 @@ deploy_pin_image_or_default() {
 }
 
 default_curator_telegram_onboarding_enabled() {
-  local channels=",${ALMANAC_CURATOR_CHANNELS:-tui-only},"
+  local channels=",${ARCLINK_CURATOR_CHANNELS:-tui-only},"
   if [[ "$channels" == *",telegram,"* || "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-}" == "telegram" ]]; then
     printf '%s' "1"
   else
@@ -1818,7 +1818,7 @@ default_curator_telegram_onboarding_enabled() {
 }
 
 default_curator_discord_onboarding_enabled() {
-  local channels=",${ALMANAC_CURATOR_CHANNELS:-tui-only},"
+  local channels=",${ARCLINK_CURATOR_CHANNELS:-tui-only},"
   if [[ "$channels" == *",discord,"* ]]; then
     printf '%s' "1"
   else
@@ -1835,11 +1835,11 @@ normalize_runtime_config_defaults() {
   if [[ -z "${VAULT_WATCH_MAX_BATCH_SECONDS:-}" ]]; then
     VAULT_WATCH_MAX_BATCH_SECONDS="10"
   fi
-  if [[ -z "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
-    ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED="$(default_curator_telegram_onboarding_enabled)"
+  if [[ -z "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}" ]]; then
+    ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED="$(default_curator_telegram_onboarding_enabled)"
   fi
-  if [[ -z "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
-    ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED="$(default_curator_discord_onboarding_enabled)"
+  if [[ -z "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-}" ]]; then
+    ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED="$(default_curator_discord_onboarding_enabled)"
   fi
   if declare -F refresh_notion_webhook_public_url_from_tailscale >/dev/null 2>&1; then
     refresh_notion_webhook_public_url_from_tailscale
@@ -1854,37 +1854,37 @@ emit_runtime_config() {
   local code_server_image=""
 
   normalize_runtime_config_defaults
-  hermes_agent_ref="$(deploy_pin_get_or_default hermes-agent ref "${ALMANAC_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
-  hermes_docs_repo_url="${ALMANAC_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
+  hermes_agent_ref="$(deploy_pin_get_or_default hermes-agent ref "${ARCLINK_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
+  hermes_docs_repo_url="${ARCLINK_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
   if [[ "$hermes_docs_repo_url" == "https://github.com/NousResearch/hermes-agent.git" ]]; then
-    hermes_docs_ref="$(deploy_pin_get_or_default hermes-docs ref "${ALMANAC_HERMES_DOCS_REF:-$hermes_agent_ref}")"
+    hermes_docs_ref="$(deploy_pin_get_or_default hermes-docs ref "${ARCLINK_HERMES_DOCS_REF:-$hermes_agent_ref}")"
   else
-    hermes_docs_ref="${ALMANAC_HERMES_DOCS_REF:-$hermes_agent_ref}"
+    hermes_docs_ref="${ARCLINK_HERMES_DOCS_REF:-$hermes_agent_ref}"
   fi
-  code_server_image="$(deploy_pin_image_or_default code-server "${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}")"
+  code_server_image="$(deploy_pin_image_or_default code-server "${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}")"
   if declare -F normalize_http_path >/dev/null 2>&1; then
     notion_funnel_path="$(normalize_http_path "$notion_funnel_path")"
   elif [[ "$notion_funnel_path" != /* ]]; then
     notion_funnel_path="/$notion_funnel_path"
   fi
   {
-    write_kv ALMANAC_NAME "$ALMANAC_NAME"
-    write_kv ALMANAC_USER "$ALMANAC_USER"
-    write_kv ALMANAC_HOME "$ALMANAC_HOME"
-    write_kv ALMANAC_REPO_DIR "$ALMANAC_REPO_DIR"
-    write_kv ALMANAC_PRIV_DIR "$ALMANAC_PRIV_DIR"
-    write_kv ALMANAC_PRIV_CONFIG_DIR "$ALMANAC_PRIV_CONFIG_DIR"
+    write_kv ARCLINK_NAME "$ARCLINK_NAME"
+    write_kv ARCLINK_USER "$ARCLINK_USER"
+    write_kv ARCLINK_HOME "$ARCLINK_HOME"
+    write_kv ARCLINK_REPO_DIR "$ARCLINK_REPO_DIR"
+    write_kv ARCLINK_PRIV_DIR "$ARCLINK_PRIV_DIR"
+    write_kv ARCLINK_PRIV_CONFIG_DIR "$ARCLINK_PRIV_CONFIG_DIR"
     write_kv VAULT_DIR "$VAULT_DIR"
     write_kv STATE_DIR "$STATE_DIR"
     write_kv NEXTCLOUD_STATE_DIR "$NEXTCLOUD_STATE_DIR"
     write_kv RUNTIME_DIR "$RUNTIME_DIR"
     write_kv PUBLISHED_DIR "$PUBLISHED_DIR"
-    write_kv ALMANAC_DB_PATH "${ALMANAC_DB_PATH:-$STATE_DIR/almanac-control.sqlite3}"
-    write_kv ALMANAC_AGENTS_STATE_DIR "${ALMANAC_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
-    write_kv ALMANAC_CURATOR_DIR "${ALMANAC_CURATOR_DIR:-$STATE_DIR/curator}"
-    write_kv ALMANAC_CURATOR_MANIFEST "${ALMANAC_CURATOR_MANIFEST:-$STATE_DIR/curator/manifest.json}"
-    write_kv ALMANAC_CURATOR_HERMES_HOME "${ALMANAC_CURATOR_HERMES_HOME:-$STATE_DIR/curator/hermes-home}"
-    write_kv ALMANAC_ARCHIVED_AGENTS_DIR "${ALMANAC_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
+    write_kv ARCLINK_DB_PATH "${ARCLINK_DB_PATH:-$STATE_DIR/arclink-control.sqlite3}"
+    write_kv ARCLINK_AGENTS_STATE_DIR "${ARCLINK_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
+    write_kv ARCLINK_CURATOR_DIR "${ARCLINK_CURATOR_DIR:-$STATE_DIR/curator}"
+    write_kv ARCLINK_CURATOR_MANIFEST "${ARCLINK_CURATOR_MANIFEST:-$STATE_DIR/curator/manifest.json}"
+    write_kv ARCLINK_CURATOR_HERMES_HOME "${ARCLINK_CURATOR_HERMES_HOME:-$STATE_DIR/curator/hermes-home}"
+    write_kv ARCLINK_ARCHIVED_AGENTS_DIR "${ARCLINK_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
     write_kv QMD_INDEX_NAME "$QMD_INDEX_NAME"
     write_kv QMD_COLLECTION_NAME "$QMD_COLLECTION_NAME"
     write_kv VAULT_QMD_COLLECTION_MASK "$(normalize_vault_qmd_collection_mask "${VAULT_QMD_COLLECTION_MASK:-}")"
@@ -1900,35 +1900,35 @@ emit_runtime_config() {
     write_kv QMD_EMBED_MAX_BATCH_MB "$QMD_EMBED_MAX_BATCH_MB"
     write_kv QMD_EMBED_FORCE_ON_NEXT_REFRESH "${QMD_EMBED_FORCE_ON_NEXT_REFRESH:-0}"
     write_kv QMD_MCP_PORT "$QMD_MCP_PORT"
-    write_kv ALMANAC_MCP_HOST "$ALMANAC_MCP_HOST"
-    write_kv ALMANAC_MCP_PORT "$ALMANAC_MCP_PORT"
-    write_kv ALMANAC_NOTION_WEBHOOK_HOST "$ALMANAC_NOTION_WEBHOOK_HOST"
-    write_kv ALMANAC_NOTION_WEBHOOK_PORT "$ALMANAC_NOTION_WEBHOOK_PORT"
-    write_kv ALMANAC_NOTION_WEBHOOK_PUBLIC_URL "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+    write_kv ARCLINK_MCP_HOST "$ARCLINK_MCP_HOST"
+    write_kv ARCLINK_MCP_PORT "$ARCLINK_MCP_PORT"
+    write_kv ARCLINK_NOTION_WEBHOOK_HOST "$ARCLINK_NOTION_WEBHOOK_HOST"
+    write_kv ARCLINK_NOTION_WEBHOOK_PORT "$ARCLINK_NOTION_WEBHOOK_PORT"
+    write_kv ARCLINK_NOTION_WEBHOOK_PUBLIC_URL "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
     write_kv ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
     write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
     write_kv TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH "$notion_funnel_path"
-    write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_URL "${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}"
-    write_kv ALMANAC_SSOT_NOTION_ROOT_PAGE_ID "${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
-    write_kv ALMANAC_SSOT_NOTION_SPACE_URL "${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
-    write_kv ALMANAC_SSOT_NOTION_SPACE_ID "${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
-    write_kv ALMANAC_SSOT_NOTION_SPACE_KIND "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}"
-    write_kv ALMANAC_SSOT_NOTION_API_VERSION "${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}"
-    write_kv ALMANAC_SSOT_NOTION_TOKEN "${ALMANAC_SSOT_NOTION_TOKEN:-}"
-    write_kv ALMANAC_NOTION_INDEX_ROOTS "${ALMANAC_NOTION_INDEX_ROOTS:-}"
-    write_kv ALMANAC_NOTION_INDEX_RUN_EMBED "${ALMANAC_NOTION_INDEX_RUN_EMBED:-1}"
-    write_kv ALMANAC_ORG_NAME "${ALMANAC_ORG_NAME:-}"
-    write_kv ALMANAC_ORG_MISSION "${ALMANAC_ORG_MISSION:-}"
-    write_kv ALMANAC_ORG_PRIMARY_PROJECT "${ALMANAC_ORG_PRIMARY_PROJECT:-}"
-    write_kv ALMANAC_ORG_TIMEZONE "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}"
-    write_kv ALMANAC_ORG_QUIET_HOURS "${ALMANAC_ORG_QUIET_HOURS:-}"
-    write_kv ALMANAC_BOOTSTRAP_WINDOW_SECONDS "$ALMANAC_BOOTSTRAP_WINDOW_SECONDS"
-    write_kv ALMANAC_BOOTSTRAP_PER_IP_LIMIT "$ALMANAC_BOOTSTRAP_PER_IP_LIMIT"
-    write_kv ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT "$ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT"
-    write_kv ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS "$ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS"
-    write_kv ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS "$ALMANAC_AUTO_PROVISION_MAX_ATTEMPTS"
-    write_kv ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS "$ALMANAC_AUTO_PROVISION_RETRY_BASE_SECONDS"
-    write_kv ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS "$ALMANAC_AUTO_PROVISION_RETRY_MAX_SECONDS"
+    write_kv ARCLINK_SSOT_NOTION_ROOT_PAGE_URL "${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}"
+    write_kv ARCLINK_SSOT_NOTION_ROOT_PAGE_ID "${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}"
+    write_kv ARCLINK_SSOT_NOTION_SPACE_URL "${ARCLINK_SSOT_NOTION_SPACE_URL:-}"
+    write_kv ARCLINK_SSOT_NOTION_SPACE_ID "${ARCLINK_SSOT_NOTION_SPACE_ID:-}"
+    write_kv ARCLINK_SSOT_NOTION_SPACE_KIND "${ARCLINK_SSOT_NOTION_SPACE_KIND:-}"
+    write_kv ARCLINK_SSOT_NOTION_API_VERSION "${ARCLINK_SSOT_NOTION_API_VERSION:-2026-03-11}"
+    write_kv ARCLINK_SSOT_NOTION_TOKEN "${ARCLINK_SSOT_NOTION_TOKEN:-}"
+    write_kv ARCLINK_NOTION_INDEX_ROOTS "${ARCLINK_NOTION_INDEX_ROOTS:-}"
+    write_kv ARCLINK_NOTION_INDEX_RUN_EMBED "${ARCLINK_NOTION_INDEX_RUN_EMBED:-1}"
+    write_kv ARCLINK_ORG_NAME "${ARCLINK_ORG_NAME:-}"
+    write_kv ARCLINK_ORG_MISSION "${ARCLINK_ORG_MISSION:-}"
+    write_kv ARCLINK_ORG_PRIMARY_PROJECT "${ARCLINK_ORG_PRIMARY_PROJECT:-}"
+    write_kv ARCLINK_ORG_TIMEZONE "${ARCLINK_ORG_TIMEZONE:-Etc/UTC}"
+    write_kv ARCLINK_ORG_QUIET_HOURS "${ARCLINK_ORG_QUIET_HOURS:-}"
+    write_kv ARCLINK_BOOTSTRAP_WINDOW_SECONDS "$ARCLINK_BOOTSTRAP_WINDOW_SECONDS"
+    write_kv ARCLINK_BOOTSTRAP_PER_IP_LIMIT "$ARCLINK_BOOTSTRAP_PER_IP_LIMIT"
+    write_kv ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT "$ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT"
+    write_kv ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS "$ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS"
+    write_kv ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS "$ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS"
+    write_kv ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS "$ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS"
+    write_kv ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS "$ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS"
     write_kv PDF_INGEST_ENABLED "$PDF_INGEST_ENABLED"
     write_kv PDF_INGEST_EXTRACTOR "$PDF_INGEST_EXTRACTOR"
     write_kv PDF_INGEST_TRIGGER_QMD_REFRESH "${PDF_INGEST_TRIGGER_QMD_REFRESH:-1}"
@@ -1938,17 +1938,17 @@ emit_runtime_config() {
     write_kv PDF_VISION_MODEL "${PDF_VISION_MODEL:-}"
     write_kv PDF_VISION_API_KEY "${PDF_VISION_API_KEY:-}"
     write_kv PDF_VISION_MAX_PAGES "${PDF_VISION_MAX_PAGES:-6}"
-    write_kv ALMANAC_MEMORY_SYNTH_ENABLED "${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}"
-    write_kv ALMANAC_MEMORY_SYNTH_ENDPOINT "${ALMANAC_MEMORY_SYNTH_ENDPOINT:-}"
-    write_kv ALMANAC_MEMORY_SYNTH_MODEL "${ALMANAC_MEMORY_SYNTH_MODEL:-}"
-    write_kv ALMANAC_MEMORY_SYNTH_API_KEY "${ALMANAC_MEMORY_SYNTH_API_KEY:-}"
-    write_kv ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN "${ALMANAC_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
-    write_kv ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS "${ALMANAC_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
-    write_kv ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS "${ALMANAC_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
-    write_kv ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS "${ALMANAC_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
-    write_kv ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS "${ALMANAC_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
-    write_kv ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT "${ALMANAC_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
-    write_kv ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE "${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"
+    write_kv ARCLINK_MEMORY_SYNTH_ENABLED "${ARCLINK_MEMORY_SYNTH_ENABLED:-auto}"
+    write_kv ARCLINK_MEMORY_SYNTH_ENDPOINT "${ARCLINK_MEMORY_SYNTH_ENDPOINT:-}"
+    write_kv ARCLINK_MEMORY_SYNTH_MODEL "${ARCLINK_MEMORY_SYNTH_MODEL:-}"
+    write_kv ARCLINK_MEMORY_SYNTH_API_KEY "${ARCLINK_MEMORY_SYNTH_API_KEY:-}"
+    write_kv ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN "${ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}"
+    write_kv ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS "${ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}"
+    write_kv ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS "${ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}"
+    write_kv ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS "${ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}"
+    write_kv ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS "${ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}"
+    write_kv ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT "${ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}"
+    write_kv ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE "${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}"
     write_kv VAULT_WATCH_DEBOUNCE_SECONDS "${VAULT_WATCH_DEBOUNCE_SECONDS:-0.5}"
     write_kv VAULT_WATCH_MAX_BATCH_SECONDS "${VAULT_WATCH_MAX_BATCH_SECONDS:-10}"
     write_kv VAULT_WATCH_RUN_EMBED "${VAULT_WATCH_RUN_EMBED:-auto}"
@@ -1968,57 +1968,57 @@ emit_runtime_config() {
     write_kv NEXTCLOUD_VAULT_MOUNT_POINT "${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
     write_kv OPERATOR_NOTIFY_CHANNEL_PLATFORM "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
     write_kv OPERATOR_NOTIFY_CHANNEL_ID "${OPERATOR_NOTIFY_CHANNEL_ID:-}"
-    write_kv ALMANAC_OPERATOR_TELEGRAM_USER_IDS "${ALMANAC_OPERATOR_TELEGRAM_USER_IDS:-}"
-    write_kv ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}"
-    write_kv ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-}"
-    write_kv ALMANAC_ONBOARDING_WINDOW_SECONDS "${ALMANAC_ONBOARDING_WINDOW_SECONDS:-3600}"
-    write_kv ALMANAC_ONBOARDING_PER_USER_LIMIT "${ALMANAC_ONBOARDING_PER_USER_LIMIT:-${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}}"
-    write_kv ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT "${ALMANAC_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}"
-    write_kv ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT "${ALMANAC_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
-    write_kv ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT "${ALMANAC_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
+    write_kv ARCLINK_OPERATOR_TELEGRAM_USER_IDS "${ARCLINK_OPERATOR_TELEGRAM_USER_IDS:-}"
+    write_kv ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}"
+    write_kv ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-}"
+    write_kv ARCLINK_ONBOARDING_WINDOW_SECONDS "${ARCLINK_ONBOARDING_WINDOW_SECONDS:-3600}"
+    write_kv ARCLINK_ONBOARDING_PER_USER_LIMIT "${ARCLINK_ONBOARDING_PER_USER_LIMIT:-${ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}}"
+    write_kv ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT "${ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT:-3}"
+    write_kv ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT "${ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT:-20}"
+    write_kv ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT "${ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT:-3}"
     write_kv OPERATOR_GENERAL_CHANNEL_PLATFORM "${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
     write_kv OPERATOR_GENERAL_CHANNEL_ID "${OPERATOR_GENERAL_CHANNEL_ID:-}"
     write_kv TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
-    write_kv ALMANAC_MODEL_PRESET_CODEX "${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
-    write_kv ALMANAC_MODEL_PRESET_OPUS "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
-    write_kv ALMANAC_MODEL_PRESET_CHUTES "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
-    write_kv ALMANAC_ORG_PROVIDER_ENABLED "${ALMANAC_ORG_PROVIDER_ENABLED:-0}"
-    write_kv ALMANAC_ORG_PROVIDER_PRESET "${ALMANAC_ORG_PROVIDER_PRESET:-}"
-    write_kv ALMANAC_ORG_PROVIDER_MODEL_ID "${ALMANAC_ORG_PROVIDER_MODEL_ID:-}"
-    write_kv ALMANAC_ORG_PROVIDER_REASONING_EFFORT "${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}"
-    write_kv ALMANAC_ORG_PROVIDER_SECRET_PROVIDER "${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
-    write_kv ALMANAC_ORG_PROVIDER_SECRET "${ALMANAC_ORG_PROVIDER_SECRET:-}"
-    write_kv ALMANAC_CURATOR_MODEL_PRESET "${ALMANAC_CURATOR_MODEL_PRESET:-codex}"
-    write_kv ALMANAC_CURATOR_CHANNELS "${ALMANAC_CURATOR_CHANNELS:-tui-only}"
-    write_kv ALMANAC_HERMES_AGENT_REF "$hermes_agent_ref"
-    write_kv ALMANAC_HERMES_DOCS_SYNC_ENABLED "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}"
-    write_kv ALMANAC_HERMES_DOCS_REPO_URL "$hermes_docs_repo_url"
-    write_kv ALMANAC_HERMES_DOCS_REF "$hermes_docs_ref"
-    write_kv ALMANAC_HERMES_DOCS_SOURCE_SUBDIR "${ALMANAC_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
-    write_kv ALMANAC_HERMES_DOCS_STATE_DIR "${ALMANAC_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
-    write_kv ALMANAC_HERMES_DOCS_VAULT_DIR "${ALMANAC_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Agents_KB/hermes-agent-docs}"
-    write_kv ALMANAC_EXTRA_MCP_NAME "${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
-    write_kv ALMANAC_EXTRA_MCP_LABEL "${ALMANAC_EXTRA_MCP_LABEL:-External knowledge rail}"
-    write_kv ALMANAC_EXTRA_MCP_URL "${ALMANAC_EXTRA_MCP_URL:-}"
-    write_kv ALMANAC_UPSTREAM_REPO_URL "${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
-    write_kv ALMANAC_UPSTREAM_BRANCH "${ALMANAC_UPSTREAM_BRANCH:-main}"
-    write_kv ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
-    write_kv ALMANAC_UPSTREAM_DEPLOY_KEY_USER "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
-    write_kv ALMANAC_UPSTREAM_DEPLOY_KEY_PATH "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
-    write_kv ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE "${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
-    write_kv ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE "${ALMANAC_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
-    write_kv ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE "${ALMANAC_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
-    write_kv ALMANAC_AGENT_CODE_PORT_BASE "${ALMANAC_AGENT_CODE_PORT_BASE:-39000}"
-    write_kv ALMANAC_AGENT_PORT_SLOT_SPAN "${ALMANAC_AGENT_PORT_SLOT_SPAN:-5000}"
-    write_kv ALMANAC_AGENT_CODE_SERVER_IMAGE "$code_server_image"
-    write_kv ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
-    write_kv ALMANAC_RELEASE_STATE_FILE "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+    write_kv ARCLINK_MODEL_PRESET_CODEX "${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
+    write_kv ARCLINK_MODEL_PRESET_OPUS "${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
+    write_kv ARCLINK_MODEL_PRESET_CHUTES "${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
+    write_kv ARCLINK_ORG_PROVIDER_ENABLED "${ARCLINK_ORG_PROVIDER_ENABLED:-0}"
+    write_kv ARCLINK_ORG_PROVIDER_PRESET "${ARCLINK_ORG_PROVIDER_PRESET:-}"
+    write_kv ARCLINK_ORG_PROVIDER_MODEL_ID "${ARCLINK_ORG_PROVIDER_MODEL_ID:-}"
+    write_kv ARCLINK_ORG_PROVIDER_REASONING_EFFORT "${ARCLINK_ORG_PROVIDER_REASONING_EFFORT:-medium}"
+    write_kv ARCLINK_ORG_PROVIDER_SECRET_PROVIDER "${ARCLINK_ORG_PROVIDER_SECRET_PROVIDER:-}"
+    write_kv ARCLINK_ORG_PROVIDER_SECRET "${ARCLINK_ORG_PROVIDER_SECRET:-}"
+    write_kv ARCLINK_CURATOR_MODEL_PRESET "${ARCLINK_CURATOR_MODEL_PRESET:-codex}"
+    write_kv ARCLINK_CURATOR_CHANNELS "${ARCLINK_CURATOR_CHANNELS:-tui-only}"
+    write_kv ARCLINK_HERMES_AGENT_REF "$hermes_agent_ref"
+    write_kv ARCLINK_HERMES_DOCS_SYNC_ENABLED "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}"
+    write_kv ARCLINK_HERMES_DOCS_REPO_URL "$hermes_docs_repo_url"
+    write_kv ARCLINK_HERMES_DOCS_REF "$hermes_docs_ref"
+    write_kv ARCLINK_HERMES_DOCS_SOURCE_SUBDIR "${ARCLINK_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
+    write_kv ARCLINK_HERMES_DOCS_STATE_DIR "${ARCLINK_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
+    write_kv ARCLINK_HERMES_DOCS_VAULT_DIR "${ARCLINK_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Agents_KB/hermes-agent-docs}"
+    write_kv ARCLINK_EXTRA_MCP_NAME "${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
+    write_kv ARCLINK_EXTRA_MCP_LABEL "${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
+    write_kv ARCLINK_EXTRA_MCP_URL "${ARCLINK_EXTRA_MCP_URL:-}"
+    write_kv ARCLINK_UPSTREAM_REPO_URL "${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
+    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-main}"
+    write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+    write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_USER "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
+    write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_PATH "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
+    write_kv ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE "${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}"
+    write_kv ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE "${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
+    write_kv ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE "${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
+    write_kv ARCLINK_AGENT_CODE_PORT_BASE "${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
+    write_kv ARCLINK_AGENT_PORT_SLOT_SPAN "${ARCLINK_AGENT_PORT_SLOT_SPAN:-5000}"
+    write_kv ARCLINK_AGENT_CODE_SERVER_IMAGE "$code_server_image"
+    write_kv ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
+    write_kv ARCLINK_RELEASE_STATE_FILE "${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
     write_kv ENABLE_NEXTCLOUD "$ENABLE_NEXTCLOUD"
     write_kv ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
     write_kv TAILSCALE_SERVE_PORT "${TAILSCALE_SERVE_PORT:-443}"
     write_kv TAILSCALE_OPERATOR_USER "${TAILSCALE_OPERATOR_USER:-}"
     write_kv TAILSCALE_QMD_PATH "${TAILSCALE_QMD_PATH:-/mcp}"
-    write_kv TAILSCALE_ALMANAC_MCP_PATH "${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
+    write_kv TAILSCALE_ARCLINK_MCP_PATH "${TAILSCALE_ARCLINK_MCP_PATH:-/arclink-mcp}"
     write_kv ENABLE_PRIVATE_GIT "$ENABLE_PRIVATE_GIT"
     write_kv ENABLE_QUARTO "$ENABLE_QUARTO"
     write_kv SEED_SAMPLE_VAULT "$SEED_SAMPLE_VAULT"
@@ -2054,10 +2054,10 @@ write_answers_file() {
   mkdir -p "$(dirname "$target")"
   {
     emit_runtime_config
-    write_kv ALMANAC_INSTALL_PODMAN "${ALMANAC_INSTALL_PODMAN:-auto}"
-    write_kv ALMANAC_INSTALL_TAILSCALE "${ALMANAC_INSTALL_TAILSCALE:-auto}"
-    write_kv ALMANAC_INSTALL_PUBLIC_GIT "${ALMANAC_INSTALL_PUBLIC_GIT:-0}"
-    write_kv ALMANAC_ORG_PROFILE_BUILDER_ENABLED "${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-0}"
+    write_kv ARCLINK_INSTALL_PODMAN "${ARCLINK_INSTALL_PODMAN:-auto}"
+    write_kv ARCLINK_INSTALL_TAILSCALE "${ARCLINK_INSTALL_TAILSCALE:-auto}"
+    write_kv ARCLINK_INSTALL_PUBLIC_GIT "${ARCLINK_INSTALL_PUBLIC_GIT:-0}"
+    write_kv ARCLINK_ORG_PROFILE_BUILDER_ENABLED "${ARCLINK_ORG_PROFILE_BUILDER_ENABLED:-0}"
     write_kv WIPE_NEXTCLOUD_STATE "${WIPE_NEXTCLOUD_STATE:-0}"
     write_kv REMOVE_PUBLIC_REPO "${REMOVE_PUBLIC_REPO:-1}"
     write_kv REMOVE_USER_TOOLING "${REMOVE_USER_TOOLING:-1}"
@@ -2075,7 +2075,7 @@ org_profile_builder_python() {
     return 0
   fi
 
-  venv_dir="${ALMANAC_ORG_PROFILE_BUILDER_VENV:-${ALMANAC_PRIV_DIR:-$repo_dir/almanac-priv}/state/runtime/org-profile-builder-venv}"
+  venv_dir="${ARCLINK_ORG_PROFILE_BUILDER_VENV:-${ARCLINK_PRIV_DIR:-$repo_dir/arclink-priv}/state/runtime/org-profile-builder-venv}"
   python_bin="$venv_dir/bin/python3"
   if [[ ! -x "$python_bin" ]]; then
     mkdir -p "$(dirname "$venv_dir")"
@@ -2090,10 +2090,10 @@ org_profile_builder_python() {
 
 maybe_run_org_profile_builder() {
   local repo_dir="${1:-$BOOTSTRAP_DIR}"
-  local profile_path="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/org-profile.yaml"
+  local profile_path="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}/org-profile.yaml"
   local builder_python=""
 
-  if [[ "${ALMANAC_ORG_PROFILE_BUILDER_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_ORG_PROFILE_BUILDER_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
   if [[ ! -t 0 ]]; then
@@ -2112,39 +2112,39 @@ maybe_run_org_profile_builder() {
     echo "Could not prepare Python dependencies for the operating profile builder." >&2
     return 1
   fi
-  ALMANAC_ORG_PROFILE_BUILDER_PYTHON="$builder_python" "$repo_dir/bin/org-profile-builder.sh" --file "$profile_path"
+  ARCLINK_ORG_PROFILE_BUILDER_PYTHON="$builder_python" "$repo_dir/bin/org-profile-builder.sh" --file "$profile_path"
   chmod 600 "$profile_path" >/dev/null 2>&1 || true
-  if [[ ${EUID:-$(id -u)} -eq 0 && -n "${ALMANAC_USER:-}" ]]; then
-    chown "$ALMANAC_USER:$ALMANAC_USER" "$profile_path" >/dev/null 2>&1 || true
+  if [[ ${EUID:-$(id -u)} -eq 0 && -n "${ARCLINK_USER:-}" ]]; then
+    chown "$ARCLINK_USER:$ARCLINK_USER" "$profile_path" >/dev/null 2>&1 || true
   fi
 }
 
 apply_org_profile_if_present_root() {
-  local profile_path="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}/org-profile.yaml"
+  local profile_path="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}/org-profile.yaml"
 
   if [[ ! -f "$profile_path" ]]; then
     return 0
   fi
-  if [[ ! -x "$ALMANAC_REPO_DIR/bin/almanac-ctl" ]]; then
-    echo "Skipping operating profile apply because almanac-ctl is not installed yet."
+  if [[ ! -x "$ARCLINK_REPO_DIR/bin/arclink-ctl" ]]; then
+    echo "Skipping operating profile apply because arclink-ctl is not installed yet."
     return 0
   fi
 
   echo
   echo "Applying private operating profile..."
-  run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" org-profile apply --file "$profile_path" --yes --actor "deploy"
+  run_service_user_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" org-profile apply --file "$profile_path" --yes --actor "deploy"
 }
 
 seed_private_repo() {
   local target_dir="$1"
   mkdir -p "$target_dir"
-  if [[ -d "$BOOTSTRAP_DIR/templates/almanac-priv/" ]]; then
-    rsync -a --ignore-existing "$BOOTSTRAP_DIR/templates/almanac-priv/" "$target_dir/"
+  if [[ -d "$BOOTSTRAP_DIR/templates/arclink-priv/" ]]; then
+    rsync -a --ignore-existing "$BOOTSTRAP_DIR/templates/arclink-priv/" "$target_dir/"
   fi
 }
 
 sync_public_repo() {
-  sync_public_repo_from_source "$BOOTSTRAP_DIR" "$ALMANAC_REPO_DIR"
+  sync_public_repo_from_source "$BOOTSTRAP_DIR" "$ARCLINK_REPO_DIR"
 }
 
 sync_public_repo_from_source() {
@@ -2171,8 +2171,8 @@ PY
   rsync -a --delete \
     --exclude '/.git' \
     --exclude '/.git/' \
-    --exclude '/almanac-priv/' \
-    --exclude '/.almanac-operator.env' \
+    --exclude '/arclink-priv/' \
+    --exclude '/.arclink-operator.env' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
     --exclude '.DS_Store' \
@@ -2188,7 +2188,7 @@ sync_public_repo_git_metadata_from_source() {
   if [[ ! -d "$source_dir/.git" ]]; then
     return 0
   fi
-  if [[ ! -d "$target_dir/.git" && "${ALMANAC_INSTALL_PUBLIC_GIT:-0}" != "1" ]]; then
+  if [[ ! -d "$target_dir/.git" && "${ARCLINK_INSTALL_PUBLIC_GIT:-0}" != "1" ]]; then
     return 0
   fi
 
@@ -2212,9 +2212,9 @@ git_origin_url() {
   git -C "$repo_dir" remote get-url origin 2>/dev/null || true
 }
 
-is_placeholder_almanac_upstream_repo_url() {
+is_placeholder_arclink_upstream_repo_url() {
   case "${1:-}" in
-    ""|https://github.com/example/almanac|https://github.com/example/almanac.git|git@github.com:example/almanac.git)
+    ""|https://github.com/example/arclink|https://github.com/example/arclink.git|git@github.com:example/arclink.git)
       return 0
       ;;
     *)
@@ -2223,20 +2223,20 @@ is_placeholder_almanac_upstream_repo_url() {
   esac
 }
 
-default_almanac_upstream_repo_url() {
+default_arclink_upstream_repo_url() {
   local origin_url=""
 
   origin_url="$(git_origin_url "$BOOTSTRAP_DIR")"
   if [[ -n "$origin_url" ]]; then
     printf '%s\n' "$origin_url"
   else
-    printf '%s\n' "https://github.com/example/almanac.git"
+    printf '%s\n' "https://github.com/example/arclink.git"
   fi
 }
 
 use_detected_upstream_repo_url_if_placeholder() {
-  if is_placeholder_almanac_upstream_repo_url "${ALMANAC_UPSTREAM_REPO_URL:-}"; then
-    ALMANAC_UPSTREAM_REPO_URL="$(default_almanac_upstream_repo_url)"
+  if is_placeholder_arclink_upstream_repo_url "${ARCLINK_UPSTREAM_REPO_URL:-}"; then
+    ARCLINK_UPSTREAM_REPO_URL="$(default_arclink_upstream_repo_url)"
   fi
 }
 
@@ -2254,9 +2254,9 @@ begin_deploy_operation() {
     return 0
   fi
 
-  marker="$state_dir/almanac-deploy-operation.json"
+  marker="$state_dir/arclink-deploy-operation.json"
   mkdir -p "$state_dir" 2>/dev/null || return 0
-  if python3 - "$marker" "$operation" "$$" "$ALMANAC_DEPLOY_OPERATION_TTL_SECONDS" <<'PY'
+  if python3 - "$marker" "$operation" "$$" "$ARCLINK_DEPLOY_OPERATION_TTL_SECONDS" <<'PY'
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -2276,14 +2276,14 @@ payload = {
 target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   then
-    ALMANAC_DEPLOY_OPERATION_MARKER="$marker"
+    ARCLINK_DEPLOY_OPERATION_MARKER="$marker"
   fi
 }
 
 finish_deploy_operation() {
-  if [[ -n "${ALMANAC_DEPLOY_OPERATION_MARKER:-}" ]]; then
-    rm -f "$ALMANAC_DEPLOY_OPERATION_MARKER"
-    ALMANAC_DEPLOY_OPERATION_MARKER=""
+  if [[ -n "${ARCLINK_DEPLOY_OPERATION_MARKER:-}" ]]; then
+    rm -f "$ARCLINK_DEPLOY_OPERATION_MARKER"
+    ARCLINK_DEPLOY_OPERATION_MARKER=""
   fi
 }
 
@@ -2293,10 +2293,10 @@ write_release_state() {
   local source_repo_url="${3:-}"
   local source_branch="${4:-}"
   local source_path="${5:-}"
-  local target="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+  local target="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
 
   mkdir -p "$(dirname "$target")"
-  python3 - "$target" "$source_kind" "$deployed_commit" "$source_repo_url" "$source_branch" "$source_path" "${ALMANAC_UPSTREAM_REPO_URL:-}" "${ALMANAC_UPSTREAM_BRANCH:-}" <<'PY'
+  python3 - "$target" "$source_kind" "$deployed_commit" "$source_repo_url" "$source_branch" "$source_path" "${ARCLINK_UPSTREAM_REPO_URL:-}" "${ARCLINK_UPSTREAM_BRANCH:-}" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -2324,50 +2324,50 @@ checkout_upstream_release() {
     echo "git is required for deploy.sh upgrade." >&2
     return 1
   fi
-  if git_remote_uses_ssh "${ALMANAC_UPSTREAM_REPO_URL:-}" && [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
-    echo "Refusing SSH upstream without the Almanac upstream deploy-key lane enabled." >&2
-    echo "Run ./deploy.sh install to configure ALMANAC_UPSTREAM_DEPLOY_KEY_* or use an HTTPS upstream." >&2
+  if git_remote_uses_ssh "${ARCLINK_UPSTREAM_REPO_URL:-}" && [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+    echo "Refusing SSH upstream without the ArcLink upstream deploy-key lane enabled." >&2
+    echo "Run ./deploy.sh install to configure ARCLINK_UPSTREAM_DEPLOY_KEY_* or use an HTTPS upstream." >&2
     return 1
   fi
 
   rm -rf "$checkout_dir"
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$ALMANAC_UPSTREAM_REPO_URL"; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$ARCLINK_UPSTREAM_REPO_URL"; then
     GIT_TERMINAL_PROMPT=0 \
     GIT_ASKPASS=/bin/false \
     SSH_ASKPASS=/bin/false \
     GCM_INTERACTIVE=Never \
     GIT_SSH_COMMAND="$(upstream_git_ssh_command)" \
-      git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
-      "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
+      git clone --depth 1 --branch "$ARCLINK_UPSTREAM_BRANCH" --single-branch \
+      "$ARCLINK_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
   else
     GIT_TERMINAL_PROMPT=0 \
     GIT_ASKPASS=/bin/false \
     SSH_ASKPASS=/bin/false \
     GCM_INTERACTIVE=Never \
-      git clone --depth 1 --branch "$ALMANAC_UPSTREAM_BRANCH" --single-branch \
-      "$ALMANAC_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
+      git clone --depth 1 --branch "$ARCLINK_UPSTREAM_BRANCH" --single-branch \
+      "$ARCLINK_UPSTREAM_REPO_URL" "$checkout_dir" >/dev/null
   fi
 }
 
 require_main_upstream_branch_for_upgrade() {
-  local branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
-  if [[ "$branch" == "main" || "${ALMANAC_ALLOW_NON_MAIN_UPGRADE:-0}" == "1" ]]; then
+  local branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  if [[ "$branch" == "main" || "${ARCLINK_ALLOW_NON_MAIN_UPGRADE:-0}" == "1" ]]; then
     return 0
   fi
   echo "Refusing production upgrade from non-main upstream branch: $branch" >&2
-  echo "Set ALMANAC_ALLOW_NON_MAIN_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
+  echo "Set ARCLINK_ALLOW_NON_MAIN_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
   return 1
 }
 
 write_operator_checkout_artifact() {
-  local artifact="${ALMANAC_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.almanac-operator.env}"
+  local artifact="${ARCLINK_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.arclink-operator.env}"
   local config_target="${CONFIG_TARGET:-${DISCOVERED_CONFIG:-}}"
   local status=""
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 0
   fi
-  if [[ -n "${ALMANAC_CONFIG_FILE:-}" ]]; then
+  if [[ -n "${ARCLINK_CONFIG_FILE:-}" ]]; then
     return 0
   fi
   if [[ ! -d "$BOOTSTRAP_DIR" || ! -w "$BOOTSTRAP_DIR" ]]; then
@@ -2380,11 +2380,11 @@ write_operator_checkout_artifact() {
 
   mkdir -p "$(dirname "$artifact")"
   {
-    printf '# Managed by Almanac deploy helpers. Local maintenance pointer only.\n'
-    printf 'ALMANAC_OPERATOR_DEPLOYED_USER=%q\n' "${ALMANAC_USER:-}"
-    printf 'ALMANAC_OPERATOR_DEPLOYED_REPO_DIR=%q\n' "${ALMANAC_REPO_DIR:-}"
-    printf 'ALMANAC_OPERATOR_DEPLOYED_PRIV_DIR=%q\n' "${ALMANAC_PRIV_DIR:-}"
-    printf 'ALMANAC_OPERATOR_DEPLOYED_CONFIG_FILE=%q\n' "$config_target"
+    printf '# Managed by ArcLink deploy helpers. Local maintenance pointer only.\n'
+    printf 'ARCLINK_OPERATOR_DEPLOYED_USER=%q\n' "${ARCLINK_USER:-}"
+    printf 'ARCLINK_OPERATOR_DEPLOYED_REPO_DIR=%q\n' "${ARCLINK_REPO_DIR:-}"
+    printf 'ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR=%q\n' "${ARCLINK_PRIV_DIR:-}"
+    printf 'ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE=%q\n' "$config_target"
   } >"$artifact"
 }
 
@@ -2403,13 +2403,13 @@ run_as_user_systemd() {
 
 refresh_upgrade_check_state_root() {
   local deployed_commit="${1:-}"
-  local tracked_repo="${2:-${ALMANAC_UPSTREAM_REPO_URL:-}}"
-  local tracked_branch="${3:-${ALMANAC_UPSTREAM_BRANCH:-main}}"
-  if [[ -z "$deployed_commit" || -z "${ALMANAC_DB_PATH:-}" ]]; then
+  local tracked_repo="${2:-${ARCLINK_UPSTREAM_REPO_URL:-}}"
+  local tracked_branch="${3:-${ARCLINK_UPSTREAM_BRANCH:-main}}"
+  if [[ -z "$deployed_commit" || -z "${ARCLINK_DB_PATH:-}" ]]; then
     return 0
   fi
 
-  python3 - "$ALMANAC_DB_PATH" "$deployed_commit" "$tracked_repo" "$tracked_branch" <<'PY' || true
+  python3 - "$ARCLINK_DB_PATH" "$deployed_commit" "$tracked_repo" "$tracked_branch" <<'PY' || true
 import datetime as dt
 import sqlite3
 import sys
@@ -2442,8 +2442,8 @@ conn.execute(
     """
 )
 for key, value in [
-    ("almanac_upgrade_last_seen_sha", deployed_commit),
-    ("almanac_upgrade_relation", "equal"),
+    ("arclink_upgrade_last_seen_sha", deployed_commit),
+    ("arclink_upgrade_relation", "equal"),
 ]:
     conn.execute(
         """
@@ -2456,7 +2456,7 @@ for key, value in [
 conn.execute(
     """
     INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
-    VALUES ('almanac-upgrade-check', 'upgrade-check', 'almanac', 'every 1h', ?, 'ok', ?)
+    VALUES ('arclink-upgrade-check', 'upgrade-check', 'arclink', 'every 1h', ?, 'ok', ?)
     ON CONFLICT(job_name) DO UPDATE SET
       target_id = excluded.target_id,
       schedule = excluded.schedule,
@@ -2482,11 +2482,11 @@ if table is not None:
             SET delivered_at = ?
             WHERE delivered_at IS NULL
               AND (
-                (target_kind = 'operator' AND message LIKE 'Almanac update available:%')
+                (target_kind = 'operator' AND message LIKE 'ArcLink update available:%')
                 OR (
                   target_kind = 'user-agent'
-                  AND channel_kind = 'almanac-upgrade'
-                  AND message LIKE 'Curator reports an Almanac host update is available:%'
+                  AND channel_kind = 'arclink-upgrade'
+                  AND message LIKE 'Curator reports an ArcLink host update is available:%'
                 )
               )
             """,
@@ -2495,7 +2495,7 @@ if table is not None:
 conn.commit()
 conn.close()
 PY
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_DB_PATH" "$ALMANAC_DB_PATH"-* >/dev/null 2>&1 || true
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$ARCLINK_DB_PATH" "$ARCLINK_DB_PATH"-* >/dev/null 2>&1 || true
 }
 
 set_user_systemd_bus_env() {
@@ -2516,21 +2516,21 @@ set_user_systemd_bus_env() {
 }
 
 curator_bootstrap_env_prefix() {
-  printf '%s' "ALMANAC_CONFIG_FILE='$CONFIG_TARGET'"
+  printf '%s' "ARCLINK_CONFIG_FILE='$CONFIG_TARGET'"
 
   local key=""
   for key in \
-    ALMANAC_CURATOR_SKIP_HERMES_SETUP \
-    ALMANAC_CURATOR_SKIP_GATEWAY_SETUP \
-    ALMANAC_CURATOR_FORCE_HERMES_SETUP \
-    ALMANAC_CURATOR_FORCE_GATEWAY_SETUP \
-    ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE \
-    ALMANAC_CURATOR_NOTIFY_PLATFORM \
-    ALMANAC_CURATOR_NOTIFY_CHANNEL_ID \
-    ALMANAC_CURATOR_GENERAL_PLATFORM \
-    ALMANAC_CURATOR_GENERAL_CHANNEL_ID \
-    ALMANAC_CURATOR_MODEL_PRESET \
-    ALMANAC_CURATOR_CHANNELS
+    ARCLINK_CURATOR_SKIP_HERMES_SETUP \
+    ARCLINK_CURATOR_SKIP_GATEWAY_SETUP \
+    ARCLINK_CURATOR_FORCE_HERMES_SETUP \
+    ARCLINK_CURATOR_FORCE_GATEWAY_SETUP \
+    ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE \
+    ARCLINK_CURATOR_NOTIFY_PLATFORM \
+    ARCLINK_CURATOR_NOTIFY_CHANNEL_ID \
+    ARCLINK_CURATOR_GENERAL_PLATFORM \
+    ARCLINK_CURATOR_GENERAL_CHANNEL_ID \
+    ARCLINK_CURATOR_MODEL_PRESET \
+    ARCLINK_CURATOR_CHANNELS
   do
     if [[ -n "${!key:-}" ]]; then
       printf ' %s=%q' "$key" "${!key}"
@@ -2587,40 +2587,40 @@ print_qmd_embedding_summary() {
 }
 
 maybe_offer_notion_ssot_setup_root() {
-  if [[ "${ALMANAC_INSTALL_OFFER_NOTION_SSOT:-1}" != "1" || ! -t 0 ]]; then
+  if [[ "${ARCLINK_INSTALL_OFFER_NOTION_SSOT:-1}" != "1" || ! -t 0 ]]; then
     return 0
   fi
 
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
-  if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" || -n "${ALMANAC_SSOT_NOTION_TOKEN:-}" ]]; then
+  if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" || -n "${ARCLINK_SSOT_NOTION_TOKEN:-}" ]]; then
     return 0
   fi
 
   echo
   echo "Shared Notion SSOT is not configured yet."
-  echo "This optional walkthrough asks for the normal Notion page Almanac should use,"
+  echo "This optional walkthrough asks for the normal Notion page ArcLink should use,"
   echo "the internal integration secret, and the webhook verification if public ingress is enabled."
   if [[ "$(ask_yes_no "Configure the shared Notion SSOT page now" "0")" != "1" ]]; then
-    echo "Skipping shared Notion setup. Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot when the page and integration are ready."
+    echo "Skipping shared Notion setup. Run $ARCLINK_REPO_DIR/deploy.sh notion-ssot when the page and integration are ready."
     return 0
   fi
 
   if ! ( run_notion_ssot_setup ); then
-    echo "Optional shared Notion setup did not complete; continuing with the core Almanac install." >&2
+    echo "Optional shared Notion setup did not complete; continuing with the core ArcLink install." >&2
     return 0
   fi
 
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
-  if [[ -z "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+  if [[ -z "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then
     return 0
   fi
 
   notion_migration_restart_services || true
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh" || true
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh" || true
   fi
-  wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 20 1 || true
-  wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 20 1 || true
+  wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT" 20 1 || true
+  wait_for_port 127.0.0.1 "$ARCLINK_NOTION_WEBHOOK_PORT" 20 1 || true
 }
 
 print_post_install_guide() {
@@ -2641,7 +2641,7 @@ print_post_install_guide() {
   echo "    $VAULT_DIR"
   echo "  qmd indexes markdown and direct text files from this exact path."
   echo "  Host watcher:"
-  echo "    almanac-vault-watch.service"
+  echo "    arclink-vault-watch.service"
   echo "  Direct vault file types:"
   echo "    .md, .markdown, .mdx, .txt, .text"
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
@@ -2732,31 +2732,31 @@ print_post_install_guide() {
     fi
   fi
   echo "  Config snippet:"
-  echo "    $ALMANAC_REPO_DIR/docs/hermes-qmd-config.yaml"
+  echo "    $ARCLINK_REPO_DIR/docs/hermes-qmd-config.yaml"
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     echo "  PDF-derived qmd collection:"
     echo "    $PDF_INGEST_COLLECTION_NAME"
   fi
   echo "  Quick check:"
-  echo "    $ALMANAC_REPO_DIR/deploy.sh health"
+  echo "    $ARCLINK_REPO_DIR/deploy.sh health"
   echo
 
-  echo "Almanac control plane"
+  echo "ArcLink control plane"
   echo "  Control-plane MCP:"
-  echo "    http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp"
-  if [[ "$AGENT_ALMANAC_MCP_URL_MODE" == "tailnet" ]]; then
+  echo "    http://${ARCLINK_MCP_HOST:-127.0.0.1}:${ARCLINK_MCP_PORT:-8282}/mcp"
+  if [[ "$AGENT_ARCLINK_MCP_URL_MODE" == "tailnet" ]]; then
     echo "  Tailnet bootstrap MCP:"
-    echo "    $AGENT_ALMANAC_MCP_URL"
-    if [[ "$AGENT_ALMANAC_MCP_ROUTE_STATUS" != "live" ]]; then
+    echo "    $AGENT_ARCLINK_MCP_URL"
+    if [[ "$AGENT_ARCLINK_MCP_ROUTE_STATUS" != "live" ]]; then
       echo "  Tailnet route note:"
-      echo "    hostname detected, but current tailscale serve status does not show ${TAILSCALE_ALMANAC_MCP_PATH}"
+      echo "    hostname detected, but current tailscale serve status does not show ${TAILSCALE_ARCLINK_MCP_PATH}"
     fi
   fi
   echo "  Notion webhook receiver (local):"
-  echo "    http://${ALMANAC_NOTION_WEBHOOK_HOST:-127.0.0.1}:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}/notion/webhook"
-  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+  echo "    http://${ARCLINK_NOTION_WEBHOOK_HOST:-127.0.0.1}:${ARCLINK_NOTION_WEBHOOK_PORT:-8283}/notion/webhook"
+  if [[ -n "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     echo "  Notion webhook URL (public HTTPS):"
-    echo "    ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+    echo "    ${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL}"
     if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
       echo "  Exposure:"
       echo "    public internet via Tailscale Funnel on port ${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
@@ -2768,7 +2768,7 @@ print_post_install_guide() {
     echo "  Notion webhook setup:"
     echo "    1. Open the Notion Developer Portal for this integration and go to the Webhooks tab."
     echo "    2. If a subscription already exists for this exact URL, edit that subscription."
-    echo "       Do not create a second webhook subscription for the same Almanac endpoint."
+    echo "       Do not create a second webhook subscription for the same ArcLink endpoint."
     echo "    3. Use this exact event selection:"
     echo "       - Page: select all Page events"
     echo "       - Database: select all Database events"
@@ -2776,7 +2776,7 @@ print_post_install_guide() {
     echo "       - File uploads: select all File upload events"
     echo "       - View: leave all View events unchecked"
     echo "       - Comment: leave all Comment events unchecked"
-    echo "    4. Run $ALMANAC_REPO_DIR/deploy.sh notion-ssot for the full step-by-step webhook walkthrough."
+    echo "    4. Run $ARCLINK_REPO_DIR/deploy.sh notion-ssot for the full step-by-step webhook walkthrough."
     echo "       It will pause at each Notion UI step, arm the install window,"
     echo "       wait for Notion to deliver the token, print the verification_token,"
     echo "       and record operator confirmation once Notion accepts the Verify step."
@@ -2784,47 +2784,47 @@ print_post_install_guide() {
     echo "  Notion webhook URL (public HTTPS):"
     echo "    not configured; Notion cannot reach 127.0.0.1 without separate public ingress"
   fi
-  if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+  if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then
     echo "  Shared Notion SSOT:"
-    echo "    ${ALMANAC_SSOT_NOTION_SPACE_URL}"
-    if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]]; then
+    echo "    ${ARCLINK_SSOT_NOTION_SPACE_URL}"
+    if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_KIND:-}" || -n "${ARCLINK_SSOT_NOTION_SPACE_ID:-}" ]]; then
       echo "  Shared Notion target:"
-      echo "    ${ALMANAC_SSOT_NOTION_SPACE_KIND:-object} ${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+      echo "    ${ARCLINK_SSOT_NOTION_SPACE_KIND:-object} ${ARCLINK_SSOT_NOTION_SPACE_ID:-}"
     fi
     echo "  Shared Notion index roots:"
-    echo "    ${ALMANAC_NOTION_INDEX_ROOTS:-${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-${ALMANAC_SSOT_NOTION_SPACE_URL:-not configured}}}"
+    echo "    ${ARCLINK_NOTION_INDEX_ROOTS:-${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-${ARCLINK_SSOT_NOTION_SPACE_URL:-not configured}}}"
   else
     echo "  Shared Notion SSOT:"
-    echo "    not configured yet; run $ALMANAC_REPO_DIR/deploy.sh notion-ssot"
+    echo "    not configured yet; run $ARCLINK_REPO_DIR/deploy.sh notion-ssot"
   fi
   echo "  Curator Hermes home:"
-  echo "    ${ALMANAC_CURATOR_HERMES_HOME:-$STATE_DIR/curator/hermes-home}"
+  echo "    ${ARCLINK_CURATOR_HERMES_HOME:-$STATE_DIR/curator/hermes-home}"
   echo "  Operator notification channel:"
   echo "    $(describe_operator_channel_summary "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}" "${OPERATOR_NOTIFY_CHANNEL_ID:-}")"
   echo "  Recovery CLI:"
-  echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl"
+  echo "    $ARCLINK_REPO_DIR/bin/arclink-ctl"
   echo "  Enrollment maintenance:"
-  echo "    $ALMANAC_REPO_DIR/deploy.sh enrollment-status"
-  echo "    $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
-  echo "    $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+  echo "    $ARCLINK_REPO_DIR/deploy.sh enrollment-status"
+  echo "    $ARCLINK_REPO_DIR/deploy.sh enrollment-align"
+  echo "    $ARCLINK_REPO_DIR/deploy.sh enrollment-reset"
   echo
 
-  echo "Almanac software updates"
+  echo "ArcLink software updates"
   echo "  Tracked upstream:"
-  echo "    ${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}#${ALMANAC_UPSTREAM_BRANCH:-main}"
+  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}#${ARCLINK_UPSTREAM_BRANCH:-main}"
   echo "  Release state:"
-  echo "    ${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+  echo "    ${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   echo "  Upgrade command:"
-  echo "    $ALMANAC_REPO_DIR/deploy.sh upgrade"
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]]; then
+  echo "    $ARCLINK_REPO_DIR/deploy.sh upgrade"
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]]; then
     local upstream_repo_page="" upstream_pub_key_path="" upstream_pub_key=""
-    upstream_repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
-    upstream_pub_key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+    upstream_repo_page="$(github_repo_page_from_remote "${ARCLINK_UPSTREAM_REPO_URL:-}")"
+    upstream_pub_key_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
     if [[ -f "$upstream_pub_key_path" ]]; then
       upstream_pub_key="$(<"$upstream_pub_key_path")"
     fi
     echo "  Upstream deploy key:"
-    echo "    ${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+    echo "    ${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
     if [[ -n "$upstream_repo_page" ]]; then
       echo "  Add or review that deploy key here:"
       echo "    $upstream_repo_page/settings/keys"
@@ -2836,12 +2836,12 @@ print_post_install_guide() {
     fi
   else
     echo "  Optional deploy key:"
-    echo "    rerun install or write-config and answer yes to the Almanac upstream deploy-key prompt"
+    echo "    rerun install or write-config and answer yes to the ArcLink upstream deploy-key prompt"
   fi
   echo "  Manual upstream check:"
-  echo "    $ALMANAC_REPO_DIR/bin/almanac-ctl upgrade check"
+  echo "    $ARCLINK_REPO_DIR/bin/arclink-ctl upgrade check"
   echo "  Curator routine:"
-  echo "    hourly via almanac-curator-refresh.timer using skill almanac-upgrade-orchestrator"
+  echo "    hourly via arclink-curator-refresh.timer using skill arclink-upgrade-orchestrator"
   echo
 
   print_agent_install_payload
@@ -2849,7 +2849,7 @@ print_post_install_guide() {
 
   echo "GitHub: backup / history"
   echo "  Private repo:"
-  echo "    $ALMANAC_PRIV_DIR"
+  echo "    $ARCLINK_PRIV_DIR"
   if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
     local backup_repo_page="" backup_pub_key_path="" backup_pub_key=""
     backup_repo_page="$(backup_github_repo_page_from_remote "$BACKUP_GIT_REMOTE")"
@@ -2873,10 +2873,10 @@ print_post_install_guide() {
       printf '    %s\n' "$backup_pub_key"
     fi
     echo "  Backup smoke test:"
-    echo "    sudo -iu $ALMANAC_USER env ALMANAC_CONFIG_FILE=\"$CONFIG_TARGET\" \"$ALMANAC_REPO_DIR/bin/backup-to-github.sh\""
+    echo "    sudo -iu $ARCLINK_USER env ARCLINK_CONFIG_FILE=\"$CONFIG_TARGET\" \"$ARCLINK_REPO_DIR/bin/backup-to-github.sh\""
   else
     echo "  Configure it on the next deploy run:"
-    echo "    GitHub owner/repo for almanac-priv backup"
+    echo "    GitHub owner/repo for arclink-priv backup"
     echo "  Or set these values in:"
     echo "    $CONFIG_TARGET"
     echo "    BACKUP_GIT_REMOTE=git@github.com:owner/repo.git"
@@ -2891,7 +2891,7 @@ print_post_install_guide() {
     echo "  Output:"
     echo "    $QUARTO_OUTPUT_DIR"
     echo "  Manual render:"
-    echo "    $ALMANAC_REPO_DIR/bin/render-quarto.sh"
+    echo "    $ARCLINK_REPO_DIR/bin/render-quarto.sh"
   else
     echo "  Disabled in config. Enable it later in:"
     echo "    $CONFIG_TARGET"
@@ -2899,32 +2899,32 @@ print_post_install_guide() {
 }
 
 agent_install_payload_path() {
-  local state_dir="${STATE_DIR:-${ALMANAC_PRIV_DIR:-$BOOTSTRAP_DIR/almanac-priv}/state}"
+  local state_dir="${STATE_DIR:-${ARCLINK_PRIV_DIR:-$BOOTSTRAP_DIR/arclink-priv}/state}"
   printf '%s/agent-install-payload.txt\n' "$state_dir"
 }
 
 render_agent_install_payload_body() {
   local -a payload_skills=(
-    "almanac-qmd-mcp"
-    "almanac-vault-reconciler"
-    "almanac-first-contact"
-    "almanac-vaults"
-    "almanac-ssot"
-    "almanac-notion-knowledge"
-    "almanac-ssot-connect"
-    "almanac-notion-mcp"
-    "almanac-resources"
+    "arclink-qmd-mcp"
+    "arclink-vault-reconciler"
+    "arclink-first-contact"
+    "arclink-vaults"
+    "arclink-ssot"
+    "arclink-notion-knowledge"
+    "arclink-ssot-connect"
+    "arclink-notion-mcp"
+    "arclink-resources"
   )
   local skill_name=""
 
   detect_github_repo
   resolve_agent_qmd_endpoint
   resolve_agent_control_plane_endpoint
-  echo "almanac_task_v1:"
-  echo "  goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer"
+  echo "arclink_task_v1:"
+  echo "  goal: enroll one shared-host user agent with explicit hermes setup, default ArcLink skills, arclink-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer"
   echo "  qmd_url: \"$AGENT_QMD_URL\""
-  echo "  almanac_mcp_url: \"http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp\""
-  echo "  almanac_bootstrap_url: \"$AGENT_ALMANAC_MCP_URL\""
+  echo "  arclink_mcp_url: \"http://${ARCLINK_MCP_HOST:-127.0.0.1}:${ARCLINK_MCP_PORT:-8282}/mcp\""
+  echo "  arclink_bootstrap_url: \"$AGENT_ARCLINK_MCP_URL\""
   echo "  qmd_collections:"
   echo "    - \"$QMD_COLLECTION_NAME\""
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
@@ -2945,35 +2945,35 @@ render_agent_install_payload_body() {
   fi
   echo "  skill_sources_local:"
   for skill_name in "${payload_skills[@]}"; do
-    echo "    - \"$ALMANAC_REPO_DIR/skills/$skill_name\""
+    echo "    - \"$ARCLINK_REPO_DIR/skills/$skill_name\""
   done
   echo "  model_presets:"
-  echo "    codex: \"$ALMANAC_MODEL_PRESET_CODEX\""
-  echo "    opus: \"$ALMANAC_MODEL_PRESET_OPUS\""
-  echo "    chutes: \"$ALMANAC_MODEL_PRESET_CHUTES\""
+  echo "    codex: \"$ARCLINK_MODEL_PRESET_CODEX\""
+  echo "    opus: \"$ARCLINK_MODEL_PRESET_OPUS\""
+  echo "    chutes: \"$ARCLINK_MODEL_PRESET_CHUTES\""
   echo "  actions:"
   echo "    - run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup; keep local TUI available under the user's Unix account"
-  echo "    - install default Almanac skills: qmd MCP, vault reconciler, first-contact, vaults, ssot, notion-knowledge, ssot-connect, and notion-mcp"
-  echo "    - \"hermes mcp add almanac-mcp --url http://${ALMANAC_MCP_HOST:-127.0.0.1}:${ALMANAC_MCP_PORT:-8282}/mcp\""
-  echo "    - \"hermes mcp add almanac-qmd --url $AGENT_QMD_URL\""
-  local extra_mcp_name="${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
-  if [[ -n "${ALMANAC_EXTRA_MCP_URL:-}" ]]; then
-    echo "    - \"hermes mcp add ${extra_mcp_name} --url ${ALMANAC_EXTRA_MCP_URL}\""
+  echo "    - install default ArcLink skills: qmd MCP, vault reconciler, first-contact, vaults, ssot, notion-knowledge, ssot-connect, and notion-mcp"
+  echo "    - \"hermes mcp add arclink-mcp --url http://${ARCLINK_MCP_HOST:-127.0.0.1}:${ARCLINK_MCP_PORT:-8282}/mcp\""
+  echo "    - \"hermes mcp add arclink-qmd --url $AGENT_QMD_URL\""
+  local extra_mcp_name="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
+  if [[ -n "${ARCLINK_EXTRA_MCP_URL:-}" ]]; then
+    echo "    - \"hermes mcp add ${extra_mcp_name} --url ${ARCLINK_EXTRA_MCP_URL}\""
   else
-    echo "    - register ${extra_mcp_name} during first contact when ALMANAC_EXTRA_MCP_URL is provided"
+    echo "    - register ${extra_mcp_name} during first contact when ARCLINK_EXTRA_MCP_URL is provided"
   fi
-  echo "    - install the shipped almanac-managed-context plugin; bin/install-almanac-plugins.sh auto-enables it for Hermes homes"
-  echo "    - rely on almanac-managed-context to inject Almanac MCP auth, per-intent recipe cards, and telemetry before tool dispatch"
-  echo "    - do not read HERMES_HOME secrets files and do not pass token in Almanac MCP tool calls; the plugin injects the bootstrap token automatically"
-  echo "    - run almanac-first-contact immediately after MCP registration"
+  echo "    - install the shipped arclink-managed-context plugin; bin/install-arclink-plugins.sh auto-enables it for Hermes homes"
+  echo "    - rely on arclink-managed-context to inject ArcLink MCP auth, per-intent recipe cards, and telemetry before tool dispatch"
+  echo "    - do not read HERMES_HOME secrets files and do not pass token in ArcLink MCP tool calls; the plugin injects the bootstrap token automatically"
+  echo "    - run arclink-first-contact immediately after MCP registration"
   echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, fetch agents.managed-memory, and materialize the initial plugin-managed context state"
-  echo "    - prefer the almanac-mcp recipe-card rails directly for vault catalog/subscription, shared Notion lookup, and SSOT reads/writes; shell wrappers are human fallback only"
+  echo "    - prefer the arclink-mcp recipe-card rails directly for vault catalog/subscription, shared Notion lookup, and SSOT reads/writes; shell wrappers are human fallback only"
   echo "    - install exactly one 4h refresh timer/service for the user agent, and rely on Curator fanout -> activation trigger -> user-agent-refresh for immediate plugin-context sync after vault/catalog changes"
   echo "  memory_contract:"
-  echo "    - maintain [managed:almanac-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:notion-ref], [managed:vault-topology], [managed:vault-landmarks], [managed:recall-stubs], [managed:notion-landmarks], [managed:notion-stub], and [managed:today-plate] in plugin-managed context state"
-  echo "    - do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md; MEMORY.md is user-owned long-lived memory, not the Almanac hot-swap rail"
-  echo "    - make [managed:almanac-skill-ref] explicit: Almanac skills are active defaults, not passive extras"
-  echo "    - make [managed:resource-ref] explicit: keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there"
+  echo "    - maintain [managed:arclink-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:notion-ref], [managed:vault-topology], [managed:vault-landmarks], [managed:recall-stubs], [managed:notion-landmarks], [managed:notion-stub], and [managed:today-plate] in plugin-managed context state"
+  echo "    - do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md; MEMORY.md is user-owned long-lived memory, not the ArcLink hot-swap rail"
+  echo "    - make [managed:arclink-skill-ref] explicit: ArcLink skills are active defaults, not passive extras"
+  echo "    - make [managed:resource-ref] explicit: keep the user's dashboard/code URLs plus shared ArcLink rails in memory, but never store the user's credentials there"
   echo "    - make [managed:qmd-ref] explicit: qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval"
   echo "    - make [managed:notion-ref] explicit: use shared Notion knowledge rails for indexed search/fetch context without confusing them with the governed SSOT write lane"
   echo "    - make [managed:vault-landmarks] explicit: keep a compact top-level vault map, including plain qmd-indexed folders, while leaving content depth to retrieval tools"
@@ -2990,23 +2990,23 @@ render_agent_install_payload_body() {
   echo "  report_contract:"
   echo "    - recurring success output: exactly 1 short line"
   echo "    - recurring warn/fail output: at most 2 short lines"
-  echo "    - recurring output should say only Almanac sync, qmd indexing, memory status, and drift/blocked state"
-  echo "    - preferred success form: 'Almanac health ok: sync current, qmd indexed, managed context refreshed, drift=none.'"
+  echo "    - recurring output should say only ArcLink sync, qmd indexing, memory status, and drift/blocked state"
+  echo "    - preferred success form: 'ArcLink health ok: sync current, qmd indexed, managed context refreshed, drift=none.'"
   echo "  rails:"
   echo "    - prefer qmd/MCP over filesystem access; direct local qmd service or CLI is fallback only when MCP is unavailable"
   echo "    - prefer tool calls over bash mimicry; do not reach for scripts/curate-*.sh or python heredocs from a normal Hermes turn"
-  echo "    - prefer the deployed almanac-owned qmd/vault over repo-scaffold guesses"
+  echo "    - prefer the deployed arclink-owned qmd/vault over repo-scaffold guesses"
   if [[ "$AGENT_QMD_URL_MODE" == "tailnet" && "$AGENT_QMD_ROUTE_STATUS" != "live" ]]; then
     echo "    - tailnet hostname is known but ${TAILSCALE_QMD_PATH} is not visibly published; republish Tailscale Serve if MCP test fails"
   fi
-  if [[ "$AGENT_ALMANAC_MCP_URL_MODE" == "tailnet" && "$AGENT_ALMANAC_MCP_ROUTE_STATUS" != "live" ]]; then
-    echo "    - tailnet hostname is known but ${TAILSCALE_ALMANAC_MCP_PATH} is not visibly published; republish Tailscale Serve if remote bootstrap test fails"
+  if [[ "$AGENT_ARCLINK_MCP_URL_MODE" == "tailnet" && "$AGENT_ARCLINK_MCP_ROUTE_STATUS" != "live" ]]; then
+    echo "    - tailnet hostname is known but ${TAILSCALE_ARCLINK_MCP_PATH} is not visibly published; republish Tailscale Serve if remote bootstrap test fails"
   fi
   echo "    - GET /mcp returning 404 is not an MCP failure; use hermes mcp test"
   echo "    - done means: first reconciliation ran and the single 4h cron exists"
   echo "  report:"
   echo "    - active vault path"
-  echo "    - almanac-mcp endpoint"
+  echo "    - arclink-mcp endpoint"
   echo "    - qmd collection(s) and endpoint"
   echo "    - chosen model preset and enabled channels"
   echo "    - whether the first reconciliation ran"
@@ -3047,19 +3047,19 @@ load_answers() {
   # shellcheck disable=SC1090
   source "$ANSWERS_FILE"
   resolve_model_provider_presets
-  CONFIG_TARGET="${ALMANAC_PRIV_CONFIG_DIR}/almanac.env"
+  CONFIG_TARGET="${ARCLINK_PRIV_CONFIG_DIR}/arclink.env"
 }
 
 init_public_repo_if_needed() {
-  if [[ "${ALMANAC_INSTALL_PUBLIC_GIT:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_INSTALL_PUBLIC_GIT:-0}" != "1" ]]; then
     return 0
   fi
 
-  if [[ -d "$ALMANAC_REPO_DIR/.git" ]]; then
+  if [[ -d "$ARCLINK_REPO_DIR/.git" ]]; then
     return 0
   fi
 
-  run_as_user "$ALMANAC_USER" "git -C '$ALMANAC_REPO_DIR' init -b main"
+  run_as_user "$ARCLINK_USER" "git -C '$ARCLINK_REPO_DIR' init -b main"
 }
 
 path_is_within() {
@@ -3135,21 +3135,21 @@ wipe_nextcloud_state_if_requested() {
 
   echo "Wiping existing Nextcloud state under $NEXTCLOUD_STATE_DIR ..."
 
-  if id -u "$ALMANAC_USER" >/dev/null 2>&1; then
-    uid="$(id -u "$ALMANAC_USER")"
+  if id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+    uid="$(id -u "$ARCLINK_USER")"
     systemctl start "user@$uid.service" >/dev/null 2>&1 || true
 
-    if [[ -x "$ALMANAC_REPO_DIR/bin/nextcloud-down.sh" ]]; then
-      run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/nextcloud-down.sh'" >/dev/null 2>&1 || true
+    if [[ -x "$ARCLINK_REPO_DIR/bin/nextcloud-down.sh" ]]; then
+      run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/nextcloud-down.sh'" >/dev/null 2>&1 || true
     fi
 
     if [[ -S "/run/user/$uid/bus" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop almanac-nextcloud.service >/dev/null 2>&1 || true" || true
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop arclink-nextcloud.service >/dev/null 2>&1 || true" || true
     fi
   fi
 
   safe_remove_path "$NEXTCLOUD_STATE_DIR"
-  install -d -m 0750 -o "$ALMANAC_USER" -g "$ALMANAC_USER" "$NEXTCLOUD_STATE_DIR"
+  install -d -m 0750 -o "$ARCLINK_USER" -g "$ARCLINK_USER" "$NEXTCLOUD_STATE_DIR"
 }
 
 github_owner_repo_from_remote() {
@@ -3232,7 +3232,7 @@ request = urllib.request.Request(
     f"{base}/repos/{owner_repo}",
     headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "almanac-backup-visibility-check",
+        "User-Agent": "arclink-backup-visibility-check",
     },
 )
 try:
@@ -3259,14 +3259,14 @@ require_private_github_backup_remote() {
   [[ -n "$remote" ]] || return 0
   owner_repo="$(backup_github_owner_repo_from_remote "$remote")"
   if [[ -z "$owner_repo" ]]; then
-    echo "almanac-priv backups currently support GitHub remotes only." >&2
+    echo "arclink-priv backups currently support GitHub remotes only." >&2
     echo "Use a remote like git@github.com:owner/private-repo.git" >&2
     return 1
   fi
 
   visibility="$(github_repo_visibility "$owner_repo")"
   if [[ "$visibility" == "public" ]]; then
-    echo "Refusing to back up almanac-priv to a public GitHub repository: $owner_repo" >&2
+    echo "Refusing to back up arclink-priv to a public GitHub repository: $owner_repo" >&2
     return 1
   fi
   if [[ "$visibility" == error:* || "$visibility" == "unsupported" ]]; then
@@ -3284,7 +3284,7 @@ backup_git_remote_uses_ssh() {
 }
 
 backup_private_repo_origin_remote() {
-  local repo_dir="${1:-$ALMANAC_PRIV_DIR}"
+  local repo_dir="${1:-$ARCLINK_PRIV_DIR}"
 
   if [[ -z "$repo_dir" || ! -d "$repo_dir/.git" ]]; then
     return 0
@@ -3301,23 +3301,23 @@ resolve_backup_git_remote_default() {
     return 0
   fi
 
-  remote="$(backup_private_repo_origin_remote "${ALMANAC_PRIV_DIR:-}")"
+  remote="$(backup_private_repo_origin_remote "${ARCLINK_PRIV_DIR:-}")"
   if [[ -n "$remote" ]]; then
     printf '%s\n' "$remote"
   fi
 }
 
 default_backup_git_deploy_key_path() {
-  printf '%s' "${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}/.ssh/almanac-backup-ed25519"
+  printf '%s' "${ARCLINK_HOME:-$(default_home_for_user "$ARCLINK_USER")}/.ssh/arclink-backup-ed25519"
 }
 
 default_backup_git_known_hosts_file() {
-  printf '%s' "${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}/.ssh/almanac-backup-known_hosts"
+  printf '%s' "${ARCLINK_HOME:-$(default_home_for_user "$ARCLINK_USER")}/.ssh/arclink-backup-known_hosts"
 }
 
 upstream_deploy_key_user_default() {
-  if [[ -n "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" ]]; then
-    printf '%s\n' "$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
+  if [[ -n "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" ]]; then
+    printf '%s\n' "$ARCLINK_UPSTREAM_DEPLOY_KEY_USER"
     return 0
   fi
   if [[ -n "${SUDO_USER:-}" && "${SUDO_USER:-}" != "root" ]]; then
@@ -3328,33 +3328,33 @@ upstream_deploy_key_user_default() {
     id -un
     return 0
   fi
-  printf '%s\n' "${ALMANAC_USER:-almanac}"
+  printf '%s\n' "${ARCLINK_USER:-arclink}"
 }
 
 default_upstream_git_deploy_key_path() {
   local key_user="" key_home=""
 
   key_user="$(upstream_deploy_key_user_default)"
-  if [[ "$key_user" == "${ALMANAC_USER:-}" && -n "${ALMANAC_HOME:-}" ]]; then
-    key_home="$ALMANAC_HOME"
+  if [[ "$key_user" == "${ARCLINK_USER:-}" && -n "${ARCLINK_HOME:-}" ]]; then
+    key_home="$ARCLINK_HOME"
   else
     key_home="$(resolve_user_home "$key_user" 2>/dev/null || default_home_for_user "$key_user")"
   fi
-  printf '%s' "$key_home/.ssh/almanac-upstream-ed25519"
+  printf '%s' "$key_home/.ssh/arclink-upstream-ed25519"
 }
 
 default_upstream_git_known_hosts_file() {
   local key_path=""
 
-  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
-  printf '%s' "$(dirname "$key_path")/almanac-upstream-known_hosts"
+  key_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  printf '%s' "$(dirname "$key_path")/arclink-upstream-known_hosts"
 }
 
 upstream_git_ssh_command() {
   local key_path="" known_hosts="" quoted_key="" quoted_known_hosts=""
 
-  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
-  known_hosts="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+  key_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  known_hosts="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
   printf -v quoted_key '%q' "$key_path"
   printf -v quoted_known_hosts '%q' "$known_hosts"
   printf 'ssh -i %s -o BatchMode=yes -o IPQoS=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
@@ -3365,52 +3365,52 @@ collect_upstream_git_answers() {
   local default_remote="" default_owner_repo="" owner_repo="" default_enabled="" repo_page=""
   local default_key_user="" key_user=""
 
-  default_remote="${ALMANAC_UPSTREAM_REPO_URL:-$(git_origin_url "$BOOTSTRAP_DIR")}"
+  default_remote="${ARCLINK_UPSTREAM_REPO_URL:-$(git_origin_url "$BOOTSTRAP_DIR")}"
   default_owner_repo="$(github_owner_repo_from_remote "$default_remote")"
-  default_enabled="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
-  default_key_user="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
-  if [[ -n "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" && -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
+  default_enabled="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+  default_key_user="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  if [[ -n "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" && -f "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" ]]; then
     default_enabled="1"
   fi
 
   echo
-  echo "GitHub deploy key for Almanac upstream"
-  echo "  This is the read/write deploy key for operator/agent code pushes to the Almanac repo."
-  echo "  The almanac-priv backup and per-user Hermes-home backups use separate deploy keys."
+  echo "GitHub deploy key for ArcLink upstream"
+  echo "  This is the read/write deploy key for operator/agent code pushes to the ArcLink repo."
+  echo "  The arclink-priv backup and per-user Hermes-home backups use separate deploy keys."
   echo "  In GitHub deploy key settings, enable: Allow write access."
 
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="$(ask_yes_no "Set up an operator deploy key for the Almanac upstream repo" "$default_enabled")"
-  if [[ "$ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED" != "1" ]]; then
-    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
-    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
-    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="$(ask_yes_no "Set up an operator deploy key for the ArcLink upstream repo" "$default_enabled")"
+  if [[ "$ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED" != "1" ]]; then
+    ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
+    ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
+    ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}"
     return 0
   fi
 
   while true; do
-    owner_repo="$(ask "GitHub owner/repo for Almanac upstream deploy key" "$default_owner_repo")"
+    owner_repo="$(ask "GitHub owner/repo for ArcLink upstream deploy key" "$default_owner_repo")"
     owner_repo="${owner_repo#/}"
     owner_repo="${owner_repo%/}"
     if [[ "$owner_repo" == */* && "$owner_repo" != */ && "$owner_repo" != /* ]]; then
-      ALMANAC_UPSTREAM_REPO_URL="$(github_ssh_remote_from_owner_repo "$owner_repo")"
-      key_user="$(ask "Unix user that should own the Almanac repo push deploy key" "$default_key_user")"
-      if [[ "$key_user" != "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" ]]; then
-        ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$key_user"
-        ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="$(default_upstream_git_deploy_key_path)"
-        ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="$(default_upstream_git_known_hosts_file)"
+      ARCLINK_UPSTREAM_REPO_URL="$(github_ssh_remote_from_owner_repo "$owner_repo")"
+      key_user="$(ask "Unix user that should own the ArcLink repo push deploy key" "$default_key_user")"
+      if [[ "$key_user" != "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" ]]; then
+        ARCLINK_UPSTREAM_DEPLOY_KEY_USER="$key_user"
+        ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="$(default_upstream_git_deploy_key_path)"
+        ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="$(default_upstream_git_known_hosts_file)"
       else
-        ALMANAC_UPSTREAM_DEPLOY_KEY_USER="$key_user"
-        ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
-        ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+        ARCLINK_UPSTREAM_DEPLOY_KEY_USER="$key_user"
+        ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+        ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
       fi
-      key_user="$ALMANAC_UPSTREAM_DEPLOY_KEY_USER"
-      repo_page="$(github_repo_page_from_remote "$ALMANAC_UPSTREAM_REPO_URL")"
+      key_user="$ARCLINK_UPSTREAM_DEPLOY_KEY_USER"
+      repo_page="$(github_repo_page_from_remote "$ARCLINK_UPSTREAM_REPO_URL")"
       echo "  Upstream SSH remote:"
-      echo "    $ALMANAC_UPSTREAM_REPO_URL"
+      echo "    $ARCLINK_UPSTREAM_REPO_URL"
       echo "  Key owner on this host:"
       echo "    $key_user"
       echo "  Deploy key public file:"
-      echo "    ${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH}.pub"
+      echo "    ${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH}.pub"
       if [[ -n "$repo_page" ]]; then
         echo "  Add the public key to GitHub here:"
         echo "    $repo_page/settings/keys"
@@ -3428,7 +3428,7 @@ collect_upstream_git_answers() {
       fi
       return 0
     fi
-    echo "Please enter GitHub owner/repo, for example example/almanac."
+    echo "Please enter GitHub owner/repo, for example example/arclink."
   done
 }
 
@@ -3437,18 +3437,18 @@ ensure_upstream_git_deploy_key_material_for_user() {
   local key_path="" pub_path="" key_dir="" known_hosts="" key_comment="" quoted_key="" quoted_pub="" quoted_dir="" quoted_known_hosts=""
   local key_script=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
-  if ! git_remote_uses_ssh "${ALMANAC_UPSTREAM_REPO_URL:-}"; then
+  if ! git_remote_uses_ssh "${ARCLINK_UPSTREAM_REPO_URL:-}"; then
     return 0
   fi
 
-  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  key_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
   pub_path="${key_path}.pub"
   key_dir="$(dirname "$key_path")"
-  known_hosts="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
-  key_comment="almanac-upstream@$(hostname -f 2>/dev/null || hostname)"
+  known_hosts="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
+  key_comment="arclink-upstream@$(hostname -f 2>/dev/null || hostname)"
 
   printf -v quoted_key '%q' "$key_path"
   printf -v quoted_pub '%q' "$pub_path"
@@ -3482,12 +3482,12 @@ ensure_upstream_git_deploy_key_material_for_user() {
 ensure_upstream_git_deploy_key_material_root() {
   local key_user=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
-  key_user="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  key_user="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
   if ! id -u "$key_user" >/dev/null 2>&1; then
-    echo "Configured Almanac upstream deploy key user '$key_user' does not exist on this host." >&2
+    echo "Configured ArcLink upstream deploy key user '$key_user' does not exist on this host." >&2
     return 1
   fi
   ensure_upstream_git_deploy_key_material_for_user "$key_user"
@@ -3496,11 +3496,11 @@ ensure_upstream_git_deploy_key_material_root() {
 print_upstream_deploy_key_public_key() {
   local pub_path="" pub_key=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
 
-  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  pub_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
   if [[ ! -f "$pub_path" ]]; then
     echo "  Public key to paste into GitHub:"
     echo "    Not generated yet: $pub_path"
@@ -3515,18 +3515,18 @@ print_upstream_deploy_key_public_key() {
 print_upstream_deploy_key_instructions() {
   local repo_page="" pub_path=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
 
-  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
-  repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
+  pub_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  repo_page="$(github_repo_page_from_remote "${ARCLINK_UPSTREAM_REPO_URL:-}")"
   echo
-  echo "Almanac upstream deploy key"
+  echo "ArcLink upstream deploy key"
   echo "  SSH remote:"
-  echo "    ${ALMANAC_UPSTREAM_REPO_URL:-}"
+  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-}"
   echo "  Key owner:"
-  echo "    ${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  echo "    ${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
   echo "  Public key file:"
   echo "    $pub_path"
   if [[ -n "$repo_page" ]]; then
@@ -3541,21 +3541,21 @@ configure_upstream_git_for_repo() {
   local repo_dir="${1:-}"
   local ssh_command=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
   if [[ -z "$repo_dir" || ! -d "$repo_dir/.git" ]]; then
     return 0
   fi
-  if ! git_remote_uses_ssh "${ALMANAC_UPSTREAM_REPO_URL:-}"; then
+  if ! git_remote_uses_ssh "${ARCLINK_UPSTREAM_REPO_URL:-}"; then
     return 0
   fi
 
   ssh_command="$(upstream_git_ssh_command)"
   if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
-    git -C "$repo_dir" remote set-url origin "$ALMANAC_UPSTREAM_REPO_URL"
+    git -C "$repo_dir" remote set-url origin "$ARCLINK_UPSTREAM_REPO_URL"
   else
-    git -C "$repo_dir" remote add origin "$ALMANAC_UPSTREAM_REPO_URL"
+    git -C "$repo_dir" remote add origin "$ARCLINK_UPSTREAM_REPO_URL"
   fi
   git -C "$repo_dir" config core.sshCommand "$ssh_command"
 }
@@ -3563,21 +3563,21 @@ configure_upstream_git_for_repo() {
 verify_upstream_git_deploy_key_access() {
   local remote="" ssh_command="" branch="" tmp_dir="" output="" write_ref=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
 
-  remote="${ALMANAC_UPSTREAM_REPO_URL:-}"
+  remote="${ARCLINK_UPSTREAM_REPO_URL:-}"
   if ! git_remote_uses_ssh "$remote"; then
     return 0
   fi
 
-  if [[ ! -f "${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}" ]]; then
-    echo "Almanac upstream deploy key private file is missing; cannot verify GitHub access." >&2
+  if [[ ! -f "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}" ]]; then
+    echo "ArcLink upstream deploy key private file is missing; cannot verify GitHub access." >&2
     return 1
   fi
-  if [[ ! -f "${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}" ]]; then
-    echo "Almanac upstream deploy key known_hosts file is missing; cannot verify GitHub access." >&2
+  if [[ ! -f "${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}" ]]; then
+    echo "ArcLink upstream deploy key known_hosts file is missing; cannot verify GitHub access." >&2
     return 1
   fi
 
@@ -3591,7 +3591,7 @@ verify_upstream_git_deploy_key_access() {
   fi
   echo "  Read check passed."
 
-  branch="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
   write_ref="refs/heads/$branch"
   tmp_dir="$(mktemp -d)"
   if ! (
@@ -3602,11 +3602,11 @@ verify_upstream_git_deploy_key_access() {
     GCM_INTERACTIVE=Never \
     GIT_SSH_COMMAND="$ssh_command" \
       git clone --depth 1 --branch "$branch" --single-branch "$remote" "$tmp_dir" >/dev/null
-    git -C "$tmp_dir" config user.name "Almanac Deploy Key Check"
-    git -C "$tmp_dir" config user.email "almanac-deploy-key-check@localhost"
-    printf 'Almanac deploy key write check for %s at %s\n' "$branch" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp_dir/.almanac-deploy-key-write-check"
-    git -C "$tmp_dir" add .almanac-deploy-key-write-check
-    git -C "$tmp_dir" commit -m "Almanac deploy key write check" >/dev/null
+    git -C "$tmp_dir" config user.name "ArcLink Deploy Key Check"
+    git -C "$tmp_dir" config user.email "arclink-deploy-key-check@localhost"
+    printf 'ArcLink deploy key write check for %s at %s\n' "$branch" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp_dir/.arclink-deploy-key-write-check"
+    git -C "$tmp_dir" add .arclink-deploy-key-write-check
+    git -C "$tmp_dir" commit -m "ArcLink deploy key write check" >/dev/null
   ); then
     rm -rf "$tmp_dir"
     echo "Failed to prepare a temporary dry-run push repo for deploy-key verification." >&2
@@ -3628,8 +3628,8 @@ verify_upstream_git_deploy_key_access() {
 rotate_upstream_git_deploy_key_material() {
   local key_user="" key_path="" pub_path="" quoted_key="" quoted_pub=""
 
-  key_user="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
-  key_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
+  key_user="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  key_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}"
   pub_path="${key_path}.pub"
 
   printf -v quoted_key '%q' "$key_path"
@@ -3644,21 +3644,21 @@ rotate_upstream_git_deploy_key_material() {
     run_as_user "$key_user" "rm -f -- $quoted_key $quoted_pub"
   fi
   ensure_upstream_git_deploy_key_material_for_user "$key_user"
-  echo "  Generated a new Almanac upstream deploy key. Remove the previous deploy key entry from GitHub and add the new public key below."
+  echo "  Generated a new ArcLink upstream deploy key. Remove the previous deploy key entry from GitHub and add the new public key below."
 }
 
 prompt_and_verify_upstream_deploy_key_access() {
   local pub_path="" repo_page="" retry="" reuse=""
 
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED:-0}" == "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED:-0}" == "1" ]]; then
     return 0
   fi
 
-  pub_path="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
-  repo_page="$(github_repo_page_from_remote "${ALMANAC_UPSTREAM_REPO_URL:-}")"
+  pub_path="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}.pub"
+  repo_page="$(github_repo_page_from_remote "${ARCLINK_UPSTREAM_REPO_URL:-}")"
   if [[ ! -t 0 || -z "$repo_page" || ! -f "$pub_path" ]]; then
     return 0
   fi
@@ -3668,10 +3668,10 @@ prompt_and_verify_upstream_deploy_key_access() {
   # org-provided credentials and let the operator skip the manual paste step.
   if verify_upstream_git_deploy_key_access >/dev/null 2>&1; then
     echo
-    echo "  Detected an existing Almanac upstream deploy key with verified GitHub read+write access."
-    reuse="$(ask_yes_no "Reuse existing Almanac upstream deploy key" "1")"
+    echo "  Detected an existing ArcLink upstream deploy key with verified GitHub read+write access."
+    reuse="$(ask_yes_no "Reuse existing ArcLink upstream deploy key" "1")"
     if [[ "$reuse" == "1" ]]; then
-      ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED=1
+      ARCLINK_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED=1
       return 0
     fi
     echo
@@ -3683,7 +3683,7 @@ prompt_and_verify_upstream_deploy_key_access() {
   read -r -p "Press ENTER after adding this deploy key in GitHub with Allow write access, or Ctrl-C to stop: " _
   while true; do
     if verify_upstream_git_deploy_key_access; then
-      ALMANAC_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED=1
+      ARCLINK_UPSTREAM_DEPLOY_KEY_ACCESS_VERIFIED=1
       return 0
     fi
     echo
@@ -3698,14 +3698,14 @@ prompt_and_verify_upstream_deploy_key_access() {
 }
 
 prepare_operator_upstream_deploy_key_before_sudo() {
-  if [[ "${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" != "1" ]]; then
     return 0
   fi
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 0
   fi
 
-  ensure_upstream_git_deploy_key_material_for_user "${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
+  ensure_upstream_git_deploy_key_material_for_user "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}"
   configure_upstream_git_for_repo "$BOOTSTRAP_DIR"
   print_upstream_deploy_key_instructions
   prompt_and_verify_upstream_deploy_key_access
@@ -3759,15 +3759,15 @@ org_provider_default_model_id() {
   local configured=""
   case "$preset" in
     codex)
-      configured="$(model_provider_resolve_target_or_default codex "${ALMANAC_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
+      configured="$(model_provider_resolve_target_or_default codex "${ARCLINK_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
       configured="${configured#*:}"
       ;;
     opus)
-      configured="$(model_provider_resolve_target_or_default opus "${ALMANAC_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
+      configured="$(model_provider_resolve_target_or_default opus "${ARCLINK_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
       configured="${configured#*:}"
       ;;
     chutes|*)
-      configured="$(model_provider_resolve_target_or_default chutes "${ALMANAC_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
+      configured="$(model_provider_resolve_target_or_default chutes "${ARCLINK_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
       configured="${configured#*:}"
       ;;
   esac
@@ -3780,7 +3780,7 @@ import json
 import sys
 import time
 
-from almanac_onboarding_provider_auth import poll_codex_device_authorization, start_codex_device_authorization
+from arclink_onboarding_provider_auth import poll_codex_device_authorization, start_codex_device_authorization
 
 try:
     state = start_codex_device_authorization()
@@ -3814,7 +3814,7 @@ mint_org_opus_secret() {
   PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
 import sys
 
-from almanac_onboarding_provider_auth import complete_anthropic_pkce_authorization, start_anthropic_pkce_authorization
+from arclink_onboarding_provider_auth import complete_anthropic_pkce_authorization, start_anthropic_pkce_authorization
 
 try:
     state = start_anthropic_pkce_authorization()
@@ -3836,12 +3836,12 @@ PY
 }
 
 disable_org_provider_answers() {
-  ALMANAC_ORG_PROVIDER_ENABLED="0"
-  ALMANAC_ORG_PROVIDER_PRESET=""
-  ALMANAC_ORG_PROVIDER_MODEL_ID=""
-  ALMANAC_ORG_PROVIDER_REASONING_EFFORT="medium"
-  ALMANAC_ORG_PROVIDER_SECRET_PROVIDER=""
-  ALMANAC_ORG_PROVIDER_SECRET=""
+  ARCLINK_ORG_PROVIDER_ENABLED="0"
+  ARCLINK_ORG_PROVIDER_PRESET=""
+  ARCLINK_ORG_PROVIDER_MODEL_ID=""
+  ARCLINK_ORG_PROVIDER_REASONING_EFFORT="medium"
+  ARCLINK_ORG_PROVIDER_SECRET_PROVIDER=""
+  ARCLINK_ORG_PROVIDER_SECRET=""
 }
 
 ask_org_provider_auth_failure_action() {
@@ -3893,11 +3893,11 @@ ask_org_provider_auth_failure_action() {
 }
 
 collect_org_provider_answers() {
-  local default_enabled="${ALMANAC_ORG_PROVIDER_ENABLED:-1}"
+  local default_enabled="${ARCLINK_ORG_PROVIDER_ENABLED:-1}"
   local provider_answer="" provider_preset="" default_model="" reasoning_answer=""
-  local existing_secret_provider="${ALMANAC_ORG_PROVIDER_SECRET_PROVIDER:-}"
+  local existing_secret_provider="${ARCLINK_ORG_PROVIDER_SECRET_PROVIDER:-}"
   local reuse_secret="0" auth_action="" provider_label=""
-  local auth_attempts=0 max_auth_attempts="${ALMANAC_ORG_PROVIDER_AUTH_MAX_ATTEMPTS:-2}"
+  local auth_attempts=0 max_auth_attempts="${ARCLINK_ORG_PROVIDER_AUTH_MAX_ATTEMPTS:-2}"
   local default_auth_action="retry" allow_auth_retry="1"
 
   case "$max_auth_attempts" in
@@ -3907,16 +3907,16 @@ collect_org_provider_answers() {
     max_auth_attempts="1"
   fi
 
-  if [[ ! -t 0 && "${ALMANAC_ORG_PROVIDER_PROMPT_NONINTERACTIVE:-0}" != "1" ]]; then
-    if [[ "${ALMANAC_ORG_PROVIDER_ENABLED:-0}" == "1" && -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; then
+  if [[ ! -t 0 && "${ARCLINK_ORG_PROVIDER_PROMPT_NONINTERACTIVE:-0}" != "1" ]]; then
+    if [[ "${ARCLINK_ORG_PROVIDER_ENABLED:-0}" == "1" && -n "${ARCLINK_ORG_PROVIDER_SECRET:-}" ]]; then
       return 0
     fi
     disable_org_provider_answers
     return 0
   fi
 
-  ALMANAC_ORG_PROVIDER_ENABLED="$(ask_yes_no "Provide an organization-wide inference provider/default model for onboarded users" "$default_enabled")"
-  if [[ "$ALMANAC_ORG_PROVIDER_ENABLED" != "1" ]]; then
+  ARCLINK_ORG_PROVIDER_ENABLED="$(ask_yes_no "Provide an organization-wide inference provider/default model for onboarded users" "$default_enabled")"
+  if [[ "$ARCLINK_ORG_PROVIDER_ENABLED" != "1" ]]; then
     disable_org_provider_answers
     return 0
   fi
@@ -3928,56 +3928,56 @@ Organization-wide inference provider:
   3) opus   - Claude Opus OAuth link + default model id
 EOF
   while true; do
-    provider_answer="$(ask "Org inference provider" "${ALMANAC_ORG_PROVIDER_PRESET:-chutes}")"
+    provider_answer="$(ask "Org inference provider" "${ARCLINK_ORG_PROVIDER_PRESET:-chutes}")"
     if provider_preset="$(normalize_org_provider_preset "$provider_answer")"; then
       break
     fi
     echo "Choose chutes, codex, or opus."
   done
 
-  ALMANAC_ORG_PROVIDER_PRESET="$provider_preset"
-  default_model="${ALMANAC_ORG_PROVIDER_MODEL_ID:-$(org_provider_default_model_id "$provider_preset")}"
-  ALMANAC_ORG_PROVIDER_MODEL_ID="$(ask "Org default model id" "$default_model")"
+  ARCLINK_ORG_PROVIDER_PRESET="$provider_preset"
+  default_model="${ARCLINK_ORG_PROVIDER_MODEL_ID:-$(org_provider_default_model_id "$provider_preset")}"
+  ARCLINK_ORG_PROVIDER_MODEL_ID="$(ask "Org default model id" "$default_model")"
 
   while true; do
-    reasoning_answer="$(ask "Org default reasoning effort (xhigh/high/medium/low/minimal/none)" "${ALMANAC_ORG_PROVIDER_REASONING_EFFORT:-medium}")"
-    if ALMANAC_ORG_PROVIDER_REASONING_EFFORT="$(normalize_org_reasoning_effort "$reasoning_answer")"; then
+    reasoning_answer="$(ask "Org default reasoning effort (xhigh/high/medium/low/minimal/none)" "${ARCLINK_ORG_PROVIDER_REASONING_EFFORT:-medium}")"
+    if ARCLINK_ORG_PROVIDER_REASONING_EFFORT="$(normalize_org_reasoning_effort "$reasoning_answer")"; then
       break
     fi
     echo "Choose xhigh, high, medium, low, minimal, or none."
   done
 
-  if [[ -n "${ALMANAC_ORG_PROVIDER_SECRET:-}" && "$existing_secret_provider" == "$provider_preset" ]]; then
+  if [[ -n "${ARCLINK_ORG_PROVIDER_SECRET:-}" && "$existing_secret_provider" == "$provider_preset" ]]; then
     reuse_secret="$(ask_yes_no "Reuse existing org-provided $provider_preset credential" "1")"
   fi
   if [[ "$reuse_secret" == "1" ]]; then
-    ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
+    ARCLINK_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
     return 0
   fi
 
-  ALMANAC_ORG_PROVIDER_SECRET=""
+  ARCLINK_ORG_PROVIDER_SECRET=""
   case "$provider_preset" in
     chutes)
-      while [[ -z "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; do
-        ALMANAC_ORG_PROVIDER_SECRET="$(ask_secret_keep_default "Chutes API key for org-provided agents (ENTER keeps current)" "")"
-        if [[ -z "$ALMANAC_ORG_PROVIDER_SECRET" ]]; then
+      while [[ -z "${ARCLINK_ORG_PROVIDER_SECRET:-}" ]]; do
+        ARCLINK_ORG_PROVIDER_SECRET="$(ask_secret_keep_default "Chutes API key for org-provided agents (ENTER keeps current)" "")"
+        if [[ -z "$ARCLINK_ORG_PROVIDER_SECRET" ]]; then
           echo "A Chutes API key is required for org-provided Chutes."
         fi
       done
       ;;
     codex)
-      if [[ "${ALMANAC_ORG_PROVIDER_CODEX_AUTH_MODE:-curator}" != "direct" ]]; then
+      if [[ "${ARCLINK_ORG_PROVIDER_CODEX_AUTH_MODE:-curator}" != "direct" ]]; then
         echo
         echo "OpenAI Codex org provider will use the Curator Codex sign-in later in setup."
         echo "If Curator is configured with a different provider, org-provided Codex will stay disabled until reconfigured."
-        ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="curator-codex-pending"
-        ALMANAC_ORG_PROVIDER_SECRET=""
+        ARCLINK_ORG_PROVIDER_SECRET_PROVIDER="curator-codex-pending"
+        ARCLINK_ORG_PROVIDER_SECRET=""
       else
         provider_label="OpenAI Codex"
         auth_attempts=0
-        while [[ -z "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; do
+        while [[ -z "${ARCLINK_ORG_PROVIDER_SECRET:-}" ]]; do
           auth_attempts=$((auth_attempts + 1))
-          if ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_codex_secret)"; then
+          if ARCLINK_ORG_PROVIDER_SECRET="$(mint_org_codex_secret)"; then
             break
           fi
           if [[ "$auth_attempts" -ge "$max_auth_attempts" ]]; then
@@ -3993,7 +3993,7 @@ EOF
               continue
               ;;
             change)
-              ALMANAC_ORG_PROVIDER_PRESET=""
+              ARCLINK_ORG_PROVIDER_PRESET=""
               collect_org_provider_answers
               return 0
               ;;
@@ -4008,9 +4008,9 @@ EOF
     opus)
       provider_label="Claude Opus"
       auth_attempts=0
-      while [[ -z "${ALMANAC_ORG_PROVIDER_SECRET:-}" ]]; do
+      while [[ -z "${ARCLINK_ORG_PROVIDER_SECRET:-}" ]]; do
         auth_attempts=$((auth_attempts + 1))
-        if ALMANAC_ORG_PROVIDER_SECRET="$(mint_org_opus_secret)"; then
+        if ARCLINK_ORG_PROVIDER_SECRET="$(mint_org_opus_secret)"; then
           break
         fi
         if [[ "$auth_attempts" -ge "$max_auth_attempts" ]]; then
@@ -4026,7 +4026,7 @@ EOF
             continue
             ;;
           change)
-            ALMANAC_ORG_PROVIDER_PRESET=""
+            ARCLINK_ORG_PROVIDER_PRESET=""
             collect_org_provider_answers
             return 0
             ;;
@@ -4038,7 +4038,7 @@ EOF
       done
       ;;
   esac
-  ALMANAC_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
+  ARCLINK_ORG_PROVIDER_SECRET_PROVIDER="$provider_preset"
 }
 
 collect_backup_git_answers() {
@@ -4048,13 +4048,13 @@ collect_backup_git_answers() {
   default_owner_repo="$(backup_github_owner_repo_from_remote "$default_remote")"
 
   echo
-  echo "GitHub backup for almanac-priv"
-  echo "  Almanac can push the private repo to a private GitHub repository using a deploy-only SSH key."
+  echo "GitHub backup for arclink-priv"
+  echo "  ArcLink can push the private repo to a private GitHub repository using a deploy-only SSH key."
   echo "  Deploy will generate that key on this host and print the public key for you to paste into GitHub."
   echo "  In GitHub deploy key settings, enable: Allow write access."
 
   while true; do
-    owner_repo="$(ask "GitHub owner/repo for almanac-priv backup (blank to skip)" "$default_owner_repo")"
+    owner_repo="$(ask "GitHub owner/repo for arclink-priv backup (blank to skip)" "$default_owner_repo")"
     owner_repo="${owner_repo#/}"
     owner_repo="${owner_repo%/}"
 
@@ -4076,7 +4076,7 @@ collect_backup_git_answers() {
       return 0
     fi
 
-    echo "Please enter GitHub owner/repo, for example acme/almanac-priv, or leave it blank to skip."
+    echo "Please enter GitHub owner/repo, for example acme/arclink-priv, or leave it blank to skip."
   done
 }
 
@@ -4090,12 +4090,12 @@ ensure_backup_git_deploy_key_material_root() {
   key_path="${BACKUP_GIT_DEPLOY_KEY_PATH:-$(default_backup_git_deploy_key_path)}"
   pub_path="${key_path}.pub"
   key_dir="$(dirname "$key_path")"
-  key_comment="almanac-backup@$(hostname -f 2>/dev/null || hostname)"
+  key_comment="arclink-backup@$(hostname -f 2>/dev/null || hostname)"
 
   printf -v quoted_key '%q' "$key_path"
   printf -v quoted_pub '%q' "$pub_path"
 
-  run_as_user "$ALMANAC_USER" "
+  run_as_user "$ARCLINK_USER" "
     mkdir -p $(printf '%q' "$key_dir")
     chmod 700 $(printf '%q' "$key_dir")
     if [[ ! -f $quoted_key ]]; then
@@ -4129,13 +4129,13 @@ collect_install_answers() {
 
   load_detected_config || true
 
-  echo "Almanac deploy: install / repair from current checkout"
+  echo "ArcLink deploy: install / repair from current checkout"
   echo
 
-  detected_user="${ALMANAC_USER:-}"
-  detected_home="${ALMANAC_HOME:-}"
-  detected_repo="${ALMANAC_REPO_DIR:-}"
-  detected_priv="${ALMANAC_PRIV_DIR:-}"
+  detected_user="${ARCLINK_USER:-}"
+  detected_home="${ARCLINK_HOME:-}"
+  detected_repo="${ARCLINK_REPO_DIR:-}"
+  detected_priv="${ARCLINK_PRIV_DIR:-}"
   detected_git_name="${BACKUP_GIT_AUTHOR_NAME:-}"
   detected_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-}"
   while IFS= read -r line; do
@@ -4162,43 +4162,43 @@ collect_install_answers() {
     detected_priv="$artifact_priv"
   fi
 
-  if [[ -n "$detected_user" && "$detected_user" != "almanac" ]]; then
+  if [[ -n "$detected_user" && "$detected_user" != "arclink" ]]; then
     echo "Detected existing configured user: $detected_user"
   fi
 
   while true; do
-    default_user="${detected_user:-almanac}"
-    ALMANAC_USER="$(ask "Service user" "$default_user")"
-    if [[ -n "$ALMANAC_USER" ]]; then
+    default_user="${detected_user:-arclink}"
+    ARCLINK_USER="$(ask "Service user" "$default_user")"
+    if [[ -n "$ARCLINK_USER" ]]; then
       break
     fi
     echo "Service user cannot be blank."
   done
 
-  if [[ -n "$detected_home" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
+  if [[ -n "$detected_home" && ( -z "$detected_user" || "$detected_user" == "$ARCLINK_USER" ) ]]; then
     default_home="$detected_home"
   else
-    default_home="$(default_home_for_user "$ALMANAC_USER")"
+    default_home="$(default_home_for_user "$ARCLINK_USER")"
   fi
 
-  if [[ -n "$detected_repo" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
+  if [[ -n "$detected_repo" && ( -z "$detected_user" || "$detected_user" == "$ARCLINK_USER" ) ]]; then
     default_repo="$detected_repo"
   else
-    default_repo="$default_home/almanac"
+    default_repo="$default_home/arclink"
   fi
 
-  if [[ -n "$detected_priv" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
+  if [[ -n "$detected_priv" && ( -z "$detected_user" || "$detected_user" == "$ARCLINK_USER" ) ]]; then
     default_priv="$detected_priv"
   else
-    default_priv="$default_repo/almanac-priv"
+    default_priv="$default_repo/arclink-priv"
   fi
 
   default_nextcloud_port="${NEXTCLOUD_PORT:-18080}"
-  default_git_name="${detected_git_name:-Almanac Backup}"
-  if [[ -n "$detected_git_email" && ( -z "$detected_user" || "$detected_user" == "$ALMANAC_USER" ) ]]; then
+  default_git_name="${detected_git_name:-ArcLink Backup}"
+  if [[ -n "$detected_git_email" && ( -z "$detected_user" || "$detected_user" == "$ARCLINK_USER" ) ]]; then
     default_git_email="$detected_git_email"
   else
-    default_git_email="$ALMANAC_USER@localhost"
+    default_git_email="$ARCLINK_USER@localhost"
   fi
   default_enable_nextcloud="${ENABLE_NEXTCLOUD:-1}"
   default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
@@ -4211,12 +4211,12 @@ collect_install_answers() {
     default_tailscale_operator_user="$(id -un)"
   fi
   if [[ "$default_tailscale_operator_user" == "root" ]]; then
-    default_tailscale_operator_user="$ALMANAC_USER"
+    default_tailscale_operator_user="$ARCLINK_USER"
   fi
   default_enable_private_git="${ENABLE_PRIVATE_GIT:-1}"
   default_enable_quarto="${ENABLE_QUARTO:-1}"
   default_seed_vault="${SEED_SAMPLE_VAULT:-1}"
-  default_install_public_git="${ALMANAC_INSTALL_PUBLIC_GIT:-1}"
+  default_install_public_git="${ARCLINK_INSTALL_PUBLIC_GIT:-1}"
   default_nextcloud_admin_user="${NEXTCLOUD_ADMIN_USER:-$(id -un)}"
   default_pdf_vision_endpoint="${PDF_VISION_ENDPOINT:-}"
   default_pdf_vision_model="${PDF_VISION_MODEL:-}"
@@ -4229,58 +4229,58 @@ Tailscale Serve/Funnel prerequisite
     https://login.tailscale.com/admin/dns
   In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
   Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
-  consent URL or fail before Almanac can publish the routes.
+  consent URL or fail before ArcLink can publish the routes.
   If the installer prints a Tailscale approval URL later:
     https://login.tailscale.com/f/funnel?...  for the public Notion webhook
     https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
   open it as a tailnet admin, approve the feature for this node, then return
-  to this terminal and press ENTER so Almanac can retry the route.
+  to this terminal and press ENTER so ArcLink can retry the route.
 
 EOF
   }
 
-  ALMANAC_NAME="almanac"
-  ALMANAC_HOME="$(ask "Service home" "$default_home")"
-  ALMANAC_REPO_DIR="$(ask "Public repo path" "$default_repo")"
-  ALMANAC_PRIV_DIR="$(ask "Private repo path" "$default_priv")"
-  ALMANAC_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ALMANAC_ORG_NAME:-}")")"
-  ALMANAC_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ALMANAC_ORG_MISSION:-}")")"
-  ALMANAC_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ALMANAC_ORG_PRIMARY_PROJECT:-}")")"
-  ALMANAC_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
-  ALMANAC_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ALMANAC_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
+  ARCLINK_NAME="arclink"
+  ARCLINK_HOME="$(ask "Service home" "$default_home")"
+  ARCLINK_REPO_DIR="$(ask "Public repo path" "$default_repo")"
+  ARCLINK_PRIV_DIR="$(ask "Private repo path" "$default_priv")"
+  ARCLINK_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ARCLINK_ORG_NAME:-}")")"
+  ARCLINK_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ARCLINK_ORG_MISSION:-}")")"
+  ARCLINK_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ARCLINK_ORG_PRIMARY_PROJECT:-}")")"
+  ARCLINK_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ARCLINK_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
+  ARCLINK_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ARCLINK_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
   collect_org_provider_answers
-  ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
-  VAULT_DIR="$ALMANAC_PRIV_DIR/vault"
-  STATE_DIR="$ALMANAC_PRIV_DIR/state"
+  ARCLINK_PRIV_CONFIG_DIR="$ARCLINK_PRIV_DIR/config"
+  VAULT_DIR="$ARCLINK_PRIV_DIR/vault"
+  STATE_DIR="$ARCLINK_PRIV_DIR/state"
   NEXTCLOUD_STATE_DIR="$STATE_DIR/nextcloud"
   RUNTIME_DIR="$STATE_DIR/runtime"
-  PUBLISHED_DIR="$ALMANAC_PRIV_DIR/published"
-  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
+  PUBLISHED_DIR="$ARCLINK_PRIV_DIR/published"
+  ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   local default_org_profile_builder="0"
-  if [[ ! -f "$ALMANAC_PRIV_CONFIG_DIR/org-profile.yaml" ]]; then
+  if [[ ! -f "$ARCLINK_PRIV_CONFIG_DIR/org-profile.yaml" ]]; then
     default_org_profile_builder="1"
   fi
   if [[ ! -t 0 ]]; then
     default_org_profile_builder="0"
   fi
-  ALMANAC_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
-  QMD_INDEX_NAME="almanac"
+  ARCLINK_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
+  QMD_INDEX_NAME="arclink"
   QMD_COLLECTION_NAME="vault"
   QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
   use_detected_upstream_repo_url_if_placeholder
-  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   collect_upstream_git_answers
-  ALMANAC_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
+  ARCLINK_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
   collect_backup_git_answers
   BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
   BACKUP_GIT_AUTHOR_EMAIL="$(ask "Git author email" "$default_git_email")"
   NEXTCLOUD_PORT="$(ask "Nextcloud local port" "$default_nextcloud_port")"
 
   detect_tailscale
-  default_domain="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
+  default_domain="${NEXTCLOUD_TRUSTED_DOMAIN:-arclink.your-tailnet.ts.net}"
   if [[ -n "$TAILSCALE_DNS_NAME" ]]; then
     default_domain="$TAILSCALE_DNS_NAME"
     default_enable_tailscale_serve="1"
@@ -4369,7 +4369,7 @@ EOF
   fi
   nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
   NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
-  ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize almanac-priv as a git repo" "$default_enable_private_git")"
+  ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize arclink-priv as a git repo" "$default_enable_private_git")"
   ENABLE_QUARTO="$(ask_yes_no "Enable Quarto timer/hooks" "$default_enable_quarto")"
   SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"
   collect_qmd_embedding_answers
@@ -4383,9 +4383,9 @@ EOF
     PDF_VISION_MODEL=""
     PDF_VISION_API_KEY=""
   fi
-  QUARTO_PROJECT_DIR="$ALMANAC_PRIV_DIR/quarto"
-  QUARTO_OUTPUT_DIR="$ALMANAC_PRIV_DIR/published"
-  CONFIG_TARGET="$ALMANAC_PRIV_CONFIG_DIR/almanac.env"
+  QUARTO_PROJECT_DIR="$ARCLINK_PRIV_DIR/quarto"
+  QUARTO_OUTPUT_DIR="$ARCLINK_PRIV_DIR/published"
+  CONFIG_TARGET="$ARCLINK_PRIV_CONFIG_DIR/arclink.env"
 }
 
 collect_remove_answers() {
@@ -4398,60 +4398,60 @@ collect_remove_answers() {
     use_detected_config="$(ask_yes_no "Use detected config from $DISCOVERED_CONFIG for teardown" "1")"
   fi
 
-  echo "Almanac deploy: remove / teardown"
+  echo "ArcLink deploy: remove / teardown"
   echo
 
-  default_user="${ALMANAC_USER:-almanac}"
-  default_home="${ALMANAC_HOME:-$(default_home_for_user "$default_user")}"
-  default_repo="${ALMANAC_REPO_DIR:-$default_home/almanac}"
-  default_priv="${ALMANAC_PRIV_DIR:-$default_repo/almanac-priv}"
+  default_user="${ARCLINK_USER:-arclink}"
+  default_home="${ARCLINK_HOME:-$(default_home_for_user "$default_user")}"
+  default_repo="${ARCLINK_REPO_DIR:-$default_home/arclink}"
+  default_priv="${ARCLINK_PRIV_DIR:-$default_repo/arclink-priv}"
   default_remove_user="0"
-  if [[ "$default_user" == "almanac" && "$default_home" == "/home/almanac" ]]; then
+  if [[ "$default_user" == "arclink" && "$default_home" == "/home/arclink" ]]; then
     default_remove_user="1"
   fi
   default_remove_tooling="$default_remove_user"
 
-  ALMANAC_NAME="${ALMANAC_NAME:-almanac}"
+  ARCLINK_NAME="${ARCLINK_NAME:-arclink}"
 
   if [[ "$use_detected_config" == "1" ]]; then
-    ALMANAC_USER="${ALMANAC_USER:-$default_user}"
-    ALMANAC_HOME="${ALMANAC_HOME:-$default_home}"
-    ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$default_repo}"
-    ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$default_priv}"
+    ARCLINK_USER="${ARCLINK_USER:-$default_user}"
+    ARCLINK_HOME="${ARCLINK_HOME:-$default_home}"
+    ARCLINK_REPO_DIR="${ARCLINK_REPO_DIR:-$default_repo}"
+    ARCLINK_PRIV_DIR="${ARCLINK_PRIV_DIR:-$default_priv}"
 
     echo "Using config:   $DISCOVERED_CONFIG"
-    echo "Service user:   $ALMANAC_USER"
-    echo "Service home:   $ALMANAC_HOME"
-    echo "Public repo:    $ALMANAC_REPO_DIR"
-    echo "Private repo:   $ALMANAC_PRIV_DIR"
+    echo "Service user:   $ARCLINK_USER"
+    echo "Service home:   $ARCLINK_HOME"
+    echo "Public repo:    $ARCLINK_REPO_DIR"
+    echo "Private repo:   $ARCLINK_PRIV_DIR"
     echo
   else
-    ALMANAC_USER="$(ask "Service user to remove" "$default_user")"
-    ALMANAC_HOME="$(ask "Service home" "$default_home")"
-    ALMANAC_REPO_DIR="$(ask "Deployed public repo path" "$default_repo")"
-    ALMANAC_PRIV_DIR="$(ask "Deployed private repo path" "$default_priv")"
+    ARCLINK_USER="$(ask "Service user to remove" "$default_user")"
+    ARCLINK_HOME="$(ask "Service home" "$default_home")"
+    ARCLINK_REPO_DIR="$(ask "Deployed public repo path" "$default_repo")"
+    ARCLINK_PRIV_DIR="$(ask "Deployed private repo path" "$default_priv")"
   fi
 
-  ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
-  VAULT_DIR="$ALMANAC_PRIV_DIR/vault"
-  STATE_DIR="$ALMANAC_PRIV_DIR/state"
+  ARCLINK_PRIV_CONFIG_DIR="$ARCLINK_PRIV_DIR/config"
+  VAULT_DIR="$ARCLINK_PRIV_DIR/vault"
+  STATE_DIR="$ARCLINK_PRIV_DIR/state"
   NEXTCLOUD_STATE_DIR="$STATE_DIR/nextcloud"
   RUNTIME_DIR="$STATE_DIR/runtime"
-  PUBLISHED_DIR="$ALMANAC_PRIV_DIR/published"
-  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
-  QMD_INDEX_NAME="${QMD_INDEX_NAME:-almanac}"
+  PUBLISHED_DIR="$ARCLINK_PRIV_DIR/published"
+  ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
+  QMD_INDEX_NAME="${QMD_INDEX_NAME:-arclink}"
   QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
   QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
   use_detected_upstream_repo_url_if_placeholder
-  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
-  BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
-  BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-$ALMANAC_USER@localhost}"
+  BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
+  BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-$ARCLINK_USER@localhost}"
   NEXTCLOUD_PORT="${NEXTCLOUD_PORT:-18080}"
-  NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
+  NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-arclink.your-tailnet.ts.net}"
   POSTGRES_DB="${POSTGRES_DB:-${MARIADB_DATABASE:-nextcloud}}"
   POSTGRES_USER="${POSTGRES_USER:-${MARIADB_USER:-nextcloud}}"
   POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${MARIADB_PASSWORD:-}}"
@@ -4462,13 +4462,13 @@ collect_remove_answers() {
   ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
   TAILSCALE_OPERATOR_USER="${TAILSCALE_OPERATOR_USER:-}"
   TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
-  TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
+  TAILSCALE_ARCLINK_MCP_PATH="${TAILSCALE_ARCLINK_MCP_PATH:-/arclink-mcp}"
   ENABLE_PRIVATE_GIT="${ENABLE_PRIVATE_GIT:-1}"
   ENABLE_QUARTO="${ENABLE_QUARTO:-1}"
   SEED_SAMPLE_VAULT="${SEED_SAMPLE_VAULT:-1}"
-  QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ALMANAC_PRIV_DIR/quarto}"
-  QUARTO_OUTPUT_DIR="${QUARTO_OUTPUT_DIR:-$ALMANAC_PRIV_DIR/published}"
-  CONFIG_TARGET="${DISCOVERED_CONFIG:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}"
+  QUARTO_PROJECT_DIR="${QUARTO_PROJECT_DIR:-$ARCLINK_PRIV_DIR/quarto}"
+  QUARTO_OUTPUT_DIR="${QUARTO_OUTPUT_DIR:-$ARCLINK_PRIV_DIR/published}"
+  CONFIG_TARGET="${DISCOVERED_CONFIG:-$ARCLINK_PRIV_CONFIG_DIR/arclink.env}"
   REMOVE_PUBLIC_REPO="$(ask_yes_no "Remove the deployed repo directory and private state" "1")"
   REMOVE_USER_TOOLING="$(ask_yes_no "Remove user-scoped tooling and caches" "$default_remove_tooling")"
   REMOVE_SERVICE_USER="$(ask_yes_no "Remove the service user and its home" "$default_remove_user")"
@@ -4483,28 +4483,28 @@ collect_remove_answers() {
 prepare_deployed_context() {
   load_detected_config || true
 
-  ALMANAC_USER="${ALMANAC_USER:-almanac}"
-  ALMANAC_HOME="${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}"
-  ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$ALMANAC_HOME/almanac}"
-  ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
-  ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
-  VAULT_DIR="${VAULT_DIR:-$ALMANAC_PRIV_DIR/vault}"
-  STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
+  ARCLINK_USER="${ARCLINK_USER:-arclink}"
+  ARCLINK_HOME="${ARCLINK_HOME:-$(default_home_for_user "$ARCLINK_USER")}"
+  ARCLINK_REPO_DIR="${ARCLINK_REPO_DIR:-$ARCLINK_HOME/arclink}"
+  ARCLINK_PRIV_DIR="${ARCLINK_PRIV_DIR:-$ARCLINK_REPO_DIR/arclink-priv}"
+  ARCLINK_PRIV_CONFIG_DIR="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}"
+  VAULT_DIR="${VAULT_DIR:-$ARCLINK_PRIV_DIR/vault}"
+  STATE_DIR="${STATE_DIR:-$ARCLINK_PRIV_DIR/state}"
   NEXTCLOUD_STATE_DIR="${NEXTCLOUD_STATE_DIR:-$STATE_DIR/nextcloud}"
   RUNTIME_DIR="${RUNTIME_DIR:-$STATE_DIR/runtime}"
-  PUBLISHED_DIR="${PUBLISHED_DIR:-$ALMANAC_PRIV_DIR/published}"
-  ALMANAC_DB_PATH="${ALMANAC_DB_PATH:-$STATE_DIR/almanac-control.sqlite3}"
-  ALMANAC_AGENTS_STATE_DIR="${ALMANAC_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
-  ALMANAC_ARCHIVED_AGENTS_DIR="${ALMANAC_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
-  CONFIG_TARGET="${DISCOVERED_CONFIG:-${ALMANAC_CONFIG_FILE:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}}"
-  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}"
-  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  PUBLISHED_DIR="${PUBLISHED_DIR:-$ARCLINK_PRIV_DIR/published}"
+  ARCLINK_DB_PATH="${ARCLINK_DB_PATH:-$STATE_DIR/arclink-control.sqlite3}"
+  ARCLINK_AGENTS_STATE_DIR="${ARCLINK_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
+  ARCLINK_ARCHIVED_AGENTS_DIR="${ARCLINK_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
+  CONFIG_TARGET="${DISCOVERED_CONFIG:-${ARCLINK_CONFIG_FILE:-$ARCLINK_PRIV_CONFIG_DIR/arclink.env}}"
+  ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
   use_detected_upstream_repo_url_if_placeholder
-  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
-  ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
-  ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}"
-  ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}"
-  ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
+  ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
+  ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
+  ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}"
 }
 
 ensure_deployed_config_exists() {
@@ -4515,7 +4515,7 @@ ensure_deployed_config_exists() {
   fi
   if [[ ! -f "$CONFIG_TARGET" ]]; then
     echo "Deployed config not found at $CONFIG_TARGET" >&2
-    echo "Run ./deploy.sh install first, or point ALMANAC_CONFIG_FILE at the deployed almanac.env." >&2
+    echo "Run ./deploy.sh install first, or point ARCLINK_CONFIG_FILE at the deployed arclink.env." >&2
     exit 1
   fi
 }
@@ -4525,7 +4525,7 @@ maybe_reexec_with_sudo_for_config() {
   local status=""
   local -a cmd=()
 
-  ALMANAC_REEXEC_ATTEMPTED=0
+  ARCLINK_REEXEC_ATTEMPTED=0
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 1
   fi
@@ -4542,8 +4542,8 @@ maybe_reexec_with_sudo_for_config() {
   fi
 
   echo "Switching to sudo to inspect the deployed config..."
-  ALMANAC_REEXEC_ATTEMPTED=1
-  cmd=(sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" "$mode")
+  ARCLINK_REEXEC_ATTEMPTED=1
+  cmd=(sudo_deploy ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" "$mode")
   if [[ "$mode" == "enrollment-trace" ]]; then
     if [[ -n "${TRACE_UNIX_USER:-}" ]]; then
       cmd+=(--unix-user "$TRACE_UNIX_USER")
@@ -4567,7 +4567,7 @@ maybe_reexec_install_for_config_defaults() {
   local requested_mode="${1:-$MODE}"
   local status=""
 
-  ALMANAC_REEXEC_ATTEMPTED=0
+  ARCLINK_REEXEC_ATTEMPTED=0
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     return 1
   fi
@@ -4582,8 +4582,8 @@ maybe_reexec_install_for_config_defaults() {
 
   CONFIG_TARGET="$DISCOVERED_CONFIG"
   echo "Switching to sudo before prompting so existing defaults can be loaded from $DISCOVERED_CONFIG ..."
-  ALMANAC_REEXEC_ATTEMPTED=1
-  if sudo_deploy ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" "$requested_mode"; then
+  ARCLINK_REEXEC_ATTEMPTED=1
+  if sudo_deploy ARCLINK_CONFIG_FILE="$DISCOVERED_CONFIG" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" "$requested_mode"; then
     write_operator_checkout_artifact
     return 0
   else
@@ -4594,33 +4594,33 @@ maybe_reexec_install_for_config_defaults() {
 
 sudo_deploy() {
   sudo env \
-    "ALMANAC_DEPLOY_BOOTSTRAP_DIR=$BOOTSTRAP_DIR" \
-    "ALMANAC_DEPLOY_EXEC_PATH=${DEPLOY_EXEC_PATH:-$SELF_PATH}" \
-    "ALMANAC_DEPLOY_STABLE_COPY=1" \
-    "ALMANAC_DEPLOY_STABLE_OWNER_PID=${ALMANAC_DEPLOY_STABLE_OWNER_PID:-}" \
+    "ARCLINK_DEPLOY_BOOTSTRAP_DIR=$BOOTSTRAP_DIR" \
+    "ARCLINK_DEPLOY_EXEC_PATH=${DEPLOY_EXEC_PATH:-$SELF_PATH}" \
+    "ARCLINK_DEPLOY_STABLE_COPY=1" \
+    "ARCLINK_DEPLOY_STABLE_OWNER_PID=${ARCLINK_DEPLOY_STABLE_OWNER_PID:-}" \
     "$@"
 }
 
 run_root_env_cmd() {
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$@"
     return 0
   fi
-  sudo env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+  sudo env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$@"
 }
 
 run_service_user_cmd() {
-  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+  if [[ "$(id -un)" == "$ARCLINK_USER" ]]; then
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$@"
     return 0
   fi
-  sudo -iu "$ALMANAC_USER" env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$@"
+  sudo -iu "$ARCLINK_USER" env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$@"
 }
 
 repair_active_agent_runtime_access() {
   local agent_id="" unix_user=""
 
-  if [[ ! -f "$ALMANAC_DB_PATH" ]]; then
+  if [[ ! -f "$ARCLINK_DB_PATH" ]]; then
     return 0
   fi
 
@@ -4631,8 +4631,8 @@ repair_active_agent_runtime_access() {
       continue
     fi
     echo "Repairing shared-runtime access for $agent_id ($unix_user)..."
-    run_root_env_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
-  done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
+    run_root_env_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
+  done < <(run_root_env_cmd python3 - "$ARCLINK_DB_PATH" <<'PY'
 import sqlite3
 import sys
 
@@ -4699,15 +4699,15 @@ realign_active_enrolled_agents_root() {
     fi
     uid="$(id -u "$unix_user")"
     systemctl start "user@$uid.service" >/dev/null 2>&1 || true
-    run_root_env_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null 2>&1 || true
+    run_root_env_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null 2>&1 || true
     if [[ -n "$bot_label" ]]; then
       run_root_env_cmd env \
-        ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-        PYTHONPATH="$ALMANAC_REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+        ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+        PYTHONPATH="$ARCLINK_REPO_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 - "$agent_id" "$bot_label" <<'PY' >/dev/null 2>&1 || true
 import sys
 
-from almanac_control import Config, connect_db, update_agent_display_name
+from arclink_control import Config, connect_db, update_agent_display_name
 
 cfg = Config.from_env()
 with connect_db(cfg) as conn:
@@ -4716,15 +4716,15 @@ PY
     fi
     echo "Realigning user-agent install for $agent_id ($unix_user)..."
     run_root_env_cmd env \
-      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-      "$ALMANAC_REPO_DIR/bin/refresh-agent-install.sh" \
+      ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ARCLINK_REPO_DIR/bin/refresh-agent-install.sh" \
       --unix-user "$unix_user" \
       --hermes-home "$hermes_home" \
-      --repo-dir "$ALMANAC_REPO_DIR" \
+      --repo-dir "$ARCLINK_REPO_DIR" \
       --bot-name "$bot_label" \
       --user-name "$user_name" \
       "${restart_gateway_arg[@]}" >/dev/null
-  done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
+  done < <(run_root_env_cmd python3 - "$ARCLINK_DB_PATH" <<'PY'
 import json
 import sqlite3
 import sys
@@ -4793,10 +4793,10 @@ PY
 
 refresh_active_agent_context_root() {
   local agent_id="" unix_user="" hermes_home="" home_dir=""
-  local agents_state_dir="${ALMANAC_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
-  local mcp_url="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT:-8282}/mcp}"
+  local agents_state_dir="${ARCLINK_AGENTS_STATE_DIR:-$STATE_DIR/agents}"
+  local mcp_url="${ARCLINK_MCP_URL:-http://127.0.0.1:${ARCLINK_MCP_PORT:-8282}/mcp}"
 
-  if [[ ! -f "$ALMANAC_DB_PATH" || ! -x "$ALMANAC_REPO_DIR/bin/user-agent-refresh.sh" ]]; then
+  if [[ ! -f "$ARCLINK_DB_PATH" || ! -x "$ARCLINK_REPO_DIR/bin/user-agent-refresh.sh" ]]; then
     return 0
   fi
 
@@ -4811,15 +4811,15 @@ refresh_active_agent_context_root() {
     if ! runuser -u "$unix_user" -- env \
       HOME="$home_dir" \
       HERMES_HOME="$hermes_home" \
-      ALMANAC_AGENT_ID="$agent_id" \
-      ALMANAC_AGENTS_STATE_DIR="$agents_state_dir" \
-      ALMANAC_MCP_URL="$mcp_url" \
-      ALMANAC_MCP_PORT="$ALMANAC_MCP_PORT" \
-      ALMANAC_SHARED_REPO_DIR="$ALMANAC_REPO_DIR" \
-      "$ALMANAC_REPO_DIR/bin/user-agent-refresh.sh" >/dev/null; then
+      ARCLINK_AGENT_ID="$agent_id" \
+      ARCLINK_AGENTS_STATE_DIR="$agents_state_dir" \
+      ARCLINK_MCP_URL="$mcp_url" \
+      ARCLINK_MCP_PORT="$ARCLINK_MCP_PORT" \
+      ARCLINK_SHARED_REPO_DIR="$ARCLINK_REPO_DIR" \
+      "$ARCLINK_REPO_DIR/bin/user-agent-refresh.sh" >/dev/null; then
       echo "Warning: immediate user-agent refresh failed for $agent_id ($unix_user); health will report the remaining state." >&2
     fi
-  done < <(run_root_env_cmd python3 - "$ALMANAC_DB_PATH" <<'PY'
+  done < <(run_root_env_cmd python3 - "$ARCLINK_DB_PATH" <<'PY'
 import sqlite3
 import sys
 
@@ -4844,35 +4844,35 @@ PY
 }
 
 chown_managed_paths() {
-  if [[ -d "$ALMANAC_REPO_DIR" ]]; then
-    find "$ALMANAC_REPO_DIR" -ignore_readdir_race \
-      -path "$ALMANAC_PRIV_DIR" -prune -o \
-      -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+  if [[ -d "$ARCLINK_REPO_DIR" ]]; then
+    find "$ARCLINK_REPO_DIR" -ignore_readdir_race \
+      -path "$ARCLINK_PRIV_DIR" -prune -o \
+      -exec chown -h "$ARCLINK_USER:$ARCLINK_USER" {} +
   fi
 
-  if [[ ! -d "$ALMANAC_PRIV_DIR" ]]; then
+  if [[ ! -d "$ARCLINK_PRIV_DIR" ]]; then
     return 0
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && -n "${NEXTCLOUD_STATE_DIR:-}" && -d "$NEXTCLOUD_STATE_DIR" ]]; then
-    find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
+    find "$ARCLINK_PRIV_DIR" -ignore_readdir_race \
       -path "$NEXTCLOUD_STATE_DIR" -prune -o \
       -name "*.sqlite3-shm" -prune -o \
       -name "*.sqlite3-wal" -prune -o \
-      -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+      -exec chown -h "$ARCLINK_USER:$ARCLINK_USER" {} +
     return 0
   fi
 
-  find "$ALMANAC_PRIV_DIR" -ignore_readdir_race \
+  find "$ARCLINK_PRIV_DIR" -ignore_readdir_race \
     -name "*.sqlite3-shm" -prune -o \
     -name "*.sqlite3-wal" -prune -o \
-    -exec chown -h "$ALMANAC_USER:$ALMANAC_USER" {} +
+    -exec chown -h "$ARCLINK_USER:$ARCLINK_USER" {} +
 }
 
 enrollment_snapshot_json() {
   local target_unix_user="$1"
 
-  run_root_env_cmd python3 - "$ALMANAC_DB_PATH" "$target_unix_user" <<'PY'
+  run_root_env_cmd python3 - "$ARCLINK_DB_PATH" "$target_unix_user" <<'PY'
 import json
 import sqlite3
 import sys
@@ -4957,7 +4957,7 @@ curator_native_gateway_system_unit_name_root() {
     return 1
   fi
 
-  HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "$python_bin" <<'PY'
+  HERMES_HOME="$ARCLINK_CURATOR_HERMES_HOME" "$python_bin" <<'PY'
 try:
     from hermes_cli.gateway import get_service_name
 except Exception:
@@ -4984,41 +4984,41 @@ restart_shared_user_services_root() {
 
   disable_curator_native_gateway_system_unit_root
 
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
   if [[ -S "/run/user/$uid/bus" ]]; then
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "systemctl --user daemon-reload"
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer"
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-curator-refresh.service" || true
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-memory-synth.service" || true
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-health-watch.service" || true
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "systemctl --user daemon-reload"
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-mcp.service arclink-notion-webhook.service arclink-qmd-mcp.service arclink-qmd-update.timer arclink-vault-watch.service arclink-github-backup.timer arclink-ssot-batcher.timer arclink-notification-delivery.timer arclink-health-watch.timer arclink-curator-refresh.timer arclink-memory-synth.timer"
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start arclink-curator-refresh.service" || true
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start arclink-memory-synth.service" || true
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start arclink-health-watch.service" || true
 
     if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-pdf-ingest.timer"
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop almanac-pdf-ingest-watch.service >/dev/null 2>&1 || true"
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-pdf-ingest.timer"
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop arclink-pdf-ingest-watch.service >/dev/null 2>&1 || true"
     fi
 
     if [[ "$ENABLE_QUARTO" == "1" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-quarto-render.timer"
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-quarto-render.timer"
     fi
 
     if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-nextcloud.service"
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-nextcloud.service"
     fi
-    if [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-onboarding.service" || true
+    if [[ "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-curator-onboarding.service" || true
     fi
-    if [[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-discord-onboarding.service" || true
+    if [[ "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-curator-discord-onboarding.service" || true
     fi
-    if [[ "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-curator-gateway.service" || true
+    if [[ "${ARCLINK_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ARCLINK_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-curator-gateway.service" || true
     fi
     return 0
   fi
 
-  if [[ "${ALMANAC_ALLOW_NO_USER_BUS:-0}" != "1" ]]; then
-    echo "Systemd user bus unavailable for $ALMANAC_USER; services were installed but not started." >&2
+  if [[ "${ARCLINK_ALLOW_NO_USER_BUS:-0}" != "1" ]]; then
+    echo "Systemd user bus unavailable for $ARCLINK_USER; services were installed but not started." >&2
     return 1
   fi
 
@@ -5035,49 +5035,49 @@ run_root_install() {
   local gateway_restart_policy="defer"
 
   begin_deploy_operation "install" "$STATE_DIR"
-  trap 'finish_deploy_operation; almanac_deploy_stable_copy_cleanup' EXIT
+  trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
 
   env \
-    ALMANAC_USER="$ALMANAC_USER" \
-    ALMANAC_HOME="$ALMANAC_HOME" \
-    ALMANAC_REPO_DIR="$ALMANAC_REPO_DIR" \
-    ALMANAC_PRIV_DIR="$ALMANAC_PRIV_DIR" \
-    ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_CONFIG_DIR" \
+    ARCLINK_USER="$ARCLINK_USER" \
+    ARCLINK_HOME="$ARCLINK_HOME" \
+    ARCLINK_REPO_DIR="$ARCLINK_REPO_DIR" \
+    ARCLINK_PRIV_DIR="$ARCLINK_PRIV_DIR" \
+    ARCLINK_PRIV_CONFIG_DIR="$ARCLINK_PRIV_CONFIG_DIR" \
     VAULT_DIR="$VAULT_DIR" \
     STATE_DIR="$STATE_DIR" \
     NEXTCLOUD_STATE_DIR="$NEXTCLOUD_STATE_DIR" \
     PUBLISHED_DIR="$PUBLISHED_DIR" \
     QUARTO_PROJECT_DIR="$QUARTO_PROJECT_DIR" \
-    ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}" \
-    ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}" \
+    ARCLINK_INSTALL_PODMAN="${ARCLINK_INSTALL_PODMAN:-auto}" \
+    ARCLINK_INSTALL_TAILSCALE="${ARCLINK_INSTALL_TAILSCALE:-auto}" \
     ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}" \
-    ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
+    ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
     "$BOOTSTRAP_DIR/bin/bootstrap-system.sh"
   sync_public_repo
-  seed_private_repo "$ALMANAC_PRIV_DIR"
+  seed_private_repo "$ARCLINK_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
-  maybe_run_org_profile_builder "$ALMANAC_REPO_DIR"
+  maybe_run_org_profile_builder "$ARCLINK_REPO_DIR"
   chown_managed_paths
   ensure_upstream_git_deploy_key_material_root
-  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
   wipe_nextcloud_state_if_requested
 
   init_public_repo_if_needed
-  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
+  configure_upstream_git_for_repo "$ARCLINK_REPO_DIR"
 
   hermes_runtime_before="$(shared_hermes_runtime_commit)"
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
+  run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/bootstrap-userland.sh'"
   hermes_runtime_after="$(shared_hermes_runtime_commit)"
   report_shared_hermes_runtime_transition "$hermes_runtime_before" "$hermes_runtime_after"
   if [[ -n "$hermes_runtime_after" && "$hermes_runtime_before" != "$hermes_runtime_after" ]]; then
     gateway_restart_policy="restart"
   fi
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_ALLOW_NO_USER_BUS='${ARCLINK_ALLOW_NO_USER_BUS:-0}' '$ARCLINK_REPO_DIR/bin/install-user-services.sh'"
   chown_managed_paths
-  run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
+  run_as_user "$ARCLINK_USER" "env $(curator_bootstrap_env_prefix) '$ARCLINK_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   ensure_upstream_git_deploy_key_material_root
-  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
+  configure_upstream_git_for_repo "$ARCLINK_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
   apply_org_profile_if_present_root
@@ -5085,24 +5085,24 @@ run_root_install() {
 
   local uid=""
   restart_shared_user_services_root
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
 
   if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]] || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
     tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
   fi
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
-  elif [[ -x "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
+  elif [[ -x "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
   fi
 
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
-  wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 20 1
-  wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 20 1
+  wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT" 20 1
+  wait_for_port 127.0.0.1 "$ARCLINK_NOTION_WEBHOOK_PORT" 20 1
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
@@ -5116,39 +5116,39 @@ run_root_install() {
   source_repo_url="$(git_origin_url "$BOOTSTRAP_DIR")"
   if [[ -n "$source_commit" ]]; then
     write_release_state "local-checkout" "$source_commit" "$source_repo_url" "$source_branch" "$BOOTSTRAP_DIR"
-    chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
-    refresh_upgrade_check_state_root "$source_commit" "${ALMANAC_UPSTREAM_REPO_URL:-$source_repo_url}" "${ALMANAC_UPSTREAM_BRANCH:-$source_branch}"
+    chown "$ARCLINK_USER:$ARCLINK_USER" "${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}" >/dev/null 2>&1 || true
+    refresh_upgrade_check_state_root "$source_commit" "${ARCLINK_UPSTREAM_REPO_URL:-$source_repo_url}" "${ARCLINK_UPSTREAM_BRANCH:-$source_branch}"
   fi
 
   echo
   echo "Running health check..."
   if [[ -S "/run/user/$uid/bus" ]]; then
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_HEALTH_STRICT=1 '$ARCLINK_REPO_DIR/bin/health.sh'"
   else
-    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+    run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_HEALTH_STRICT=1 '$ARCLINK_REPO_DIR/bin/health.sh'"
   fi
 
-  if [[ -x "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
+  if [[ -x "$ARCLINK_REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
     echo
     echo "Running live agent tool smoke..."
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/live-agent-tool-smoke.sh"
   fi
 
   echo
-  echo "Almanac install complete."
-  echo "Public repo:  $ALMANAC_REPO_DIR"
-  echo "Private repo: $ALMANAC_PRIV_DIR"
+  echo "ArcLink install complete."
+  echo "Public repo:  $ARCLINK_REPO_DIR"
+  echo "Private repo: $ARCLINK_PRIV_DIR"
   echo "Config:       $CONFIG_TARGET"
   if [[ -n "$source_commit" ]]; then
     echo "Release:      ${source_commit:0:12} from current checkout"
   fi
   agent_payload_file="$(write_agent_install_payload_file || true)"
   if [[ -n "$agent_payload_file" && -f "$agent_payload_file" ]]; then
-    chown "$ALMANAC_USER:$ALMANAC_USER" "$agent_payload_file" >/dev/null 2>&1 || true
+    chown "$ARCLINK_USER:$ARCLINK_USER" "$agent_payload_file" >/dev/null 2>&1 || true
   fi
   print_post_install_guide
   finish_deploy_operation
-  trap 'almanac_deploy_stable_copy_cleanup' EXIT
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
 }
 
 run_root_upgrade() {
@@ -5161,84 +5161,84 @@ run_root_upgrade() {
   local hermes_runtime_after=""
   local gateway_restart_policy="defer"
 
-  tmp_dir="$(mktemp -d /tmp/almanac-upgrade.XXXXXX)"
+  tmp_dir="$(mktemp -d /tmp/arclink-upgrade.XXXXXX)"
   checkout_dir="$tmp_dir/repo"
   begin_deploy_operation "upgrade" "$STATE_DIR"
-  trap 'finish_deploy_operation; rm -rf "${tmp_dir:-}"; almanac_deploy_stable_copy_cleanup' EXIT
+  trap 'finish_deploy_operation; rm -rf "${tmp_dir:-}"; arclink_deploy_stable_copy_cleanup' EXIT
 
   require_main_upstream_branch_for_upgrade
   ensure_upstream_git_deploy_key_material_root
 
-  echo "Fetching Almanac upstream..."
-  echo "  repo:   $ALMANAC_UPSTREAM_REPO_URL"
-  echo "  branch: $ALMANAC_UPSTREAM_BRANCH"
+  echo "Fetching ArcLink upstream..."
+  echo "  repo:   $ARCLINK_UPSTREAM_REPO_URL"
+  echo "  branch: $ARCLINK_UPSTREAM_BRANCH"
   checkout_upstream_release "$checkout_dir"
   upstream_commit="$(git_head_commit "$checkout_dir")"
   if [[ -z "$upstream_commit" ]]; then
-    echo "Could not determine upstream commit after cloning $ALMANAC_UPSTREAM_REPO_URL." >&2
+    echo "Could not determine upstream commit after cloning $ARCLINK_UPSTREAM_REPO_URL." >&2
     return 1
   fi
 
-  sync_public_repo_from_source "$checkout_dir" "$ALMANAC_REPO_DIR"
-  seed_private_repo "$ALMANAC_PRIV_DIR"
+  sync_public_repo_from_source "$checkout_dir" "$ARCLINK_REPO_DIR"
+  seed_private_repo "$ARCLINK_PRIV_DIR"
   write_runtime_config "$CONFIG_TARGET"
   chown_managed_paths
-  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
+  configure_upstream_git_for_repo "$ARCLINK_REPO_DIR"
 
   env \
-    ALMANAC_USER="$ALMANAC_USER" \
-    ALMANAC_HOME="$ALMANAC_HOME" \
-    ALMANAC_REPO_DIR="$ALMANAC_REPO_DIR" \
-    ALMANAC_PRIV_DIR="$ALMANAC_PRIV_DIR" \
-    ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_CONFIG_DIR" \
+    ARCLINK_USER="$ARCLINK_USER" \
+    ARCLINK_HOME="$ARCLINK_HOME" \
+    ARCLINK_REPO_DIR="$ARCLINK_REPO_DIR" \
+    ARCLINK_PRIV_DIR="$ARCLINK_PRIV_DIR" \
+    ARCLINK_PRIV_CONFIG_DIR="$ARCLINK_PRIV_CONFIG_DIR" \
     VAULT_DIR="$VAULT_DIR" \
     STATE_DIR="$STATE_DIR" \
     NEXTCLOUD_STATE_DIR="$NEXTCLOUD_STATE_DIR" \
     PUBLISHED_DIR="$PUBLISHED_DIR" \
     QUARTO_PROJECT_DIR="$QUARTO_PROJECT_DIR" \
-    ALMANAC_INSTALL_PODMAN="${ALMANAC_INSTALL_PODMAN:-auto}" \
-    ALMANAC_INSTALL_TAILSCALE="${ALMANAC_INSTALL_TAILSCALE:-auto}" \
+    ARCLINK_INSTALL_PODMAN="${ARCLINK_INSTALL_PODMAN:-auto}" \
+    ARCLINK_INSTALL_TAILSCALE="${ARCLINK_INSTALL_TAILSCALE:-auto}" \
     ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}" \
-    ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE="${ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
-    "$ALMANAC_REPO_DIR/bin/bootstrap-system.sh"
-  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
+    ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
+    "$ARCLINK_REPO_DIR/bin/bootstrap-system.sh"
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
   hermes_runtime_before="$(shared_hermes_runtime_commit)"
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/bootstrap-userland.sh'"
+  run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/bootstrap-userland.sh'"
   hermes_runtime_after="$(shared_hermes_runtime_commit)"
   report_shared_hermes_runtime_transition "$hermes_runtime_before" "$hermes_runtime_after"
   if [[ -n "$hermes_runtime_after" && "$hermes_runtime_before" != "$hermes_runtime_after" ]]; then
     gateway_restart_policy="restart"
   fi
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_ALLOW_NO_USER_BUS='${ARCLINK_ALLOW_NO_USER_BUS:-0}' '$ARCLINK_REPO_DIR/bin/install-user-services.sh'"
   chown_managed_paths
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CURATOR_SKIP_HERMES_SETUP='1' ALMANAC_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
+  run_as_user "$ARCLINK_USER" "env ARCLINK_CURATOR_SKIP_HERMES_SETUP='1' ARCLINK_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ARCLINK_REPO_DIR/bin/bootstrap-curator.sh'"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
   ensure_upstream_git_deploy_key_material_root
-  configure_upstream_git_for_repo "$ALMANAC_REPO_DIR"
+  configure_upstream_git_for_repo "$ARCLINK_REPO_DIR"
   ensure_backup_git_deploy_key_material_root
   repair_active_agent_runtime_access
   apply_org_profile_if_present_root
   realign_active_enrolled_agents_root "$gateway_restart_policy"
 
   restart_shared_user_services_root
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
 
   if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]] || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
     tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
   fi
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
-  elif [[ -x "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
+  elif [[ -x "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
   fi
 
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
-  wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 20 1
-  wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 20 1
+  wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT" 20 1
+  wait_for_port 127.0.0.1 "$ARCLINK_NOTION_WEBHOOK_PORT" 20 1
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
@@ -5249,120 +5249,120 @@ run_root_upgrade() {
   # the new code at this point; the release state reflects reality regardless
   # of whether strict health passes. If health fails, the operator inspects
   # the failures against an accurately-recorded current deployment.
-  write_release_state "upstream" "$upstream_commit" "$ALMANAC_UPSTREAM_REPO_URL" "$ALMANAC_UPSTREAM_BRANCH" ""
-  chown "$ALMANAC_USER:$ALMANAC_USER" "${ALMANAC_RELEASE_STATE_FILE:-$STATE_DIR/almanac-release.json}" >/dev/null 2>&1 || true
-  refresh_upgrade_check_state_root "$upstream_commit" "$ALMANAC_UPSTREAM_REPO_URL" "$ALMANAC_UPSTREAM_BRANCH"
+  write_release_state "upstream" "$upstream_commit" "$ARCLINK_UPSTREAM_REPO_URL" "$ARCLINK_UPSTREAM_BRANCH" ""
+  chown "$ARCLINK_USER:$ARCLINK_USER" "${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}" >/dev/null 2>&1 || true
+  refresh_upgrade_check_state_root "$upstream_commit" "$ARCLINK_UPSTREAM_REPO_URL" "$ARCLINK_UPSTREAM_BRANCH"
 
   echo
   echo "Running health check..."
   if [[ -S "/run/user/$uid/bus" ]]; then
-    run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+    run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_HEALTH_STRICT=1 '$ARCLINK_REPO_DIR/bin/health.sh'"
   else
-    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+    run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_HEALTH_STRICT=1 '$ARCLINK_REPO_DIR/bin/health.sh'"
   fi
 
-  if [[ -x "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
+  if [[ -x "$ARCLINK_REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
     echo
     echo "Running live agent tool smoke..."
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/live-agent-tool-smoke.sh"
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/live-agent-tool-smoke.sh"
   fi
 
   echo
-  echo "Almanac upgrade complete."
-  echo "Public repo:  $ALMANAC_REPO_DIR"
-  echo "Private repo: $ALMANAC_PRIV_DIR"
+  echo "ArcLink upgrade complete."
+  echo "Public repo:  $ARCLINK_REPO_DIR"
+  echo "Private repo: $ARCLINK_PRIV_DIR"
   echo "Config:       $CONFIG_TARGET"
-  echo "Release:      ${upstream_commit:0:12} from ${ALMANAC_UPSTREAM_REPO_URL}#${ALMANAC_UPSTREAM_BRANCH}"
+  echo "Release:      ${upstream_commit:0:12} from ${ARCLINK_UPSTREAM_REPO_URL}#${ARCLINK_UPSTREAM_BRANCH}"
   agent_payload_file="$(write_agent_install_payload_file || true)"
   if [[ -n "$agent_payload_file" && -f "$agent_payload_file" ]]; then
-    chown "$ALMANAC_USER:$ALMANAC_USER" "$agent_payload_file" >/dev/null 2>&1 || true
+    chown "$ARCLINK_USER:$ARCLINK_USER" "$agent_payload_file" >/dev/null 2>&1 || true
   fi
   rm -rf "$tmp_dir"
   finish_deploy_operation
-  trap 'almanac_deploy_stable_copy_cleanup' EXIT
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
   echo
   echo "Manual upstream check:"
-  echo "  $ALMANAC_REPO_DIR/bin/almanac-ctl upgrade check"
+  echo "  $ARCLINK_REPO_DIR/bin/arclink-ctl upgrade check"
   echo "Host health check:"
-  echo "  $ALMANAC_REPO_DIR/deploy.sh health"
+  echo "  $ARCLINK_REPO_DIR/deploy.sh health"
 }
 
 run_root_remove() {
   local uid=""
   local remove_repo_with_user_home="0"
 
-  if id -u "$ALMANAC_USER" >/dev/null 2>&1; then
-    uid="$(id -u "$ALMANAC_USER")"
+  if id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+    uid="$(id -u "$ARCLINK_USER")"
     systemctl start "user@$uid.service" >/dev/null 2>&1 || true
 
-    if [[ -x "$ALMANAC_REPO_DIR/bin/nextcloud-down.sh" ]]; then
-      run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/nextcloud-down.sh'" >/dev/null 2>&1 || true
+    if [[ -x "$ARCLINK_REPO_DIR/bin/nextcloud-down.sh" ]]; then
+      run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/nextcloud-down.sh'" >/dev/null 2>&1 || true
     fi
 
     if [[ -S "/run/user/$uid/bus" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now almanac-nextcloud.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-pdf-ingest.timer almanac-pdf-ingest-watch.service almanac-github-backup.timer almanac-quarto-render.timer almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer almanac-memory-synth.service almanac-curator-gateway.service almanac-curator-onboarding.service almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true" || true
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "systemctl --user daemon-reload >/dev/null 2>&1 || true" || true
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user disable --now arclink-nextcloud.service arclink-qmd-mcp.service arclink-qmd-update.timer arclink-vault-watch.service arclink-pdf-ingest.timer arclink-pdf-ingest-watch.service arclink-github-backup.timer arclink-quarto-render.timer arclink-mcp.service arclink-notion-webhook.service arclink-ssot-batcher.timer arclink-notification-delivery.timer arclink-health-watch.timer arclink-curator-refresh.timer arclink-memory-synth.timer arclink-memory-synth.service arclink-curator-gateway.service arclink-curator-onboarding.service arclink-curator-discord-onboarding.service >/dev/null 2>&1 || true" || true
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "systemctl --user daemon-reload >/dev/null 2>&1 || true" || true
     fi
 
-    find "$ALMANAC_HOME/.config/systemd/user" -maxdepth 1 -type f \
-      \( -name 'almanac-*.service' -o -name 'almanac-*.timer' \) -delete 2>/dev/null || true
+    find "$ARCLINK_HOME/.config/systemd/user" -maxdepth 1 -type f \
+      \( -name 'arclink-*.service' -o -name 'arclink-*.timer' \) -delete 2>/dev/null || true
 
-    loginctl disable-linger "$ALMANAC_USER" >/dev/null 2>&1 || true
-    pkill -u "$ALMANAC_USER" >/dev/null 2>&1 || true
+    loginctl disable-linger "$ARCLINK_USER" >/dev/null 2>&1 || true
+    pkill -u "$ARCLINK_USER" >/dev/null 2>&1 || true
     systemctl stop "user@$uid.service" >/dev/null 2>&1 || true
   fi
 
-  if [[ "$REMOVE_SERVICE_USER" == "1" && -d "$ALMANAC_HOME" ]]; then
-    if path_is_within "$ALMANAC_REPO_DIR" "$ALMANAC_HOME"; then
+  if [[ "$REMOVE_SERVICE_USER" == "1" && -d "$ARCLINK_HOME" ]]; then
+    if path_is_within "$ARCLINK_REPO_DIR" "$ARCLINK_HOME"; then
       remove_repo_with_user_home="1"
     fi
   fi
 
-  if [[ "$REMOVE_PUBLIC_REPO" == "1" && -x "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true
+  if [[ "$REMOVE_PUBLIC_REPO" == "1" && -x "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" ]]; then
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true
   fi
-  if [[ "$REMOVE_PUBLIC_REPO" == "1" && -x "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
+  if [[ "$REMOVE_PUBLIC_REPO" == "1" && -x "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" >/dev/null 2>&1 || true
   fi
 
-  systemctl disable --now almanac-enrollment-provision.timer almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
-  systemctl stop almanac-enrollment-provision.service almanac-notion-claim-poll.service >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/almanac-enrollment-provision.service /etc/systemd/system/almanac-enrollment-provision.timer
-  rm -f /etc/systemd/system/almanac-notion-claim-poll.service /etc/systemd/system/almanac-notion-claim-poll.timer
+  systemctl disable --now arclink-enrollment-provision.timer arclink-notion-claim-poll.timer >/dev/null 2>&1 || true
+  systemctl stop arclink-enrollment-provision.service arclink-notion-claim-poll.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/arclink-enrollment-provision.service /etc/systemd/system/arclink-enrollment-provision.timer
+  rm -f /etc/systemd/system/arclink-notion-claim-poll.service /etc/systemd/system/arclink-notion-claim-poll.timer
   systemctl daemon-reload >/dev/null 2>&1 || true
 
   if [[ "$REMOVE_PUBLIC_REPO" == "1" && "$remove_repo_with_user_home" != "1" ]]; then
-    safe_remove_path "$ALMANAC_REPO_DIR"
-    if [[ "$ALMANAC_PRIV_DIR" != "$ALMANAC_REPO_DIR" ]] && ! path_is_within "$ALMANAC_PRIV_DIR" "$ALMANAC_REPO_DIR"; then
-      safe_remove_path "$ALMANAC_PRIV_DIR"
+    safe_remove_path "$ARCLINK_REPO_DIR"
+    if [[ "$ARCLINK_PRIV_DIR" != "$ARCLINK_REPO_DIR" ]] && ! path_is_within "$ARCLINK_PRIV_DIR" "$ARCLINK_REPO_DIR"; then
+      safe_remove_path "$ARCLINK_PRIV_DIR"
     fi
   fi
 
   if [[ "$REMOVE_USER_TOOLING" == "1" && "$REMOVE_SERVICE_USER" != "1" ]]; then
-    safe_remove_path "$ALMANAC_HOME/.cache/qmd"
-    safe_remove_path "$ALMANAC_HOME/.cache/containers"
-    safe_remove_path "$ALMANAC_HOME/.config/cni"
-    safe_remove_path "$ALMANAC_HOME/.config/containers"
-    safe_remove_path "$ALMANAC_HOME/.local/share/containers"
-    safe_remove_path "$ALMANAC_HOME/.local/bin/podman-compose"
-    safe_remove_path "$ALMANAC_HOME/.nvm"
+    safe_remove_path "$ARCLINK_HOME/.cache/qmd"
+    safe_remove_path "$ARCLINK_HOME/.cache/containers"
+    safe_remove_path "$ARCLINK_HOME/.config/cni"
+    safe_remove_path "$ARCLINK_HOME/.config/containers"
+    safe_remove_path "$ARCLINK_HOME/.local/share/containers"
+    safe_remove_path "$ARCLINK_HOME/.local/bin/podman-compose"
+    safe_remove_path "$ARCLINK_HOME/.nvm"
   fi
 
-  if [[ "$REMOVE_SERVICE_USER" == "1" ]] && id -u "$ALMANAC_USER" >/dev/null 2>&1; then
-    userdel -r "$ALMANAC_USER" >/dev/null 2>&1 || userdel "$ALMANAC_USER" >/dev/null 2>&1 || true
+  if [[ "$REMOVE_SERVICE_USER" == "1" ]] && id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+    userdel -r "$ARCLINK_USER" >/dev/null 2>&1 || userdel "$ARCLINK_USER" >/dev/null 2>&1 || true
   fi
 
   if [[ "$REMOVE_PUBLIC_REPO" == "1" ]]; then
-    if [[ -e "$ALMANAC_REPO_DIR" ]]; then
-      safe_remove_path "$ALMANAC_REPO_DIR"
+    if [[ -e "$ARCLINK_REPO_DIR" ]]; then
+      safe_remove_path "$ARCLINK_REPO_DIR"
     fi
-    if [[ "$ALMANAC_PRIV_DIR" != "$ALMANAC_REPO_DIR" ]] && [[ -e "$ALMANAC_PRIV_DIR" ]] && ! path_is_within "$ALMANAC_PRIV_DIR" "$ALMANAC_REPO_DIR"; then
-      safe_remove_path "$ALMANAC_PRIV_DIR"
+    if [[ "$ARCLINK_PRIV_DIR" != "$ARCLINK_REPO_DIR" ]] && [[ -e "$ARCLINK_PRIV_DIR" ]] && ! path_is_within "$ARCLINK_PRIV_DIR" "$ARCLINK_REPO_DIR"; then
+      safe_remove_path "$ARCLINK_PRIV_DIR"
     fi
   fi
 
   echo
-  echo "Almanac teardown complete."
+  echo "ArcLink teardown complete."
   echo "Removed service user: $REMOVE_SERVICE_USER"
   echo "Removed repo/state:   $REMOVE_PUBLIC_REPO"
   echo "Removed tooling:      $REMOVE_USER_TOOLING"
@@ -5376,7 +5376,7 @@ run_enrollment_status() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
@@ -5385,22 +5385,22 @@ run_enrollment_status() {
   onboarding_file="$(mktemp)"
   provision_file="$(mktemp)"
 
-  run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json onboarding list >"$onboarding_file"
-  run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json provision list >"$provision_file"
+  run_service_user_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" --json onboarding list >"$onboarding_file"
+  run_service_user_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" --json provision list >"$provision_file"
 
-  timer_enabled="$(systemctl is-enabled almanac-enrollment-provision.timer 2>/dev/null || true)"
-  timer_active="$(systemctl is-active almanac-enrollment-provision.timer 2>/dev/null || true)"
-  service_active="$(systemctl is-active almanac-enrollment-provision.service 2>/dev/null || true)"
-  claim_timer_enabled="$(systemctl is-enabled almanac-notion-claim-poll.timer 2>/dev/null || true)"
-  claim_timer_active="$(systemctl is-active almanac-notion-claim-poll.timer 2>/dev/null || true)"
-  claim_service_active="$(systemctl is-active almanac-notion-claim-poll.service 2>/dev/null || true)"
+  timer_enabled="$(systemctl is-enabled arclink-enrollment-provision.timer 2>/dev/null || true)"
+  timer_active="$(systemctl is-active arclink-enrollment-provision.timer 2>/dev/null || true)"
+  service_active="$(systemctl is-active arclink-enrollment-provision.service 2>/dev/null || true)"
+  claim_timer_enabled="$(systemctl is-enabled arclink-notion-claim-poll.timer 2>/dev/null || true)"
+  claim_timer_active="$(systemctl is-active arclink-notion-claim-poll.timer 2>/dev/null || true)"
+  claim_service_active="$(systemctl is-active arclink-notion-claim-poll.service 2>/dev/null || true)"
 
   echo "Enrollment status"
   echo
   echo "Config:        $CONFIG_TARGET"
-  echo "Service user:  $ALMANAC_USER"
-  echo "Repo:          $ALMANAC_REPO_DIR"
-  echo "DB:            $ALMANAC_DB_PATH"
+  echo "Service user:  $ARCLINK_USER"
+  echo "Repo:          $ARCLINK_REPO_DIR"
+  echo "DB:            $ARCLINK_DB_PATH"
   echo "Provisioner:"
   echo "  timer enabled: $timer_enabled"
   echo "  timer active:  $timer_active"
@@ -5477,9 +5477,9 @@ PY
   rm -f "$onboarding_file" "$provision_file"
   echo
   echo "Repair commands:"
-  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-trace --unix-user <unix-user>"
-  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
-  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+  echo "  $ARCLINK_REPO_DIR/deploy.sh enrollment-trace --unix-user <unix-user>"
+  echo "  $ARCLINK_REPO_DIR/deploy.sh enrollment-align"
+  echo "  $ARCLINK_REPO_DIR/deploy.sh enrollment-reset"
 }
 
 resolve_enrollment_trace_selector() {
@@ -5530,7 +5530,7 @@ run_enrollment_trace() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
@@ -5540,7 +5540,7 @@ run_enrollment_trace() {
   IFS=$'\t' read -r selector_kind selector_value <<<"$selector_spec"
   trace_file="$(mktemp)"
 
-  run_root_env_cmd python3 - "$ALMANAC_DB_PATH" "$STATE_DIR" "$selector_kind" "$selector_value" <<'PY' >"$trace_file"
+  run_root_env_cmd python3 - "$ARCLINK_DB_PATH" "$STATE_DIR" "$selector_kind" "$selector_value" <<'PY' >"$trace_file"
 import json
 import sqlite3
 import sys
@@ -5789,7 +5789,7 @@ if latest_session is not None:
             provision_state = str(latest_request.get("provision_state") or "")
             if provision_state == "queued":
                 payload["inferred_stage"] = "queued-for-root-provisioner"
-                payload["next_action"] = "Wait for the root provisioner timer or start almanac-enrollment-provision.service once."
+                payload["next_action"] = "Wait for the root provisioner timer or start arclink-enrollment-provision.service once."
             elif provision_state == "running":
                 payload["inferred_stage"] = "root-provisioner-running"
                 payload["next_action"] = "Inspect the root provisioner journal and the per-request auto-provision log."
@@ -5835,9 +5835,9 @@ payload["rate_limit_subjects"] = sorted(subjects)
 print(json.dumps(payload, sort_keys=True))
 PY
 
-  timer_enabled="$(systemctl is-enabled almanac-enrollment-provision.timer 2>/dev/null || true)"
-  timer_active="$(systemctl is-active almanac-enrollment-provision.timer 2>/dev/null || true)"
-  service_active="$(systemctl is-active almanac-enrollment-provision.service 2>/dev/null || true)"
+  timer_enabled="$(systemctl is-enabled arclink-enrollment-provision.timer 2>/dev/null || true)"
+  timer_active="$(systemctl is-active arclink-enrollment-provision.timer 2>/dev/null || true)"
+  service_active="$(systemctl is-active arclink-enrollment-provision.service 2>/dev/null || true)"
   resolved_unix_user="$(python3 - "$trace_file" <<'PY'
 import json
 import sys
@@ -5859,9 +5859,9 @@ PY
   echo "Enrollment trace"
   echo
   echo "Config:        $CONFIG_TARGET"
-  echo "Service user:  $ALMANAC_USER"
-  echo "Repo:          $ALMANAC_REPO_DIR"
-  echo "DB:            $ALMANAC_DB_PATH"
+  echo "Service user:  $ARCLINK_USER"
+  echo "Repo:          $ARCLINK_REPO_DIR"
+  echo "DB:            $ARCLINK_DB_PATH"
   echo "Selector:      $selector_kind=$selector_value"
   echo "Provisioner:"
   echo "  timer enabled: $timer_enabled"
@@ -5988,9 +5988,9 @@ PY
 )"
   if [[ "$user_gateway_expected" == "1" && -n "$resolved_unix_user" ]] && getent passwd "$resolved_unix_user" >/dev/null 2>&1; then
     resolved_uid="$(getent passwd "$resolved_unix_user" | awk -F: '{print $3}')"
-    user_gateway_unit="/home/$resolved_unix_user/.config/systemd/user/almanac-user-agent-gateway.service"
-    gateway_enabled="$(run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user is-enabled almanac-user-agent-gateway.service 2>/dev/null || true)"
-    gateway_active="$(run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user is-active almanac-user-agent-gateway.service 2>/dev/null || true)"
+    user_gateway_unit="/home/$resolved_unix_user/.config/systemd/user/arclink-user-agent-gateway.service"
+    gateway_enabled="$(run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user is-enabled arclink-user-agent-gateway.service 2>/dev/null || true)"
+    gateway_active="$(run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user is-active arclink-user-agent-gateway.service 2>/dev/null || true)"
     echo
     echo "User gateway:"
     if [[ -f "$user_gateway_unit" ]]; then
@@ -6041,12 +6041,12 @@ PY
     fi
     echo
     echo "Recent user gateway status:"
-    run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user status almanac-user-agent-gateway.service -n "$TRACE_LOG_LINES" --no-pager || true
+    run_root_env_cmd runuser -u "$resolved_unix_user" -- env XDG_RUNTIME_DIR="/run/user/$resolved_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$resolved_uid/bus" systemctl --user status arclink-user-agent-gateway.service -n "$TRACE_LOG_LINES" --no-pager || true
   fi
 
   echo
   echo "Recent root provisioner journal:"
-  run_root_env_cmd journalctl -u almanac-enrollment-provision.service -n "$TRACE_LOG_LINES" --no-pager || true
+  run_root_env_cmd journalctl -u arclink-enrollment-provision.service -n "$TRACE_LOG_LINES" --no-pager || true
 
   while IFS= read -r log_path; do
     [[ -n "$log_path" ]] || continue
@@ -6070,11 +6070,11 @@ PY
   rm -f "$trace_file"
   echo
   echo "Repair commands:"
-  echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-align"
+  echo "  $ARCLINK_REPO_DIR/deploy.sh enrollment-align"
   if [[ -n "$resolved_unix_user" ]]; then
-    echo "  ENROLLMENT_RESET_UNIX_USER=$resolved_unix_user $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+    echo "  ENROLLMENT_RESET_UNIX_USER=$resolved_unix_user $ARCLINK_REPO_DIR/deploy.sh enrollment-reset"
   else
-    echo "  $ALMANAC_REPO_DIR/deploy.sh enrollment-reset"
+    echo "  $ARCLINK_REPO_DIR/deploy.sh enrollment-reset"
   fi
 }
 
@@ -6086,28 +6086,28 @@ run_enrollment_align() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
   ensure_deployed_config_exists
 
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" enrollment-align
+    sudo_deploy ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" enrollment-align
     write_operator_checkout_artifact
     return 0
   fi
 
   echo "Realigning enrollment services..."
-  env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
-  run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-1}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
+  run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_ALLOW_NO_USER_BUS='${ARCLINK_ALLOW_NO_USER_BUS:-1}' '$ARCLINK_REPO_DIR/bin/install-user-services.sh'"
   realign_active_enrolled_agents_root
   restart_shared_user_services_root || true
-  systemctl reset-failed almanac-enrollment-provision.service almanac-enrollment-provision.timer almanac-notion-claim-poll.service almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
-  systemctl enable almanac-enrollment-provision.timer almanac-notion-claim-poll.timer >/dev/null
-  systemctl restart almanac-enrollment-provision.timer almanac-notion-claim-poll.timer
-  systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
-  systemctl start almanac-notion-claim-poll.service >/dev/null 2>&1 || true
+  systemctl reset-failed arclink-enrollment-provision.service arclink-enrollment-provision.timer arclink-notion-claim-poll.service arclink-notion-claim-poll.timer >/dev/null 2>&1 || true
+  systemctl enable arclink-enrollment-provision.timer arclink-notion-claim-poll.timer >/dev/null
+  systemctl restart arclink-enrollment-provision.timer arclink-notion-claim-poll.timer
+  systemctl start arclink-enrollment-provision.service >/dev/null 2>&1 || true
+  systemctl start arclink-notion-claim-poll.service >/dev/null 2>&1 || true
   echo "Enrollment provisioner, shared services, and active external user-agent units realigned."
   echo
   run_enrollment_status
@@ -6124,14 +6124,14 @@ run_enrollment_reset() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
   ensure_deployed_config_exists
 
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" enrollment-reset
+    sudo_deploy ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" enrollment-reset
     write_operator_checkout_artifact
     return 0
   fi
@@ -6141,8 +6141,8 @@ run_enrollment_reset() {
     echo "Unix user is required." >&2
     exit 1
   fi
-  if [[ "$target_unix_user" == "$ALMANAC_USER" ]]; then
-    echo "Refusing to reset the Almanac service user '$ALMANAC_USER'." >&2
+  if [[ "$target_unix_user" == "$ARCLINK_USER" ]]; then
+    echo "Refusing to reset the ArcLink service user '$ARCLINK_USER'." >&2
     exit 1
   fi
 
@@ -6189,8 +6189,8 @@ PY
   if [[ "$forget_history" == "1" ]]; then
     purge_cmd=(
       env
-      ALMANAC_CONFIG_FILE="$CONFIG_TARGET"
-      "$ALMANAC_REPO_DIR/bin/almanac-ctl"
+      ARCLINK_CONFIG_FILE="$CONFIG_TARGET"
+      "$ARCLINK_REPO_DIR/bin/arclink-ctl"
       user
       purge-enrollment
       "$target_unix_user"
@@ -6217,7 +6217,7 @@ PY
       echo "Enrollment purge failed." >&2
       exit 1
     fi
-    systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
+    systemctl start arclink-enrollment-provision.service >/dev/null 2>&1 || true
     rm -f "$snapshot_file"
     echo "Enrollment purge complete for $target_unix_user."
     echo
@@ -6291,30 +6291,30 @@ PY
       continue
     fi
     if [[ "$request_status" == "approved" && -z "$request_provisioned_at" ]]; then
-      env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-        "$ALMANAC_REPO_DIR/bin/almanac-ctl" provision cancel "$request_id" \
+      env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+        "$ARCLINK_REPO_DIR/bin/arclink-ctl" provision cancel "$request_id" \
         --reason "reset via deploy.sh enrollment-reset" >/dev/null 2>&1 || true
     elif [[ "$request_status" == "pending" ]]; then
-      run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" request deny "$request_id" \
+      run_service_user_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" request deny "$request_id" \
         --surface ctl --actor deploy-enrollment-reset >/dev/null 2>&1 || true
     fi
   done
 
   for session_id in "${session_ids[@]}"; do
     [[ -n "$session_id" ]] || continue
-    run_service_user_cmd "$ALMANAC_REPO_DIR/bin/almanac-ctl" onboarding deny "$session_id" \
+    run_service_user_cmd "$ARCLINK_REPO_DIR/bin/arclink-ctl" onboarding deny "$session_id" \
       --actor deploy-enrollment-reset --reason "reset via deploy.sh enrollment-reset" >/dev/null 2>&1 || true
   done
 
   if [[ "$agent_status" == "active" || "$agent_status" == "pending" ]]; then
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-      "$ALMANAC_REPO_DIR/bin/almanac-ctl" agent deenroll "$target_unix_user" \
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ARCLINK_REPO_DIR/bin/arclink-ctl" agent deenroll "$target_unix_user" \
       --actor deploy-enrollment-reset >/dev/null 2>&1 || true
   fi
 
-  rm -rf "$ALMANAC_AGENTS_STATE_DIR/$agent_id"
+  rm -rf "$ARCLINK_AGENTS_STATE_DIR/$agent_id"
   if [[ "$remove_archives" == "1" ]]; then
-    rm -rf "$ALMANAC_ARCHIVED_AGENTS_DIR/$agent_id"
+    rm -rf "$ARCLINK_ARCHIVED_AGENTS_DIR/$agent_id"
   fi
   rm -f "$STATE_DIR/activation-triggers/$agent_id.json"
 
@@ -6334,7 +6334,7 @@ PY
     rate_subjects+=("$extra_subject")
   fi
   if [[ "$purge_rate_limits" == "1" && ${#rate_subjects[@]} -gt 0 ]]; then
-    run_root_env_cmd python3 - "$ALMANAC_DB_PATH" "${rate_subjects[@]}" <<'PY'
+    run_root_env_cmd python3 - "$ARCLINK_DB_PATH" "${rate_subjects[@]}" <<'PY'
 import sqlite3
 import sys
 
@@ -6357,7 +6357,7 @@ PY
     userdel -r "$target_unix_user" >/dev/null 2>&1 || userdel "$target_unix_user" >/dev/null 2>&1 || true
   fi
 
-  systemctl start almanac-enrollment-provision.service >/dev/null 2>&1 || true
+  systemctl start arclink-enrollment-provision.service >/dev/null 2>&1 || true
   rm -f "$snapshot_file"
   echo "Enrollment reset complete for $target_unix_user."
   echo
@@ -6371,12 +6371,12 @@ run_pins_show() {
 }
 
 run_pin_upgrade_notify() {
-  # On-demand detector run: same logic that almanac-curator-refresh.timer
-  # invokes hourly via `almanac-ctl internal pin-upgrade-check`.
+  # On-demand detector run: same logic that arclink-curator-refresh.timer
+  # invokes hourly via `arclink-ctl internal pin-upgrade-check`.
   load_detected_config || true
-  exec sudo -u "${ALMANAC_USER:-almanac}" \
-    env ALMANAC_CONFIG_FILE="${ALMANAC_CONFIG_FILE:-/home/almanac/almanac/almanac-priv/config/almanac.env}" \
-    "$BOOTSTRAP_DIR/bin/almanac-ctl" --json internal pin-upgrade-check
+  exec sudo -u "${ARCLINK_USER:-arclink}" \
+    env ARCLINK_CONFIG_FILE="${ARCLINK_CONFIG_FILE:-/home/arclink/arclink/arclink-priv/config/arclink.env}" \
+    "$BOOTSTRAP_DIR/bin/arclink-ctl" --json internal pin-upgrade-check
 }
 
 # Components in pins.json that have a concrete upstream-check resolver wired in
@@ -6400,7 +6400,7 @@ run_pins_check() {
   source "$BOOTSTRAP_DIR/bin/pins.sh"
   pins_require
   pins_validate || return 1
-  echo "config/pins.json: $ALMANAC_PINS_FILE (validated)"
+  echo "config/pins.json: $ARCLINK_PINS_FILE (validated)"
   echo
   echo "Per-component drift (read-only; no pins.json or git modifications):"
   while IFS= read -r component; do
@@ -6426,13 +6426,13 @@ _run_component_apply() {
   local component="$1"; shift
   load_detected_config || true
   exec env \
-    ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
-    ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
-    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
-    ALMANAC_CONFIG_FILE="${ALMANAC_CONFIG_FILE:-}" \
+    ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+    ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
+    ARCLINK_CONFIG_FILE="${ARCLINK_CONFIG_FILE:-}" \
     "$BOOTSTRAP_DIR/bin/component-upgrade.sh" "$component" apply "$@"
 }
 
@@ -6463,68 +6463,68 @@ run_health_check() {
     status="$(probe_path_status "$DISCOVERED_CONFIG")"
   fi
   if [[ "$status" == "exists-unreadable" ]]; then
-    if ! sudo_deploy ALMANAC_CONFIG_FILE="$DISCOVERED_CONFIG" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" health; then
+    if ! sudo_deploy ARCLINK_CONFIG_FILE="$DISCOVERED_CONFIG" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" health; then
       return 1
     fi
     write_operator_checkout_artifact
     return 0
   fi
 
-  if [[ -z "${ALMANAC_USER:-}" ]]; then
-    ALMANAC_USER="almanac"
+  if [[ -z "${ARCLINK_USER:-}" ]]; then
+    ARCLINK_USER="arclink"
   fi
-  if [[ -z "${ALMANAC_HOME:-}" ]]; then
-    ALMANAC_HOME="$(default_home_for_user "$ALMANAC_USER")"
+  if [[ -z "${ARCLINK_HOME:-}" ]]; then
+    ARCLINK_HOME="$(default_home_for_user "$ARCLINK_USER")"
   fi
-  if [[ -z "${ALMANAC_REPO_DIR:-}" ]]; then
-    ALMANAC_REPO_DIR="$ALMANAC_HOME/almanac"
+  if [[ -z "${ARCLINK_REPO_DIR:-}" ]]; then
+    ARCLINK_REPO_DIR="$ARCLINK_HOME/arclink"
   fi
-  if [[ -z "${ALMANAC_PRIV_DIR:-}" ]]; then
-    ALMANAC_PRIV_DIR="$ALMANAC_REPO_DIR/almanac-priv"
+  if [[ -z "${ARCLINK_PRIV_DIR:-}" ]]; then
+    ARCLINK_PRIV_DIR="$ARCLINK_REPO_DIR/arclink-priv"
   fi
 
-  ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
-  CONFIG_TARGET="${DISCOVERED_CONFIG:-$ALMANAC_PRIV_CONFIG_DIR/almanac.env}"
+  ARCLINK_PRIV_CONFIG_DIR="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}"
+  CONFIG_TARGET="${DISCOVERED_CONFIG:-$ARCLINK_PRIV_CONFIG_DIR/arclink.env}"
 
-  if ! id -u "$ALMANAC_USER" >/dev/null 2>&1; then
-    echo "Service user '$ALMANAC_USER' does not exist." >&2
+  if ! id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+    echo "Service user '$ARCLINK_USER' does not exist." >&2
     exit 1
   fi
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    if [[ ! -x "$ALMANAC_REPO_DIR/bin/health.sh" ]]; then
-      echo "Health script not found at $ALMANAC_REPO_DIR/bin/health.sh" >&2
+    if [[ ! -x "$ARCLINK_REPO_DIR/bin/health.sh" ]]; then
+      echo "Health script not found at $ARCLINK_REPO_DIR/bin/health.sh" >&2
       exit 1
     fi
-    uid="$(id -u "$ALMANAC_USER")"
+    uid="$(id -u "$ARCLINK_USER")"
     if [[ -S "/run/user/$uid/bus" ]]; then
-      run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+      run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/health.sh'"
     else
-      run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+      run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/health.sh'"
     fi
     return 0
   fi
 
-  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
-    if [[ ! -x "$ALMANAC_REPO_DIR/bin/health.sh" ]]; then
-      echo "Health script not found at $ALMANAC_REPO_DIR/bin/health.sh" >&2
+  if [[ "$(id -un)" == "$ARCLINK_USER" ]]; then
+    if [[ ! -x "$ARCLINK_REPO_DIR/bin/health.sh" ]]; then
+      echo "Health script not found at $ARCLINK_REPO_DIR/bin/health.sh" >&2
       exit 1
     fi
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/health.sh"
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/health.sh"
     return 0
   fi
 
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
   if [[ -S "/run/user/$uid/bus" ]]; then
-    sudo -iu "$ALMANAC_USER" env \
+    sudo -iu "$ARCLINK_USER" env \
       XDG_RUNTIME_DIR="/run/user/$uid" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-      "$ALMANAC_REPO_DIR/bin/health.sh"
+      ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ARCLINK_REPO_DIR/bin/health.sh"
   else
-    sudo -iu "$ALMANAC_USER" env \
-      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-      "$ALMANAC_REPO_DIR/bin/health.sh"
+    sudo -iu "$ARCLINK_USER" env \
+      ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+      "$ARCLINK_REPO_DIR/bin/health.sh"
   fi
   write_operator_checkout_artifact
 }
@@ -6541,17 +6541,17 @@ run_rotate_nextcloud_secrets() {
     local sudo_pg_file="" sudo_admin_file="" sudo_status=0
     local -a cmd=(
       sudo_deploy
-      "ALMANAC_CONFIG_FILE=$CONFIG_TARGET"
+      "ARCLINK_CONFIG_FILE=$CONFIG_TARGET"
       "NEXTCLOUD_ROTATE_ASSUME_YES=${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
     )
     if [[ -n "${NEXTCLOUD_ROTATE_POSTGRES_PASSWORD:-}" ]]; then
-      sudo_pg_file="$(mktemp /tmp/almanac-nextcloud-pg.XXXXXX)"
+      sudo_pg_file="$(mktemp /tmp/arclink-nextcloud-pg.XXXXXX)"
       chmod 600 "$sudo_pg_file"
       printf '%s\n' "$NEXTCLOUD_ROTATE_POSTGRES_PASSWORD" >"$sudo_pg_file"
       cmd+=("NEXTCLOUD_ROTATE_POSTGRES_PASSWORD_FILE=$sudo_pg_file")
     fi
     if [[ -n "${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-}" ]]; then
-      sudo_admin_file="$(mktemp /tmp/almanac-nextcloud-admin.XXXXXX)"
+      sudo_admin_file="$(mktemp /tmp/arclink-nextcloud-admin.XXXXXX)"
       chmod 600 "$sudo_admin_file"
       printf '%s\n' "$NEXTCLOUD_ROTATE_ADMIN_PASSWORD" >"$sudo_admin_file"
       cmd+=("NEXTCLOUD_ROTATE_ADMIN_PASSWORD_FILE=$sudo_admin_file")
@@ -6573,8 +6573,8 @@ run_rotate_nextcloud_secrets() {
     exit 1
   fi
 
-  if ! id -u "$ALMANAC_USER" >/dev/null 2>&1; then
-    echo "Service user '$ALMANAC_USER' does not exist." >&2
+  if ! id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+    echo "Service user '$ARCLINK_USER' does not exist." >&2
     exit 1
   fi
 
@@ -6590,10 +6590,10 @@ run_rotate_nextcloud_secrets() {
   masked_postgres="$(mask_secret "$new_postgres_password")"
   masked_admin="$(mask_secret "$new_admin_password")"
 
-  echo "Almanac deploy: rotate live Nextcloud credentials"
+  echo "ArcLink deploy: rotate live Nextcloud credentials"
   echo
   echo "Config:             $CONFIG_TARGET"
-  echo "Service user:       $ALMANAC_USER"
+  echo "Service user:       $ARCLINK_USER"
   echo "Nextcloud admin:    ${NEXTCLOUD_ADMIN_USER:-admin}"
   echo "New Postgres pass:  $masked_postgres"
   echo "New admin pass:     $masked_admin"
@@ -6606,18 +6606,18 @@ run_rotate_nextcloud_secrets() {
     fi
   fi
 
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
-  run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start almanac-nextcloud.service >/dev/null 2>&1 || true"
+  run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user start arclink-nextcloud.service >/dev/null 2>&1 || true"
 
-  pg_file="$(mktemp /tmp/almanac-nextcloud-pg.XXXXXX)"
-  admin_file="$(mktemp /tmp/almanac-nextcloud-admin.XXXXXX)"
+  pg_file="$(mktemp /tmp/arclink-nextcloud-pg.XXXXXX)"
+  admin_file="$(mktemp /tmp/arclink-nextcloud-admin.XXXXXX)"
   chmod 600 "$pg_file" "$admin_file"
   printf '%s\n' "$new_postgres_password" >"$pg_file"
   printf '%s\n' "$new_admin_password" >"$admin_file"
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$pg_file" "$admin_file"
-  run_as_user "$ALMANAC_USER" \
-    "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' NEXTCLOUD_ROTATE_POSTGRES_PASSWORD_FILE='$pg_file' NEXTCLOUD_ROTATE_ADMIN_PASSWORD_FILE='$admin_file' '$ALMANAC_REPO_DIR/bin/rotate-nextcloud-secrets.sh'" || rotate_status=$?
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$pg_file" "$admin_file"
+  run_as_user "$ARCLINK_USER" \
+    "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' NEXTCLOUD_ROTATE_POSTGRES_PASSWORD_FILE='$pg_file' NEXTCLOUD_ROTATE_ADMIN_PASSWORD_FILE='$admin_file' '$ARCLINK_REPO_DIR/bin/rotate-nextcloud-secrets.sh'" || rotate_status=$?
   rm -f "$pg_file" "$admin_file"
   if (( rotate_status != 0 )); then
     return "$rotate_status"
@@ -6628,8 +6628,8 @@ run_rotate_nextcloud_secrets() {
   write_runtime_config "$CONFIG_TARGET"
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
-  run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-nextcloud.service"
-  run_as_user_systemd "$ALMANAC_USER" "$uid" "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_HEALTH_STRICT=1 '$ALMANAC_REPO_DIR/bin/health.sh'"
+  run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-nextcloud.service"
+  run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_HEALTH_STRICT=1 '$ARCLINK_REPO_DIR/bin/health.sh'"
 
   echo
   echo "Live Nextcloud credentials rotated and persisted to $CONFIG_TARGET."
@@ -6645,68 +6645,68 @@ run_notion_ssot_setup() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
   ensure_deployed_config_exists
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
-  if [[ "${ALMANAC_NOTION_MIGRATION_FRESH_DEFAULTS:-0}" == "1" ]]; then
-    ALMANAC_SSOT_NOTION_ROOT_PAGE_URL=""
-    ALMANAC_SSOT_NOTION_ROOT_PAGE_ID=""
-    ALMANAC_SSOT_NOTION_SPACE_URL=""
-    ALMANAC_SSOT_NOTION_SPACE_ID=""
-    ALMANAC_SSOT_NOTION_SPACE_KIND=""
-    ALMANAC_SSOT_NOTION_TOKEN=""
-    ALMANAC_NOTION_INDEX_ROOTS=""
+  if [[ "${ARCLINK_NOTION_MIGRATION_FRESH_DEFAULTS:-0}" == "1" ]]; then
+    ARCLINK_SSOT_NOTION_ROOT_PAGE_URL=""
+    ARCLINK_SSOT_NOTION_ROOT_PAGE_ID=""
+    ARCLINK_SSOT_NOTION_SPACE_URL=""
+    ARCLINK_SSOT_NOTION_SPACE_ID=""
+    ARCLINK_SSOT_NOTION_SPACE_KIND=""
+    ARCLINK_SSOT_NOTION_TOKEN=""
+    ARCLINK_NOTION_INDEX_ROOTS=""
   fi
 
-  if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
+  if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ARCLINK_USER" ]]; then
     echo "Switching to sudo for Notion SSOT setup..."
-    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" notion-ssot
+    sudo_deploy ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" notion-ssot
     write_operator_checkout_artifact
     return 0
   fi
 
-  echo "Almanac deploy: Notion SSOT setup / handshake"
+  echo "ArcLink deploy: Notion SSOT setup / handshake"
   echo
-  echo "Make one normal Notion page for Almanac, such as 'The Almanac', then"
+  echo "Make one normal Notion page for ArcLink, such as 'The ArcLink', then"
   echo "paste that page URL below."
   echo "Do not use the workspace Home screen."
   echo
   echo "Before you continue in Notion:"
-  echo "  1) Create a normal page for Almanac in the Teamspace you want it to use."
+  echo "  1) Create a normal page for ArcLink in the Teamspace you want it to use."
   echo "  2) Open this page in your browser:"
   echo "     https://www.notion.so/profile/integrations/internal"
   echo "  3) If Notion lands you back in the workspace UI, open your workspace"
   echo "     switcher in the top-left, then go to Settings -> Integrations."
   echo "  4) Click Create new integration."
-  echo "  5) Name it something like Almanac Curator, optionally upload an icon"
+  echo "  5) Name it something like ArcLink Curator, optionally upload an icon"
   echo "     (the Curator Discord avatar in this repo works well), choose the"
   echo "     associated workspace, and click Create."
   echo "  6) On the capabilities screen:"
   echo "     - turn on every checkbox capability Notion offers on that screen"
   echo "     - for user information, choose Read user information including email addresses"
-  echo "       so Almanac can verify users against their Notion email"
+  echo "       so ArcLink can verify users against their Notion email"
   echo "     - click Save"
   echo "  7) If you land on Discover new connections / Show all and see options like"
   echo "     Notion MCP, GitHub, Slack, Jira, or other partner apps, stop there:"
-  echo "     those are not the right choice for Almanac's shared SSOT setup."
+  echo "     those are not the right choice for ArcLink's shared SSOT setup."
   echo "  8) Open that internal integration and, near Internal integration secret,"
   echo "     click Show and then copy the key."
   echo "  9) In that integration, open Manage page access and grant access to the"
-  echo "     parent page or Teamspace root Almanac should live under."
+  echo "     parent page or Teamspace root ArcLink should live under."
   echo "     New child pages and databases under that granted subtree inherit"
   echo "     access automatically."
   echo
-  echo "Almanac will use the page you paste below as its shared Notion home and"
+  echo "ArcLink will use the page you paste below as its shared Notion home and"
   echo "create its verification scaffolding under it when needed."
   require_notion_subtree_ack
-  if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" ]]; then
+  if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then
     echo "Current shared Notion target:"
-    echo "  ${ALMANAC_SSOT_NOTION_SPACE_URL}"
-    if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_KIND:-}" || -n "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]]; then
-      echo "  ${ALMANAC_SSOT_NOTION_SPACE_KIND:-object} ${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
+    echo "  ${ARCLINK_SSOT_NOTION_SPACE_URL}"
+    if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_KIND:-}" || -n "${ARCLINK_SSOT_NOTION_SPACE_ID:-}" ]]; then
+      echo "  ${ARCLINK_SSOT_NOTION_SPACE_KIND:-object} ${ARCLINK_SSOT_NOTION_SPACE_ID:-}"
     fi
   else
     echo "No shared Notion SSOT target is configured yet."
@@ -6715,25 +6715,25 @@ run_notion_ssot_setup() {
 
   local notion_index_roots=""
 
-  notion_space_url="$(normalize_optional_answer "$(ask "Shared Notion page URL for Almanac (use a normal page, not the workspace Home screen) (ENTER keeps current, type none to clear)" "${ALMANAC_SSOT_NOTION_SPACE_URL:-}")")"
-  notion_api_version="$(normalize_optional_answer "$(ask "Notion API version" "${ALMANAC_SSOT_NOTION_API_VERSION:-2026-03-11}")")"
+  notion_space_url="$(normalize_optional_answer "$(ask "Shared Notion page URL for ArcLink (use a normal page, not the workspace Home screen) (ENTER keeps current, type none to clear)" "${ARCLINK_SSOT_NOTION_SPACE_URL:-}")")"
+  notion_api_version="$(normalize_optional_answer "$(ask "Notion API version" "${ARCLINK_SSOT_NOTION_API_VERSION:-2026-03-11}")")"
   notion_api_version="${notion_api_version:-2026-03-11}"
-  notion_token="$(ask_secret_with_default "Notion Internal Integration Secret for your Almanac internal integration (start at https://www.notion.so/profile/integrations/internal) (ENTER keeps current, type none to clear)" "${ALMANAC_SSOT_NOTION_TOKEN:-}")"
-  notion_public_webhook_url="${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}"
+  notion_token="$(ask_secret_with_default "Notion Internal Integration Secret for your ArcLink internal integration (start at https://www.notion.so/profile/integrations/internal) (ENTER keeps current, type none to clear)" "${ARCLINK_SSOT_NOTION_TOKEN:-}")"
+  notion_public_webhook_url="${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
 
   if [[ -z "$notion_space_url" && -z "$notion_token" ]]; then
-    ALMANAC_SSOT_NOTION_ROOT_PAGE_URL=""
-    ALMANAC_SSOT_NOTION_ROOT_PAGE_ID=""
-    ALMANAC_SSOT_NOTION_SPACE_URL=""
-    ALMANAC_SSOT_NOTION_SPACE_ID=""
-    ALMANAC_SSOT_NOTION_SPACE_KIND=""
-    ALMANAC_SSOT_NOTION_API_VERSION="$notion_api_version"
-    ALMANAC_SSOT_NOTION_TOKEN=""
-    ALMANAC_NOTION_INDEX_ROOTS=""
-    ALMANAC_NOTION_WEBHOOK_PUBLIC_URL=""
+    ARCLINK_SSOT_NOTION_ROOT_PAGE_URL=""
+    ARCLINK_SSOT_NOTION_ROOT_PAGE_ID=""
+    ARCLINK_SSOT_NOTION_SPACE_URL=""
+    ARCLINK_SSOT_NOTION_SPACE_ID=""
+    ARCLINK_SSOT_NOTION_SPACE_KIND=""
+    ARCLINK_SSOT_NOTION_API_VERSION="$notion_api_version"
+    ARCLINK_SSOT_NOTION_TOKEN=""
+    ARCLINK_NOTION_INDEX_ROOTS=""
+    ARCLINK_NOTION_WEBHOOK_PUBLIC_URL=""
     write_runtime_config "$CONFIG_TARGET"
     if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-      chown "$ALMANAC_USER:$ALMANAC_USER" "$CONFIG_TARGET" >/dev/null 2>&1 || true
+      chown "$ARCLINK_USER:$ARCLINK_USER" "$CONFIG_TARGET" >/dev/null 2>&1 || true
     fi
     echo
     echo "Cleared shared Notion SSOT configuration in $CONFIG_TARGET."
@@ -6750,8 +6750,8 @@ run_notion_ssot_setup() {
   chmod 600 "$notion_token_file" || true
   printf '%s\n' "$notion_token" >"$notion_token_file"
   if ! env \
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-    "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion handshake \
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+    "$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion handshake \
       --space-url "$notion_space_url" \
       --token-file "$notion_token_file" \
       --api-version "$notion_api_version" >"$handshake_file"; then
@@ -6843,8 +6843,8 @@ print(str(integration.get("workspace_name") or "").strip())
 PY
 )"
   if ! env \
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-    "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion preflight-root \
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+    "$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion preflight-root \
       --root-page-id "$root_page_id" \
       --token-file "$notion_token_file" \
       --api-version "$notion_api_version" >/dev/null; then
@@ -6853,26 +6853,26 @@ PY
     exit 1
   fi
 
-  local notion_index_roots_default="${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}"
-  if [[ "${ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT:-0}" == "1" ]]; then
+  local notion_index_roots_default="${ARCLINK_NOTION_INDEX_ROOTS:-$root_page_url}"
+  if [[ "${ARCLINK_NOTION_MIGRATION_DEFAULT_INDEX_ROOT:-0}" == "1" ]]; then
     notion_index_roots_default="$root_page_url"
   fi
   notion_index_roots="$(normalize_optional_answer "$(ask "Shared Notion index roots (comma-separated page/database URLs or IDs; ENTER keeps current/default root)" "$notion_index_roots_default")")"
   notion_index_roots="${notion_index_roots:-$root_page_url}"
 
-  ALMANAC_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"
-  ALMANAC_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"
-  ALMANAC_SSOT_NOTION_SPACE_URL="$notion_space_url"
-  ALMANAC_SSOT_NOTION_SPACE_ID="$space_id"
-  ALMANAC_SSOT_NOTION_SPACE_KIND="$space_kind"
-  ALMANAC_SSOT_NOTION_API_VERSION="$notion_api_version"
-  ALMANAC_SSOT_NOTION_TOKEN="$notion_token"
-  ALMANAC_NOTION_INDEX_ROOTS="$notion_index_roots"
-  ALMANAC_NOTION_WEBHOOK_PUBLIC_URL="$notion_public_webhook_url"
+  ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="$root_page_url"
+  ARCLINK_SSOT_NOTION_ROOT_PAGE_ID="$root_page_id"
+  ARCLINK_SSOT_NOTION_SPACE_URL="$notion_space_url"
+  ARCLINK_SSOT_NOTION_SPACE_ID="$space_id"
+  ARCLINK_SSOT_NOTION_SPACE_KIND="$space_kind"
+  ARCLINK_SSOT_NOTION_API_VERSION="$notion_api_version"
+  ARCLINK_SSOT_NOTION_TOKEN="$notion_token"
+  ARCLINK_NOTION_INDEX_ROOTS="$notion_index_roots"
+  ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="$notion_public_webhook_url"
   write_runtime_config "$CONFIG_TARGET"
   rm -f "$handshake_file" "$notion_token_file"
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    chown "$ALMANAC_USER:$ALMANAC_USER" "$CONFIG_TARGET" >/dev/null 2>&1 || true
+    chown "$ARCLINK_USER:$ARCLINK_USER" "$CONFIG_TARGET" >/dev/null 2>&1 || true
   fi
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
@@ -6893,16 +6893,16 @@ PY
     echo "  $space_title"
   fi
   echo "Shared Notion index roots:"
-  echo "  ${ALMANAC_NOTION_INDEX_ROOTS:-$root_page_url}"
+  echo "  ${ARCLINK_NOTION_INDEX_ROOTS:-$root_page_url}"
   echo "Resolved URL:"
   echo "  ${target_url:-$notion_space_url}"
-  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+  if [[ -n "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     echo "Webhook URL:"
-    echo "  ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+    echo "  ${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL}"
     echo "Webhook subscription checklist:"
     echo "  1. Open the Notion Developer Portal for this integration and go to Webhooks."
     echo "  2. If a subscription already exists for this exact URL, edit it instead of creating a duplicate:"
-    echo "     ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL}"
+    echo "     ${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL}"
     echo "  3. Select events exactly as follows:"
     echo "     - Page: all Page events"
     echo "     - Database: all Database events"
@@ -6916,18 +6916,18 @@ PY
   echo "Config persisted to:"
   echo "  $CONFIG_TARGET"
 
-  if [[ -n "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
-    if [[ "${ALMANAC_NOTION_MIGRATION_FORCE_WEBHOOK_RESET:-0}" == "1" ]]; then
+  if [[ -n "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+    if [[ "${ARCLINK_NOTION_MIGRATION_FORCE_WEBHOOK_RESET:-0}" == "1" ]]; then
       echo
       echo "Migration mode: clearing the previous Notion webhook verification token before the new subscription handshake."
-      if ! env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-        "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion webhook-reset-token \
+      if ! env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+        "$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion webhook-reset-token \
           --actor "${SUDO_USER:-$(id -un)}" --minutes 0 --force >/dev/null; then
         echo "Could not clear the previous Notion webhook token; leaving migration paused before webhook verification." >&2
         exit 1
       fi
     fi
-    if ! run_notion_webhook_setup_flow "$BOOTSTRAP_DIR/bin/almanac-ctl" "${SUDO_USER:-$(id -un)}"; then
+    if ! run_notion_webhook_setup_flow "$BOOTSTRAP_DIR/bin/arclink-ctl" "${SUDO_USER:-$(id -un)}"; then
       rm -f "$handshake_file"
       echo "Shared Notion configuration was saved, but webhook verification is still incomplete." >&2
       exit 1
@@ -6948,13 +6948,13 @@ print_notion_migration_runbook() {
   cat <<'EOF'
 Notion workspace migration guide
 
-This flow moves Almanac's shared Notion SSOT lane from one Notion workspace to
+This flow moves ArcLink's shared Notion SSOT lane from one Notion workspace to
 another. It does not copy Notion pages for you; create or import the new Notion
-content first, then point Almanac at the new shared root page.
+content first, then point ArcLink at the new shared root page.
 
 The guided migration will:
   1. Show the current Notion config without revealing the integration secret.
-  2. Create private backups under almanac-priv/state/migrations/.
+  2. Create private backups under arclink-priv/state/migrations/.
   3. Drain pending Notion webhook events before the cutover when possible.
   4. Pause write/batcher surfaces while leaving the webhook receiver reachable.
   5. Re-run the Notion SSOT setup against the new workspace, including the
@@ -6966,9 +6966,9 @@ The guided migration will:
   8. Restart shared services and remind users to verify Notion again.
 
 What you need before starting:
-  - A normal Notion page in the new workspace for Almanac to use as its root.
+  - A normal Notion page in the new workspace for ArcLink to use as its root.
   - A new Notion internal integration secret from the new workspace.
-  - Page access granted from that new integration to the Almanac root subtree.
+  - Page access granted from that new integration to the ArcLink root subtree.
   - Access to the Notion Developer Portal Webhooks tab if webhooks are enabled.
 
 Expected user impact:
@@ -7015,14 +7015,14 @@ notion_migration_backup_state() {
   echo "  $NOTION_MIGRATION_DIR"
 
   if [[ -f "$CONFIG_TARGET" ]]; then
-    config_backup="$NOTION_MIGRATION_DIR/almanac.env.before"
+    config_backup="$NOTION_MIGRATION_DIR/arclink.env.before"
     cp -p "$CONFIG_TARGET" "$config_backup"
     echo "  config: $config_backup"
   fi
 
-  if [[ -f "$ALMANAC_DB_PATH" ]]; then
-    db_backup="$NOTION_MIGRATION_DIR/almanac-control.sqlite3.before"
-    python3 - "$ALMANAC_DB_PATH" "$db_backup" <<'PY'
+  if [[ -f "$ARCLINK_DB_PATH" ]]; then
+    db_backup="$NOTION_MIGRATION_DIR/arclink-control.sqlite3.before"
+    python3 - "$ARCLINK_DB_PATH" "$db_backup" <<'PY'
 import sqlite3
 import sys
 
@@ -7037,7 +7037,7 @@ finally:
 PY
     echo "  sqlite: $db_backup"
   else
-    echo "  sqlite: skipped; DB not found at $ALMANAC_DB_PATH"
+    echo "  sqlite: skipped; DB not found at $ARCLINK_DB_PATH"
   fi
 
   if [[ -d "$STATE_DIR/notion-index" ]]; then
@@ -7055,21 +7055,21 @@ notion_migration_pause_write_surfaces() {
   echo "The Notion webhook receiver stays online so the new subscription can complete its verification handshake."
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    systemctl stop almanac-notion-claim-poll.timer almanac-notion-claim-poll.service >/dev/null 2>&1 || true
-    uid="$(id -u "$ALMANAC_USER" 2>/dev/null || true)"
+    systemctl stop arclink-notion-claim-poll.timer arclink-notion-claim-poll.service >/dev/null 2>&1 || true
+    uid="$(id -u "$ARCLINK_USER" 2>/dev/null || true)"
     if [[ -n "$uid" ]]; then
       systemctl start "user@$uid.service" >/dev/null 2>&1 || true
       if [[ -S "/run/user/$uid/bus" ]]; then
-        run_as_user_systemd "$ALMANAC_USER" "$uid" \
-          "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop almanac-mcp.service almanac-ssot-batcher.timer almanac-ssot-batcher.service >/dev/null 2>&1 || true" || true
+        run_as_user_systemd "$ARCLINK_USER" "$uid" \
+          "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user stop arclink-mcp.service arclink-ssot-batcher.timer arclink-ssot-batcher.service >/dev/null 2>&1 || true" || true
       fi
     fi
     return 0
   fi
 
-  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+  if [[ "$(id -un)" == "$ARCLINK_USER" ]]; then
     if set_user_systemd_bus_env; then
-      systemctl --user stop almanac-mcp.service almanac-ssot-batcher.timer almanac-ssot-batcher.service >/dev/null 2>&1 || true
+      systemctl --user stop arclink-mcp.service arclink-ssot-batcher.timer arclink-ssot-batcher.service >/dev/null 2>&1 || true
     fi
   fi
 }
@@ -7078,29 +7078,29 @@ notion_migration_restart_services() {
   local uid=""
 
   echo
-  echo "Restarting shared Almanac services."
+  echo "Restarting shared ArcLink services."
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     restart_shared_user_services_root || true
-    systemctl restart almanac-notion-claim-poll.timer >/dev/null 2>&1 || true
-    systemctl start almanac-notion-claim-poll.service >/dev/null 2>&1 || true
+    systemctl restart arclink-notion-claim-poll.timer >/dev/null 2>&1 || true
+    systemctl start arclink-notion-claim-poll.service >/dev/null 2>&1 || true
     return 0
   fi
 
-  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
+  if [[ "$(id -un)" == "$ARCLINK_USER" ]]; then
     if set_user_systemd_bus_env; then
       systemctl --user daemon-reload
-      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer || true
-      systemctl --user start almanac-curator-refresh.service >/dev/null 2>&1 || true
-      systemctl --user start almanac-memory-synth.service >/dev/null 2>&1 || true
-      systemctl --user start almanac-health-watch.service >/dev/null 2>&1 || true
+      systemctl --user restart arclink-mcp.service arclink-notion-webhook.service arclink-qmd-mcp.service arclink-qmd-update.timer arclink-vault-watch.service arclink-ssot-batcher.timer arclink-notification-delivery.timer arclink-health-watch.timer arclink-curator-refresh.timer arclink-memory-synth.timer || true
+      systemctl --user start arclink-curator-refresh.service >/dev/null 2>&1 || true
+      systemctl --user start arclink-memory-synth.service >/dev/null 2>&1 || true
+      systemctl --user start arclink-health-watch.service >/dev/null 2>&1 || true
     fi
     return 0
   fi
 
-  uid="$(id -u "$ALMANAC_USER" 2>/dev/null || true)"
+  uid="$(id -u "$ARCLINK_USER" 2>/dev/null || true)"
   if [[ -n "$uid" && -S "/run/user/$uid/bus" ]]; then
-    run_as_user_systemd "$ALMANAC_USER" "$uid" \
-      "ALMANAC_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-ssot-batcher.timer >/dev/null 2>&1 || true" || true
+    run_as_user_systemd "$ARCLINK_USER" "$uid" \
+      "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-mcp.service arclink-notion-webhook.service arclink-ssot-batcher.timer >/dev/null 2>&1 || true" || true
   fi
 }
 
@@ -7112,19 +7112,19 @@ notion_migration_restore_paused_services() {
 }
 
 notion_migration_repair_state_ownership() {
-  if [[ ${EUID:-$(id -u)} -ne 0 || "${ALMANAC_DOCKER_MODE:-0}" == "1" ]]; then
+  if [[ ${EUID:-$(id -u)} -ne 0 || "${ARCLINK_DOCKER_MODE:-0}" == "1" ]]; then
     return 0
   fi
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$STATE_DIR/notion-index" "$NOTION_MIGRATION_DIR" >/dev/null 2>&1 || true
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$ALMANAC_DB_PATH" "$ALMANAC_DB_PATH"-* >/dev/null 2>&1 || true
+  chown -R "$ARCLINK_USER:$ARCLINK_USER" "$STATE_DIR/notion-index" "$NOTION_MIGRATION_DIR" >/dev/null 2>&1 || true
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$ARCLINK_DB_PATH" "$ARCLINK_DB_PATH"-* >/dev/null 2>&1 || true
 }
 
 run_notion_migration_index_sync() {
   local actor="$1"
-  local ctl_bin="$ALMANAC_REPO_DIR/bin/almanac-ctl"
+  local ctl_bin="$ARCLINK_REPO_DIR/bin/arclink-ctl"
 
-  if [[ "${ALMANAC_DOCKER_MODE:-0}" == "1" || "$(id -un)" == "$ALMANAC_USER" ]]; then
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ctl_bin" --json notion index-sync --full --actor "$actor"
+  if [[ "${ARCLINK_DOCKER_MODE:-0}" == "1" || "$(id -un)" == "$ARCLINK_USER" ]]; then
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ctl_bin" --json notion index-sync --full --actor "$actor"
     return $?
   fi
 
@@ -7170,12 +7170,12 @@ run_notion_migration_retry_index_sync() {
 }
 
 notion_migration_clear_workspace_state() {
-  if [[ ! -f "$ALMANAC_DB_PATH" ]]; then
-    echo "Skipping DB state cleanup; DB not found at $ALMANAC_DB_PATH"
+  if [[ ! -f "$ARCLINK_DB_PATH" ]]; then
+    echo "Skipping DB state cleanup; DB not found at $ARCLINK_DB_PATH"
     return 0
   fi
 
-  python3 - "$ALMANAC_DB_PATH" "$STATE_DIR" "$NOTION_MIGRATION_DIR" <<'PY'
+  python3 - "$ARCLINK_DB_PATH" "$STATE_DIR" "$NOTION_MIGRATION_DIR" <<'PY'
 import datetime as dt
 import json
 import shutil
@@ -7278,16 +7278,16 @@ run_notion_migrate_flow() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
   ensure_deployed_config_exists
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
-  if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ALMANAC_USER" ]]; then
+  if [[ ${EUID:-$(id -u)} -ne 0 && "$(id -un)" != "$ARCLINK_USER" ]]; then
     echo "Switching to sudo for Notion workspace migration..."
-    sudo_deploy ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" notion-migrate
+    sudo_deploy ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" notion-migrate
     write_operator_checkout_artifact
     return 0
   fi
@@ -7299,26 +7299,26 @@ run_notion_migrate_flow() {
     return 1
   fi
 
-  echo "Almanac deploy: Notion workspace migration"
+  echo "ArcLink deploy: Notion workspace migration"
   echo
   echo "Current deployment:"
   echo "  config:          $CONFIG_TARGET"
-  echo "  db:              $ALMANAC_DB_PATH"
-  echo "  current root:    ${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-not configured}"
-  echo "  current target:  ${ALMANAC_SSOT_NOTION_SPACE_URL:-not configured}"
-  echo "  current index:   ${ALMANAC_NOTION_INDEX_ROOTS:-${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-not configured}}"
-  echo "  webhook URL:     ${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-not configured}"
-  if [[ -n "${ALMANAC_SSOT_NOTION_TOKEN:-}" ]]; then
-    echo "  Notion token:    configured ($(mask_secret "$ALMANAC_SSOT_NOTION_TOKEN"))"
+  echo "  db:              $ARCLINK_DB_PATH"
+  echo "  current root:    ${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-not configured}"
+  echo "  current target:  ${ARCLINK_SSOT_NOTION_SPACE_URL:-not configured}"
+  echo "  current index:   ${ARCLINK_NOTION_INDEX_ROOTS:-${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-not configured}}"
+  echo "  webhook URL:     ${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-not configured}"
+  if [[ -n "${ARCLINK_SSOT_NOTION_TOKEN:-}" ]]; then
+    echo "  Notion token:    configured ($(mask_secret "$ARCLINK_SSOT_NOTION_TOKEN"))"
   else
     echo "  Notion token:    not configured"
   fi
   echo
 
   actor="${SUDO_USER:-$(id -un)}"
-  old_notion_space_url="${ALMANAC_SSOT_NOTION_SPACE_URL:-}"
-  old_notion_space_id="${ALMANAC_SSOT_NOTION_SPACE_ID:-}"
-  old_notion_root_page_id="${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}"
+  old_notion_space_url="${ARCLINK_SSOT_NOTION_SPACE_URL:-}"
+  old_notion_space_id="${ARCLINK_SSOT_NOTION_SPACE_ID:-}"
+  old_notion_root_page_id="${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}"
 
   action="$(choose_notion_migration_action)"
   case "$action" in
@@ -7352,7 +7352,7 @@ run_notion_migrate_flow() {
 
   if [[ "$(ask_yes_no "Drain pending Notion webhook events before the cutover" "1")" == "1" ]]; then
     echo "Draining pending Notion webhook events..."
-    if ! env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion process-pending; then
+    if ! env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion process-pending; then
       echo "Pending Notion event processing failed." >&2
       if [[ "$(ask_yes_no "Continue migration anyway" "0")" != "1" ]]; then
         return 1
@@ -7371,19 +7371,19 @@ run_notion_migrate_flow() {
   echo "Starting the new workspace SSOT setup."
   echo "Old Notion URL and token values will not be offered as defaults; paste the new workspace page URL and new integration secret."
   if (
-    ALMANAC_NOTION_MIGRATION_FRESH_DEFAULTS=1
-    ALMANAC_NOTION_MIGRATION_DEFAULT_INDEX_ROOT=1
-    ALMANAC_NOTION_MIGRATION_FORCE_WEBHOOK_RESET=1
+    ARCLINK_NOTION_MIGRATION_FRESH_DEFAULTS=1
+    ARCLINK_NOTION_MIGRATION_DEFAULT_INDEX_ROOT=1
+    ARCLINK_NOTION_MIGRATION_FORCE_WEBHOOK_RESET=1
     run_notion_ssot_setup
   ); then
     setup_rc=0
   else
     setup_rc=$?
     reload_runtime_config_from_file "$CONFIG_TARGET" || true
-    if [[ -n "${ALMANAC_SSOT_NOTION_SPACE_URL:-}${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]] &&
-      [[ "${ALMANAC_SSOT_NOTION_SPACE_URL:-}" != "$old_notion_space_url" ||
-         "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" != "$old_notion_space_id" ||
-         "${ALMANAC_SSOT_NOTION_ROOT_PAGE_ID:-}" != "$old_notion_root_page_id" ]]; then
+    if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}${ARCLINK_SSOT_NOTION_SPACE_ID:-}" ]] &&
+      [[ "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" != "$old_notion_space_url" ||
+         "${ARCLINK_SSOT_NOTION_SPACE_ID:-}" != "$old_notion_space_id" ||
+         "${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}" != "$old_notion_root_page_id" ]]; then
       echo "New Notion configuration was saved before setup stopped." >&2
       echo "Continuing workspace-state cleanup so old Notion identities and queued writes cannot be used against the new workspace." >&2
       index_rc=1
@@ -7397,15 +7397,15 @@ run_notion_migrate_flow() {
   fi
   reload_runtime_config_from_file "$CONFIG_TARGET" || true
 
-  if [[ -z "${ALMANAC_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
+  if [[ -z "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}" ]]; then
     echo
     echo "No Notion webhook public URL is configured; clearing any stored webhook verification token from the old workspace."
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/almanac-ctl" --json notion webhook-reset-token \
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$BOOTSTRAP_DIR/bin/arclink-ctl" --json notion webhook-reset-token \
       --actor "$actor" --minutes 0 --force >/dev/null || true
   fi
 
   echo
-  echo "Clearing old workspace-specific Almanac state."
+  echo "Clearing old workspace-specific ArcLink state."
   notion_migration_clear_workspace_state
   notion_migration_repair_state_ownership
 
@@ -7419,7 +7419,7 @@ run_notion_migrate_flow() {
     fi
   else
     echo "Skipped full Notion index sync. Run this later:"
-    echo "  ./bin/almanac-ctl notion index-sync --full"
+    echo "  ./bin/arclink-ctl notion index-sync --full"
   fi
 
   notion_migration_restart_services
@@ -7439,10 +7439,10 @@ run_notion_migrate_flow() {
 }
 
 notion_transfer_prepare_context() {
-  ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$BOOTSTRAP_DIR}"
-  ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
-  STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
-  NOTION_TRANSFER_DIR="${ALMANAC_NOTION_TRANSFER_DIR:-$STATE_DIR/notion-transfer}"
+  ARCLINK_REPO_DIR="${ARCLINK_REPO_DIR:-$BOOTSTRAP_DIR}"
+  ARCLINK_PRIV_DIR="${ARCLINK_PRIV_DIR:-$ARCLINK_REPO_DIR/arclink-priv}"
+  STATE_DIR="${STATE_DIR:-$ARCLINK_PRIV_DIR/state}"
+  NOTION_TRANSFER_DIR="${ARCLINK_NOTION_TRANSFER_DIR:-$STATE_DIR/notion-transfer}"
   NOTION_TRANSFER_TOOL="$BOOTSTRAP_DIR/bin/notion-transfer.py"
   mkdir -p "$NOTION_TRANSFER_DIR/backups"
   chmod 700 "$NOTION_TRANSFER_DIR" "$NOTION_TRANSFER_DIR/backups" >/dev/null 2>&1 || true
@@ -7476,7 +7476,7 @@ Expected fidelity:
 
 Secrets:
   - Keep Notion tokens in private token files, for example
-    almanac-priv/state/notion-transfer/source.token and dest.token.
+    arclink-priv/state/notion-transfer/source.token and dest.token.
   - The tool never accepts tokens on argv.
 EOF
 }
@@ -7560,7 +7560,7 @@ notion_transfer_backup() {
   local token_file="" source_root="" output_dir="" timestamp="" default_source_root=""
 
   token_file="$(notion_transfer_prompt_token_file "Source Notion token file" "$NOTION_TRANSFER_DIR/source.token")"
-  default_source_root="${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-${ALMANAC_SSOT_NOTION_SPACE_URL:-}}"
+  default_source_root="${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-${ARCLINK_SSOT_NOTION_SPACE_URL:-}}"
   source_root="$(notion_transfer_prompt_required "Source root page URL or ID to back up" "$default_source_root")"
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   output_dir="$(notion_transfer_prompt_required "Backup output directory" "$NOTION_TRANSFER_DIR/backups/$timestamp")"
@@ -7585,7 +7585,7 @@ notion_transfer_restore() {
   fi
 
   token_file="$(notion_transfer_prompt_token_file "Destination Notion token file" "$NOTION_TRANSFER_DIR/dest.token")"
-  dest_parent="$(notion_transfer_prompt_required "Destination parent/root page URL or ID" "${ALMANAC_SSOT_NOTION_ROOT_PAGE_URL:-}")"
+  dest_parent="$(notion_transfer_prompt_required "Destination parent/root page URL or ID" "${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}")"
   title="$(ask "Title for the restored root page (ENTER keeps source title)" "")"
 
   echo
@@ -7633,7 +7633,7 @@ run_notion_transfer_flow() {
     return 1
   fi
 
-  echo "Almanac deploy: Notion page backup / restore"
+  echo "ArcLink deploy: Notion page backup / restore"
   echo
   echo "Private working directory:"
   echo "  $NOTION_TRANSFER_DIR"
@@ -7671,66 +7671,66 @@ run_curator_setup_flow() {
   prepare_deployed_context
 
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/install-system-services.sh"
-    run_as_user "$ALMANAC_USER" "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' ALMANAC_ALLOW_NO_USER_BUS='${ALMANAC_ALLOW_NO_USER_BUS:-0}' '$ALMANAC_REPO_DIR/bin/install-user-services.sh'"
-    run_as_user "$ALMANAC_USER" "env $(curator_bootstrap_env_prefix) '$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh'"
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
+    run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_ALLOW_NO_USER_BUS='${ARCLINK_ALLOW_NO_USER_BUS:-0}' '$ARCLINK_REPO_DIR/bin/install-user-services.sh'"
+    run_as_user "$ARCLINK_USER" "env $(curator_bootstrap_env_prefix) '$ARCLINK_REPO_DIR/bin/bootstrap-curator.sh'"
     reload_runtime_config_from_file "$CONFIG_TARGET" || true
     restart_shared_user_services_root
     return 0
   fi
 
-  if [[ "$(id -un)" == "$ALMANAC_USER" ]]; then
-    env ALMANAC_CONFIG_FILE="$CONFIG_TARGET" ALMANAC_ALLOW_NO_USER_BUS="${ALMANAC_ALLOW_NO_USER_BUS:-0}" "$ALMANAC_REPO_DIR/bin/install-user-services.sh"
-    env $(curator_bootstrap_env_prefix) "$ALMANAC_REPO_DIR/bin/bootstrap-curator.sh"
+  if [[ "$(id -un)" == "$ARCLINK_USER" ]]; then
+    env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" ARCLINK_ALLOW_NO_USER_BUS="${ARCLINK_ALLOW_NO_USER_BUS:-0}" "$ARCLINK_REPO_DIR/bin/install-user-services.sh"
+    env $(curator_bootstrap_env_prefix) "$ARCLINK_REPO_DIR/bin/bootstrap-curator.sh"
     reload_runtime_config_from_file "$CONFIG_TARGET" || true
     if set_user_systemd_bus_env; then
       systemctl --user daemon-reload
-      systemctl --user restart almanac-mcp.service almanac-notion-webhook.service almanac-qmd-mcp.service almanac-qmd-update.timer almanac-vault-watch.service almanac-github-backup.timer almanac-ssot-batcher.timer almanac-notification-delivery.timer almanac-health-watch.timer almanac-curator-refresh.timer almanac-memory-synth.timer
-      systemctl --user start almanac-curator-refresh.service >/dev/null 2>&1 || true
-      systemctl --user start almanac-memory-synth.service >/dev/null 2>&1 || true
-      systemctl --user start almanac-health-watch.service >/dev/null 2>&1 || true
+      systemctl --user restart arclink-mcp.service arclink-notion-webhook.service arclink-qmd-mcp.service arclink-qmd-update.timer arclink-vault-watch.service arclink-github-backup.timer arclink-ssot-batcher.timer arclink-notification-delivery.timer arclink-health-watch.timer arclink-curator-refresh.timer arclink-memory-synth.timer
+      systemctl --user start arclink-curator-refresh.service >/dev/null 2>&1 || true
+      systemctl --user start arclink-memory-synth.service >/dev/null 2>&1 || true
+      systemctl --user start arclink-health-watch.service >/dev/null 2>&1 || true
       if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
-        systemctl --user restart almanac-pdf-ingest.timer
-        systemctl --user stop almanac-pdf-ingest-watch.service >/dev/null 2>&1 || true
+        systemctl --user restart arclink-pdf-ingest.timer
+        systemctl --user stop arclink-pdf-ingest-watch.service >/dev/null 2>&1 || true
       fi
       if [[ "$ENABLE_QUARTO" == "1" ]]; then
-        systemctl --user restart almanac-quarto-render.timer
+        systemctl --user restart arclink-quarto-render.timer
       fi
       if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
-        systemctl --user restart almanac-nextcloud.service
+        systemctl --user restart arclink-nextcloud.service
       fi
-      if [[ "${ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
-        systemctl --user restart almanac-curator-onboarding.service >/dev/null 2>&1 || true
+      if [[ "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+        systemctl --user restart arclink-curator-onboarding.service >/dev/null 2>&1 || true
       fi
-      if [[ "${ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
-        systemctl --user restart almanac-curator-discord-onboarding.service >/dev/null 2>&1 || true
+      if [[ "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-0}" == "1" ]]; then
+        systemctl --user restart arclink-curator-discord-onboarding.service >/dev/null 2>&1 || true
       fi
-      if [[ "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ALMANAC_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
-        systemctl --user restart almanac-curator-gateway.service >/dev/null 2>&1 || true
+      if [[ "${ARCLINK_CURATOR_CHANNELS:-tui-only}" == *discord* || "${ARCLINK_CURATOR_CHANNELS:-tui-only}" == *telegram* ]]; then
+        systemctl --user restart arclink-curator-gateway.service >/dev/null 2>&1 || true
       fi
     fi
     return 0
   fi
 
   sudo env \
-    ALMANAC_USER="$ALMANAC_USER" \
-    ALMANAC_HOME="$ALMANAC_HOME" \
-    ALMANAC_REPO_DIR="$ALMANAC_REPO_DIR" \
-    ALMANAC_PRIV_DIR="$ALMANAC_PRIV_DIR" \
-    ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_CONFIG_DIR" \
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-    ALMANAC_ALLOW_NO_USER_BUS="${ALMANAC_ALLOW_NO_USER_BUS:-0}" \
-    ALMANAC_CURATOR_SKIP_HERMES_SETUP="${ALMANAC_CURATOR_SKIP_HERMES_SETUP:-}" \
-    ALMANAC_CURATOR_SKIP_GATEWAY_SETUP="${ALMANAC_CURATOR_SKIP_GATEWAY_SETUP:-}" \
-    ALMANAC_CURATOR_FORCE_HERMES_SETUP="${ALMANAC_CURATOR_FORCE_HERMES_SETUP:-}" \
-    ALMANAC_CURATOR_FORCE_GATEWAY_SETUP="${ALMANAC_CURATOR_FORCE_GATEWAY_SETUP:-}" \
-    ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE="${ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE:-}" \
-    ALMANAC_CURATOR_NOTIFY_PLATFORM="${ALMANAC_CURATOR_NOTIFY_PLATFORM:-}" \
-    ALMANAC_CURATOR_NOTIFY_CHANNEL_ID="${ALMANAC_CURATOR_NOTIFY_CHANNEL_ID:-}" \
-    ALMANAC_CURATOR_GENERAL_PLATFORM="${ALMANAC_CURATOR_GENERAL_PLATFORM:-}" \
-    ALMANAC_CURATOR_GENERAL_CHANNEL_ID="${ALMANAC_CURATOR_GENERAL_CHANNEL_ID:-}" \
-    ALMANAC_CURATOR_MODEL_PRESET="${ALMANAC_CURATOR_MODEL_PRESET:-}" \
-    ALMANAC_CURATOR_CHANNELS="${ALMANAC_CURATOR_CHANNELS:-}" \
+    ARCLINK_USER="$ARCLINK_USER" \
+    ARCLINK_HOME="$ARCLINK_HOME" \
+    ARCLINK_REPO_DIR="$ARCLINK_REPO_DIR" \
+    ARCLINK_PRIV_DIR="$ARCLINK_PRIV_DIR" \
+    ARCLINK_PRIV_CONFIG_DIR="$ARCLINK_PRIV_CONFIG_DIR" \
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+    ARCLINK_ALLOW_NO_USER_BUS="${ARCLINK_ALLOW_NO_USER_BUS:-0}" \
+    ARCLINK_CURATOR_SKIP_HERMES_SETUP="${ARCLINK_CURATOR_SKIP_HERMES_SETUP:-}" \
+    ARCLINK_CURATOR_SKIP_GATEWAY_SETUP="${ARCLINK_CURATOR_SKIP_GATEWAY_SETUP:-}" \
+    ARCLINK_CURATOR_FORCE_HERMES_SETUP="${ARCLINK_CURATOR_FORCE_HERMES_SETUP:-}" \
+    ARCLINK_CURATOR_FORCE_GATEWAY_SETUP="${ARCLINK_CURATOR_FORCE_GATEWAY_SETUP:-}" \
+    ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE="${ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE:-}" \
+    ARCLINK_CURATOR_NOTIFY_PLATFORM="${ARCLINK_CURATOR_NOTIFY_PLATFORM:-}" \
+    ARCLINK_CURATOR_NOTIFY_CHANNEL_ID="${ARCLINK_CURATOR_NOTIFY_CHANNEL_ID:-}" \
+    ARCLINK_CURATOR_GENERAL_PLATFORM="${ARCLINK_CURATOR_GENERAL_PLATFORM:-}" \
+    ARCLINK_CURATOR_GENERAL_CHANNEL_ID="${ARCLINK_CURATOR_GENERAL_CHANNEL_ID:-}" \
+    ARCLINK_CURATOR_MODEL_PRESET="${ARCLINK_CURATOR_MODEL_PRESET:-}" \
+    ARCLINK_CURATOR_CHANNELS="${ARCLINK_CURATOR_CHANNELS:-}" \
     TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" \
     "$BOOTSTRAP_DIR/deploy.sh" curator-setup
   write_operator_checkout_artifact
@@ -7743,13 +7743,13 @@ run_upgrade_flow() {
   if [[ ${EUID:-$(id -u)} -ne 0 && -n "${CONFIG_TARGET:-}" && ! -r "$CONFIG_TARGET" ]]; then
     echo "Switching to sudo to inspect the deployed config..."
     if ! sudo_deploy \
-      ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-      ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
-      ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
-      ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
-      ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
-      ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
-      ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
+      ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+      ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
+      ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-}" \
+      ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
+      ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
+      ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+      ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
       "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-upgrade; then
       return 1
     fi
@@ -7758,16 +7758,16 @@ run_upgrade_flow() {
   fi
 
   if [[ ! -f "$CONFIG_TARGET" ]]; then
-    echo "Almanac upgrade needs an existing deployed config. Expected: $CONFIG_TARGET" >&2
-    echo "Run ./deploy.sh install first, or point ALMANAC_CONFIG_FILE at the deployed almanac.env." >&2
+    echo "ArcLink upgrade needs an existing deployed config. Expected: $CONFIG_TARGET" >&2
+    echo "Run ./deploy.sh install first, or point ARCLINK_CONFIG_FILE at the deployed arclink.env." >&2
     exit 1
   fi
 
-  echo "Almanac deploy: upgrade from configured upstream"
+  echo "ArcLink deploy: upgrade from configured upstream"
   echo
   echo "Config:   $CONFIG_TARGET"
-  echo "Upstream: ${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}#${ALMANAC_UPSTREAM_BRANCH:-main}"
-  echo "Target:   $ALMANAC_REPO_DIR"
+  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}#${ARCLINK_UPSTREAM_BRANCH:-main}"
+  echo "Target:   $ARCLINK_REPO_DIR"
 
   require_main_upstream_branch_for_upgrade
 
@@ -7779,13 +7779,13 @@ run_upgrade_flow() {
   echo
   echo "Switching to sudo for upgrade..."
   if ! sudo_deploy \
-    ALMANAC_CONFIG_FILE="$CONFIG_TARGET" \
-    ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-}" \
-    ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED="${ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_USER="${ALMANAC_UPSTREAM_DEPLOY_KEY_USER:-}" \
-    ALMANAC_UPSTREAM_DEPLOY_KEY_PATH="${ALMANAC_UPSTREAM_DEPLOY_KEY_PATH:-}" \
-    ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE="${ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
+    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
+    ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
+    ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
+    ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
     "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-upgrade; then
     return 1
   fi
@@ -7795,18 +7795,18 @@ run_upgrade_flow() {
 run_agent_payload() {
   load_detected_config || true
 
-  ALMANAC_USER="${ALMANAC_USER:-almanac}"
-  ALMANAC_HOME="${ALMANAC_HOME:-$(default_home_for_user "$ALMANAC_USER")}"
-  ALMANAC_REPO_DIR="${ALMANAC_REPO_DIR:-$BOOTSTRAP_DIR}"
-  ALMANAC_PRIV_DIR="${ALMANAC_PRIV_DIR:-$ALMANAC_REPO_DIR/almanac-priv}"
-  ALMANAC_PRIV_CONFIG_DIR="${ALMANAC_PRIV_CONFIG_DIR:-$ALMANAC_PRIV_DIR/config}"
-  STATE_DIR="${STATE_DIR:-$ALMANAC_PRIV_DIR/state}"
+  ARCLINK_USER="${ARCLINK_USER:-arclink}"
+  ARCLINK_HOME="${ARCLINK_HOME:-$(default_home_for_user "$ARCLINK_USER")}"
+  ARCLINK_REPO_DIR="${ARCLINK_REPO_DIR:-$BOOTSTRAP_DIR}"
+  ARCLINK_PRIV_DIR="${ARCLINK_PRIV_DIR:-$ARCLINK_REPO_DIR/arclink-priv}"
+  ARCLINK_PRIV_CONFIG_DIR="${ARCLINK_PRIV_CONFIG_DIR:-$ARCLINK_PRIV_DIR/config}"
+  STATE_DIR="${STATE_DIR:-$ARCLINK_PRIV_DIR/state}"
   QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
-  NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-almanac.your-tailnet.ts.net}"
+  NEXTCLOUD_TRUSTED_DOMAIN="${NEXTCLOUD_TRUSTED_DOMAIN:-arclink.your-tailnet.ts.net}"
   ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}"
   TAILSCALE_QMD_PATH="${TAILSCALE_QMD_PATH:-/mcp}"
-  TAILSCALE_ALMANAC_MCP_PATH="${TAILSCALE_ALMANAC_MCP_PATH:-/almanac-mcp}"
+  TAILSCALE_ARCLINK_MCP_PATH="${TAILSCALE_ARCLINK_MCP_PATH:-/arclink-mcp}"
 
   if [[ -d "$STATE_DIR" && -w "$STATE_DIR" ]]; then
     write_agent_install_payload_file >/dev/null 2>&1 || true
@@ -7865,8 +7865,8 @@ docker_command_from_mode() {
   esac
 }
 
-run_almanac_docker() {
-  local helper="$BOOTSTRAP_DIR/bin/almanac-docker.sh"
+run_arclink_docker() {
+  local helper="$BOOTSTRAP_DIR/bin/arclink-docker.sh"
 
   if [[ ! -x "$helper" ]]; then
     echo "Docker helper is missing or not executable: $helper" >&2
@@ -7877,7 +7877,7 @@ run_almanac_docker() {
 }
 
 docker_env_file_path() {
-  printf '%s\n' "$BOOTSTRAP_DIR/almanac-priv/config/docker.env"
+  printf '%s\n' "$BOOTSTRAP_DIR/arclink-priv/config/docker.env"
 }
 
 load_docker_runtime_config() {
@@ -7893,7 +7893,7 @@ load_docker_runtime_config() {
 }
 
 docker_nextcloud_state_has_existing_data() {
-  local host_nextcloud_state="$BOOTSTRAP_DIR/almanac-priv/state/nextcloud"
+  local host_nextcloud_state="$BOOTSTRAP_DIR/arclink-priv/state/nextcloud"
 
   if [[ ! -d "$host_nextcloud_state" ]]; then
     return 1
@@ -7904,17 +7904,17 @@ docker_nextcloud_state_has_existing_data() {
 
 write_docker_runtime_config() {
   local target="${1:-$(docker_env_file_path)}"
-  local container_repo_dir="/home/almanac/almanac"
-  local container_priv_dir="/home/almanac/almanac/almanac-priv"
+  local container_repo_dir="/home/arclink/arclink"
+  local container_priv_dir="/home/arclink/arclink/arclink-priv"
   local container_state_dir="$container_priv_dir/state"
-  local container_runtime_dir="/opt/almanac/runtime"
+  local container_runtime_dir="/opt/arclink/runtime"
 
-  ALMANAC_NAME="almanac"
-  ALMANAC_USER="almanac"
-  ALMANAC_HOME="/home/almanac"
-  ALMANAC_REPO_DIR="$container_repo_dir"
-  ALMANAC_PRIV_DIR="$container_priv_dir"
-  ALMANAC_PRIV_CONFIG_DIR="$container_priv_dir/config"
+  ARCLINK_NAME="arclink"
+  ARCLINK_USER="arclink"
+  ARCLINK_HOME="/home/arclink"
+  ARCLINK_REPO_DIR="$container_repo_dir"
+  ARCLINK_PRIV_DIR="$container_priv_dir"
+  ARCLINK_PRIV_CONFIG_DIR="$container_priv_dir/config"
   VAULT_DIR="$container_priv_dir/vault"
   STATE_DIR="$container_state_dir"
   NEXTCLOUD_STATE_DIR="$container_state_dir/nextcloud"
@@ -7922,38 +7922,38 @@ write_docker_runtime_config() {
   PUBLISHED_DIR="$container_priv_dir/published"
   QUARTO_PROJECT_DIR="$container_priv_dir/quarto"
   QUARTO_OUTPUT_DIR="$container_priv_dir/published"
-  ALMANAC_RELEASE_STATE_FILE="${ALMANAC_RELEASE_STATE_FILE:-$container_state_dir/almanac-release.json}"
-  ALMANAC_MCP_HOST="0.0.0.0"
-  ALMANAC_NOTION_WEBHOOK_HOST="0.0.0.0"
-  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$container_priv_dir/secrets/almanac-backup-ed25519}"
-  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$container_priv_dir/secrets/almanac-backup-known_hosts}"
+  ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$container_state_dir/arclink-release.json}"
+  ARCLINK_MCP_HOST="0.0.0.0"
+  ARCLINK_NOTION_WEBHOOK_HOST="0.0.0.0"
+  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-$container_priv_dir/secrets/arclink-backup-ed25519}"
+  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-$container_priv_dir/secrets/arclink-backup-known_hosts}"
 
   mkdir -p "$(dirname "$target")"
   {
     emit_runtime_config
-    write_kv ALMANAC_BACKEND_ALLOWED_CIDRS "${ALMANAC_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}"
-    write_kv ALMANAC_MCP_URL "http://almanac-mcp:8282/mcp"
-    write_kv ALMANAC_BOOTSTRAP_URL "http://almanac-mcp:8282/mcp"
-    write_kv ALMANAC_QMD_URL "http://qmd-mcp:8181/mcp"
-    write_kv ALMANAC_NOTION_INDEX_DIR "$container_state_dir/notion-index"
-    write_kv ALMANAC_NOTION_INDEX_MARKDOWN_DIR "$container_state_dir/notion-index/markdown"
-    write_kv ALMANAC_DOCKER_AGENT_HOME_ROOT "$container_state_dir/docker/users"
-    write_kv ALMANAC_DOCKER_CONTAINER_PRIV_DIR "$container_priv_dir"
-    write_kv ALMANAC_DOCKER_HOST_REPO_DIR "$BOOTSTRAP_DIR"
-    write_kv ALMANAC_DOCKER_HOST_PRIV_DIR "$BOOTSTRAP_DIR/almanac-priv"
+    write_kv ARCLINK_BACKEND_ALLOWED_CIDRS "${ARCLINK_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}"
+    write_kv ARCLINK_MCP_URL "http://arclink-mcp:8282/mcp"
+    write_kv ARCLINK_BOOTSTRAP_URL "http://arclink-mcp:8282/mcp"
+    write_kv ARCLINK_QMD_URL "http://qmd-mcp:8181/mcp"
+    write_kv ARCLINK_NOTION_INDEX_DIR "$container_state_dir/notion-index"
+    write_kv ARCLINK_NOTION_INDEX_MARKDOWN_DIR "$container_state_dir/notion-index/markdown"
+    write_kv ARCLINK_DOCKER_AGENT_HOME_ROOT "$container_state_dir/docker/users"
+    write_kv ARCLINK_DOCKER_CONTAINER_PRIV_DIR "$container_priv_dir"
+    write_kv ARCLINK_DOCKER_HOST_REPO_DIR "$BOOTSTRAP_DIR"
+    write_kv ARCLINK_DOCKER_HOST_PRIV_DIR "$BOOTSTRAP_DIR/arclink-priv"
   } >"$target"
   chmod 600 "$target"
 }
 
 maybe_run_docker_org_profile_builder() {
-  local saved_priv_config_dir="${ALMANAC_PRIV_CONFIG_DIR:-}"
-  local saved_priv_dir="${ALMANAC_PRIV_DIR:-}"
+  local saved_priv_config_dir="${ARCLINK_PRIV_CONFIG_DIR:-}"
+  local saved_priv_dir="${ARCLINK_PRIV_DIR:-}"
 
-  ALMANAC_PRIV_DIR="$BOOTSTRAP_DIR/almanac-priv"
-  ALMANAC_PRIV_CONFIG_DIR="$BOOTSTRAP_DIR/almanac-priv/config"
+  ARCLINK_PRIV_DIR="$BOOTSTRAP_DIR/arclink-priv"
+  ARCLINK_PRIV_CONFIG_DIR="$BOOTSTRAP_DIR/arclink-priv/config"
   maybe_run_org_profile_builder "$BOOTSTRAP_DIR"
-  ALMANAC_PRIV_DIR="$saved_priv_dir"
-  ALMANAC_PRIV_CONFIG_DIR="$saved_priv_config_dir"
+  ARCLINK_PRIV_DIR="$saved_priv_dir"
+  ARCLINK_PRIV_CONFIG_DIR="$saved_priv_config_dir"
 }
 
 collect_docker_install_answers() {
@@ -7969,17 +7969,17 @@ collect_docker_install_answers() {
   docker_env="$(docker_env_file_path)"
   load_docker_runtime_config
 
-  echo "Almanac deploy: Docker install / repair from current checkout"
+  echo "ArcLink deploy: Docker install / repair from current checkout"
   echo
   echo "Docker mode uses fixed container paths and the current checkout as the host bind mount:"
   echo "  host repo:    $BOOTSTRAP_DIR"
-  echo "  host private: $BOOTSTRAP_DIR/almanac-priv"
-  echo "  container:    /home/almanac/almanac"
+  echo "  host private: $BOOTSTRAP_DIR/arclink-priv"
+  echo "  container:    /home/arclink/arclink"
   echo
 
   default_nextcloud_port="${NEXTCLOUD_PORT:-18080}"
-  default_git_name="${BACKUP_GIT_AUTHOR_NAME:-Almanac Backup}"
-  default_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-almanac@localhost}"
+  default_git_name="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
+  default_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-arclink@localhost}"
   default_enable_nextcloud="${ENABLE_NEXTCLOUD:-1}"
   default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
   default_tailscale_serve_port="${TAILSCALE_SERVE_PORT:-443}"
@@ -8002,42 +8002,42 @@ Tailscale Serve/Funnel prerequisite
     https://login.tailscale.com/admin/dns
   In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
   Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
-  consent URL or fail before Almanac can publish the routes.
+  consent URL or fail before ArcLink can publish the routes.
   If the installer prints a Tailscale approval URL later:
     https://login.tailscale.com/f/funnel?...  for the public Notion webhook
     https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
   open it as a tailnet admin, approve the feature for this node, then return
-  to this terminal and press ENTER so Almanac can retry the route.
+  to this terminal and press ENTER so ArcLink can retry the route.
 
 EOF
   }
 
-  ALMANAC_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ALMANAC_ORG_NAME:-}")")"
-  ALMANAC_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ALMANAC_ORG_MISSION:-}")")"
-  ALMANAC_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ALMANAC_ORG_PRIMARY_PROJECT:-}")")"
-  ALMANAC_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ALMANAC_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
-  ALMANAC_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ALMANAC_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
+  ARCLINK_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ARCLINK_ORG_NAME:-}")")"
+  ARCLINK_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ARCLINK_ORG_MISSION:-}")")"
+  ARCLINK_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ARCLINK_ORG_PRIMARY_PROJECT:-}")")"
+  ARCLINK_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ARCLINK_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
+  ARCLINK_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ARCLINK_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
   collect_org_provider_answers
 
-  if [[ ! -f "$BOOTSTRAP_DIR/almanac-priv/config/org-profile.yaml" ]]; then
+  if [[ ! -f "$BOOTSTRAP_DIR/arclink-priv/config/org-profile.yaml" ]]; then
     default_org_profile_builder="1"
   fi
-  ALMANAC_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
+  ARCLINK_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
 
-  QMD_INDEX_NAME="${QMD_INDEX_NAME:-almanac}"
+  QMD_INDEX_NAME="${QMD_INDEX_NAME:-arclink}"
   QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
   QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
-  ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
-  ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
+  ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
+  ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ALMANAC_UPSTREAM_REPO_URL="${ALMANAC_UPSTREAM_REPO_URL:-https://github.com/example/almanac.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
   use_detected_upstream_repo_url_if_placeholder
-  ALMANAC_UPSTREAM_BRANCH="${ALMANAC_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   collect_upstream_git_answers
 
-  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/almanac/almanac/almanac-priv/secrets/almanac-backup-ed25519}"
-  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-/home/almanac/almanac/almanac-priv/secrets/almanac-backup-known_hosts}"
+  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-ed25519}"
+  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-known_hosts}"
   collect_backup_git_answers
   BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
   BACKUP_GIT_AUTHOR_EMAIL="$(ask "Git author email" "$default_git_email")"
@@ -8122,7 +8122,7 @@ EOF
   nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
   NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
 
-  ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize almanac-priv as a git repo" "$default_enable_private_git")"
+  ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize arclink-priv as a git repo" "$default_enable_private_git")"
   ENABLE_QUARTO="$(ask_yes_no "Enable Quarto job container" "$default_enable_quarto")"
   SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"
   collect_qmd_embedding_answers
@@ -8150,33 +8150,33 @@ run_docker_install_flow() {
   if [[ "$run_curator_setup" == "1" ]]; then
     operation="docker-install"
   fi
-  begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/almanac-priv/state"
-  trap 'finish_deploy_operation; almanac_deploy_stable_copy_cleanup' EXIT
+  begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/arclink-priv/state"
+  trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
 
-  echo "Installing or repairing Almanac Docker stack from this checkout..."
-  run_almanac_docker bootstrap
-  if [[ "$run_curator_setup" == "1" && "${ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG:-0}" != "1" && -t 0 ]]; then
+  echo "Installing or repairing ArcLink Docker stack from this checkout..."
+  run_arclink_docker bootstrap
+  if [[ "$run_curator_setup" == "1" && "${ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG:-0}" != "1" && -t 0 ]]; then
     collect_docker_install_answers
   fi
-  run_almanac_docker build
-  run_almanac_docker up
-  if [[ "$run_curator_setup" == "1" && "${ALMANAC_DOCKER_SKIP_CURATOR_SETUP:-0}" != "1" ]]; then
-    run_almanac_docker curator-setup
+  run_arclink_docker build
+  run_arclink_docker up
+  if [[ "$run_curator_setup" == "1" && "${ARCLINK_DOCKER_SKIP_CURATOR_SETUP:-0}" != "1" ]]; then
+    run_arclink_docker curator-setup
   fi
-  run_almanac_docker reconcile
-  run_almanac_docker record-release
-  run_almanac_docker ports
-  run_almanac_docker health
-  run_almanac_docker live-smoke
+  run_arclink_docker reconcile
+  run_arclink_docker record-release
+  run_arclink_docker ports
+  run_arclink_docker health
+  run_arclink_docker live-smoke
   finish_deploy_operation
-  trap 'almanac_deploy_stable_copy_cleanup' EXIT
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
 }
 
 run_docker_reconfigure_flow() {
-  echo "Refreshing Almanac Docker generated config and port assignments..."
-  run_almanac_docker bootstrap
-  run_almanac_docker config -q
-  run_almanac_docker ports
+  echo "Refreshing ArcLink Docker generated config and port assignments..."
+  run_arclink_docker bootstrap
+  run_arclink_docker config -q
+  run_arclink_docker ports
 }
 
 run_docker_deploy_flow() {
@@ -8204,7 +8204,7 @@ run_docker_deploy_flow() {
       run_docker_reconfigure_flow
       ;;
     bootstrap|write-config|config|build|up|reconcile|down|ps|ports|logs|health|record-release|live-smoke|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
-      run_almanac_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
+      run_arclink_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
       ;;
     *)
       echo "Unknown Docker deploy command: ${command:-<empty>}" >&2
@@ -8221,7 +8221,7 @@ run_install_flow() {
     return 0
   else
     reexec_status="$?"
-    if [[ "${ALMANAC_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
+    if [[ "${ARCLINK_REEXEC_ATTEMPTED:-0}" == "1" ]]; then
       return "$reexec_status"
     fi
   fi
@@ -8232,12 +8232,12 @@ run_install_flow() {
   prepare_operator_upstream_deploy_key_before_sudo
 
   if [[ "$MODE" == "write-config" ]]; then
-    seed_private_repo "$ALMANAC_PRIV_DIR"
+    seed_private_repo "$ARCLINK_PRIV_DIR"
     write_runtime_config "$CONFIG_TARGET"
     maybe_run_org_profile_builder "$BOOTSTRAP_DIR"
     echo
     echo "Wrote config to: $CONFIG_TARGET"
-    echo "Private repo scaffold: $ALMANAC_PRIV_DIR"
+    echo "Private repo scaffold: $ARCLINK_PRIV_DIR"
     return 0
   fi
 
@@ -8246,12 +8246,12 @@ run_install_flow() {
     return 0
   fi
 
-  ANSWERS_FILE="$(mktemp /tmp/almanac-install.XXXXXX.env)"
+  ANSWERS_FILE="$(mktemp /tmp/arclink-install.XXXXXX.env)"
   trap 'rm -f "${ANSWERS_FILE:-}"' EXIT
   write_answers_file "$ANSWERS_FILE"
   echo
   echo "Switching to sudo for system setup..."
-  if ! sudo_deploy ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-install; then
+  if ! sudo_deploy ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-install; then
     return 1
   fi
   rm -f "$ANSWERS_FILE"
@@ -8268,12 +8268,12 @@ run_remove_flow() {
     return 0
   fi
 
-  ANSWERS_FILE="$(mktemp /tmp/almanac-remove.XXXXXX.env)"
+  ANSWERS_FILE="$(mktemp /tmp/arclink-remove.XXXXXX.env)"
   trap 'rm -f "${ANSWERS_FILE:-}"' EXIT
   write_answers_file "$ANSWERS_FILE"
   echo
   echo "Switching to sudo for teardown..."
-  if ! sudo_deploy ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-remove; then
+  if ! sudo_deploy ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "${DEPLOY_EXEC_PATH:-$SELF_PATH}" --apply-remove; then
     return 1
   fi
   rm -f "$ANSWERS_FILE"

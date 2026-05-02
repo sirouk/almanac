@@ -1,9 +1,9 @@
-# Almanac Agent Operating Guide
+# ArcLink Agent Operating Guide
 
 This file is the first-read map for coding agents working in this repository.
 It exists so future agents notice the operational handles before improvising.
 
-Almanac is not just a library checkout. It is the public half of a live
+ArcLink is not just a library checkout. It is the public half of a live
 shared-host system for Hermes agents, with a private nested state repo,
 systemd services, per-user Unix accounts, chat gateways, qmd retrieval, Notion
 SSOT rails, and deploy keys.
@@ -12,7 +12,7 @@ SSOT rails, and deploy keys.
 
 - Read this file before changing deploy, onboarding, service, or runtime code.
 - Prefer the canonical scripts in this repo over manual host surgery.
-- Do not modify core Hermes just to make Almanac behavior work. Use Almanac
+- Do not modify core Hermes just to make ArcLink behavior work. Use ArcLink
   wrappers, plugins, hooks, generated config, and service units.
 - Do not print, log, commit, or quote secrets. Tokens, API keys, OAuth
   credentials, deploy keys, and `.env` values belong in private state only.
@@ -33,16 +33,16 @@ SSOT rails, and deploy keys.
 Default deployed layout:
 
 ```text
-/home/almanac/
-  almanac/                         public repo: scripts, units, templates
-    almanac-priv/                  private nested repo/state; ignored by public git
-      config/almanac.env           live config
+/home/arclink/
+  arclink/                         public repo: scripts, units, templates
+    arclink-priv/                  private nested repo/state; ignored by public git
+      config/arclink.env           live config
       vault/                       shared vault
       published/                   rendered/published output
       quarto/                      Quarto source/project state
       state/
-        almanac-control.sqlite3    control-plane DB
-        almanac-release.json       deployed release state
+        arclink-control.sqlite3    control-plane DB
+        arclink-release.json       deployed release state
         agents/                    enrolled agent state
         archived-agents/           enrollment-reset archives
         curator/hermes-home/       Curator HERMES_HOME
@@ -56,18 +56,18 @@ Per enrolled user:
 
 ```text
 /home/<user>/
-  .local/share/almanac-agent/hermes-home/   private user-agent HERMES_HOME
-  .config/systemd/user/                     user-level Almanac units
-  Almanac -> <shared vault>                 convenience symlink
+  .local/share/arclink-agent/hermes-home/   private user-agent HERMES_HOME
+  .config/systemd/user/                     user-level ArcLink units
+  ArcLink -> <shared vault>                 convenience symlink
 ```
 
-Do not guess `~/.hermes` for enrolled agents. Almanac agents normally use:
+Do not guess `~/.hermes` for enrolled agents. ArcLink agents normally use:
 
 ```text
-/home/<user>/.local/share/almanac-agent/hermes-home
+/home/<user>/.local/share/arclink-agent/hermes-home
 ```
 
-The operator checkout may include `.almanac-operator.env`, which points at the
+The operator checkout may include `.arclink-operator.env`, which points at the
 deployed user, public repo, private repo, and live config. It is a discovery
 hint, not a file to publish or stuff with secrets.
 
@@ -89,13 +89,13 @@ From the repo root:
 ./deploy.sh enrollment-align
 ./deploy.sh enrollment-reset
 ./deploy.sh rotate-nextcloud-secrets
-./bin/almanac-ctl upgrade check
-./bin/almanac-ctl org-profile build
-./bin/almanac-ctl org-profile validate
-./bin/almanac-ctl org-profile preview
-./bin/almanac-ctl org-profile apply --yes
-./bin/almanac-ctl org-profile doctor
-./bin/almanac-ctl onboarding retry-contact <unixusername|discordname>
+./bin/arclink-ctl upgrade check
+./bin/arclink-ctl org-profile build
+./bin/arclink-ctl org-profile validate
+./bin/arclink-ctl org-profile preview
+./bin/arclink-ctl org-profile apply --yes
+./bin/arclink-ctl org-profile doctor
+./bin/arclink-ctl onboarding retry-contact <unixusername|discordname>
 ```
 
 Docker mode is also routed through `deploy.sh` so the operator keeps one
@@ -129,13 +129,13 @@ services are Compose services, and enrolled user agents are reconciled by
 systemd units. The Docker install/upgrade path applies the private operating
 profile when present, records the release state, runs strict Docker health, and
 runs the live agent tool smoke. Persistent Docker agent homes live under
-`almanac-priv/state/docker/users/`.
+`arclink-priv/state/docker/users/`.
 
 `deploy.sh` is a thin wrapper around `bin/deploy.sh`.
 
 Organization profile ingestion is the operator-owned path for aligning agent
 baseline, roles, teams, boundaries, and per-agent context. The private source
-file belongs at `almanac-priv/config/org-profile.yaml`; use the public
+file belongs at `arclink-priv/config/org-profile.yaml`; use the public
 `config/org-profile.example.yaml` for a compact example and
 `config/org-profile.ultimate.example.yaml` for the full fictional layered
 ingestion example. Applying the profile writes normalized
@@ -144,29 +144,29 @@ per-agent context slices, plugin-managed sections, and a durable `SOUL.md`
 overlay for matched agents after refresh.
 
 Operator-specific resource rails belong in private state too. Keep real source
-repo inventories in `almanac-priv/config/team-resources.tsv`, optionally point
-`ALMANAC_TEAM_RESOURCES_MANIFEST` at another private manifest, and use
-`ALMANAC_EXTRA_MCP_NAME`, `ALMANAC_EXTRA_MCP_LABEL`, and
-`ALMANAC_EXTRA_MCP_URL` for any extra knowledge MCP. Public examples must stay
+repo inventories in `arclink-priv/config/team-resources.tsv`, optionally point
+`ARCLINK_TEAM_RESOURCES_MANIFEST` at another private manifest, and use
+`ARCLINK_EXTRA_MCP_NAME`, `ARCLINK_EXTRA_MCP_LABEL`, and
+`ARCLINK_EXTRA_MCP_URL` for any extra knowledge MCP. Public examples must stay
 fictional.
 
 Keep public hygiene blocklists in private state too. The public regression test
-reads `almanac-priv/config/public-hygiene-terms.txt` when present, or
-`ALMANAC_PUBLIC_HYGIENE_TERMS_FILE`; do not hard-code private operator,
+reads `arclink-priv/config/public-hygiene-terms.txt` when present, or
+`ARCLINK_PUBLIC_HYGIENE_TERMS_FILE`; do not hard-code private operator,
 project, team, or resource names in public tests.
 
 Use `./deploy.sh upgrade` when the user asks to upgrade the live system. It:
 
 1. Reads the deployed config.
-2. Fetches `ALMANAC_UPSTREAM_REPO_URL#ALMANAC_UPSTREAM_BRANCH`.
-3. Uses the configured Almanac upstream deploy key when enabled.
+2. Fetches `ARCLINK_UPSTREAM_REPO_URL#ARCLINK_UPSTREAM_BRANCH`.
+3. Uses the configured ArcLink upstream deploy key when enabled.
 4. Syncs the public deployed repo.
-5. Preserves and seeds `almanac-priv`.
+5. Preserves and seeds `arclink-priv`.
 6. Runs system bootstrap and userland bootstrap.
 7. Repairs Curator.
 8. Realigns active enrolled agents.
 9. Restarts shared services.
-10. Records `state/almanac-release.json`.
+10. Records `state/arclink-release.json`.
 11. Runs strict health.
 12. Runs `bin/live-agent-tool-smoke.sh` when present.
 
@@ -176,7 +176,7 @@ the remote, not unpushed local commits.
 
 Production deploys track `main`. Branches are fine for local development,
 focused testing, and temporary experiments, but do not switch the live
-`ALMANAC_UPSTREAM_BRANCH` away from `main` unless the operator explicitly asks
+`ARCLINK_UPSTREAM_BRANCH` away from `main` unless the operator explicitly asks
 for a one-off emergency/staging deployment and understands that production will
 follow that branch. Before running `./deploy.sh upgrade`, verify the deployed
 config is tracking `main`; if it is not, correct it or stop and ask.
@@ -202,32 +202,32 @@ the operator would use the interactive deploy flow.
 
 ## Deploy Keys
 
-Almanac has multiple deploy-key lanes. Do not conflate them.
+ArcLink has multiple deploy-key lanes. Do not conflate them.
 
-- Almanac upstream deploy key: read/write key for the public `almanac` repo.
+- ArcLink upstream deploy key: read/write key for the public `arclink` repo.
   Used by `./deploy.sh upgrade` and operator/agent code pushes when enabled.
-- `almanac-priv` backup deploy key: read/write key for the private state
+- `arclink-priv` backup deploy key: read/write key for the private state
   backup repo.
 - Per-user agent backup deploy key: read/write key for a user's private
   Hermes-home backup repo.
 
 Before expecting an assisting agent to handle code changes, tests, pushes,
-deploys, or live upgrades, the operator should have the Almanac upstream
+deploys, or live upgrades, the operator should have the ArcLink upstream
 deploy-key lane configured for the public repo with write access. The key
 should be installed for the configured key owner, referenced by live config,
-accepted in `known_hosts`, and attached to `ALMANAC_UPSTREAM_REPO_URL` with
+accepted in `known_hosts`, and attached to `ARCLINK_UPSTREAM_REPO_URL` with
 GitHub deploy-key write access. The branch being pushed must match
-`ALMANAC_UPSTREAM_BRANCH`, because `./deploy.sh upgrade` consumes that branch.
+`ARCLINK_UPSTREAM_BRANCH`, because `./deploy.sh upgrade` consumes that branch.
 
 Relevant config:
 
 ```text
-ALMANAC_UPSTREAM_REPO_URL
-ALMANAC_UPSTREAM_BRANCH
-ALMANAC_UPSTREAM_DEPLOY_KEY_ENABLED
-ALMANAC_UPSTREAM_DEPLOY_KEY_USER
-ALMANAC_UPSTREAM_DEPLOY_KEY_PATH
-ALMANAC_UPSTREAM_KNOWN_HOSTS_FILE
+ARCLINK_UPSTREAM_REPO_URL
+ARCLINK_UPSTREAM_BRANCH
+ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED
+ARCLINK_UPSTREAM_DEPLOY_KEY_USER
+ARCLINK_UPSTREAM_DEPLOY_KEY_PATH
+ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE
 ```
 
 `bin/deploy.sh` can generate the upstream key, print the public key, configure
@@ -241,74 +241,74 @@ The operational question is usually not "does a deploy key exist?" but:
 - Is the remote SSH URL correct?
 - Does the key owner exist on this host?
 - Has the public key been added to GitHub with write access?
-- Has the commit to deploy been pushed to `ALMANAC_UPSTREAM_REPO_URL`?
+- Has the commit to deploy been pushed to `ARCLINK_UPSTREAM_REPO_URL`?
 
 ## Services
 
 System units installed under `/etc/systemd/system`:
 
 ```text
-almanac-enrollment-provision.service
-almanac-enrollment-provision.timer
-almanac-notion-claim-poll.service
-almanac-notion-claim-poll.timer
+arclink-enrollment-provision.service
+arclink-enrollment-provision.timer
+arclink-notion-claim-poll.service
+arclink-notion-claim-poll.timer
 ```
 
-Main service-user units installed for the Almanac service user:
+Main service-user units installed for the ArcLink service user:
 
 ```text
-almanac-mcp.service
-almanac-notion-webhook.service
-almanac-ssot-batcher.service
-almanac-ssot-batcher.timer
-almanac-notification-delivery.service
-almanac-notification-delivery.timer
-almanac-health-watch.service
-almanac-health-watch.timer
-almanac-curator-refresh.service
-almanac-curator-refresh.timer
-almanac-memory-synth.service
-almanac-memory-synth.timer
-almanac-qmd-mcp.service
-almanac-qmd-update.service
-almanac-qmd-update.timer
-almanac-vault-watch.service
-almanac-github-backup.service
-almanac-github-backup.timer
-almanac-hermes-docs-sync.service
-almanac-hermes-docs-sync.timer
-almanac-pdf-ingest.service
-almanac-pdf-ingest.timer
-almanac-pdf-ingest-watch.service     # installed, normally disabled in favor of the timer
-almanac-quarto-render.service
-almanac-quarto-render.timer
-almanac-nextcloud.service
-almanac-curator-onboarding.service
-almanac-curator-discord-onboarding.service
-almanac-curator-gateway.service
+arclink-mcp.service
+arclink-notion-webhook.service
+arclink-ssot-batcher.service
+arclink-ssot-batcher.timer
+arclink-notification-delivery.service
+arclink-notification-delivery.timer
+arclink-health-watch.service
+arclink-health-watch.timer
+arclink-curator-refresh.service
+arclink-curator-refresh.timer
+arclink-memory-synth.service
+arclink-memory-synth.timer
+arclink-qmd-mcp.service
+arclink-qmd-update.service
+arclink-qmd-update.timer
+arclink-vault-watch.service
+arclink-github-backup.service
+arclink-github-backup.timer
+arclink-hermes-docs-sync.service
+arclink-hermes-docs-sync.timer
+arclink-pdf-ingest.service
+arclink-pdf-ingest.timer
+arclink-pdf-ingest-watch.service     # installed, normally disabled in favor of the timer
+arclink-quarto-render.service
+arclink-quarto-render.timer
+arclink-nextcloud.service
+arclink-curator-onboarding.service
+arclink-curator-discord-onboarding.service
+arclink-curator-gateway.service
 ```
 
-Whether Curator uses onboarding services or `almanac-curator-gateway.service`
+Whether Curator uses onboarding services or `arclink-curator-gateway.service`
 depends on:
 
 ```text
-ALMANAC_CURATOR_CHANNELS
-ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED
-ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED
+ARCLINK_CURATOR_CHANNELS
+ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED
+ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED
 ```
 
 Per enrolled user:
 
 ```text
-almanac-user-agent-refresh.service
-almanac-user-agent-refresh.timer
-almanac-user-agent-activate.path
-almanac-user-agent-gateway.service
-almanac-user-agent-dashboard.service
-almanac-user-agent-dashboard-proxy.service
-almanac-user-agent-code.service
-almanac-user-agent-backup.service        # manual immediate backup fallback
-Hermes cron job in HERMES_HOME/cron/jobs.json: Almanac private Hermes-home backup
+arclink-user-agent-refresh.service
+arclink-user-agent-refresh.timer
+arclink-user-agent-activate.path
+arclink-user-agent-gateway.service
+arclink-user-agent-dashboard.service
+arclink-user-agent-dashboard-proxy.service
+arclink-user-agent-code.service
+arclink-user-agent-backup.service        # manual immediate backup fallback
+Hermes cron job in HERMES_HOME/cron/jobs.json: ArcLink private Hermes-home backup
 ```
 
 ## Hermes Cron Jobs
@@ -340,11 +340,11 @@ uid="$(id -u <user>)"
 sudo runuser -u <user> -- env \
   XDG_RUNTIME_DIR="/run/user/$uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-  systemctl --user status almanac-user-agent-gateway.service --no-pager
+  systemctl --user status arclink-user-agent-gateway.service --no-pager
 ```
 
-The gateway service name is `almanac-user-agent-gateway.service`, not
-`almanac-agent-gateway.service`.
+The gateway service name is `arclink-user-agent-gateway.service`, not
+`arclink-agent-gateway.service`.
 
 ## Verification Playbooks
 
@@ -358,8 +358,8 @@ systemctl --failed --no-legend --plain
 Check service-user failed units:
 
 ```bash
-uid="$(id -u almanac)"
-sudo runuser -u almanac -- env \
+uid="$(id -u arclink)"
+sudo runuser -u arclink -- env \
   XDG_RUNTIME_DIR="/run/user/$uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
   systemctl --user --failed --no-legend --plain
@@ -368,29 +368,29 @@ sudo runuser -u almanac -- env \
 Check enrolled users similarly. Discover users with:
 
 ```bash
-./bin/almanac-ctl agent list
+./bin/arclink-ctl agent list
 ```
 
 Check deployed commit:
 
 ```bash
-sudo runuser -u almanac -- env HOME=/home/almanac \
-  git -C /home/almanac/almanac rev-parse --short HEAD
+sudo runuser -u arclink -- env HOME=/home/arclink \
+  git -C /home/arclink/arclink rev-parse --short HEAD
 ```
 
 Check release state:
 
 ```bash
-sudo runuser -u almanac -- env HOME=/home/almanac \
-  python3 -m json.tool /home/almanac/almanac/almanac-priv/state/almanac-release.json
+sudo runuser -u arclink -- env HOME=/home/arclink \
+  python3 -m json.tool /home/arclink/arclink/arclink-priv/state/arclink-release.json
 ```
 
 Check agent gateway defaults for a user:
 
 ```bash
-hh="/home/<user>/.local/share/almanac-agent/hermes-home"
-sudo test -f "$hh/hooks/almanac-telegram-start/handler.py"
-sudo test -f "$hh/plugins/almanac-managed-context/plugin.yaml"
+hh="/home/<user>/.local/share/arclink-agent/hermes-home"
+sudo test -f "$hh/hooks/arclink-telegram-start/handler.py"
+sudo test -f "$hh/plugins/arclink-managed-context/plugin.yaml"
 sudo grep -E '^(TELEGRAM_REACTIONS|DISCORD_REACTIONS)=true$' "$hh/.env"
 ```
 
@@ -400,8 +400,8 @@ healthy and the failed units are stale `/usr/bin/podman healthcheck run ...`
 transients, clear them with:
 
 ```bash
-uid="$(id -u almanac)"
-sudo runuser -u almanac -- env \
+uid="$(id -u arclink)"
+sudo runuser -u arclink -- env \
   XDG_RUNTIME_DIR="/run/user/$uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
   systemctl --user reset-failed
@@ -416,22 +416,22 @@ Users normally begin in a Discord or Telegram DM with Curator. The flow:
 1. Curator asks what to call the user, what the agent should help with, Unix
    username, bot name, provider, model, and reasoning level.
 2. Operator approves the session.
-3. Almanac creates the Unix user, enables linger, provisions the Hermes home,
+3. ArcLink creates the Unix user, enables linger, provisions the Hermes home,
    and installs per-user services.
 4. Curator asks the user for a bot token for the new user-agent bot, not
    Curator's bot.
-5. Almanac writes gateway config and starts the user gateway.
+5. ArcLink writes gateway config and starts the user gateway.
 6. Curator offers private per-user Hermes-home backup setup: the user provides
-   a private GitHub `owner/repo`, Almanac generates a separate deploy key,
+   a private GitHub `owner/repo`, ArcLink generates a separate deploy key,
    refuses public repos, and activates the Hermes cron backup job only after
    GitHub read plus dry-run write access verifies.
 7. Optional Notion identity and remote SSH setup continue after that.
 
 Provider lanes currently include:
 
-- Org-provided via `ALMANAC_ORG_PROVIDER_ENABLED=1`,
-  `ALMANAC_ORG_PROVIDER_PRESET`, `ALMANAC_ORG_PROVIDER_MODEL_ID`, and
-  `ALMANAC_ORG_PROVIDER_SECRET`. When present, it is the first onboarding
+- Org-provided via `ARCLINK_ORG_PROVIDER_ENABLED=1`,
+  `ARCLINK_ORG_PROVIDER_PRESET`, `ARCLINK_ORG_PROVIDER_MODEL_ID`, and
+  `ARCLINK_ORG_PROVIDER_SECRET`. When present, it is the first onboarding
   option and auto-stages the org credential after the user's bot token.
 - Chutes via OpenAI-compatible endpoint `https://llm.chutes.ai/v1`.
 - Claude Opus via Claude Code OAuth, not Anthropic API keys.
@@ -460,7 +460,7 @@ Click Reset Token, copy the bot token, and paste that token here.
 ```
 
 Users should not have to add their agent bot to a server or manually open the
-agent DM. Almanac opens the DM by Discord user id, uses that DM channel as the
+agent DM. ArcLink opens the DM by Discord user id, uses that DM channel as the
 agent home channel, and after Curator sends the completion links it queues a
 root-side handoff that sends the user-agent bot DM with the same visual
 confirmation code Curator showed. If that DM does not arrive, the onboarding
@@ -470,7 +470,7 @@ root-side retry.
 
 Telegram cannot cold-DM a user. For Telegram lanes, Curator should show the
 agent bot handle, such as `@agent_bot`, and tell the user to tap it and press
-Start. Almanac's Telegram `/start` hook rewrites that first Start into a normal
+Start. ArcLink's Telegram `/start` hook rewrites that first Start into a normal
 agent greeting.
 
 Telegram user-agent onboarding uses BotFather and the token printed for the
@@ -491,24 +491,24 @@ New and refreshed agents should get these defaults from the outset:
 
 - Official bundled Hermes skills synced from the pinned shared runtime
   (`state/runtime/hermes-agent-src/skills`) via Hermes's manifest-based
-  `tools/skills_sync.py`, before Almanac-specific skills are layered in.
+  `tools/skills_sync.py`, before ArcLink-specific skills are layered in.
 - Org-published Hermes skills discovered from
-  `~/Almanac/Agents_Skills/*/skills` and wired into
+  `~/ArcLink/Agents_Skills/*/skills` and wired into
   `skills.external_dirs` during install/refresh so shared skill repos become
   read-only active skills for each agent.
 - Hermes config schemas migrated non-interactively via
   `bin/migrate-hermes-config.sh` during Curator bootstrap and user-agent
   install/refresh. Do not run `hermes update` inside unattended deploys; keep
-  upgrades on Almanac's pinned shared-runtime path.
-- Telegram `/start` support through Almanac's Hermes hook, not core Hermes.
-- `almanac-managed-context` plugin installed and enabled.
-- Per-agent Almanac MCP bootstrap token installed at
-  `HERMES_HOME/secrets/almanac-bootstrap-token`. Agents do not pass this token
-  manually; `almanac-managed-context` injects it before Almanac MCP tool
+  upgrades on ArcLink's pinned shared-runtime path.
+- Telegram `/start` support through ArcLink's Hermes hook, not core Hermes.
+- `arclink-managed-context` plugin installed and enabled.
+- Per-agent ArcLink MCP bootstrap token installed at
+  `HERMES_HOME/secrets/arclink-bootstrap-token`. Agents do not pass this token
+  manually; `arclink-managed-context` injects it before ArcLink MCP tool
   dispatch. `refresh-agent-install.sh`, and therefore idempotent install and
   upgrade realignment, validates the token against the control-plane DB and
   repairs the file/token row when needed. Docker mode performs the same repair
-  from `python/almanac_docker_agent_supervisor.py` before user-agent refresh or
+  from `python/arclink_docker_agent_supervisor.py` before user-agent refresh or
   gateway work.
 - `TELEGRAM_REACTIONS=true`.
 - `DISCORD_REACTIONS=true`.
@@ -518,40 +518,40 @@ New and refreshed agents should get these defaults from the outset:
 The Telegram `/start` behavior lives here:
 
 ```text
-hooks/hermes-agent/almanac-telegram-start/HOOK.yaml
-hooks/hermes-agent/almanac-telegram-start/handler.py
-bin/install-almanac-plugins.sh
+hooks/hermes-agent/arclink-telegram-start/HOOK.yaml
+hooks/hermes-agent/arclink-telegram-start/handler.py
+bin/install-arclink-plugins.sh
 ```
 
 The managed context plugin lives here:
 
 ```text
-plugins/hermes-agent/almanac-managed-context/
+plugins/hermes-agent/arclink-managed-context/
 ```
 
 Per-user installation and refresh paths:
 
 ```text
 bin/sync-hermes-bundled-skills.sh
-bin/install-almanac-skills.sh
+bin/install-arclink-skills.sh
 bin/install-agent-user-services.sh
 bin/refresh-agent-install.sh
-python/almanac_enrollment_provisioner.py
+python/arclink_enrollment_provisioner.py
 ```
 
 Regression coverage to update when touching this area:
 
 ```text
-tests/test_almanac_agent_user_services.py
-tests/test_almanac_plugins.py
-tests/test_almanac_enrollment_provisioner_regressions.py
-tests/test_almanac_onboarding_prompts.py
+tests/test_arclink_agent_user_services.py
+tests/test_arclink_plugins.py
+tests/test_arclink_enrollment_provisioner_regressions.py
+tests/test_arclink_onboarding_prompts.py
 tests/test_deploy_regressions.py
 ```
 
 ## Knowledge And MCP Rails
 
-Almanac gives agents higher-level MCP tools so they do not rummage through
+ArcLink gives agents higher-level MCP tools so they do not rummage through
 raw files or raw Notion APIs first.
 
 Prefer:
@@ -600,8 +600,8 @@ PDF files are converted into generated markdown under
 `state/pdf-ingest/markdown`, then indexed via the `vault-pdf-ingest`
 collection.
 
-`almanac-memory-synth.timer` is the optional cached second-stage sensemaking
-lane. It uses `ALMANAC_MEMORY_SYNTH_*` or falls back to `PDF_VISION_*`, writes
+`arclink-memory-synth.timer` is the optional cached second-stage sensemaking
+lane. It uses `ARCLINK_MEMORY_SYNTH_*` or falls back to `PDF_VISION_*`, writes
 compact rows to `memory_synthesis_cards`, and lets managed memory render those
 cards into `[managed:recall-stubs]`. It is intentionally domain-neutral for
 families, creators, businesses, communities, research groups, and larger
@@ -619,7 +619,7 @@ the agent's subscribed vault cards before newer global cards.
 Shared Notion writes must go through the SSOT broker. Destructive operations
 such as archive/delete/trash are intentionally rejected or require approval
 rails; do not bypass this with raw Notion access. Shared org pages and
-databases must be created under the configured Almanac root/shared parent via
+databases must be created under the configured ArcLink root/shared parent via
 `ssot.write`, including `operation: "create_page"` for org pages/lists and
 `operation: "create_database"` for org databases, so
 they inherit shared Notion permissions instead of landing in a user's Private
@@ -636,34 +636,34 @@ Important defaults and paths are defined in `bin/common.sh`.
 Core config:
 
 ```text
-ALMANAC_CONFIG_FILE
-ALMANAC_USER
-ALMANAC_REPO_DIR
-ALMANAC_PRIV_DIR
+ARCLINK_CONFIG_FILE
+ARCLINK_USER
+ARCLINK_REPO_DIR
+ARCLINK_PRIV_DIR
 VAULT_DIR
 STATE_DIR
 RUNTIME_DIR
-ALMANAC_DB_PATH
-ALMANAC_RELEASE_STATE_FILE
-ALMANAC_CURATOR_HERMES_HOME
+ARCLINK_DB_PATH
+ARCLINK_RELEASE_STATE_FILE
+ARCLINK_CURATOR_HERMES_HOME
 ```
 
 Ports:
 
 ```text
 QMD_MCP_PORT                    default 8181
-ALMANAC_MCP_HOST                default 127.0.0.1
-ALMANAC_MCP_PORT                default 8282
-ALMANAC_NOTION_WEBHOOK_HOST     default 127.0.0.1
-ALMANAC_NOTION_WEBHOOK_PORT     default 8283
+ARCLINK_MCP_HOST                default 127.0.0.1
+ARCLINK_MCP_PORT                default 8282
+ARCLINK_NOTION_WEBHOOK_HOST     default 127.0.0.1
+ARCLINK_NOTION_WEBHOOK_PORT     default 8283
 NEXTCLOUD_PORT                  default 18080
 ```
 
 Runtime pin:
 
 ```text
-ALMANAC_HERMES_AGENT_REF
-ALMANAC_HERMES_DOCS_REF
+ARCLINK_HERMES_AGENT_REF
+ARCLINK_HERMES_DOCS_REF
 ```
 
 Hermes docs sync is pinned to the runtime ref by default so agent-facing docs
@@ -674,10 +674,10 @@ do not drift ahead of the installed runtime.
 Useful focused tests:
 
 ```bash
-python3 tests/test_almanac_agent_user_services.py
-python3 tests/test_almanac_plugins.py
-python3 tests/test_almanac_enrollment_provisioner_regressions.py
-python3 tests/test_almanac_onboarding_prompts.py
+python3 tests/test_arclink_agent_user_services.py
+python3 tests/test_arclink_plugins.py
+python3 tests/test_arclink_enrollment_provisioner_regressions.py
+python3 tests/test_arclink_onboarding_prompts.py
 python3 tests/test_deploy_regressions.py
 python3 tests/test_health_regressions.py
 ```
@@ -730,11 +730,11 @@ bin/health.sh
 Enrollment and onboarding:
 
 ```text
-python/almanac_onboarding_flow.py
-python/almanac_curator_onboarding.py
-python/almanac_curator_discord_onboarding.py
-python/almanac_enrollment_provisioner.py
-bin/almanac-enrollment-provision.sh
+python/arclink_onboarding_flow.py
+python/arclink_curator_onboarding.py
+python/arclink_curator_discord_onboarding.py
+python/arclink_enrollment_provisioner.py
+bin/arclink-enrollment-provision.sh
 ```
 
 Agent install/repair:
@@ -749,11 +749,11 @@ bin/activate-agent.sh
 Control plane and MCP:
 
 ```text
-python/almanac_control.py
-python/almanac_ctl.py
-python/almanac_mcp_server.py
-bin/almanac-ctl
-bin/almanac-mcp-server.sh
+python/arclink_control.py
+python/arclink_ctl.py
+python/arclink_mcp_server.py
+bin/arclink-ctl
+bin/arclink-mcp-server.sh
 ```
 
 Knowledge, vault, qmd, PDFs, docs:
@@ -765,7 +765,7 @@ bin/qmd-daemon.sh
 bin/pdf-ingest.sh
 bin/pdf-ingest.py
 bin/memory-synth.sh
-python/almanac_memory_synthesizer.py
+python/arclink_memory_synthesizer.py
 bin/sync-hermes-docs-into-vault.sh
 bin/vault-repo-sync.sh
 ```
@@ -773,27 +773,27 @@ bin/vault-repo-sync.sh
 Notion:
 
 ```text
-python/almanac_notion_ssot.py
-python/almanac_notion_webhook.py
-python/almanac_ssot_batcher.py
-bin/almanac-notion-webhook.sh
-bin/almanac-ssot-batcher.sh
+python/arclink_notion_ssot.py
+python/arclink_notion_webhook.py
+python/arclink_ssot_batcher.py
+bin/arclink-notion-webhook.sh
+bin/arclink-ssot-batcher.sh
 ```
 
 Notifications:
 
 ```text
-python/almanac_notification_delivery.py
-bin/almanac-notification-delivery.sh
+python/arclink_notification_delivery.py
+bin/arclink-notification-delivery.sh
 ```
 
 ## Safety Notes
 
-- The public repo ignores `almanac-priv/`. Do not add private state to public
+- The public repo ignores `arclink-priv/`. Do not add private state to public
   commits.
 - Do not read private user `HERMES_HOME` secret files unless the operator asks
   for a specific recovery/debug action.
-- Do not pass tokens in Almanac MCP tool calls. The Almanac plugin injects the
+- Do not pass tokens in ArcLink MCP tool calls. The ArcLink plugin injects the
   bootstrap token where appropriate.
 - Do not store Discord bot tokens, Telegram bot tokens, Chutes keys, Notion
   tokens, OAuth credentials, or sudo credentials in docs.
@@ -802,7 +802,7 @@ bin/almanac-notification-delivery.sh
 - Repo sync inside the vault is intentionally destructive for real `.git`
   checkouts: it fetches, resets hard to `origin/<current-branch>`, and cleans
   untracked files, including gitignored build caches.
-- Almanac services are loopback/tailnet-first. Do not open public listeners
+- ArcLink services are loopback/tailnet-first. Do not open public listeners
   unless the specific Tailscale Serve/Funnel path is intended.
 
 ## When Something Fails
@@ -821,8 +821,8 @@ For a stuck onboarding/provisioning session:
 ./deploy.sh enrollment-trace --unix-user <user>
 ./deploy.sh enrollment-trace --session-id <session-id>
 ./deploy.sh enrollment-trace --request-id <request-id>
-./bin/almanac-ctl provision list
-./bin/almanac-ctl provision retry <request-id>
+./bin/arclink-ctl provision list
+./bin/arclink-ctl provision retry <request-id>
 ```
 
 For Curator:
@@ -835,7 +835,7 @@ For Curator:
 For upgrade drift:
 
 ```bash
-./bin/almanac-ctl upgrade check
+./bin/arclink-ctl upgrade check
 ./deploy.sh upgrade
 ```
 
@@ -846,13 +846,13 @@ uid="$(id -u <user>)"
 sudo runuser -u <user> -- env \
   XDG_RUNTIME_DIR="/run/user/$uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-  systemctl --user status almanac-user-agent-gateway.service -n 80 --no-pager
+  systemctl --user status arclink-user-agent-gateway.service -n 80 --no-pager
 ```
 
 Then inspect the user's actual Hermes home:
 
 ```text
-/home/<user>/.local/share/almanac-agent/hermes-home
+/home/<user>/.local/share/arclink-agent/hermes-home
 ```
 
 ## Documentation To Keep In Sync

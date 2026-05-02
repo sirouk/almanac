@@ -11,9 +11,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
-CONTROL_PY = PYTHON_DIR / "almanac_control.py"
-ONBOARDING_PY = PYTHON_DIR / "almanac_onboarding_flow.py"
-PROVISIONER_PY = PYTHON_DIR / "almanac_enrollment_provisioner.py"
+CONTROL_PY = PYTHON_DIR / "arclink_control.py"
+ONBOARDING_PY = PYTHON_DIR / "arclink_onboarding_flow.py"
+PROVISIONER_PY = PYTHON_DIR / "arclink_enrollment_provisioner.py"
 
 
 def load_module(path: Path, name: str):
@@ -39,33 +39,33 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 
 def config_values(root: Path) -> dict[str, str]:
     return {
-        "ALMANAC_USER": "almanac",
-        "ALMANAC_HOME": str(root / "home-almanac"),
-        "ALMANAC_REPO_DIR": str(REPO),
-        "ALMANAC_PRIV_DIR": str(root / "priv"),
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(REPO),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
         "STATE_DIR": str(root / "state"),
         "RUNTIME_DIR": str(root / "state" / "runtime"),
         "VAULT_DIR": str(root / "vault"),
-        "ALMANAC_DB_PATH": str(root / "state" / "almanac-control.sqlite3"),
-        "ALMANAC_AGENTS_STATE_DIR": str(root / "state" / "agents"),
-        "ALMANAC_CURATOR_DIR": str(root / "state" / "curator"),
-        "ALMANAC_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
-        "ALMANAC_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
-        "ALMANAC_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
-        "ALMANAC_RELEASE_STATE_FILE": str(root / "state" / "almanac-release.json"),
-        "ALMANAC_QMD_URL": "http://127.0.0.1:8181/mcp",
-        "ALMANAC_MCP_HOST": "127.0.0.1",
-        "ALMANAC_MCP_PORT": "8282",
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "ARCLINK_MCP_HOST": "127.0.0.1",
+        "ARCLINK_MCP_PORT": "8282",
         "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
         "OPERATOR_NOTIFY_CHANNEL_ID": "999",
-        "ALMANAC_MODEL_PRESET_CODEX": "openai:codex",
-        "ALMANAC_MODEL_PRESET_OPUS": "anthropic:claude-opus",
-        "ALMANAC_MODEL_PRESET_CHUTES": "chutes:model-router",
-        "ALMANAC_CURATOR_CHANNELS": "tui-only,discord",
-        "ALMANAC_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
-        "ALMANAC_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",
+        "ARCLINK_MODEL_PRESET_CODEX": "openai:codex",
+        "ARCLINK_MODEL_PRESET_OPUS": "anthropic:claude-opus",
+        "ARCLINK_MODEL_PRESET_CHUTES": "chutes:model-router",
+        "ARCLINK_CURATOR_CHANNELS": "tui-only,discord",
+        "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+        "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED": "1",
         "ENABLE_TAILSCALE_SERVE": "1",
-        "TAILSCALE_DNS_NAME": "almanac.example.test",
+        "TAILSCALE_DNS_NAME": "arclink.example.test",
     }
 
 
@@ -88,21 +88,21 @@ def insert_agent(mod, conn, *, agent_id: str, unix_user: str, hermes_home: Path)
 def test_completed_onboarding_user_can_queue_remote_ssh_key_install() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_remote_ssh_key_queue_test")
-    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_remote_ssh_key_queue_test")
+    control = load_module(CONTROL_PY, "arclink_control_remote_ssh_key_queue_test")
+    onboarding = load_module(ONBOARDING_PY, "arclink_onboarding_remote_ssh_key_queue_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "arclink-agent" / "hermes-home"
             (hermes_home / "state").mkdir(parents=True, exist_ok=True)
-            (hermes_home / "state" / "almanac-web-access.json").write_text(
-                json.dumps({"unix_user": "alex", "username": "alex", "tailscale_host": "almanac.example.test"}),
+            (hermes_home / "state" / "arclink-web-access.json").write_text(
+                json.dumps({"unix_user": "alex", "username": "alex", "tailscale_host": "arclink.example.test"}),
                 encoding="utf-8",
             )
             insert_agent(control, conn, agent_id="agent-alex", unix_user="alex", hermes_home=hermes_home)
@@ -122,7 +122,7 @@ def test_completed_onboarding_user_can_queue_remote_ssh_key_install() -> None:
                 linked_agent_id="agent-alex",
                 answers={"unix_user": "alex", "bot_platform": "discord"},
             )
-            pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey almanac-remote-hermes@test"
+            pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey arclink-remote-hermes@test"
             replies = onboarding.process_onboarding_message(
                 cfg,
                 onboarding.IncomingMessage(
@@ -144,7 +144,7 @@ def test_completed_onboarding_user_can_queue_remote_ssh_key_install() -> None:
             payload = json.loads(str(row["requested_target"]))
             expect(payload["unix_user"] == "alex", str(payload))
             expect(payload["pubkey"] == pubkey, str(payload))
-            expect(payload["tailscale_host"] == "almanac.example.test", str(payload))
+            expect(payload["tailscale_host"] == "arclink.example.test", str(payload))
             print("PASS test_completed_onboarding_user_can_queue_remote_ssh_key_install")
         finally:
             os.environ.clear()
@@ -154,14 +154,14 @@ def test_completed_onboarding_user_can_queue_remote_ssh_key_install() -> None:
 def test_remote_ssh_key_install_requires_completed_sender_lane() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_remote_ssh_key_requires_lane_test")
-    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_remote_ssh_key_requires_lane_test")
+    control = load_module(CONTROL_PY, "arclink_control_remote_ssh_key_requires_lane_test")
+    onboarding = load_module(ONBOARDING_PY, "arclink_onboarding_remote_ssh_key_requires_lane_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             control.connect_db(cfg)
@@ -188,18 +188,18 @@ def test_remote_ssh_key_install_requires_completed_sender_lane() -> None:
 def test_completed_onboarding_user_can_queue_agent_backup_setup() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_agent_backup_queue_test")
-    onboarding = load_module(ONBOARDING_PY, "almanac_onboarding_agent_backup_queue_test")
+    control = load_module(CONTROL_PY, "arclink_control_agent_backup_queue_test")
+    onboarding = load_module(ONBOARDING_PY, "arclink_onboarding_agent_backup_queue_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "arclink-agent" / "hermes-home"
             (hermes_home / "state").mkdir(parents=True, exist_ok=True)
             insert_agent(control, conn, agent_id="agent-alex", unix_user="alex", hermes_home=hermes_home)
             session = control.start_onboarding_session(
@@ -240,7 +240,7 @@ def test_completed_onboarding_user_can_queue_agent_backup_setup() -> None:
                     sender_id="777",
                     sender_username="alex",
                     sender_display_name="Alex",
-                    text="example/almanac-guide",
+                    text="example/arclink-guide",
                 ),
                 validate_bot_token=lambda token: onboarding.BotIdentity(bot_id="unused"),
             )
@@ -249,8 +249,8 @@ def test_completed_onboarding_user_can_queue_agent_backup_setup() -> None:
             expect(row is not None, "expected queued agent backup action")
             payload = json.loads(str(row["requested_target"]))
             expect(payload["phase"] == "prepare", str(payload))
-            expect(payload["owner_repo"] == "example/almanac-guide", str(payload))
-            expect(payload["remote"] == "git@github.com:example/almanac-guide.git", str(payload))
+            expect(payload["owner_repo"] == "example/arclink-guide", str(payload))
+            expect(payload["remote"] == "git@github.com:example/arclink-guide.git", str(payload))
             expect(payload["include_sessions"] == "1", str(payload))
             print("PASS test_completed_onboarding_user_can_queue_agent_backup_setup")
         finally:
@@ -261,18 +261,18 @@ def test_completed_onboarding_user_can_queue_agent_backup_setup() -> None:
 def test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_agent_backup_prepare_root_test")
-    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_agent_backup_prepare_root_test")
+    control = load_module(CONTROL_PY, "arclink_control_agent_backup_prepare_root_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_agent_backup_prepare_root_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            hermes_home = root / "homes" / "alex" / ".local" / "share" / "almanac-agent" / "hermes-home"
+            hermes_home = root / "homes" / "alex" / ".local" / "share" / "arclink-agent" / "hermes-home"
             (hermes_home / "state").mkdir(parents=True, exist_ok=True)
             session = control.start_onboarding_session(
                 conn,
@@ -288,7 +288,7 @@ def test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key() -> 
                 session_id=str(session["session_id"]),
                 state="agent-backup-prepare-pending",
                 linked_agent_id="agent-alex",
-                answers={"unix_user": "alex", "agent_backup_owner_repo": "example/almanac-guide"},
+                answers={"unix_user": "alex", "agent_backup_owner_repo": "example/arclink-guide"},
             )
             action, _created = control.request_operator_action(
                 conn,
@@ -302,8 +302,8 @@ def test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key() -> 
                         "agent_id": "agent-alex",
                         "unix_user": "alex",
                         "hermes_home": str(hermes_home),
-                        "owner_repo": "example/almanac-guide",
-                        "remote": "git@github.com:example/almanac-guide.git",
+                        "owner_repo": "example/arclink-guide",
+                        "remote": "git@github.com:example/arclink-guide.git",
                         "branch": "main",
                         "include_sessions": "1",
                     },
@@ -311,7 +311,7 @@ def test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key() -> 
                 ),
                 dedupe_by_target=True,
             )
-            public_key = "ssh-ed25519 AAAAC3NzaAgentBackupKey almanac-agent-backup@test"
+            public_key = "ssh-ed25519 AAAAC3NzaAgentBackupKey arclink-agent-backup@test"
             user_messages: list[str] = []
 
             def fake_configure(cfg, *, unix_user, hermes_home, remote, branch, include_sessions, phase, log_path):
@@ -319,7 +319,7 @@ def test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key() -> 
                 key_path.parent.mkdir(parents=True, exist_ok=True)
                 key_path.write_text("private", encoding="utf-8")
                 (root / ".ssh" / "agent-backup.pub").write_text(public_key, encoding="utf-8")
-                (hermes_home / "state" / "almanac-agent-backup.pending.env").write_text(
+                (hermes_home / "state" / "arclink-agent-backup.pending.env").write_text(
                     f"AGENT_BACKUP_KEY_PATH='{key_path}'\n",
                     encoding="utf-8",
                 )
@@ -345,14 +345,14 @@ def test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key() -> 
 def test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_remote_ssh_key_root_test")
-    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_remote_ssh_key_root_test")
+    control = load_module(CONTROL_PY, "arclink_control_remote_ssh_key_root_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_remote_ssh_key_root_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
@@ -372,7 +372,7 @@ def test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user
                 linked_agent_id="agent-alex",
                 answers={"unix_user": "alex"},
             )
-            pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey almanac-remote-hermes@test"
+            pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey arclink-remote-hermes@test"
             action, _created = control.request_operator_action(
                 conn,
                 action_kind="install-agent-ssh-key",
@@ -384,7 +384,7 @@ def test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user
                         "agent_id": "agent-alex",
                         "unix_user": "alex",
                         "pubkey": pubkey,
-                        "tailscale_host": "almanac.example.test",
+                        "tailscale_host": "arclink.example.test",
                     },
                     sort_keys=True,
                 ),
@@ -420,7 +420,7 @@ def test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user
             expect(refreshed is not None and refreshed["status"] == "completed", str(dict(refreshed) if refreshed else {}))
             expect(user_messages and "hermes-<org>-remote-<user>" in user_messages[0], str(user_messages))
             expect(user_messages and "remote config, skills, MCP tools, and files" in user_messages[0], str(user_messages))
-            expect(user_messages and "ssh alex@almanac.example.test" in user_messages[0], str(user_messages))
+            expect(user_messages and "ssh alex@arclink.example.test" in user_messages[0], str(user_messages))
             print("PASS test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user")
         finally:
             os.environ.clear()
@@ -430,14 +430,14 @@ def test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user
 def test_root_maintenance_install_ssh_key_uses_discovered_config_file() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    control = load_module(CONTROL_PY, "almanac_control_remote_ssh_key_config_env_test")
-    provisioner = load_module(PROVISIONER_PY, "almanac_enrollment_provisioner_remote_ssh_key_config_env_test")
+    control = load_module(CONTROL_PY, "arclink_control_remote_ssh_key_config_env_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_remote_ssh_key_config_env_test")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        config_path = root / "config" / "almanac.env"
+        config_path = root / "config" / "arclink.env"
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
-        os.environ["ALMANAC_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
         try:
             cfg = control.Config.from_env()
             seen: dict[str, object] = {}
@@ -445,7 +445,7 @@ def test_root_maintenance_install_ssh_key_uses_discovered_config_file() -> None:
             def fake_run(args, *, cwd, env, text, stdout, stderr, check):
                 seen["args"] = list(args)
                 seen["cwd"] = cwd
-                seen["config_file"] = env.get("ALMANAC_CONFIG_FILE")
+                seen["config_file"] = env.get("ARCLINK_CONFIG_FILE")
                 stdout.write("Installed SSH key\n")
                 return subprocess.CompletedProcess(args=args, returncode=0)
 

@@ -8,9 +8,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-MANAGED_MARKER_MD = "<!-- managed: almanac-default-vault -->"
-MANAGED_MARKER_NOTE = "<!-- managed: almanac-generated-vault-note -->"
-MANAGED_MARKER_VAULT = "# managed: almanac-default-vault"
+MANAGED_MARKER_MD = "<!-- managed: arclink-default-vault -->"
+MANAGED_MARKER_NOTE = "<!-- managed: arclink-generated-vault-note -->"
+MANAGED_MARKER_VAULT = "# managed: arclink-default-vault"
 AGENT_SKILLS_DIRNAME = "Agents_Skills"
 AGENT_PLUGINS_DIRNAME = "Agents_Plugins"
 LEGACY_AGENT_SKILLS_DIRNAME = "Skills"
@@ -74,8 +74,8 @@ tags:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Reconcile Almanac's default shared-vault layout.")
-    parser.add_argument("--repo-dir", required=True, help="Path to the Almanac repo checkout")
+    parser = argparse.ArgumentParser(description="Reconcile ArcLink's default shared-vault layout.")
+    parser.add_argument("--repo-dir", required=True, help="Path to the ArcLink repo checkout")
     parser.add_argument("--vault-dir", required=True, help="Path to the shared vault root")
     parser.add_argument("--repo-url", default="", help="Optional GitHub repo URL override")
     parser.add_argument("--hermes-skills-dir", default="", help="Optional Hermes bundled skills directory")
@@ -242,7 +242,7 @@ def discover_repo_url(repo_dir: Path) -> str:
 
 
 def template_vault_dirs(repo_dir: Path) -> list[Path]:
-    root = repo_dir / "templates" / "almanac-priv" / "vault"
+    root = repo_dir / "templates" / "arclink-priv" / "vault"
     return sorted(
         path
         for path in root.iterdir()
@@ -314,7 +314,7 @@ def make_skill_note(skill_id: str, name: str, description: str, repo_url: str) -
         "",
         f"Skill ID: `{skill_id}`",
         "",
-        f"Description: {description or 'Shipped with Almanac for shared agent workflows.'}",
+        f"Description: {description or 'Shipped with ArcLink for shared agent workflows.'}",
         "",
         "How to use this note:",
         "- Capture local conventions, examples, and rollout status for this skill.",
@@ -386,14 +386,14 @@ def discover_hermes_skills_dir(repo_dir: Path, explicit: str) -> Path | None:
     candidates = []
     if explicit:
         candidates.append(Path(explicit))
-    for env_name in ("ALMANAC_HERMES_BUNDLED_SKILLS_DIR", "HERMES_BUNDLED_SKILLS"):
+    for env_name in ("ARCLINK_HERMES_BUNDLED_SKILLS_DIR", "HERMES_BUNDLED_SKILLS"):
         value = os.environ.get(env_name, "").strip()
         if value:
             candidates.append(Path(value))
     runtime_dir = os.environ.get("RUNTIME_DIR", "").strip()
     if runtime_dir:
         candidates.append(Path(runtime_dir) / "hermes-agent-src" / "skills")
-    candidates.append(repo_dir / "almanac-priv" / "state" / "runtime" / "hermes-agent-src" / "skills")
+    candidates.append(repo_dir / "arclink-priv" / "state" / "runtime" / "hermes-agent-src" / "skills")
 
     for candidate in candidates:
         if candidate.is_dir() and any(candidate.rglob("SKILL.md")):
@@ -431,7 +431,7 @@ def make_project_note(project_name: str, repo_name: str, repo_url: str) -> str:
         MANAGED_MARKER_NOTE,
         f"# {project_name}",
         "",
-        "Project role: shared organizational workspace for the Almanac system and its operational roadmap.",
+        "Project role: shared organizational workspace for the ArcLink system and its operational roadmap.",
         "",
         f"Primary repo: {repo_name}",
     ]
@@ -459,7 +459,7 @@ def make_plugin_note(plugin_id: str, name: str, description: str, repo_url: str)
         "",
         f"Plugin ID: `{plugin_id}`",
         "",
-        f"Description: {description or 'Hermes Agent plugin shipped with Almanac for shared managed-context refresh.'}",
+        f"Description: {description or 'Hermes Agent plugin shipped with ArcLink for shared managed-context refresh.'}",
         "",
         "How to use this note:",
         "- capture rollout status and the agent cohorts that should have this plugin installed",
@@ -502,13 +502,13 @@ def reconcile_dynamic_notes(repo_dir: Path, vault_dir: Path, repo_url: str, herm
     counts = {"created": 0, "updated": 0, "preserved": 0}
     skills_dir = vault_dir / AGENT_SKILLS_DIRNAME
     legacy_skills_dir = vault_dir / LEGACY_AGENT_SKILLS_DIRNAME
-    almanac_skills_dir = skills_dir / "Almanac"
+    arclink_skills_dir = skills_dir / "ArcLink"
     hermes_notes_dir = skills_dir / "Hermes"
     for note_path, title, body in (
         (
-            almanac_skills_dir / "README.md",
-            "Almanac Skills",
-            "Notes for the Almanac-managed skills installed into every Curator and enrolled-agent Hermes home.",
+            arclink_skills_dir / "README.md",
+            "ArcLink Skills",
+            "Notes for the ArcLink-managed skills installed into every Curator and enrolled-agent Hermes home.",
         ),
         (
             hermes_notes_dir / "README.md",
@@ -523,17 +523,17 @@ def reconcile_dynamic_notes(repo_dir: Path, vault_dir: Path, repo_url: str, herm
     for skill_dir in sorted(path for path in (repo_dir / "skills").iterdir() if path.is_dir() and (path / "SKILL.md").is_file()):
         name, description = load_skill_metadata(skill_dir)
         result = sync_text(
-            almanac_skills_dir / f"{skill_dir.name}.md",
+            arclink_skills_dir / f"{skill_dir.name}.md",
             make_skill_note(skill_dir.name, name, description, repo_url),
         )
         if result in counts:
             counts[result] += 1
         remove_managed_note(skills_dir / f"{skill_dir.name}.md")
         remove_managed_note(legacy_skills_dir / f"{skill_dir.name}.md")
-        remove_managed_note(legacy_skills_dir / "Almanac" / f"{skill_dir.name}.md")
+        remove_managed_note(legacy_skills_dir / "ArcLink" / f"{skill_dir.name}.md")
 
     if hermes_skills_dir is not None:
-        hermes_ref = os.environ.get("ALMANAC_HERMES_AGENT_REF", "").strip()
+        hermes_ref = os.environ.get("ARCLINK_HERMES_AGENT_REF", "").strip()
         for skill_file in sorted(hermes_skills_dir.rglob("SKILL.md")):
             skill_dir = skill_file.parent
             if any(part in {".git", ".github", ".hub"} for part in skill_file.parts):
@@ -570,8 +570,8 @@ def reconcile_dynamic_notes(repo_dir: Path, vault_dir: Path, repo_url: str, herm
     if result in counts:
         counts[result] += 1
 
-    project_note = make_project_note("Almanac", repo_name, repo_url)
-    result = sync_text(vault_dir / "Projects" / "almanac.md", project_note)
+    project_note = make_project_note("ArcLink", repo_name, repo_url)
+    result = sync_text(vault_dir / "Projects" / "arclink.md", project_note)
     if result in counts:
         counts[result] += 1
 
@@ -584,7 +584,7 @@ def main() -> int:
     vault_dir = Path(args.vault_dir).resolve()
     repo_url = (
         normalize_repo_url(args.repo_url)
-        or normalize_repo_url(os.environ.get("ALMANAC_UPSTREAM_REPO_URL", ""))
+        or normalize_repo_url(os.environ.get("ARCLINK_UPSTREAM_REPO_URL", ""))
         or discover_repo_url(repo_dir)
     )
     hermes_skills_dir = discover_hermes_skills_dir(repo_dir, args.hermes_skills_dir)

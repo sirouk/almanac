@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from almanac_control import (
+from arclink_control import (
     advance_arclink_entitlement_gates_for_user,
     append_arclink_audit,
     append_arclink_event,

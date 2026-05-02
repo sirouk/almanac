@@ -95,21 +95,21 @@ PY
   fi
 }
 
-check_dir "$ALMANAC_PRIV_DIR" "Docker private state"
+check_dir "$ARCLINK_PRIV_DIR" "Docker private state"
 check_dir "$VAULT_DIR" "Docker vault"
 check_dir "$STATE_DIR" "Docker state"
 check_dir "$NEXTCLOUD_STATE_DIR" "Docker Nextcloud state"
 check_dir "$PDF_INGEST_MARKDOWN_DIR" "Docker PDF ingest markdown"
-check_dir "$ALMANAC_NOTION_INDEX_MARKDOWN_DIR" "Docker Notion index markdown"
+check_dir "$ARCLINK_NOTION_INDEX_MARKDOWN_DIR" "Docker Notion index markdown"
 
-check_http "http://almanac-mcp:8282/health" "Almanac MCP"
+check_http "http://arclink-mcp:8282/health" "ArcLink MCP"
 check_http "http://notion-webhook:8283/health" "Notion webhook"
 check_http_with_host "http://nextcloud/status.php" "localhost" "Nextcloud"
 check_optional_tcp "host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}" "qmd MCP published host port"
 check_tcp "postgres" "5432" "Postgres"
 check_tcp "redis" "6379" "Redis"
 
-if [[ -f "$ALMANAC_MEMORY_SYNTH_STATUS_FILE" ]]; then
+if [[ -f "$ARCLINK_MEMORY_SYNTH_STATUS_FILE" ]]; then
   pass "memory synthesis status file exists"
 else
   warn "memory synthesis status file not written yet"
@@ -127,7 +127,7 @@ check_docker_agent_mcp_auth() {
 import datetime as dt
 from pathlib import Path
 
-from almanac_control import Config, connect_db, parse_utc_iso, validate_token
+from arclink_control import Config, connect_db, parse_utc_iso, validate_token
 
 cfg = Config.from_env()
 now = dt.datetime.now(dt.timezone.utc)
@@ -150,10 +150,10 @@ with connect_db(cfg) as conn:
         agent_id = str(agent["agent_id"] or "")
         unix_user = str(agent["unix_user"] or "")
         hermes_home = Path(str(agent["hermes_home"] or ""))
-        token_file = hermes_home / "secrets" / "almanac-bootstrap-token"
-        managed_context_plugin = hermes_home / "plugins" / "almanac-managed-context" / "plugin.yaml"
+        token_file = hermes_home / "secrets" / "arclink-bootstrap-token"
+        managed_context_plugin = hermes_home / "plugins" / "arclink-managed-context" / "plugin.yaml"
         soul_file = hermes_home / "SOUL.md"
-        vault_reconciler_state = hermes_home / "state" / "almanac-vault-reconciler.json"
+        vault_reconciler_state = hermes_home / "state" / "arclink-vault-reconciler.json"
         if not managed_context_plugin.is_file():
             print(f"FAIL {agent_id}: Docker managed-context plugin is missing at {managed_context_plugin}")
             failures += 1

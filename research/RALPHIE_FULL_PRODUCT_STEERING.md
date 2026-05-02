@@ -5,7 +5,7 @@ Use this as the active steering source after the completed backend foundation.
 ## Product North Star
 
 ArcLink is a Chutes-first, self-serve, single-user private AI infrastructure
-product evolved from Almanac. The product must feel premium, operational,
+product evolved from ArcLink. The product must feel premium, operational,
 transparent about its technology, and easy for a non-operator to use.
 
 Users should be able to enter from:
@@ -25,7 +25,7 @@ health, deployments, and access links are product strengths.
 Already present:
 
 - ArcLink product/config helpers.
-- ArcLink schema and helpers in `python/almanac_control.py`.
+- ArcLink schema and helpers in `python/arclink_control.py`.
 - Chutes catalog/fake key contracts.
 - Stripe entitlement and public onboarding contracts.
 - DNS/Traefik/access planning contracts.
@@ -112,7 +112,7 @@ python3 tests/test_arclink_admin_actions.py
 python3 tests/test_arclink_dashboard.py
 python3 tests/test_arclink_executor.py
 python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
+python3 -m py_compile python/arclink_control.py python/arclink_*.py
 git diff --check
 ```
 

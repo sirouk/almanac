@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up ArcLink vault to GitHub every hour
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=1h
+Unit=arclink-github-backup.service
+
+[Install]
+WantedBy=timers.target

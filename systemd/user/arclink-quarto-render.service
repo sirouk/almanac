@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink Quarto render
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/render-quarto.sh

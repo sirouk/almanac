@@ -3,35 +3,35 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DEPLOY_BIN="$ROOT_DIR/bin/deploy.sh"
-ALMANAC_NAME="${ALMANAC_SMOKE_NAME:-almanac}"
-ALMANAC_USER="${ALMANAC_SMOKE_USER:-almanac}"
-ALMANAC_HOME="${ALMANAC_SMOKE_HOME:-/home/$ALMANAC_USER}"
-ALMANAC_REPO_DIR="$ALMANAC_HOME/almanac"
-ALMANAC_PRIV_DIR="$ALMANAC_REPO_DIR/almanac-priv"
-ALMANAC_PRIV_CONFIG_DIR="$ALMANAC_PRIV_DIR/config"
-CONFIG_TARGET="$ALMANAC_PRIV_CONFIG_DIR/almanac.env"
-STATE_DIR="$ALMANAC_PRIV_DIR/state"
+ARCLINK_NAME="${ARCLINK_SMOKE_NAME:-arclink}"
+ARCLINK_USER="${ARCLINK_SMOKE_USER:-arclink}"
+ARCLINK_HOME="${ARCLINK_SMOKE_HOME:-/home/$ARCLINK_USER}"
+ARCLINK_REPO_DIR="$ARCLINK_HOME/arclink"
+ARCLINK_PRIV_DIR="$ARCLINK_REPO_DIR/arclink-priv"
+ARCLINK_PRIV_CONFIG_DIR="$ARCLINK_PRIV_DIR/config"
+CONFIG_TARGET="$ARCLINK_PRIV_CONFIG_DIR/arclink.env"
+STATE_DIR="$ARCLINK_PRIV_DIR/state"
 RUNTIME_DIR="$STATE_DIR/runtime"
-ALMANAC_DB_PATH="$STATE_DIR/almanac-control.sqlite3"
-ALMANAC_AGENTS_STATE_DIR="$STATE_DIR/agents"
-ALMANAC_CURATOR_DIR="$STATE_DIR/curator"
-ALMANAC_CURATOR_MANIFEST="$ALMANAC_CURATOR_DIR/manifest.json"
-ALMANAC_CURATOR_HERMES_HOME="$ALMANAC_CURATOR_DIR/hermes-home"
-ALMANAC_ARCHIVED_AGENTS_DIR="$STATE_DIR/archived-agents"
-QMD_INDEX_NAME="${ALMANAC_SMOKE_QMD_INDEX_NAME:-almanac}"
-QMD_COLLECTION_NAME="${ALMANAC_SMOKE_QMD_COLLECTION_NAME:-vault}"
-NEXTCLOUD_ADMIN_USER="${ALMANAC_SMOKE_NEXTCLOUD_ADMIN_USER:-admin}"
+ARCLINK_DB_PATH="$STATE_DIR/arclink-control.sqlite3"
+ARCLINK_AGENTS_STATE_DIR="$STATE_DIR/agents"
+ARCLINK_CURATOR_DIR="$STATE_DIR/curator"
+ARCLINK_CURATOR_MANIFEST="$ARCLINK_CURATOR_DIR/manifest.json"
+ARCLINK_CURATOR_HERMES_HOME="$ARCLINK_CURATOR_DIR/hermes-home"
+ARCLINK_ARCHIVED_AGENTS_DIR="$STATE_DIR/archived-agents"
+QMD_INDEX_NAME="${ARCLINK_SMOKE_QMD_INDEX_NAME:-arclink}"
+QMD_COLLECTION_NAME="${ARCLINK_SMOKE_QMD_COLLECTION_NAME:-vault}"
+NEXTCLOUD_ADMIN_USER="${ARCLINK_SMOKE_NEXTCLOUD_ADMIN_USER:-admin}"
 NEXTCLOUD_VAULT_MOUNT_POINT="/Vault"
 PDF_INGEST_ENABLED="${PDF_INGEST_ENABLED:-1}"
 PDF_INGEST_COLLECTION_NAME="vault-pdf-ingest"
-QMD_MCP_PORT="${ALMANAC_SMOKE_QMD_MCP_PORT:-8181}"
-NEXTCLOUD_PORT="${ALMANAC_SMOKE_NEXTCLOUD_PORT:-18080}"
-ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
-ALMANAC_NOTION_WEBHOOK_PORT="${ALMANAC_NOTION_WEBHOOK_PORT:-8283}"
-ENABLE_TAILSCALE_SERVE="${ALMANAC_SMOKE_ENABLE_TAILSCALE_SERVE:-0}"
-TAILSCALE_OPERATOR_USER="${ALMANAC_SMOKE_TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
-AUTOPROV_UNIX_USER="${ALMANAC_SMOKE_AUTOPROV_USER:-autoprovbot}"
-ANSWERS_FILE="$(mktemp /tmp/almanac-ci-install.XXXXXX.env)"
+QMD_MCP_PORT="${ARCLINK_SMOKE_QMD_MCP_PORT:-8181}"
+NEXTCLOUD_PORT="${ARCLINK_SMOKE_NEXTCLOUD_PORT:-18080}"
+ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
+ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
+ENABLE_TAILSCALE_SERVE="${ARCLINK_SMOKE_ENABLE_TAILSCALE_SERVE:-0}"
+TAILSCALE_OPERATOR_USER="${ARCLINK_SMOKE_TAILSCALE_OPERATOR_USER:-${SUDO_USER:-}}"
+AUTOPROV_UNIX_USER="${ARCLINK_SMOKE_AUTOPROV_USER:-autoprovbot}"
+ANSWERS_FILE="$(mktemp /tmp/arclink-ci-install.XXXXXX.env)"
 INSTALLED=0
 LAST_QMD_SEARCH_OUTPUT=""
 LAST_QMD_MCP_OUTPUT=""
@@ -43,37 +43,37 @@ fi
 
 write_answers() {
   cat >"$ANSWERS_FILE" <<EOF
-ALMANAC_NAME=$ALMANAC_NAME
-ALMANAC_USER=$ALMANAC_USER
-ALMANAC_HOME=$ALMANAC_HOME
-ALMANAC_REPO_DIR=$ALMANAC_REPO_DIR
-ALMANAC_PRIV_DIR=$ALMANAC_PRIV_DIR
-ALMANAC_PRIV_CONFIG_DIR=$ALMANAC_PRIV_CONFIG_DIR
-VAULT_DIR=$ALMANAC_PRIV_DIR/vault
+ARCLINK_NAME=$ARCLINK_NAME
+ARCLINK_USER=$ARCLINK_USER
+ARCLINK_HOME=$ARCLINK_HOME
+ARCLINK_REPO_DIR=$ARCLINK_REPO_DIR
+ARCLINK_PRIV_DIR=$ARCLINK_PRIV_DIR
+ARCLINK_PRIV_CONFIG_DIR=$ARCLINK_PRIV_CONFIG_DIR
+VAULT_DIR=$ARCLINK_PRIV_DIR/vault
 STATE_DIR=$STATE_DIR
 NEXTCLOUD_STATE_DIR=$STATE_DIR/nextcloud
 RUNTIME_DIR=$RUNTIME_DIR
-ALMANAC_DB_PATH=$ALMANAC_DB_PATH
-ALMANAC_AGENTS_STATE_DIR=$ALMANAC_AGENTS_STATE_DIR
-ALMANAC_CURATOR_DIR=$ALMANAC_CURATOR_DIR
-ALMANAC_CURATOR_MANIFEST=$ALMANAC_CURATOR_MANIFEST
-ALMANAC_CURATOR_HERMES_HOME=$ALMANAC_CURATOR_HERMES_HOME
-ALMANAC_ARCHIVED_AGENTS_DIR=$ALMANAC_ARCHIVED_AGENTS_DIR
-PUBLISHED_DIR=$ALMANAC_PRIV_DIR/published
+ARCLINK_DB_PATH=$ARCLINK_DB_PATH
+ARCLINK_AGENTS_STATE_DIR=$ARCLINK_AGENTS_STATE_DIR
+ARCLINK_CURATOR_DIR=$ARCLINK_CURATOR_DIR
+ARCLINK_CURATOR_MANIFEST=$ARCLINK_CURATOR_MANIFEST
+ARCLINK_CURATOR_HERMES_HOME=$ARCLINK_CURATOR_HERMES_HOME
+ARCLINK_ARCHIVED_AGENTS_DIR=$ARCLINK_ARCHIVED_AGENTS_DIR
+PUBLISHED_DIR=$ARCLINK_PRIV_DIR/published
 QMD_INDEX_NAME=$QMD_INDEX_NAME
 QMD_COLLECTION_NAME=$QMD_COLLECTION_NAME
 VAULT_QMD_COLLECTION_MASK=**/*.{md,markdown,mdx,txt,text}
 PDF_INGEST_COLLECTION_NAME=$PDF_INGEST_COLLECTION_NAME
 QMD_RUN_EMBED=1
 QMD_MCP_PORT=$QMD_MCP_PORT
-ALMANAC_MCP_HOST=127.0.0.1
-ALMANAC_MCP_PORT=$ALMANAC_MCP_PORT
-ALMANAC_NOTION_WEBHOOK_HOST=127.0.0.1
-ALMANAC_NOTION_WEBHOOK_PORT=$ALMANAC_NOTION_WEBHOOK_PORT
-ALMANAC_BOOTSTRAP_WINDOW_SECONDS=3600
-ALMANAC_BOOTSTRAP_PER_IP_LIMIT=5
-ALMANAC_BOOTSTRAP_GLOBAL_PENDING_LIMIT=20
-ALMANAC_BOOTSTRAP_PENDING_TTL_SECONDS=900
+ARCLINK_MCP_HOST=127.0.0.1
+ARCLINK_MCP_PORT=$ARCLINK_MCP_PORT
+ARCLINK_NOTION_WEBHOOK_HOST=127.0.0.1
+ARCLINK_NOTION_WEBHOOK_PORT=$ARCLINK_NOTION_WEBHOOK_PORT
+ARCLINK_BOOTSTRAP_WINDOW_SECONDS=3600
+ARCLINK_BOOTSTRAP_PER_IP_LIMIT=5
+ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT=20
+ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS=900
 PDF_INGEST_ENABLED=1
 PDF_INGEST_EXTRACTOR=auto
 PDF_VISION_ENDPOINT=
@@ -84,19 +84,19 @@ VAULT_WATCH_DEBOUNCE_SECONDS=1
 VAULT_WATCH_RUN_EMBED=auto
 BACKUP_GIT_BRANCH=main
 BACKUP_GIT_REMOTE=
-BACKUP_GIT_AUTHOR_NAME=Almanac\ Backup
-BACKUP_GIT_AUTHOR_EMAIL=almanac@localhost
+BACKUP_GIT_AUTHOR_NAME=ArcLink\ Backup
+BACKUP_GIT_AUTHOR_EMAIL=arclink@localhost
 NEXTCLOUD_PORT=$NEXTCLOUD_PORT
-NEXTCLOUD_TRUSTED_DOMAIN=almanac-ci.local
+NEXTCLOUD_TRUSTED_DOMAIN=arclink-ci.local
 POSTGRES_DB=nextcloud
 POSTGRES_USER=nextcloud
-POSTGRES_PASSWORD=almanac-ci-postgres
+POSTGRES_PASSWORD=arclink-ci-postgres
 NEXTCLOUD_ADMIN_USER=$NEXTCLOUD_ADMIN_USER
-NEXTCLOUD_ADMIN_PASSWORD=almanac-ci-admin
+NEXTCLOUD_ADMIN_PASSWORD=arclink-ci-admin
 NEXTCLOUD_VAULT_MOUNT_POINT=$NEXTCLOUD_VAULT_MOUNT_POINT
 ENABLE_NEXTCLOUD=1
 ENABLE_TAILSCALE_SERVE=$ENABLE_TAILSCALE_SERVE
-ALMANAC_AGENT_ENABLE_TAILSCALE_SERVE=$ENABLE_TAILSCALE_SERVE
+ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE=$ENABLE_TAILSCALE_SERVE
 TAILSCALE_OPERATOR_USER=$TAILSCALE_OPERATOR_USER
 TAILSCALE_QMD_PATH=/mcp
 ENABLE_PRIVATE_GIT=1
@@ -106,15 +106,15 @@ OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
 OPERATOR_NOTIFY_CHANNEL_ID=
 OPERATOR_GENERAL_CHANNEL_PLATFORM=
 OPERATOR_GENERAL_CHANNEL_ID=
-ALMANAC_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
-ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
-ALMANAC_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
-ALMANAC_CURATOR_MODEL_PRESET=codex
-ALMANAC_CURATOR_CHANNELS=tui-only
-ALMANAC_EXTRA_MCP_URL=https://kb.example.test/mcp
-QUARTO_PROJECT_DIR=$ALMANAC_PRIV_DIR/quarto
-QUARTO_OUTPUT_DIR=$ALMANAC_PRIV_DIR/published
-ALMANAC_INSTALL_PUBLIC_GIT=1
+ARCLINK_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
+ARCLINK_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
+ARCLINK_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
+ARCLINK_CURATOR_MODEL_PRESET=codex
+ARCLINK_CURATOR_CHANNELS=tui-only
+ARCLINK_EXTRA_MCP_URL=https://kb.example.test/mcp
+QUARTO_PROJECT_DIR=$ARCLINK_PRIV_DIR/quarto
+QUARTO_OUTPUT_DIR=$ARCLINK_PRIV_DIR/published
+ARCLINK_INSTALL_PUBLIC_GIT=1
 REMOVE_PUBLIC_REPO=1
 REMOVE_USER_TOOLING=1
 REMOVE_SERVICE_USER=1
@@ -214,7 +214,7 @@ wait_for_http_success() {
   local i=""
   local error_file=""
 
-  error_file="$(mktemp /tmp/almanac-http-check.XXXXXX.log)"
+  error_file="$(mktemp /tmp/arclink-http-check.XXXXXX.log)"
 
   for ((i = 1; i <= attempts; i++)); do
     if [[ -n "$host_header" ]]; then
@@ -316,26 +316,26 @@ with urllib.request.urlopen(
 PY
 }
 
-run_almanac_shell() {
+run_arclink_shell() {
   local user_cmd="$1"
   local wrapped=""
 
-  wrapped="source '$ALMANAC_REPO_DIR/bin/common.sh'; ensure_nvm; ensure_uv; export ALMANAC_CONFIG_FILE='$CONFIG_TARGET'; $user_cmd"
-  su - "$ALMANAC_USER" -c "bash -lc $(printf '%q' "$wrapped")"
+  wrapped="source '$ARCLINK_REPO_DIR/bin/common.sh'; ensure_nvm; ensure_uv; export ARCLINK_CONFIG_FILE='$CONFIG_TARGET'; $user_cmd"
+  su - "$ARCLINK_USER" -c "bash -lc $(printf '%q' "$wrapped")"
 }
 
-run_almanac_rpc_with_payload() {
+run_arclink_rpc_with_payload() {
   local tool="$1"
   local payload="$2"
   local args_file=""
   local status=0
 
-  args_file="$(mktemp /tmp/almanac-rpc-args.XXXXXX.json)"
+  args_file="$(mktemp /tmp/arclink-rpc-args.XXXXXX.json)"
   chmod 600 "$args_file"
   printf '%s\n' "$payload" >"$args_file"
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$args_file"
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool $(printf '%q' "$tool") --json-args-file $(printf '%q' "$args_file")" || status=$?
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$args_file"
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool $(printf '%q' "$tool") --json-args-file $(printf '%q' "$args_file")" || status=$?
   rm -f "$args_file"
   return "$status"
 }
@@ -449,7 +449,7 @@ wait_for_qmd_search_match() {
 
   for ((i = 1; i <= attempts; i++)); do
     LAST_QMD_SEARCH_OUTPUT="$(
-      run_almanac_shell \
+      run_arclink_shell \
         "qmd --index '$QMD_INDEX_NAME' search '$query' --files -c '$collection'" \
         2>&1 || true
     )"
@@ -472,7 +472,7 @@ wait_for_qmd_search_absent() {
 
   for ((i = 1; i <= attempts; i++)); do
     LAST_QMD_SEARCH_OUTPUT="$(
-      run_almanac_shell \
+      run_arclink_shell \
         "qmd --index '$QMD_INDEX_NAME' search '$query' --files -c '$collection'" \
         2>&1 || true
     )"
@@ -493,7 +493,7 @@ wait_for_qmd_pending_embeddings_zero() {
 
   for ((i = 1; i <= attempts; i++)); do
     pending="$(
-      run_almanac_shell \
+      run_arclink_shell \
         "qmd_pending_embeddings_count" \
         2>/dev/null || printf '0\n'
     )"
@@ -535,7 +535,7 @@ assert_agent_access_surfaces() {
   local unix_user="$1"
   local agent_id="$2"
   local hermes_home="$3"
-  local access_file="$hermes_home/state/almanac-web-access.json"
+  local access_file="$hermes_home/state/arclink-web-access.json"
   local username="" password="" dashboard_backend_port="" dashboard_proxy_port="" code_port="" dashboard_url="" code_url="" dashboard_label="" code_label="" code_container_name="" code_server_image=""
   local before_signature="" after_signature="" home_dir="" uid=""
   local podman_bin=""
@@ -582,9 +582,9 @@ PY
   wait_for_port 127.0.0.1 "$dashboard_backend_port" 120 2
   wait_for_port 127.0.0.1 "$dashboard_proxy_port" 180 2
   wait_for_port 127.0.0.1 "$code_port" 300 2
-  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard.service" 120 2
-  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard-proxy.service" 120 2
-  wait_for_user_unit_active "$unix_user" "almanac-user-agent-code.service" 180 2
+  wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard.service" 120 2
+  wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard-proxy.service" 120 2
+  wait_for_user_unit_active "$unix_user" "arclink-user-agent-code.service" 180 2
 
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "401" "" "" 90 2
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "200" "$username:$password" "" 90 2
@@ -603,10 +603,10 @@ print("|".join(str(state.get(key, "")) for key in ("username", "password", "dash
 PY
   )"
 
-  ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
-  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard.service" 120 2
-  wait_for_user_unit_active "$unix_user" "almanac-user-agent-dashboard-proxy.service" 120 2
-  wait_for_user_unit_active "$unix_user" "almanac-user-agent-code.service" 180 2
+  ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/arclink-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
+  wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard.service" 120 2
+  wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard-proxy.service" 120 2
+  wait_for_user_unit_active "$unix_user" "arclink-user-agent-code.service" 180 2
 
   after_signature="$(
     python3 - "$access_file" <<'PY'
@@ -695,9 +695,9 @@ for url, port in expected:
 PY
   fi
 
-  run_login_user_systemctl "$unix_user" is-enabled almanac-user-agent-dashboard.service >/dev/null
-  run_login_user_systemctl "$unix_user" is-enabled almanac-user-agent-dashboard-proxy.service >/dev/null
-  run_login_user_systemctl "$unix_user" is-enabled almanac-user-agent-code.service >/dev/null
+  run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-dashboard.service >/dev/null
+  run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-dashboard-proxy.service >/dev/null
+  run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-code.service >/dev/null
 }
 
 qmd_mcp_query_files() {
@@ -738,7 +738,7 @@ session_id, _ = rpc(
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "almanac-smoke", "version": "1.0"},
+            "clientInfo": {"name": "arclink-smoke", "version": "1.0"},
         },
     }
 )
@@ -753,7 +753,7 @@ _, body = rpc(
             "arguments": {
                 "searches": [{"type": "lex", "query": query}],
                 "collections": [collection],
-                "intent": "Almanac smoke test verification",
+                "intent": "ArcLink smoke test verification",
                 "rerank": False,
                 "limit": 10,
             },
@@ -817,7 +817,7 @@ wait_for_mcp_query_absent() {
 assert_mcp_status_alignment() {
   local expected_docs=""
 
-  expected_docs="$(find "$ALMANAC_PRIV_DIR/vault" -type f \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.mdx' -o -iname '*.txt' -o -iname '*.text' \) | wc -l | tr -d ' ')"
+  expected_docs="$(find "$ARCLINK_PRIV_DIR/vault" -type f \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.mdx' -o -iname '*.txt' -o -iname '*.text' \) | wc -l | tr -d ' ')"
 
   if [[ "$expected_docs" == "0" ]]; then
     return 0
@@ -856,7 +856,7 @@ session_id, _ = rpc(
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "almanac-smoke", "version": "1.0"},
+            "clientInfo": {"name": "arclink-smoke", "version": "1.0"},
         },
     }
 )
@@ -895,11 +895,11 @@ show_nextcloud_diagnostics() {
 
   echo
   echo "Nextcloud diagnostics..."
-  su - "$ALMANAC_USER" -c "podman pod ps" || true
-  su - "$ALMANAC_USER" -c "podman ps --all --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'" || true
+  su - "$ARCLINK_USER" -c "podman pod ps" || true
+  su - "$ARCLINK_USER" -c "podman ps --all --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'" || true
 
-  prefix="${ALMANAC_NAME:-almanac}-nextcloud"
-  containers="$(su - "$ALMANAC_USER" -c "podman ps --all --format '{{.Names}}'" 2>/dev/null | grep -E \"^(compose_|${prefix})\" || true)"
+  prefix="${ARCLINK_NAME:-arclink}-nextcloud"
+  containers="$(su - "$ARCLINK_USER" -c "podman ps --all --format '{{.Names}}'" 2>/dev/null | grep -E \"^(compose_|${prefix})\" || true)"
   if [[ -z "$containers" ]]; then
     echo "No Nextcloud containers found."
     return 0
@@ -909,7 +909,7 @@ show_nextcloud_diagnostics() {
     [[ -n "$name" ]] || continue
     echo
     echo "Logs: $name"
-    su - "$ALMANAC_USER" -c "podman logs --tail 120 '$name'" || true
+    su - "$ARCLINK_USER" -c "podman logs --tail 120 '$name'" || true
   done <<<"$containers"
 }
 
@@ -918,22 +918,22 @@ show_pdf_ingest_diagnostics() {
 
   echo
   echo "PDF ingest diagnostics..."
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
 
-  if [[ -f "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" ]]; then
+  if [[ -f "$ARCLINK_PRIV_DIR/state/pdf-ingest/status.json" ]]; then
     echo "Status:"
-    sed 's/^/  /' "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" || true
+    sed 's/^/  /' "$ARCLINK_PRIV_DIR/state/pdf-ingest/status.json" || true
   fi
 
   echo "Generated markdown tree:"
-  find "$ALMANAC_PRIV_DIR/state/pdf-ingest/markdown" -maxdepth 5 -type f | sed 's/^/  /' || true
+  find "$ARCLINK_PRIV_DIR/state/pdf-ingest/markdown" -maxdepth 5 -type f | sed 's/^/  /' || true
 
   echo "QMD collection:"
-  run_almanac_shell "qmd --index '$QMD_INDEX_NAME' collection show '$PDF_INGEST_COLLECTION_NAME'" || true
+  run_arclink_shell "qmd --index '$QMD_INDEX_NAME' collection show '$PDF_INGEST_COLLECTION_NAME'" || true
 
   if [[ -S "/run/user/$uid/bus" ]]; then
-    su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user --no-pager --full status almanac-vault-watch.service almanac-pdf-ingest.service almanac-pdf-ingest.timer" || true
-    su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' journalctl --user -u almanac-vault-watch.service -u almanac-pdf-ingest.service -n 120 --no-pager" || true
+    su - "$ARCLINK_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user --no-pager --full status arclink-vault-watch.service arclink-pdf-ingest.service arclink-pdf-ingest.timer" || true
+    su - "$ARCLINK_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' journalctl --user -u arclink-vault-watch.service -u arclink-pdf-ingest.service -n 120 --no-pager" || true
   fi
 }
 
@@ -944,35 +944,35 @@ assert_agent_payload() {
   local payload_len=""
   local payload_file_len=""
 
-  payload="$(ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/deploy.sh" agent-payload)"
-  payload_file="$ALMANAC_PRIV_DIR/state/agent-install-payload.txt"
+  payload="$(ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/deploy.sh" agent-payload)"
+  payload_file="$ARCLINK_PRIV_DIR/state/agent-install-payload.txt"
   payload_len="$(printf '%s' "$payload" | wc -c | tr -d ' ')"
 
   for required in \
-    "almanac_task_v1:" \
-    "goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
-    "almanac_mcp_url:" \
-    "hermes mcp add almanac-qmd" \
-    "hermes mcp add almanac-mcp" \
+    "arclink_task_v1:" \
+    "goal: enroll one shared-host user agent with explicit hermes setup, default ArcLink skills, arclink-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
+    "arclink_mcp_url:" \
+    "hermes mcp add arclink-qmd" \
+    "hermes mcp add arclink-mcp" \
     "run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup" \
     "first contact must resolve YAML .vault defaults" \
     "plugin-managed context state" \
     "do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md" \
-    "Almanac skills are active defaults, not passive extras" \
-    "keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there" \
+    "ArcLink skills are active defaults, not passive extras" \
+    "keep the user's dashboard/code URLs plus shared ArcLink rails in memory, but never store the user's credentials there" \
     "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
     "if legacy [managed:*] entries exist in \$HERMES_HOME/memories/MEMORY.md" \
     "recurring success output: exactly 1 short line" \
     "recurring warn/fail output: at most 2 short lines" \
-    "$ALMANAC_REPO_DIR/skills/almanac-qmd-mcp" \
-    "$ALMANAC_REPO_DIR/skills/almanac-vault-reconciler" \
-    "$ALMANAC_REPO_DIR/skills/almanac-first-contact" \
-    "$ALMANAC_REPO_DIR/skills/almanac-vaults" \
-    "$ALMANAC_REPO_DIR/skills/almanac-ssot" \
-    "$ALMANAC_REPO_DIR/skills/almanac-notion-knowledge" \
-    "$ALMANAC_REPO_DIR/skills/almanac-ssot-connect" \
-    "$ALMANAC_REPO_DIR/skills/almanac-notion-mcp" \
-    "$ALMANAC_REPO_DIR/skills/almanac-resources"
+    "$ARCLINK_REPO_DIR/skills/arclink-qmd-mcp" \
+    "$ARCLINK_REPO_DIR/skills/arclink-vault-reconciler" \
+    "$ARCLINK_REPO_DIR/skills/arclink-first-contact" \
+    "$ARCLINK_REPO_DIR/skills/arclink-vaults" \
+    "$ARCLINK_REPO_DIR/skills/arclink-ssot" \
+    "$ARCLINK_REPO_DIR/skills/arclink-notion-knowledge" \
+    "$ARCLINK_REPO_DIR/skills/arclink-ssot-connect" \
+    "$ARCLINK_REPO_DIR/skills/arclink-notion-mcp" \
+    "$ARCLINK_REPO_DIR/skills/arclink-resources"
   do
     if ! grep -Fq "$required" <<<"$payload"; then
       echo "Agent payload is missing expected text: $required" >&2
@@ -994,12 +994,12 @@ assert_agent_payload() {
   payload_file_len="$(wc -c <"$payload_file" | tr -d ' ')"
 
   for required in \
-    "almanac_task_v1:" \
-    "goal: enroll one shared-host user agent with explicit hermes setup, default Almanac skills, almanac-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
+    "arclink_task_v1:" \
+    "goal: enroll one shared-host user agent with explicit hermes setup, default ArcLink skills, arclink-mcp + qmd + external MCP registration, first-contact vault defaults, and exactly one 4h refresh timer" \
     "plugin-managed context state" \
     "first contact must resolve YAML .vault defaults" \
-    "Almanac skills are active defaults, not passive extras" \
-    "keep the user's dashboard/code URLs plus shared Almanac rails in memory, but never store the user's credentials there" \
+    "ArcLink skills are active defaults, not passive extras" \
+    "keep the user's dashboard/code URLs plus shared ArcLink rails in memory, but never store the user's credentials there" \
     "qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval" \
     "if legacy [managed:*] entries exist in \$HERMES_HOME/memories/MEMORY.md" \
     "recurring success output: exactly 1 short line"
@@ -1019,7 +1019,7 @@ assert_agent_payload() {
 }
 
 assert_default_vault_bootstrap_layout() {
-  python3 - "$ALMANAC_REPO_DIR" "$VAULT_DIR" <<'PY'
+  python3 - "$ARCLINK_REPO_DIR" "$VAULT_DIR" <<'PY'
 import sys
 from pathlib import Path
 
@@ -1039,17 +1039,17 @@ for legacy in ("Inbox", "People", "Teams"):
     if (vault_dir / legacy).exists():
         raise SystemExit(f"expected legacy default vault to be absent after bootstrap: {vault_dir / legacy}")
 
-repo_note = vault_dir / "Repos" / "almanac.md"
+repo_note = vault_dir / "Repos" / "arclink.md"
 if not repo_note.is_file():
     raise SystemExit(f"expected repo starter note: {repo_note}")
-project_note = vault_dir / "Projects" / "almanac.md"
+project_note = vault_dir / "Projects" / "arclink.md"
 if not project_note.is_file():
     raise SystemExit(f"expected project starter note: {project_note}")
 
 skills_dir = repo_dir / "skills"
 missing = []
 for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()):
-    note = vault_dir / "Agents_Skills" / "Almanac" / f"{skill_dir.name}.md"
+    note = vault_dir / "Agents_Skills" / "ArcLink" / f"{skill_dir.name}.md"
     if not note.is_file():
         missing.append(str(note.relative_to(vault_dir / "Agents_Skills")))
 if missing:
@@ -1094,11 +1094,11 @@ description: Broken vault file for smoke coverage
 owner: smoke
 default_subscribed: maybe
 EOF
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$docs_dir" "$malformed_dir"
+  chown -R "$ARCLINK_USER:$ARCLINK_USER" "$docs_dir" "$malformed_dir"
 
   scan_json="$(
-    run_almanac_shell \
-      "PYTHONPATH='$ALMANAC_REPO_DIR/python' python3 '$ALMANAC_REPO_DIR/python/almanac_ctl.py' --json vault reload-defs"
+    run_arclink_shell \
+      "PYTHONPATH='$ARCLINK_REPO_DIR/python' python3 '$ARCLINK_REPO_DIR/python/arclink_ctl.py' --json vault reload-defs"
   )"
 
   python3 - "$scan_json" <<'PY'
@@ -1118,7 +1118,7 @@ if not any("default_subscribed must be true or false" in warning for warning in 
 PY
 }
 
-assert_almanac_control_plane_roundtrip() {
+assert_arclink_control_plane_roundtrip() {
   local status_json=""
   local request_json=""
   local request_id=""
@@ -1131,31 +1131,31 @@ assert_almanac_control_plane_roundtrip() {
   local token_list_json=""
   local revoke_output=""
   local refresh_error=""
-  local smoke_home="/tmp/almanac-smoke-agent-home"
+  local smoke_home="/tmp/arclink-smoke-agent-home"
 
   mkdir -p "$smoke_home/secrets"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$smoke_home"
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh' '$ALMANAC_REPO_DIR' '$smoke_home'" >/dev/null
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/install-almanac-plugins.sh' '$ALMANAC_REPO_DIR' '$smoke_home'" >/dev/null
+  chown -R "$ARCLINK_USER:$ARCLINK_USER" "$smoke_home"
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/install-arclink-skills.sh' '$ARCLINK_REPO_DIR' '$smoke_home'" >/dev/null
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/install-arclink-plugins.sh' '$ARCLINK_REPO_DIR' '$smoke_home'" >/dev/null
 
   status_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool status"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool status"
   )"
   python3 - "$status_json" <<'PY'
 import json
 import sys
 
 payload = json.loads(sys.argv[1])
-if payload.get("service") != "almanac-mcp":
-    raise SystemExit("unexpected almanac-mcp status payload")
+if payload.get("service") != "arclink-mcp":
+    raise SystemExit("unexpected arclink-mcp status payload")
 PY
 
   request_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"Smoke Bot\",\"unix_user\":\"smokebot\",\"source_ip\":\"127.0.0.1\"}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"Smoke Bot\",\"unix_user\":\"smokebot\",\"source_ip\":\"127.0.0.1\"}'"
   )"
   request_id="$(python3 - "$request_json" <<'PY'
 import json
@@ -1170,8 +1170,8 @@ PY
   fi
 
   approve_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$request_id' --surface ctl --actor smoke-test"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json request approve '$request_id' --surface ctl --actor smoke-test"
   )"
   python3 - "$approve_json" <<'PY'
 import json
@@ -1183,20 +1183,20 @@ if payload.get("approved_by_surface") != "ctl":
 PY
 
   poll_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'"
   )"
   token="$(printf '%s\n' "$poll_json" | json_fields raw_token)"
   if [[ -z "$token" ]]; then
     echo "Expected bootstrap.status to return a raw token after approval." >&2
     exit 1
   fi
-  printf '%s\n' "$token" >"$smoke_home/secrets/almanac-bootstrap-token"
-  chmod 600 "$smoke_home/secrets/almanac-bootstrap-token"
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_home/secrets/almanac-bootstrap-token"
+  printf '%s\n' "$token" >"$smoke_home/secrets/arclink-bootstrap-token"
+  chmod 600 "$smoke_home/secrets/arclink-bootstrap-token"
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$smoke_home/secrets/arclink-bootstrap-token"
 
   register_json="$(
-    run_almanac_rpc_with_payload \
+    run_arclink_rpc_with_payload \
       "agents.register" \
       "$(rpc_register_payload "$token" "smokebot" "Smoke Bot" "$smoke_home")"
   )"
@@ -1206,7 +1206,7 @@ import sys
 
 payload = json.loads(sys.argv[1])
 allowed = {item["name"] for item in payload.get("allowed_mcps", [])}
-expected = {"almanac-mcp", "almanac-qmd", "external-kb"}
+expected = {"arclink-mcp", "arclink-qmd", "external-kb"}
 missing = sorted(expected - allowed)
 if missing:
     raise SystemExit(f"missing default MCP registrations in register response: {missing}")
@@ -1215,7 +1215,7 @@ PY
 )"
 
   refresh_json="$(
-    run_almanac_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")"
+    run_arclink_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")"
   )"
   python3 - "$refresh_json" <<'PY'
 import json
@@ -1227,8 +1227,8 @@ if "Team Docs" not in payload.get("active_subscriptions", []):
 PY
 
   token_list_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token list"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json token list"
   )"
   python3 - "$token_list_json" "$agent_id" <<'PY'
 import json
@@ -1244,8 +1244,8 @@ if any("raw_token" in row for row in matches):
 PY
 
   revoke_output="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token revoke '$agent_id' --surface ctl --actor smoke-test --reason 'smoke revoke'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json token revoke '$agent_id' --surface ctl --actor smoke-test --reason 'smoke revoke'"
   )"
   python3 - "$revoke_output" <<'PY'
 import json
@@ -1257,20 +1257,20 @@ if int(payload.get("revoked", 0)) < 1:
 PY
 
   refresh_error="$(mktemp)"
-  if run_almanac_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")" \
-    > /tmp/almanac-refresh-after-revoke.out 2>"$refresh_error"; then
+  if run_arclink_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")" \
+    > /tmp/arclink-refresh-after-revoke.out 2>"$refresh_error"; then
     echo "Expected vaults.refresh to reject revoked token." >&2
-    cat /tmp/almanac-refresh-after-revoke.out >&2
-    rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
+    cat /tmp/arclink-refresh-after-revoke.out >&2
+    rm -f "$refresh_error" /tmp/arclink-refresh-after-revoke.out
     exit 1
   fi
   if ! grep -Eq "revoked|missing" "$refresh_error"; then
     echo "Expected revoked-token refresh failure to mention revocation." >&2
     cat "$refresh_error" >&2
-    rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
+    rm -f "$refresh_error" /tmp/arclink-refresh-after-revoke.out
     exit 1
   fi
-  rm -f "$refresh_error" /tmp/almanac-refresh-after-revoke.out
+  rm -f "$refresh_error" /tmp/arclink-refresh-after-revoke.out
 }
 
 assert_async_bootstrap_handshake() {
@@ -1278,8 +1278,8 @@ assert_async_bootstrap_handshake() {
   local activation_trigger_path=""
 
   handshake_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Async Bot\",\"unix_user\":\"asyncbot\",\"source_ip\":\"127.0.0.1\"}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Async Bot\",\"unix_user\":\"asyncbot\",\"source_ip\":\"127.0.0.1\"}'"
   )"
   read -r request_id token token_id <<EOF
 $(printf '%s\n' "$handshake_json" | json_fields request_id raw_token token_id)
@@ -1291,8 +1291,8 @@ EOF
   fi
 
   duplicate_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Async Bot\",\"unix_user\":\"asyncbot\",\"source_ip\":\"127.0.0.1\"}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Async Bot\",\"unix_user\":\"asyncbot\",\"source_ip\":\"127.0.0.1\"}'"
   )"
   printf '%s\n' "$duplicate_json" | REQUEST_ID="$request_id" TOKEN_ID="$token_id" python3 -c '
 import json
@@ -1312,7 +1312,7 @@ $(printf '%s\n' "$duplicate_json" | json_fields raw_token token_id)
 EOF
 
   if pending_err="$(
-    run_almanac_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")" \
+    run_arclink_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")" \
       2>&1
   )"; then
     echo "Expected pending handshake token to remain unusable before approval." >&2
@@ -1324,12 +1324,12 @@ EOF
     exit 1
   fi
 
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$request_id' --surface ctl --actor async-smoke" >/dev/null
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json request approve '$request_id' --surface ctl --actor async-smoke" >/dev/null
 
   status_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'"
   )"
   python3 - "$status_json" "$token_id" <<'PY'
 import json
@@ -1341,7 +1341,7 @@ if payload.get("token_id") != sys.argv[2]:
 if "raw_token" in payload:
     raise SystemExit("approved handshake status should not mint a second raw token")
 PY
-  activation_trigger_path="$ALMANAC_PRIV_DIR/state/activation-triggers/agent-asyncbot.json"
+  activation_trigger_path="$ARCLINK_PRIV_DIR/state/activation-triggers/agent-asyncbot.json"
   python3 - "$activation_trigger_path" <<'PY'
 import json
 import sys
@@ -1356,7 +1356,7 @@ if payload.get("status") != "approved":
 PY
 
   refresh_json="$(
-    run_almanac_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")"
+    run_arclink_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")"
   )"
   python3 - "$refresh_json" <<'PY'
 import json
@@ -1373,8 +1373,8 @@ assert_remote_auto_provision_enrollment() {
   local home_dir="" hermes_home="" agent_id=""
 
   handshake_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Remote Auto\",\"unix_user\":\"$unix_user\",\"source_ip\":\"127.0.0.1\",\"auto_provision\":true}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Remote Auto\",\"unix_user\":\"$unix_user\",\"source_ip\":\"127.0.0.1\",\"auto_provision\":true}'"
   )"
 
   request_id="$(
@@ -1392,8 +1392,8 @@ PY
   )"
 
   duplicate_json="$(
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Remote Auto\",\"unix_user\":\"$unix_user\",\"source_ip\":\"127.0.0.1\",\"auto_provision\":true}'"
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.handshake' --json-args '{\"requester_identity\":\"Remote Auto\",\"unix_user\":\"$unix_user\",\"source_ip\":\"127.0.0.1\",\"auto_provision\":true}'"
   )"
   python3 - "$duplicate_json" "$request_id" <<'PY'
 import json
@@ -1408,10 +1408,10 @@ if payload.get("raw_token"):
     raise SystemExit("duplicate auto-provision handshake should not mint a raw token")
 PY
 
-  ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-ctl" --json request approve "$request_id" --surface ctl --actor auto-provision-smoke >/dev/null
-  ALMANAC_CONFIG_FILE="$CONFIG_TARGET" "$ALMANAC_REPO_DIR/bin/almanac-enrollment-provision.sh" >/dev/null
+  ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/arclink-ctl" --json request approve "$request_id" --surface ctl --actor auto-provision-smoke >/dev/null
+  ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/arclink-enrollment-provision.sh" >/dev/null
 
-  python3 - "$ALMANAC_DB_PATH" "$request_id" "$unix_user" "$ALMANAC_PRIV_DIR" <<'PY'
+  python3 - "$ARCLINK_DB_PATH" "$request_id" "$unix_user" "$ARCLINK_PRIV_DIR" <<'PY'
 import json
 import sqlite3
 import sys
@@ -1448,7 +1448,7 @@ for field in ("manifest_path", "hermes_home"):
     if not path.exists():
         raise SystemExit(f"expected {field} to exist for {agent_id}: {path}")
 
-state_path = Path(agent["hermes_home"]) / "state" / "almanac-enrollment.json"
+state_path = Path(agent["hermes_home"]) / "state" / "arclink-enrollment.json"
 if not state_path.is_file():
     raise SystemExit(f"missing enrollment state file for {agent_id}: {state_path}")
 state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -1458,7 +1458,7 @@ PY
 
   agent_id="agent-$unix_user"
   home_dir="$(getent passwd "$unix_user" | cut -d: -f6)"
-  hermes_home="$home_dir/.local/share/almanac-agent/hermes-home"
+  hermes_home="$home_dir/.local/share/arclink-agent/hermes-home"
   assert_agent_access_surfaces "$unix_user" "$agent_id" "$hermes_home"
 }
 
@@ -1467,20 +1467,20 @@ assert_upgrade_check_notification_dedup() {
   #   1. When deployed_commit is stale, the check flags update_available=True
   #      and queues exactly ONE operator notification.
   #   2. A second identical check does not re-queue another notification for
-  #      the same upstream SHA (dedup via almanac_upgrade_last_notified_sha).
+  #      the same upstream SHA (dedup via arclink_upgrade_last_notified_sha).
   # We do not care what the live upstream SHA is; we only check the state
   # machine behaves correctly when deployed != upstream.
   local notif_before="" notif_after_first="" notif_after_second="" first_result="" second_result=""
 
-  run_almanac_shell \
-    "PYTHONPATH='$ALMANAC_REPO_DIR/python' python3 - <<'PY'
+  run_arclink_shell \
+    "PYTHONPATH='$ARCLINK_REPO_DIR/python' python3 - <<'PY'
 import json
 from pathlib import Path
 import sqlite3
 
-import almanac_control
+import arclink_control
 
-cfg = almanac_control.Config.from_env()
+cfg = arclink_control.Config.from_env()
 state_path = cfg.release_state_file
 state_path.parent.mkdir(parents=True, exist_ok=True)
 # Force the deployed commit to a sentinel value that cannot match any live
@@ -1497,23 +1497,23 @@ state_path.write_text(json.dumps({
 # Also clear any previous dedup state so this run is deterministic.
 conn = sqlite3.connect(cfg.db_path)
 conn.row_factory = sqlite3.Row
-conn.execute('DELETE FROM settings WHERE key IN (\"almanac_upgrade_last_seen_sha\", \"almanac_upgrade_last_notified_sha\")')
+conn.execute('DELETE FROM settings WHERE key IN (\"arclink_upgrade_last_seen_sha\", \"arclink_upgrade_last_notified_sha\")')
 conn.commit()
 conn.close()
 PY"
 
-  notif_before="$(run_almanac_shell \
-    "sqlite3 '$ALMANAC_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'Almanac update available%'\"")"
+  notif_before="$(run_arclink_shell \
+    "sqlite3 '$ARCLINK_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'ArcLink update available%'\"")"
 
-  first_result="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json upgrade check --notify --actor upgrade-smoke")"
-  notif_after_first="$(run_almanac_shell \
-    "sqlite3 '$ALMANAC_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'Almanac update available%'\"")"
+  first_result="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json upgrade check --notify --actor upgrade-smoke")"
+  notif_after_first="$(run_arclink_shell \
+    "sqlite3 '$ARCLINK_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'ArcLink update available%'\"")"
 
-  second_result="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json upgrade check --notify --actor upgrade-smoke")"
-  notif_after_second="$(run_almanac_shell \
-    "sqlite3 '$ALMANAC_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'Almanac update available%'\"")"
+  second_result="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json upgrade check --notify --actor upgrade-smoke")"
+  notif_after_second="$(run_arclink_shell \
+    "sqlite3 '$ARCLINK_DB_PATH' \"SELECT COUNT(*) FROM notification_outbox WHERE message LIKE 'ArcLink update available%'\"")"
 
   python3 - "$first_result" "$second_result" "$notif_before" "$notif_after_first" "$notif_after_second" <<'PY'
 import json
@@ -1566,16 +1566,16 @@ PY
 }
 
 assert_bootstrap_rate_limit() {
-  # The configured per-IP cap is ALMANAC_BOOTSTRAP_PER_IP_LIMIT; after we exceed it
-  # the server must respond with status 429 (RuntimeError mapping in almanac-mcp) AND
+  # The configured per-IP cap is ARCLINK_BOOTSTRAP_PER_IP_LIMIT; after we exceed it
+  # the server must respond with status 429 (RuntimeError mapping in arclink-mcp) AND
   # expose Retry-After + retry_after_seconds in the error body.
-  local cap="${ALMANAC_BOOTSTRAP_PER_IP_LIMIT:-5}"
+  local cap="${ARCLINK_BOOTSTRAP_PER_IP_LIMIT:-5}"
   local source_ip="10.99.$((RANDOM % 250 + 1)).$((RANDOM % 250 + 1))"
   local i=""
   # Fill the bucket from a synthetic source IP (avoids polluting real one).
   for ((i = 0; i < cap; i++)); do
-    run_almanac_shell \
-      "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"rate-$i\",\"unix_user\":\"rate-$i\",\"source_ip\":\"100.64.55.1\"}'" \
+    run_arclink_shell \
+      "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"rate-$i\",\"unix_user\":\"rate-$i\",\"source_ip\":\"100.64.55.1\"}'" \
       >/dev/null
   done
 
@@ -1586,7 +1586,7 @@ assert_bootstrap_rate_limit() {
   raw_resp="$(curl --max-time 5 -sS -o "$err_file" -D "$err_file.headers" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json' \
-    -X POST "http://127.0.0.1:$ALMANAC_MCP_PORT/mcp" \
+    -X POST "http://127.0.0.1:$ARCLINK_MCP_PORT/mcp" \
     --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"rl-smoke","version":"1"}}}' || true)"
   local session_id=""
   session_id="$(awk 'tolower($0) ~ /^mcp-session-id:/ {gsub(/\r/, ""); print $2; exit}' "$err_file.headers" 2>/dev/null || true)"
@@ -1600,14 +1600,14 @@ assert_bootstrap_rate_limit() {
   curl --max-time 5 -sS -o /dev/null \
     -H 'Content-Type: application/json' \
     -H "mcp-session-id: $session_id" \
-    -X POST "http://127.0.0.1:$ALMANAC_MCP_PORT/mcp" \
+    -X POST "http://127.0.0.1:$ARCLINK_MCP_PORT/mcp" \
     --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' >/dev/null
 
   local status_line=""
   status_line="$(curl --max-time 5 -sS -o "$err_file" -w '%{http_code}' -D "$err_file.headers" \
     -H 'Content-Type: application/json' \
     -H "mcp-session-id: $session_id" \
-    -X POST "http://127.0.0.1:$ALMANAC_MCP_PORT/mcp" \
+    -X POST "http://127.0.0.1:$ARCLINK_MCP_PORT/mcp" \
     --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bootstrap.request","arguments":{"requester_identity":"over-limit","unix_user":"over-limit","source_ip":"100.64.55.1"}}}')"
 
   if [[ "$status_line" != "429" ]]; then
@@ -1640,8 +1640,8 @@ assert_admin_endpoint_auth() {
   # bootstrap.approve must reject calls without an operator token.
   local err_file=""
   err_file="$(mktemp)"
-  if run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.approve' --json-args '{\"request_id\":\"req_doesnotexist\"}'" \
+  if run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.approve' --json-args '{\"request_id\":\"req_doesnotexist\"}'" \
     >/dev/null 2>"$err_file"; then
     echo "Expected bootstrap.approve without operator_token to fail." >&2
     rm -f "$err_file"
@@ -1658,13 +1658,13 @@ assert_admin_endpoint_auth() {
   # bootstrap.status must reject calls from a different source_ip than the one that
   # created the request.
   local request_json="" request_id=""
-  request_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"auth-bot\",\"unix_user\":\"auth-bot\",\"source_ip\":\"100.64.200.7\"}'")"
+  request_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"auth-bot\",\"unix_user\":\"auth-bot\",\"source_ip\":\"100.64.200.7\"}'")"
   request_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$request_json")"
 
   err_file="$(mktemp)"
-  if run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\",\"source_ip\":\"100.64.200.99\"}'" \
+  if run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\",\"source_ip\":\"100.64.200.99\"}'" \
     >/dev/null 2>"$err_file"; then
     echo "Expected bootstrap.status to reject mismatched source_ip." >&2
     rm -f "$err_file"
@@ -1683,25 +1683,25 @@ assert_token_reinstate() {
   # create a throwaway agent via CLI approval path, revoke, reinstate, then
   # verify the token works again for vaults.refresh.
   local request_json="" request_id="" token="" reinstate_json=""
-  request_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"reins-bot\",\"unix_user\":\"reinsbot\",\"source_ip\":\"127.0.0.1\"}'")"
+  request_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"reins-bot\",\"unix_user\":\"reinsbot\",\"source_ip\":\"127.0.0.1\"}'")"
   request_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$request_json")"
 
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$request_id' --surface ctl --actor smoke-reinstate" >/dev/null
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json request approve '$request_id' --surface ctl --actor smoke-reinstate" >/dev/null
 
   local status_json=""
-  status_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'")"
+  status_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$request_id\"}'")"
   token="$(printf '%s\n' "$status_json" | json_fields raw_token)"
   local token_id=""
   token_id="$(printf '%s\n' "$status_json" | json_fields token_id)"
 
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token revoke '$token_id' --surface ctl --actor smoke-reinstate" >/dev/null
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json token revoke '$token_id' --surface ctl --actor smoke-reinstate" >/dev/null
 
-  reinstate_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json token reinstate '$token_id' --surface ctl --actor smoke-reinstate")"
+  reinstate_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json token reinstate '$token_id' --surface ctl --actor smoke-reinstate")"
   python3 - "$reinstate_json" "$token_id" <<'PY'
 import json, sys
 payload = json.loads(sys.argv[1])
@@ -1715,29 +1715,29 @@ PY
 assert_ssot_rails() {
   # Use the already-enrolled smoke agent's token (still revoked above — create
   # a fresh one via the CLI path so we have an active token).
-  local req_json="" req_id="" tok_json="" token="" ssot_home="/tmp/almanac-smoke-ssot-home"
+  local req_json="" req_id="" tok_json="" token="" ssot_home="/tmp/arclink-smoke-ssot-home"
   mkdir -p "$ssot_home/secrets"
-  chown -R "$ALMANAC_USER:$ALMANAC_USER" "$ssot_home"
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/install-almanac-skills.sh' '$ALMANAC_REPO_DIR' '$ssot_home'" >/dev/null
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/install-almanac-plugins.sh' '$ALMANAC_REPO_DIR' '$ssot_home'" >/dev/null
-  req_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"ssot-bot\",\"unix_user\":\"ssotbot\",\"source_ip\":\"127.0.0.1\"}'")"
+  chown -R "$ARCLINK_USER:$ARCLINK_USER" "$ssot_home"
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/install-arclink-skills.sh' '$ARCLINK_REPO_DIR' '$ssot_home'" >/dev/null
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/install-arclink-plugins.sh' '$ARCLINK_REPO_DIR' '$ssot_home'" >/dev/null
+  req_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.request' --json-args '{\"requester_identity\":\"ssot-bot\",\"unix_user\":\"ssotbot\",\"source_ip\":\"127.0.0.1\"}'")"
   req_id="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['request_id'])" "$req_json")"
-  run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json request approve '$req_id' --surface ctl --actor smoke-ssot" >/dev/null
-  tok_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-rpc' --url 'http://127.0.0.1:$ALMANAC_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$req_id\"}'")"
+  run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json request approve '$req_id' --surface ctl --actor smoke-ssot" >/dev/null
+  tok_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-rpc' --url 'http://127.0.0.1:$ARCLINK_MCP_PORT/mcp' --tool 'bootstrap.status' --json-args '{\"request_id\":\"$req_id\"}'")"
   token="$(printf '%s\n' "$tok_json" | json_fields raw_token)"
-  run_almanac_rpc_with_payload \
+  run_arclink_rpc_with_payload \
     "agents.register" \
     "$(rpc_register_payload "$token" "ssotbot" "SSOT Bot" "$ssot_home")" >/dev/null
-  run_almanac_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")" >/dev/null
+  run_arclink_rpc_with_payload "vaults.refresh" "$(rpc_token_payload "$token")" >/dev/null
 
   local err_file=""
   err_file="$(mktemp)"
-  if run_almanac_rpc_with_payload "ssot.write" "$(rpc_ssot_delete_payload "$token")" \
+  if run_arclink_rpc_with_payload "ssot.write" "$(rpc_ssot_delete_payload "$token")" \
     >/dev/null 2>"$err_file"; then
     echo "Expected ssot.write delete to be refused." >&2
     rm -f "$err_file"
@@ -1751,7 +1751,7 @@ assert_ssot_rails() {
   fi
   rm -f "$err_file"
 
-  if [[ -z "${ALMANAC_SSOT_NOTION_TOKEN:-}" || -z "${ALMANAC_SSOT_NOTION_SPACE_ID:-}" ]]; then
+  if [[ -z "${ARCLINK_SSOT_NOTION_TOKEN:-}" || -z "${ARCLINK_SSOT_NOTION_SPACE_ID:-}" ]]; then
     echo "Skipping live ssot.write mutation smoke: shared Notion SSOT is not configured."
     return 0
   fi
@@ -1760,19 +1760,19 @@ assert_ssot_rails() {
 }
 
 assert_notion_webhook_flow() {
-  local webhook_url="http://127.0.0.1:$ALMANAC_NOTION_WEBHOOK_PORT/notion/webhook"
+  local webhook_url="http://127.0.0.1:$ARCLINK_NOTION_WEBHOOK_PORT/notion/webhook"
   local verify_token="smoke-verify-$(date +%s)"
 
   # 1) POST a verification_token (no signature) -> server stores it and returns 202.
   local body="" signature="" resp=""
   resp=""
-  if ! resp="$(run_almanac_shell \
-    "curl --max-time 5 -sS -o /tmp/almanac-notion-verify.out -w '%{http_code}\n' -H 'Content-Type: application/json' -X POST '$webhook_url' --data '{\"verification_token\":\"$verify_token\"}'")"; then
+  if ! resp="$(run_arclink_shell \
+    "curl --max-time 5 -sS -o /tmp/arclink-notion-verify.out -w '%{http_code}\n' -H 'Content-Type: application/json' -X POST '$webhook_url' --data '{\"verification_token\":\"$verify_token\"}'")"; then
     :
   fi
   if [[ "$resp" != "202" && "$resp" != "200" ]]; then
     echo "verification_token POST should be accepted (got $resp)" >&2
-    cat /tmp/almanac-notion-verify.out >&2 || true
+    cat /tmp/arclink-notion-verify.out >&2 || true
     exit 1
   fi
 
@@ -1780,33 +1780,33 @@ assert_notion_webhook_flow() {
   body='{"id":"evt-smoke-001","type":"page.created","created_by":{"name":"smokebot"},"properties":{}}'
   signature="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$verify_token" -hex | awk '{print $2}')"
   resp=""
-  if ! resp="$(run_almanac_shell \
-    "curl --max-time 5 -sS -o /tmp/almanac-notion-signed.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: $signature' -X POST '$webhook_url' --data '$body'")"; then
+  if ! resp="$(run_arclink_shell \
+    "curl --max-time 5 -sS -o /tmp/arclink-notion-signed.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: $signature' -X POST '$webhook_url' --data '$body'")"; then
     :
   fi
   if [[ "$resp" != "202" ]]; then
     echo "Expected signed webhook POST to return 202, got $resp" >&2
-    cat /tmp/almanac-notion-signed.out >&2
+    cat /tmp/arclink-notion-signed.out >&2
     exit 1
   fi
 
   # 3) POST with a BAD signature; expect 403.
   resp=""
-  if ! resp="$(run_almanac_shell \
-    "curl --max-time 5 -sS -o /tmp/almanac-notion-bad.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: sha256=00deadbeef' -X POST '$webhook_url' --data '$body'")"; then
+  if ! resp="$(run_arclink_shell \
+    "curl --max-time 5 -sS -o /tmp/arclink-notion-bad.out -w '%{http_code}\n' -H 'Content-Type: application/json' -H 'X-Notion-Signature: sha256=00deadbeef' -X POST '$webhook_url' --data '$body'")"; then
     :
   fi
   if [[ "$resp" != "403" ]]; then
     echo "Expected bad signature to return 403, got $resp" >&2
-    cat /tmp/almanac-notion-bad.out >&2
+    cat /tmp/arclink-notion-bad.out >&2
     exit 1
   fi
 
   # 4) Run batcher and confirm the stored event is now processed. Owner 'smokebot'
-  # should resolve to the smokebot agent from assert_almanac_control_plane_roundtrip.
+  # should resolve to the smokebot agent from assert_arclink_control_plane_roundtrip.
   local batcher_json=""
-  batcher_json="$(run_almanac_shell \
-    "'$ALMANAC_REPO_DIR/bin/almanac-ctl' --json notion process-pending")"
+  batcher_json="$(run_arclink_shell \
+    "'$ARCLINK_REPO_DIR/bin/arclink-ctl' --json notion process-pending")"
   python3 - "$batcher_json" <<'PY'
 import json, sys
 payload = json.loads(sys.argv[1])
@@ -1822,10 +1822,10 @@ PY
 }
 
 assert_notification_delivery_backlog() {
-  run_almanac_shell "PYTHONPATH='$ALMANAC_REPO_DIR/python' python3 - <<'PY'
+  run_arclink_shell "PYTHONPATH='$ARCLINK_REPO_DIR/python' python3 - <<'PY'
 import datetime as dt
 
-from almanac_control import Config, connect_db, queue_notification
+from arclink_control import Config, connect_db, queue_notification
 
 cfg = Config.from_env()
 with connect_db(cfg) as conn:
@@ -1862,9 +1862,9 @@ with connect_db(cfg) as conn:
 PY"
 
   local delivery_json=""
-  delivery_json="$(run_almanac_shell "'$ALMANAC_REPO_DIR/bin/almanac-notification-delivery.sh' --limit 10")"
+  delivery_json="$(run_arclink_shell "'$ARCLINK_REPO_DIR/bin/arclink-notification-delivery.sh' --limit 10")"
 
-  python3 - "$delivery_json" "$ALMANAC_DB_PATH" <<'PY'
+  python3 - "$delivery_json" "$ARCLINK_DB_PATH" <<'PY'
 import json
 import sqlite3
 import sys
@@ -1915,16 +1915,16 @@ PY
 assert_nextcloud_admin_home_empty() {
   local app_container=""
 
-  app_container="${ALMANAC_NAME:-almanac}-nextcloud-app"
-  if ! su - "$ALMANAC_USER" -c "podman container inspect '$app_container' >/dev/null 2>&1"; then
+  app_container="${ARCLINK_NAME:-arclink}-nextcloud-app"
+  if ! su - "$ARCLINK_USER" -c "podman container inspect '$app_container' >/dev/null 2>&1"; then
     echo "Expected Nextcloud app container '$app_container' to exist." >&2
     show_nextcloud_diagnostics
     return 1
   fi
 
-  if ! su - "$ALMANAC_USER" -c "podman exec '$app_container' sh -lc 'test -d /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files && [ -z \"\$(find /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files -mindepth 1 -maxdepth 1 -print -quit)\" ]'"; then
+  if ! su - "$ARCLINK_USER" -c "podman exec '$app_container' sh -lc 'test -d /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files && [ -z \"\$(find /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files -mindepth 1 -maxdepth 1 -print -quit)\" ]'"; then
     echo "Expected initial Nextcloud admin home to be empty." >&2
-    su - "$ALMANAC_USER" -c "podman exec '$app_container' sh -lc 'ls -la /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files || true'" || true
+    su - "$ARCLINK_USER" -c "podman exec '$app_container' sh -lc 'ls -la /var/www/html/data/${NEXTCLOUD_ADMIN_USER:-admin}/files || true'" || true
     show_nextcloud_diagnostics
     return 1
   fi
@@ -1933,14 +1933,14 @@ assert_nextcloud_admin_home_empty() {
 assert_nextcloud_vault_mount_configured() {
   local app_container="" mounts_json=""
 
-  app_container="${ALMANAC_NAME:-almanac}-nextcloud-app"
-  if ! su - "$ALMANAC_USER" -c "podman container inspect '$app_container' >/dev/null 2>&1"; then
+  app_container="${ARCLINK_NAME:-arclink}-nextcloud-app"
+  if ! su - "$ARCLINK_USER" -c "podman container inspect '$app_container' >/dev/null 2>&1"; then
     echo "Expected Nextcloud app container '$app_container' to exist." >&2
     show_nextcloud_diagnostics
     return 1
   fi
 
-  if ! mounts_json="$(su - "$ALMANAC_USER" -c "podman exec -u 33:33 '$app_container' php /var/www/html/occ files_external:list --output=json")"; then
+  if ! mounts_json="$(su - "$ARCLINK_USER" -c "podman exec -u 33:33 '$app_container' php /var/www/html/occ files_external:list --output=json")"; then
     echo "Could not inspect Nextcloud external storage mounts." >&2
     show_nextcloud_diagnostics
     return 1
@@ -1971,7 +1971,7 @@ PY
     return 1
   fi
 
-  if ! su - "$ALMANAC_USER" -c "podman exec -u 33:33 '$app_container' sh -lc 'test -w /srv/vault'"; then
+  if ! su - "$ARCLINK_USER" -c "podman exec -u 33:33 '$app_container' sh -lc 'test -w /srv/vault'"; then
     echo "Expected Nextcloud www-data to have write access to /srv/vault." >&2
     show_nextcloud_diagnostics
     return 1
@@ -2019,13 +2019,13 @@ PY
 vault_watch_ready() {
   local uid=""
 
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
   [[ -S "/run/user/$uid/bus" ]] || return 1
 
-  su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet almanac-vault-watch.service" &&
+  su - "$ARCLINK_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet arclink-vault-watch.service" &&
     (
       [[ "${PDF_INGEST_ENABLED:-1}" != "1" ]] ||
-      su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet almanac-pdf-ingest.timer"
+      su - "$ARCLINK_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet arclink-pdf-ingest.timer"
     )
 }
 
@@ -2034,7 +2034,7 @@ assert_markdown_watch_pipeline() {
   local smoke_note=""
   local query=""
 
-  smoke_note="$ALMANAC_PRIV_DIR/vault/Inbox/example-lattice-note.md"
+  smoke_note="$ARCLINK_PRIV_DIR/vault/Inbox/example-lattice-note.md"
   query="Example Lattice filesystem watcher note"
 
   if vault_watch_ready; then
@@ -2047,11 +2047,11 @@ assert_markdown_watch_pipeline() {
 
 $query
 EOF
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_note"
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$smoke_note"
 
   if (( ! watcher_mode )); then
-    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
-    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' embed"
+    run_arclink_shell "'$ARCLINK_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+    run_arclink_shell "qmd --index '$QMD_INDEX_NAME' embed"
   fi
 
   if ! wait_for_qmd_search_match "$query" "example-lattice-note.md" "$QMD_COLLECTION_NAME" 120 1; then
@@ -2070,7 +2070,7 @@ EOF
 
   if ! wait_for_qmd_pending_embeddings_zero 120 1; then
     echo "Expected watcher-driven qmd embedding backlog to clear after direct markdown changes." >&2
-    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
+    run_arclink_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
     show_pdf_ingest_diagnostics
     return 1
   fi
@@ -2078,7 +2078,7 @@ EOF
   rm -f "$smoke_note"
 
   if (( ! watcher_mode )); then
-    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+    run_arclink_shell "'$ARCLINK_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
   fi
 
   if ! wait_for_qmd_search_absent "$query" "example-lattice-note.md" "$QMD_COLLECTION_NAME" 120 1; then
@@ -2101,7 +2101,7 @@ assert_text_watch_pipeline() {
   local smoke_note=""
   local query=""
 
-  smoke_note="$ALMANAC_PRIV_DIR/vault/Inbox/example-lattice-note.txt"
+  smoke_note="$ARCLINK_PRIV_DIR/vault/Inbox/example-lattice-note.txt"
   query="Example Lattice filesystem watcher text note"
 
   if vault_watch_ready; then
@@ -2114,11 +2114,11 @@ Example Lattice text watch test
 
 $query
 EOF
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_note"
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$smoke_note"
 
   if (( ! watcher_mode )); then
-    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
-    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' embed"
+    run_arclink_shell "'$ARCLINK_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+    run_arclink_shell "qmd --index '$QMD_INDEX_NAME' embed"
   fi
 
   if ! wait_for_qmd_search_match "$query" "example-lattice-note.txt" "$QMD_COLLECTION_NAME" 120 1; then
@@ -2137,7 +2137,7 @@ EOF
 
   if ! wait_for_qmd_pending_embeddings_zero 120 1; then
     echo "Expected watcher-driven qmd embedding backlog to clear after direct text changes." >&2
-    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
+    run_arclink_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
     show_pdf_ingest_diagnostics
     return 1
   fi
@@ -2145,7 +2145,7 @@ EOF
   rm -f "$smoke_note"
 
   if (( ! watcher_mode )); then
-    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
+    run_arclink_shell "'$ARCLINK_REPO_DIR/bin/qmd-refresh.sh' --skip-embed"
   fi
 
   if ! wait_for_qmd_search_absent "$query" "example-lattice-note.txt" "$QMD_COLLECTION_NAME" 120 1; then
@@ -2170,8 +2170,8 @@ pdf_ingest_units_ready() {
     return 1
   fi
 
-  uid="$(id -u "$ALMANAC_USER")"
-  su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet almanac-pdf-ingest.timer" &&
+  uid="$(id -u "$ARCLINK_USER")"
+  su - "$ARCLINK_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' systemctl --user is-active --quiet arclink-pdf-ingest.timer" &&
     true
 }
 
@@ -2183,10 +2183,10 @@ assert_pdf_ingest_pipeline() {
   local search_term=""
   local pdf_qmd_uri_prefix=""
 
-  uid="$(id -u "$ALMANAC_USER")"
+  uid="$(id -u "$ARCLINK_USER")"
   watcher_mode=0
-  smoke_pdf="$ALMANAC_PRIV_DIR/vault/Inbox/example-lattice-smoke.pdf"
-  generated_md="$ALMANAC_PRIV_DIR/state/pdf-ingest/markdown/Inbox/example-lattice-smoke-pdf.md"
+  smoke_pdf="$ARCLINK_PRIV_DIR/vault/Inbox/example-lattice-smoke.pdf"
+  generated_md="$ARCLINK_PRIV_DIR/state/pdf-ingest/markdown/Inbox/example-lattice-smoke-pdf.md"
   search_term="Example Lattice smoke test PDF"
   pdf_qmd_uri_prefix="qmd://$PDF_INGEST_COLLECTION_NAME/"
 
@@ -2197,11 +2197,11 @@ assert_pdf_ingest_pipeline() {
     show_pdf_ingest_diagnostics
     return 1
   else
-    echo "No user systemd bus detected for $ALMANAC_USER; using direct PDF ingest fallback." >&2
+    echo "No user systemd bus detected for $ARCLINK_USER; using direct PDF ingest fallback." >&2
   fi
 
   write_smoke_pdf "$smoke_pdf"
-  chown "$ALMANAC_USER:$ALMANAC_USER" "$smoke_pdf"
+  chown "$ARCLINK_USER:$ARCLINK_USER" "$smoke_pdf"
 
   if (( watcher_mode )); then
     if ! wait_for_file "$generated_md" 120 1; then
@@ -2210,7 +2210,7 @@ assert_pdf_ingest_pipeline() {
       return 1
     fi
   else
-    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/pdf-ingest.sh'"
+    run_arclink_shell "'$ARCLINK_REPO_DIR/bin/pdf-ingest.sh'"
   fi
 
   if [[ ! -f "$generated_md" ]]; then
@@ -2225,7 +2225,7 @@ assert_pdf_ingest_pipeline() {
     return 1
   fi
 
-  if ! run_almanac_shell "qmd --index '$QMD_INDEX_NAME' collection show '$PDF_INGEST_COLLECTION_NAME' >/dev/null"; then
+  if ! run_arclink_shell "qmd --index '$QMD_INDEX_NAME' collection show '$PDF_INGEST_COLLECTION_NAME' >/dev/null"; then
     echo "Expected qmd collection '$PDF_INGEST_COLLECTION_NAME' to exist after PDF ingest bootstrap." >&2
     show_pdf_ingest_diagnostics
     return 1
@@ -2247,12 +2247,12 @@ assert_pdf_ingest_pipeline() {
 
   if ! wait_for_qmd_pending_embeddings_zero 180 1; then
     echo "Expected watcher-driven qmd embedding backlog to clear after PDF-derived markdown changes." >&2
-    run_almanac_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
+    run_arclink_shell "qmd --index '$QMD_INDEX_NAME' status" >&2 || true
     show_pdf_ingest_diagnostics
     return 1
   fi
 
-  if ! python3 - "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" <<'PY'
+  if ! python3 - "$ARCLINK_PRIV_DIR/state/pdf-ingest/status.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -2279,7 +2279,7 @@ PY
       return 1
     fi
   else
-    run_almanac_shell "'$ALMANAC_REPO_DIR/bin/pdf-ingest.sh' --quiet"
+    run_arclink_shell "'$ARCLINK_REPO_DIR/bin/pdf-ingest.sh' --quiet"
   fi
 
   if [[ -e "$generated_md" ]]; then
@@ -2302,7 +2302,7 @@ PY
     return 1
   fi
 
-  if ! python3 - "$ALMANAC_PRIV_DIR/state/pdf-ingest/status.json" <<'PY'
+  if ! python3 - "$ARCLINK_PRIV_DIR/state/pdf-ingest/status.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -2322,7 +2322,7 @@ PY
 
 teardown() {
   if [[ "$INSTALLED" == "1" ]]; then
-    ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
+    ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
     INSTALLED=0
   fi
   if id -u "$AUTOPROV_UNIX_USER" >/dev/null 2>&1; then
@@ -2332,9 +2332,9 @@ teardown() {
 }
 
 preclean() {
-  if id -u "$ALMANAC_USER" >/dev/null 2>&1 || [[ -e "$ALMANAC_HOME" ]]; then
-    echo "Removing existing Almanac smoke target before test..."
-    ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
+  if id -u "$ARCLINK_USER" >/dev/null 2>&1 || [[ -e "$ARCLINK_HOME" ]]; then
+    echo "Removing existing ArcLink smoke target before test..."
+    ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" "$DEPLOY_BIN" --apply-remove || true
   fi
   if id -u "$AUTOPROV_UNIX_USER" >/dev/null 2>&1; then
     echo "Removing existing smoke auto-provision user '$AUTOPROV_UNIX_USER' before test..."
@@ -2360,16 +2360,16 @@ write_answers
 load_answers_into_env
 preclean
 
-echo "Installing Almanac with default smoke-test answers..."
-ALMANAC_ALLOW_NO_USER_BUS=1 \
-ALMANAC_CURATOR_SKIP_HERMES_SETUP=1 \
-ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=1 \
-ALMANAC_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" \
+echo "Installing ArcLink with default smoke-test answers..."
+ARCLINK_ALLOW_NO_USER_BUS=1 \
+ARCLINK_CURATOR_SKIP_HERMES_SETUP=1 \
+ARCLINK_CURATOR_SKIP_GATEWAY_SETUP=1 \
+ARCLINK_INSTALL_ANSWERS_FILE="$ANSWERS_FILE" \
   "$DEPLOY_BIN" --apply-install
 INSTALLED=1
 
-wait_for_port 127.0.0.1 "$ALMANAC_MCP_PORT" 120 1
-wait_for_port 127.0.0.1 "$ALMANAC_NOTION_WEBHOOK_PORT" 120 1
+wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT" 120 1
+wait_for_port 127.0.0.1 "$ARCLINK_NOTION_WEBHOOK_PORT" 120 1
 echo
 
 echo "Checking agent payload..."
@@ -2381,8 +2381,8 @@ assert_default_vault_bootstrap_layout
 echo "Checking .vault discovery and reload-defs..."
 assert_vault_definition_reload
 
-echo "Checking almanac control-plane bootstrap/token roundtrip..."
-assert_almanac_control_plane_roundtrip
+echo "Checking arclink control-plane bootstrap/token roundtrip..."
+assert_arclink_control_plane_roundtrip
 
 echo "Checking async bootstrap handshake activation..."
 assert_async_bootstrap_handshake
@@ -2415,11 +2415,11 @@ echo
 echo "Starting runtime checks..."
 
 if ! wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 10 1; then
-  su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' nohup '$ALMANAC_REPO_DIR/bin/qmd-daemon.sh' > '$RUNTIME_DIR/qmd-daemon.log' 2>&1 &"
+  su - "$ARCLINK_USER" -c "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' nohup '$ARCLINK_REPO_DIR/bin/qmd-daemon.sh' > '$RUNTIME_DIR/qmd-daemon.log' 2>&1 &"
 fi
 
 if ! wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 10 1; then
-  su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/nextcloud-up.sh'"
+  su - "$ARCLINK_USER" -c "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/nextcloud-up.sh'"
 fi
 
 wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 120 1
@@ -2428,8 +2428,8 @@ assert_mcp_status_alignment
 
 if ! wait_for_http_success \
   "http://127.0.0.1:$NEXTCLOUD_PORT/status.php" \
-  "almanac-ci.local" \
-  "/tmp/almanac-nextcloud-status.json" \
+  "arclink-ci.local" \
+  "/tmp/arclink-nextcloud-status.json" \
   180 \
   2; then
   show_nextcloud_diagnostics
@@ -2442,24 +2442,24 @@ assert_text_watch_pipeline
 assert_markdown_watch_pipeline
 assert_pdf_ingest_pipeline
 
-uid="$(id -u "$ALMANAC_USER")"
+uid="$(id -u "$ARCLINK_USER")"
 if [[ -S "/run/user/$uid/bus" ]]; then
-  su - "$ALMANAC_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+  su - "$ARCLINK_USER" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/health.sh'"
 else
-  su - "$ALMANAC_USER" -c "env ALMANAC_CONFIG_FILE='$CONFIG_TARGET' '$ALMANAC_REPO_DIR/bin/health.sh'"
+  su - "$ARCLINK_USER" -c "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/health.sh'"
 fi
 
 echo
-echo "Tearing Almanac back down..."
+echo "Tearing ArcLink back down..."
 teardown
 
-if id -u "$ALMANAC_USER" >/dev/null 2>&1; then
-  echo "Expected service user '$ALMANAC_USER' to be removed." >&2
+if id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+  echo "Expected service user '$ARCLINK_USER' to be removed." >&2
   exit 1
 fi
 
-if [[ -e "$ALMANAC_HOME" ]]; then
-  echo "Expected $ALMANAC_HOME to be removed." >&2
+if [[ -e "$ARCLINK_HOME" ]]; then
+  echo "Expected $ARCLINK_HOME to be removed." >&2
   exit 1
 fi
 

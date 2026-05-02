@@ -1,6 +1,6 @@
 # ArcLink Foundation Notes
 
-ArcLink foundation code is intentionally additive. Existing Almanac deploy,
+ArcLink foundation code is intentionally additive. Existing ArcLink deploy,
 onboarding, Hermes, qmd, vault, memory, Notion, and service-health paths remain
 under their current names while new SaaS-facing primitives use `ARCLINK_*`
 configuration and `arclink_*` database tables.
@@ -12,7 +12,7 @@ Operational assumptions, ownership boundaries, and validation steps live in
 
 New product configuration uses `python/arclink_product.py`.
 
-- Non-empty `ARCLINK_*` values override legacy `ALMANAC_*` aliases.
+- Non-empty `ARCLINK_*` values override legacy `ARCLINK_*` aliases.
 - Blank `ARCLINK_*` values are ignored, so partially rendered env files do not
   erase working legacy config.
 - Conflict diagnostics name only the variables involved and do not print the
@@ -29,7 +29,7 @@ ARCLINK_MODEL_REASONING_DEFAULT=medium
 
 ## Schema
 
-ArcLink commercial and SaaS records are separate from existing Almanac
+ArcLink commercial and SaaS records are separate from existing ArcLink
 operational rows. Links to existing operational state are stored as stable text
 ids such as `agent_id`, `session_id`, and `bootstrap_request_id`; helper drift
 checks report missing linked rows instead of hiding divergence behind hard
@@ -302,7 +302,7 @@ python3 tests/test_arclink_telegram.py
 python3 tests/test_arclink_discord.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
+python3 -m py_compile python/arclink_control.py python/arclink_*.py
 bash -n deploy.sh bin/*.sh test.sh
 git diff --check
 ```

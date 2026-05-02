@@ -53,7 +53,7 @@ def test_configure_agent_backup_refuses_public_github_repo() -> None:
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": api_base,
-                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
+                "ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             },
         )
         expect(result.returncode != 0, "expected public GitHub repo to be refused")
@@ -84,17 +84,17 @@ def test_configure_agent_backup_prepares_pending_snapshot_with_sessions() -> Non
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": api_base,
-                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
+                "ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             },
         )
         expect(result.returncode == 0, f"expected private backup config to succeed: stdout={result.stdout!r} stderr={result.stderr!r}")
-        pending_body = (hermes_home / "state" / "almanac-agent-backup.pending.env").read_text(encoding="utf-8")
-        expect(not (hermes_home / "state" / "almanac-agent-backup.env").exists(), "backup must stay inactive until write access verifies")
+        pending_body = (hermes_home / "state" / "arclink-agent-backup.pending.env").read_text(encoding="utf-8")
+        expect(not (hermes_home / "state" / "arclink-agent-backup.env").exists(), "backup must stay inactive until write access verifies")
         expect("AGENT_BACKUP_INCLUDE_SESSIONS=1" in pending_body, pending_body)
         expect("Session transcripts are included by default" in result.stdout, result.stdout)
         expect("deploy key with write access" in result.stdout, result.stdout)
         expect("separate per-user backup key" in result.stdout, result.stdout)
-        expect("do not reuse the Almanac upstream code-push key" in result.stdout, result.stdout)
+        expect("do not reuse the ArcLink upstream code-push key" in result.stdout, result.stdout)
         print("PASS test_configure_agent_backup_prepares_pending_snapshot_with_sessions")
 
 
@@ -121,7 +121,7 @@ def test_configure_agent_backup_verify_activates_after_private_write_check() -> 
             "HOME": str(root),
             "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
             "AGENT_BACKUP_GITHUB_API_BASE": api_base,
-            "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
+            "ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             "GIT_CONFIG_GLOBAL": str(git_global),
         }
         prepare = run(
@@ -134,14 +134,14 @@ def test_configure_agent_backup_verify_activates_after_private_write_check() -> 
             env=common_env,
         )
         expect(prepare.returncode == 0, f"prepare failed: stdout={prepare.stdout!r} stderr={prepare.stderr!r}")
-        stale_timer = root / ".config" / "systemd" / "user" / "almanac-user-agent-backup.timer"
+        stale_timer = root / ".config" / "systemd" / "user" / "arclink-user-agent-backup.timer"
         stale_timer.parent.mkdir(parents=True, exist_ok=True)
         stale_timer.write_text("[Timer]\nOnUnitActiveSec=4h\n", encoding="utf-8")
         verify = run([str(CONFIGURE_SCRIPT), str(hermes_home), "--verify"], env=common_env)
         expect(verify.returncode == 0, f"verify failed: stdout={verify.stdout!r} stderr={verify.stderr!r}")
-        state_body = (hermes_home / "state" / "almanac-agent-backup.env").read_text(encoding="utf-8")
+        state_body = (hermes_home / "state" / "arclink-agent-backup.env").read_text(encoding="utf-8")
         expect("AGENT_BACKUP_REMOTE=git@github.com:example/private-repo.git" in state_body, state_body)
-        expect(not (hermes_home / "state" / "almanac-agent-backup.pending.env").exists(), "pending state should clear after verify")
+        expect(not (hermes_home / "state" / "arclink-agent-backup.pending.env").exists(), "pending state should clear after verify")
         expect(not stale_timer.exists(), "verify should remove the legacy systemd backup timer file")
         expect("Write check passed" in verify.stdout, verify.stdout)
         print("PASS test_configure_agent_backup_verify_activates_after_private_write_check")
@@ -164,7 +164,7 @@ def test_install_agent_cron_jobs_schedules_backup_and_records_status() -> None:
         hermes_home = root / "hermes-home"
         state_dir = hermes_home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "almanac-agent-backup.env").write_text(
+        (state_dir / "arclink-agent-backup.env").write_text(
             "AGENT_BACKUP_REMOTE='git@github.com:example/private-repo.git'\n",
             encoding="utf-8",
         )
@@ -177,12 +177,12 @@ def test_install_agent_cron_jobs_schedules_backup_and_records_status() -> None:
         job = jobs[0]
         expect(job["id"] == "a1bac0ffee42", str(job))
         expect(job["enabled"] is True, str(job))
-        expect(job["script"] == "almanac_agent_backup.py", str(job))
+        expect(job["script"] == "arclink_agent_backup.py", str(job))
         expect(job["deliver"] == "origin", str(job))
         expect(job["schedule"] == {"kind": "interval", "minutes": 240, "display": "every 240m"}, str(job))
         expect("script_timeout_seconds: 1800" in (hermes_home / "config.yaml").read_text(encoding="utf-8"), "expected cron script timeout")
 
-        wrapper = hermes_home / "scripts" / "almanac_agent_backup.py"
+        wrapper = hermes_home / "scripts" / "arclink_agent_backup.py"
         first_run = run(["python3", str(wrapper)], env={**os.environ, "HERMES_HOME": str(hermes_home)})
         expect(first_run.returncode == 0, f"cron wrapper failed: stdout={first_run.stdout!r} stderr={first_run.stderr!r}")
         gate = json.loads(first_run.stdout.strip().splitlines()[-1])
@@ -232,7 +232,7 @@ def test_configure_agent_backup_refuses_when_visibility_check_errors() -> None:
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": "https://api.github.invalid",
-                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
+                "ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
             },
         )
         expect(result.returncode != 0, "expected visibility-check error to be refused")
@@ -279,7 +279,7 @@ def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
         (hermes_home / "sessions" / "session.json").write_text("session\n", encoding="utf-8")
         (hermes_home / "logs" / "agent.log").write_text("log\n", encoding="utf-8")
         (hermes_home / "secrets" / "token").write_text("secret\n", encoding="utf-8")
-        (hermes_home / "state" / "almanac-identity-context.json").write_text("{}", encoding="utf-8")
+        (hermes_home / "state" / "arclink-identity-context.json").write_text("{}", encoding="utf-8")
 
         bare_remote = root / "remote.git"
         run(["git", "init", "--bare", str(bare_remote)])
@@ -298,7 +298,7 @@ def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
         known_hosts = root / ".ssh" / "known_hosts"
         known_hosts.write_text("github.com test\n", encoding="utf-8")
 
-        state_file = hermes_home / "state" / "almanac-agent-backup.env"
+        state_file = hermes_home / "state" / "arclink-agent-backup.env"
         state_file.write_text(
             "\n".join(
                 [
@@ -326,7 +326,7 @@ def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
                 "HOME": str(root),
                 "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
                 "AGENT_BACKUP_GITHUB_API_BASE": api_base,
-                "ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
+                "ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
                 "GIT_CONFIG_GLOBAL": str(git_global),
             },
         )

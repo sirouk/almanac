@@ -12,9 +12,9 @@ ORIGINAL_ARGS=("$@")
 TARGET_UNIX_USER=""
 TARGET_AGENT_SELECTOR=""
 TAIL_LINES=40
-SMOKE_RETRY_ATTEMPT="${ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT:-0}"
-SMOKE_TIMEOUT_SECONDS="${ALMANAC_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS:-300}"
-PROMPT="${ALMANAC_LIVE_AGENT_SMOKE_PROMPT:-Use the Almanac MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, local scripts, raw MCP protocol, or secrets files.}"
+SMOKE_RETRY_ATTEMPT="${ARCLINK_LIVE_AGENT_SMOKE_RETRY_ATTEMPT:-0}"
+SMOKE_TIMEOUT_SECONDS="${ARCLINK_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS:-300}"
+PROMPT="${ARCLINK_LIVE_AGENT_SMOKE_PROMPT:-Use the ArcLink MCP vault.search-and-fetch rail to search for \"Hermes quota monitoring\" and tell me whether you found relevant vault knowledge in one short sentence. Do not use terminal, local scripts, raw MCP protocol, or secrets files.}"
 
 usage() {
   cat <<'EOF'
@@ -81,7 +81,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 if [[ ! "$SMOKE_TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$SMOKE_TIMEOUT_SECONDS" -lt 30 ]]; then
-  echo "ALMANAC_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS must be an integer >= 30." >&2
+  echo "ARCLINK_LIVE_AGENT_SMOKE_TIMEOUT_SECONDS must be an integer >= 30." >&2
   exit 2
 fi
 
@@ -90,7 +90,7 @@ if [[ ! -x "$RUNTIME_DIR/hermes-venv/bin/hermes" ]]; then
   exit 1
 fi
 
-agent_json="$(python3 - "$ALMANAC_DB_PATH" "$TARGET_UNIX_USER" "$TARGET_AGENT_SELECTOR" <<'PY'
+agent_json="$(python3 - "$ARCLINK_DB_PATH" "$TARGET_UNIX_USER" "$TARGET_AGENT_SELECTOR" <<'PY'
 import json
 import sqlite3
 import sys
@@ -160,10 +160,10 @@ if ! run_as_target_user test -d "$TARGET_HERMES_HOME"; then
   exit 1
 fi
 
-telemetry_path="$TARGET_HERMES_HOME/state/almanac-context-telemetry.jsonl"
+telemetry_path="$TARGET_HERMES_HOME/state/arclink-context-telemetry.jsonl"
 sessions_dir="$TARGET_HERMES_HOME/sessions"
 agent_log_path="$TARGET_HERMES_HOME/logs/agent.log"
-output_file="$(mktemp /tmp/almanac-live-agent-smoke.XXXXXX.log)"
+output_file="$(mktemp /tmp/arclink-live-agent-smoke.XXXXXX.log)"
 trap 'rm -f "$output_file"' EXIT
 
 before_latest_session="$(run_as_target_user bash -lc 'find "$HERMES_HOME/sessions" -maxdepth 1 -type f -name "session_*.json" -printf "%f\n" 2>/dev/null | sort | tail -1' || true)"
@@ -358,29 +358,29 @@ tool_result_joined = "\n".join(tool_result_texts)
 output_joined = read_text(output_path)
 errors: list[str] = []
 stale_transport_session_seen = "missing or invalid mcp-session-id" in tool_result_joined
-brokered_almanac_tool_seen = any(
+brokered_arclink_tool_seen = any(
     name
     in {
-        "mcp_almanac_mcp_vault_search_and_fetch",
-        "mcp_almanac_mcp_knowledge_search_and_fetch",
+        "mcp_arclink_mcp_vault_search_and_fetch",
+        "mcp_arclink_mcp_knowledge_search_and_fetch",
     }
     for name in functions
 )
-brokered_tool_returned = brokered_almanac_tool_seen and bool(tool_result_joined.strip())
+brokered_tool_returned = brokered_arclink_tool_seen and bool(tool_result_joined.strip())
 command_timed_out = command_status in {124, 137, 143} or (
     command_status != 0
     and "interrupted during api call" in output_joined.lower()
     and "keyboardinterrupt" in output_joined.lower()
 )
 brokered_tool_succeeded = (
-    brokered_almanac_tool_seen
+    brokered_arclink_tool_seen
     and bool(tool_result_joined.strip())
     and bool(re.search(r"\b(yes|found|relevant|vault knowledge)\b", assistant_joined, re.IGNORECASE))
 )
 telemetry_missing_but_brokered_tool_succeeded = not tool_token_event and brokered_tool_succeeded
 stale_transport_recovered = (
     stale_transport_session_seen
-    and brokered_almanac_tool_seen
+    and brokered_arclink_tool_seen
     and "missing or invalid mcp-session-id" not in assistant_joined.lower()
     and bool(re.search(r"\b(yes|found|relevant|vault knowledge)\b", assistant_joined, re.IGNORECASE))
 )
@@ -388,16 +388,16 @@ if not tool_token_event and not telemetry_missing_but_brokered_tool_succeeded:
     errors.append("no tool_token_injected telemetry event was recorded for the smoke session")
 if re.search(r"python(?:3)?\s*-\s*<<\s*\S+", assistant_joined):
     errors.append("session content still mentions a python heredoc")
-if "almanac-bootstrap-token" in assistant_joined:
+if "arclink-bootstrap-token" in assistant_joined:
     errors.append("session content still mentions the bootstrap token path")
 if any(name in {"terminal", "execute_code"} for name in functions):
     errors.append(f"session invoked terminal-style tools: {functions}")
-if not brokered_almanac_tool_seen:
-    errors.append(f"session did not invoke the brokered Almanac knowledge/vault MCP rail: {functions}")
+if not brokered_arclink_tool_seen:
+    errors.append(f"session did not invoke the brokered ArcLink knowledge/vault MCP rail: {functions}")
 if stale_transport_session_seen and not stale_transport_recovered:
     errors.append("session leaked a stale MCP transport-session error to the agent")
 if re.search(r"\bcurl\b.*(?:/mcp|127\.0\.0\.1:8[12]8[12])", assistant_joined, re.IGNORECASE | re.DOTALL):
-    errors.append("session attempted raw curl/MCP debugging instead of brokered Almanac tools")
+    errors.append("session attempted raw curl/MCP debugging instead of brokered ArcLink tools")
 if command_status != 0 and not (command_timed_out and brokered_tool_returned):
     errors.append(f"hermes chat exited with status {command_status}")
 
@@ -468,7 +468,7 @@ if [[ "$validation_result" == *'"retry": "stale_mcp_transport_session"'* ]]; the
   if [[ "$SMOKE_RETRY_ATTEMPT" == "0" ]]; then
     echo "Live agent tool smoke saw a stale MCP transport session for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}; retrying once with a fresh chat session."
     rm -f "$output_file"
-    export ALMANAC_LIVE_AGENT_SMOKE_RETRY_ATTEMPT=1
+    export ARCLINK_LIVE_AGENT_SMOKE_RETRY_ATTEMPT=1
     exec "$SCRIPT_DIR/live-agent-tool-smoke.sh" "${ORIGINAL_ARGS[@]}"
   fi
   echo "Live agent tool smoke failed for ${TARGET_DISPLAY_NAME:-$TARGET_UNIX_USER}: stale MCP transport session repeated after one retry." >&2

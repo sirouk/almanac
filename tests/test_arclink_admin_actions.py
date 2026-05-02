@@ -38,7 +38,7 @@ def memory_db(control):
 
 
 def test_admin_action_requires_reason_and_queues_audited_intent() -> None:
-    control = load_module("almanac_control.py", "almanac_control_admin_action_reason_test")
+    control = load_module("arclink_control.py", "arclink_control_admin_action_reason_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_reason_test")
     conn = memory_db(control)
     try:
@@ -75,7 +75,7 @@ def test_admin_action_requires_reason_and_queues_audited_intent() -> None:
 
 
 def test_admin_action_idempotency_reuses_intent_without_duplicate_audit() -> None:
-    control = load_module("almanac_control.py", "almanac_control_admin_action_idempotency_test")
+    control = load_module("arclink_control.py", "arclink_control_admin_action_idempotency_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_idempotency_test")
     conn = memory_db(control)
     first = dashboard.queue_arclink_admin_action(
@@ -117,7 +117,7 @@ def test_admin_action_idempotency_reuses_intent_without_duplicate_audit() -> Non
 
 
 def test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects() -> None:
-    control = load_module("almanac_control.py", "almanac_control_admin_action_secret_test")
+    control = load_module("arclink_control.py", "arclink_control_admin_action_secret_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_secret_test")
     conn = memory_db(control)
     try:
@@ -155,7 +155,7 @@ def test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_ef
 
 
 def test_admin_refund_and_cancel_actions_record_audited_notes() -> None:
-    control = load_module("almanac_control.py", "almanac_control_admin_refund_cancel_test")
+    control = load_module("arclink_control.py", "arclink_control_admin_refund_cancel_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_refund_cancel_test")
     conn = memory_db(control)
     control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="paid")

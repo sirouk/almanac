@@ -25,7 +25,7 @@ def load_tool():
 def test_notion_id_extracts_url_and_plain_ids() -> None:
     tool = load_tool()
     expected = "351d9880-18ca-80bd-89e7-f1988f75b862"
-    expect(tool.notion_id("https://www.notion.so/The-Almanac-351d988018ca80bd89e7f1988f75b862?pvs=13") == expected, "url id extraction failed")
+    expect(tool.notion_id("https://www.notion.so/The-ArcLink-351d988018ca80bd89e7f1988f75b862?pvs=13") == expected, "url id extraction failed")
     expect(tool.notion_id("351d988018ca80bd89e7f1988f75b862") == expected, "plain id normalization failed")
     print("PASS test_notion_id_extracts_url_and_plain_ids")
 

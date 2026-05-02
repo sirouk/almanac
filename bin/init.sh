@@ -7,25 +7,25 @@ if [[ $# -gt 0 ]]; then
 fi
 
 BOOTSTRAP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SHARED_REPO_DIR="${ALMANAC_SHARED_REPO_DIR:-$BOOTSTRAP_DIR}"
+SHARED_REPO_DIR="${ARCLINK_SHARED_REPO_DIR:-$BOOTSTRAP_DIR}"
 . "$BOOTSTRAP_DIR/bin/model-providers.sh" 2>/dev/null || true
 if declare -f model_provider_resolve_target_or_default >/dev/null 2>&1; then
-  ALMANAC_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ALMANAC_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
-  ALMANAC_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ALMANAC_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
-  ALMANAC_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ALMANAC_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
+  ARCLINK_MODEL_PRESET_CODEX="$(model_provider_resolve_target_or_default codex "${ARCLINK_MODEL_PRESET_CODEX:-}" "openai-codex:gpt-5.5")"
+  ARCLINK_MODEL_PRESET_OPUS="$(model_provider_resolve_target_or_default opus "${ARCLINK_MODEL_PRESET_OPUS:-}" "anthropic:claude-opus-4-7")"
+  ARCLINK_MODEL_PRESET_CHUTES="$(model_provider_resolve_target_or_default chutes "${ARCLINK_MODEL_PRESET_CHUTES:-}" "chutes:moonshotai/Kimi-K2.6-TEE")"
 else
-  ALMANAC_MODEL_PRESET_CODEX="${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
-  ALMANAC_MODEL_PRESET_OPUS="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
-  ALMANAC_MODEL_PRESET_CHUTES="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
+  ARCLINK_MODEL_PRESET_CODEX="${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}"
+  ARCLINK_MODEL_PRESET_OPUS="${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}"
+  ARCLINK_MODEL_PRESET_CHUTES="${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}"
 fi
-ALMANAC_SERVICE_USER="${ALMANAC_SERVICE_USER:-almanac}"
-ALMANAC_MCP_PORT="${ALMANAC_MCP_PORT:-8282}"
-ALMANAC_MCP_URL="${ALMANAC_MCP_URL:-http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp}"
-ALMANAC_BOOTSTRAP_URL="${ALMANAC_BOOTSTRAP_URL:-$ALMANAC_MCP_URL}"
-ALMANAC_QMD_URL="${ALMANAC_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
-ALMANAC_EXTRA_MCP_NAME="${ALMANAC_EXTRA_MCP_NAME:-external-kb}"
-ALMANAC_EXTRA_MCP_URL="${ALMANAC_EXTRA_MCP_URL:-}"
-HERMES_HOME_DEFAULT="${ALMANAC_AGENT_HERMES_HOME:-$HOME/.local/share/almanac-agent/hermes-home}"
+ARCLINK_SERVICE_USER="${ARCLINK_SERVICE_USER:-arclink}"
+ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
+ARCLINK_MCP_URL="${ARCLINK_MCP_URL:-http://127.0.0.1:${ARCLINK_MCP_PORT}/mcp}"
+ARCLINK_BOOTSTRAP_URL="${ARCLINK_BOOTSTRAP_URL:-$ARCLINK_MCP_URL}"
+ARCLINK_QMD_URL="${ARCLINK_QMD_URL:-http://127.0.0.1:${QMD_MCP_PORT:-8181}/mcp}"
+ARCLINK_EXTRA_MCP_NAME="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
+ARCLINK_EXTRA_MCP_URL="${ARCLINK_EXTRA_MCP_URL:-}"
+HERMES_HOME_DEFAULT="${ARCLINK_AGENT_HERMES_HOME:-$HOME/.local/share/arclink-agent/hermes-home}"
 
 json_get() {
   local file="$1"
@@ -75,28 +75,28 @@ require_linux_host() {
   fi
 
   cat >&2 <<EOF
-Almanac v1 $action must run on the Almanac host after SSHing in as your assigned Unix user.
+ArcLink v1 $action must run on the ArcLink host after SSHing in as your assigned Unix user.
 Current OS: $os_name
 
-SSH to the Almanac host, then rerun:
+SSH to the ArcLink host, then rerun:
   init.sh $MODE
 EOF
   return 1
 }
 
-# almanac-rpc does not surface 429 Retry-After; handle it here by retrying with
+# arclink-rpc does not surface 429 Retry-After; handle it here by retrying with
 # a backoff that honors Retry-After when the server provides it.
 rpc_call_with_retry() {
   local out_file="$1"
   shift
-  local max_attempts="${ALMANAC_INIT_RPC_MAX_ATTEMPTS:-4}"
+  local max_attempts="${ARCLINK_INIT_RPC_MAX_ATTEMPTS:-4}"
   local attempt=0
   local exit_code=0
   local err_file=""
   err_file="$(mktemp)"
   while (( attempt < max_attempts )); do
     attempt=$((attempt + 1))
-    if "$SHARED_REPO_DIR/bin/almanac-rpc" "$@" >"$out_file" 2>"$err_file"; then
+    if "$SHARED_REPO_DIR/bin/arclink-rpc" "$@" >"$out_file" 2>"$err_file"; then
       rm -f "$err_file"
       return 0
     fi
@@ -122,8 +122,8 @@ rpc_call_with_retry() {
 choose_model_preset() {
   local default="${1:-codex}"
   local answer=""
-  if [[ -n "${ALMANAC_INIT_MODEL_PRESET:-}" ]]; then
-    printf '%s\n' "$ALMANAC_INIT_MODEL_PRESET"
+  if [[ -n "${ARCLINK_INIT_MODEL_PRESET:-}" ]]; then
+    printf '%s\n' "$ARCLINK_INIT_MODEL_PRESET"
     return 0
   fi
   if [[ ! -t 0 ]]; then
@@ -138,8 +138,8 @@ choose_model_preset() {
 choose_channels_csv() {
   local default="${1:-tui-only}"
   local answer="" discord="" telegram="" channels="tui-only"
-  if [[ -n "${ALMANAC_INIT_CHANNELS:-}" ]]; then
-    printf '%s\n' "$ALMANAC_INIT_CHANNELS"
+  if [[ -n "${ARCLINK_INIT_CHANNELS:-}" ]]; then
+    printf '%s\n' "$ARCLINK_INIT_CHANNELS"
     return 0
   fi
   if [[ ! -t 0 ]]; then
@@ -167,7 +167,7 @@ probe_hermes_state_json() {
     return 1
   fi
 
-  python3 - "$dump_file" "${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" "${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}" "${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}" <<'PY'
+  python3 - "$dump_file" "${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" "${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}" "${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}" <<'PY'
 import json
 import re
 import sys
@@ -235,7 +235,7 @@ PY
 
 resolve_shared_hermes_bin() {
   local wrapper_bin="$SHARED_REPO_DIR/bin/hermes-shell.sh"
-  local hermes_bin="${ALMANAC_HERMES_BIN:-}"
+  local hermes_bin="${ARCLINK_HERMES_BIN:-}"
   if [[ -x "$wrapper_bin" ]]; then
     printf '%s\n' "$wrapper_bin"
     return 0
@@ -268,23 +268,23 @@ current_hermes_bin() {
 ensure_hermes_installed() {
   local hermes_bin=""
   if hermes_bin="$(resolve_shared_hermes_bin 2>/dev/null)"; then
-    export ALMANAC_HERMES_BIN="$hermes_bin"
+    export ARCLINK_HERMES_BIN="$hermes_bin"
     export PATH="$(dirname "$hermes_bin"):$HOME/.local/bin:$PATH"
     return 0
   fi
   if command -v hermes >/dev/null 2>&1; then
-    export ALMANAC_HERMES_BIN="$(command -v hermes)"
-    export PATH="$(dirname "$ALMANAC_HERMES_BIN"):$HOME/.local/bin:$PATH"
+    export ARCLINK_HERMES_BIN="$(command -v hermes)"
+    export PATH="$(dirname "$ARCLINK_HERMES_BIN"):$HOME/.local/bin:$PATH"
     return 0
   fi
-  if [[ "${ALMANAC_INIT_SKIP_HERMES_INSTALL:-0}" == "1" ]]; then
-    echo "Hermes is not installed and ALMANAC_INIT_SKIP_HERMES_INSTALL=1 was set." >&2
+  if [[ "${ARCLINK_INIT_SKIP_HERMES_INSTALL:-0}" == "1" ]]; then
+    echo "Hermes is not installed and ARCLINK_INIT_SKIP_HERMES_INSTALL=1 was set." >&2
     return 1
   fi
   curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
   export PATH="$HOME/.local/bin:$PATH"
   if command -v hermes >/dev/null 2>&1; then
-    export ALMANAC_HERMES_BIN="$(command -v hermes)"
+    export ARCLINK_HERMES_BIN="$(command -v hermes)"
     return 0
   fi
   return 1
@@ -297,34 +297,34 @@ install_default_skills() {
       "$hermes_home" \
       "${RUNTIME_DIR:-}"
   fi
-  "$SHARED_REPO_DIR/bin/install-almanac-skills.sh" \
+  "$SHARED_REPO_DIR/bin/install-arclink-skills.sh" \
     "$SHARED_REPO_DIR" \
     "$hermes_home" \
-    almanac-qmd-mcp \
-    almanac-vault-reconciler \
-    almanac-first-contact \
-    almanac-vaults \
-    almanac-ssot \
-    almanac-notion-knowledge \
-    almanac-ssot-connect \
-    almanac-notion-mcp \
-    almanac-resources
+    arclink-qmd-mcp \
+    arclink-vault-reconciler \
+    arclink-first-contact \
+    arclink-vaults \
+    arclink-ssot \
+    arclink-notion-knowledge \
+    arclink-ssot-connect \
+    arclink-notion-mcp \
+    arclink-resources
 }
 
 install_default_plugins() {
   local hermes_home="$1"
-  "$SHARED_REPO_DIR/bin/install-almanac-plugins.sh" \
+  "$SHARED_REPO_DIR/bin/install-arclink-plugins.sh" \
     "$SHARED_REPO_DIR" \
     "$hermes_home" \
-    almanac-managed-context
+    arclink-managed-context
 }
 
 register_default_mcps() {
   local hermes_home="$1"
-  ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
-  ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
-  ALMANAC_EXTRA_MCP_NAME="$ALMANAC_EXTRA_MCP_NAME" \
-  ALMANAC_EXTRA_MCP_URL="$ALMANAC_EXTRA_MCP_URL" \
+  ARCLINK_MCP_URL="$ARCLINK_MCP_URL" \
+  ARCLINK_QMD_URL="$ARCLINK_QMD_URL" \
+  ARCLINK_EXTRA_MCP_NAME="$ARCLINK_EXTRA_MCP_NAME" \
+  ARCLINK_EXTRA_MCP_URL="$ARCLINK_EXTRA_MCP_URL" \
   "$SHARED_REPO_DIR/bin/upsert-hermes-mcps.sh" "$hermes_home"
 }
 
@@ -347,9 +347,9 @@ write_enrollment_state() {
   MODEL_PRESET="$model_preset" \
   MODEL_STRING="$model_string" \
   CHANNELS_JSON="$channels_json" \
-  ALMANAC_CONTROL_URL="$ALMANAC_MCP_URL" \
-  ALMANAC_BOOTSTRAP_URL_VALUE="$ALMANAC_BOOTSTRAP_URL" \
-  ALMANAC_QMD_URL_VALUE="$ALMANAC_QMD_URL" \
+  ARCLINK_CONTROL_URL="$ARCLINK_MCP_URL" \
+  ARCLINK_BOOTSTRAP_URL_VALUE="$ARCLINK_BOOTSTRAP_URL" \
+  ARCLINK_QMD_URL_VALUE="$ARCLINK_QMD_URL" \
   python3 - "$state_file" <<'PY'
 import json
 import os
@@ -367,9 +367,9 @@ payload = {
     "model_preset": os.environ["MODEL_PRESET"],
     "model_string": os.environ["MODEL_STRING"],
     "channels": json.loads(os.environ["CHANNELS_JSON"]),
-    "control_plane_url": os.environ["ALMANAC_CONTROL_URL"],
-    "bootstrap_url": os.environ["ALMANAC_BOOTSTRAP_URL_VALUE"],
-    "qmd_url": os.environ["ALMANAC_QMD_URL_VALUE"],
+    "control_plane_url": os.environ["ARCLINK_CONTROL_URL"],
+    "bootstrap_url": os.environ["ARCLINK_BOOTSTRAP_URL_VALUE"],
+    "qmd_url": os.environ["ARCLINK_QMD_URL_VALUE"],
     "requested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
 }
 state_path = Path(sys.argv[1])
@@ -383,13 +383,13 @@ run_agent_flow() {
   local agent_id="" token_file="" hermes_state_file="" state_file="" activation_status="" activation_trigger_path=""
   local resuming_pending="0"
   local hermes_bin=""
-  local preseeded_request_id="${ALMANAC_BOOTSTRAP_REQUEST_ID:-}"
-  local preseeded_raw_token="${ALMANAC_BOOTSTRAP_RAW_TOKEN:-}"
-  local preseeded_agent_id="${ALMANAC_BOOTSTRAP_AGENT_ID:-}"
-  local preseeded_requester_identity="${ALMANAC_REQUESTER_IDENTITY:-}"
-  local preseeded_source_ip="${ALMANAC_BOOTSTRAP_SOURCE_IP:-}"
-  unset ALMANAC_BOOTSTRAP_REQUEST_ID ALMANAC_BOOTSTRAP_RAW_TOKEN ALMANAC_BOOTSTRAP_AGENT_ID
-  unset ALMANAC_REQUESTER_IDENTITY ALMANAC_BOOTSTRAP_SOURCE_IP
+  local preseeded_request_id="${ARCLINK_BOOTSTRAP_REQUEST_ID:-}"
+  local preseeded_raw_token="${ARCLINK_BOOTSTRAP_RAW_TOKEN:-}"
+  local preseeded_agent_id="${ARCLINK_BOOTSTRAP_AGENT_ID:-}"
+  local preseeded_requester_identity="${ARCLINK_REQUESTER_IDENTITY:-}"
+  local preseeded_source_ip="${ARCLINK_BOOTSTRAP_SOURCE_IP:-}"
+  unset ARCLINK_BOOTSTRAP_REQUEST_ID ARCLINK_BOOTSTRAP_RAW_TOKEN ARCLINK_BOOTSTRAP_AGENT_ID
+  unset ARCLINK_REQUESTER_IDENTITY ARCLINK_BOOTSTRAP_SOURCE_IP
 
   export PATH="$HOME/.local/bin:$PATH"
   require_linux_host "enrollment"
@@ -397,8 +397,8 @@ run_agent_flow() {
   unix_user="$(id -un)"
   source_ip="${preseeded_source_ip:-$(awk '{print $1}' <<<"${SSH_CONNECTION:-${SSH_CLIENT:-127.0.0.1}}")}"
   hermes_home="$HERMES_HOME_DEFAULT"
-  token_file="$hermes_home/secrets/almanac-bootstrap-token"
-  state_file="$hermes_home/state/almanac-enrollment.json"
+  token_file="$hermes_home/secrets/arclink-bootstrap-token"
+  state_file="$hermes_home/state/arclink-enrollment.json"
   mkdir -p "$hermes_home/secrets" "$hermes_home/state"
   request_file="$(mktemp)"
   trap 'rm -f "${request_file:-}" "${hermes_state_file:-}"' EXIT
@@ -409,7 +409,7 @@ run_agent_flow() {
     agent_id="${preseeded_agent_id:-}"
     requester_identity="${preseeded_requester_identity:-$requester_identity}"
     resuming_pending="1"
-    echo "Using approved Almanac enrollment bootstrap: $request_id"
+    echo "Using approved ArcLink enrollment bootstrap: $request_id"
   elif [[ -f "$state_file" && -f "$token_file" && "$(json_get "$state_file" "status")" == "pending" ]]; then
     request_id="$(json_get "$state_file" "request_id")"
     agent_id="$(json_get "$state_file" "agent_id")"
@@ -419,7 +419,7 @@ run_agent_flow() {
     channels_json="$(json_get "$state_file" "channels")"
     requester_identity="$(json_get "$state_file" "requester_identity")"
     if [[ -z "$requester_identity" ]]; then
-      requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un)}"
+      requester_identity="${ARCLINK_REQUESTER_IDENTITY:-$(id -un)}"
     fi
     if [[ -n "$channels_json" && "$channels_json" != "[]" ]]; then
       channels_csv="$(
@@ -432,10 +432,10 @@ PY
       )"
     fi
     resuming_pending="1"
-    echo "Resuming pending Almanac enrollment: $request_id"
+    echo "Resuming pending ArcLink enrollment: $request_id"
   else
     rpc_call_with_retry "$request_file" \
-      --url "$ALMANAC_BOOTSTRAP_URL" \
+      --url "$ARCLINK_BOOTSTRAP_URL" \
       --tool "bootstrap.handshake" \
       --json-args "$(REQUESTER_IDENTITY="$requester_identity" UNIX_USER="$unix_user" SOURCE_IP="$source_ip" python3 - <<'PY'
 import json
@@ -471,7 +471,7 @@ PY
     fi
     agent_id="$(json_get "$request_file" "agent_id")"
     echo "Bootstrap handshake submitted: $request_id"
-    echo "A pending Almanac key was issued; it will activate automatically after operator approval."
+    echo "A pending ArcLink key was issued; it will activate automatically after operator approval."
 
     prior_default_model="$(json_get "$request_file" "prior_defaults.model_preset")"
     prior_default_channels="$(json_get "$request_file" "prior_defaults.channels")"
@@ -495,20 +495,20 @@ PY
   ensure_hermes_installed
   hermes_bin="$(current_hermes_bin)"
 
-  if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ARCLINK_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
-    echo "Launching 'hermes setup' — Almanac will read back your model choice from Hermes when it finishes."
+    echo "Launching 'hermes setup' — ArcLink will read back your model choice from Hermes when it finishes."
     HERMES_HOME="$hermes_home" "$hermes_bin" setup
   fi
 
   # Gateway setup only makes sense if we actually want Discord/Telegram. Ask
   # up front in a narrow prompt so we know whether to run the wizard.
   want_gateway="no"
-  if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ALMANAC_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ARCLINK_INIT_SKIP_GATEWAY_SETUP:-0}" != "1" && -t 0 ]]; then
     read -r -p "Configure Hermes gateway for Discord/Telegram? [y/N]: " want_gateway_answer
     if is_yes "$want_gateway_answer"; then
       want_gateway="yes"
-      gateway_setup_cmd="$SHARED_REPO_DIR/bin/almanac-hermes-gateway-setup.sh"
+      gateway_setup_cmd="$SHARED_REPO_DIR/bin/arclink-hermes-gateway-setup.sh"
       if [[ -x "$gateway_setup_cmd" ]]; then
         gateway_setup_status=0
         "$gateway_setup_cmd" "$hermes_bin" "$hermes_home" || gateway_setup_status=$?
@@ -517,7 +517,7 @@ PY
         HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup || gateway_setup_status=$?
       fi
       if [[ "$gateway_setup_status" -ne 0 ]]; then
-        echo "Hermes gateway setup returned non-zero; Almanac will continue and install the gateway service from the saved Hermes config." >&2
+        echo "Hermes gateway setup returned non-zero; ArcLink will continue and install the gateway service from the saved Hermes config." >&2
       fi
     fi
   fi
@@ -551,7 +551,7 @@ if "tui-only" not in channels:
 print(json.dumps(channels))
 PY
   )"
-  if [[ "$want_gateway" != "yes" && -z "${ALMANAC_INIT_CHANNELS:-}" ]]; then
+  if [[ "$want_gateway" != "yes" && -z "${ARCLINK_INIT_CHANNELS:-}" ]]; then
     # If this enrollment skipped gateway setup, do not preserve stale external
     # channels from an older HERMES_HOME.
     channels_csv="tui-only"
@@ -559,10 +559,10 @@ PY
   fi
   if [[ -z "${model_string:-}" ]]; then
     case "${model_preset:-}" in
-      codex) model_string="${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" ;;
-      opus) model_string="${ALMANAC_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}" ;;
-      chutes) model_string="${ALMANAC_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}" ;;
-      *) model_string="${ALMANAC_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" ;;
+      codex) model_string="${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" ;;
+      opus) model_string="${ARCLINK_MODEL_PRESET_OPUS:-anthropic:claude-opus-4-7}" ;;
+      chutes) model_string="${ARCLINK_MODEL_PRESET_CHUTES:-chutes:moonshotai/Kimi-K2.6-TEE}" ;;
+      *) model_string="${ARCLINK_MODEL_PRESET_CODEX:-openai-codex:gpt-5.5}" ;;
     esac
   fi
 
@@ -574,7 +574,7 @@ PY
   install_default_plugins "$hermes_home"
   register_default_mcps "$hermes_home"
 
-  activation_trigger_path="${ALMANAC_ACTIVATION_TRIGGER_PATH:-${ALMANAC_PRIV_DIR:-$SHARED_REPO_DIR/almanac-priv}/state/activation-triggers/$agent_id.json}"
+  activation_trigger_path="${ARCLINK_ACTIVATION_TRIGGER_PATH:-${ARCLINK_PRIV_DIR:-$SHARED_REPO_DIR/arclink-priv}/state/activation-triggers/$agent_id.json}"
   "$SHARED_REPO_DIR/bin/install-agent-user-services.sh" \
     "$agent_id" \
     "$SHARED_REPO_DIR" \
@@ -583,7 +583,7 @@ PY
     "$activation_trigger_path" \
     "$hermes_bin"
 
-  if [[ -z "$preseeded_request_id" && "${ALMANAC_INIT_SKIP_AGENT_BACKUP_SETUP:-0}" != "1" && -t 0 ]]; then
+  if [[ -z "$preseeded_request_id" && "${ARCLINK_INIT_SKIP_AGENT_BACKUP_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
     read -r -p "Configure this agent's separate private GitHub backup with its own read/write deploy key now? [Y/n]: " configure_backup_answer
     if [[ -z "$configure_backup_answer" ]] || is_yes "$configure_backup_answer"; then
@@ -593,27 +593,27 @@ PY
 
   if [[ -x "$SHARED_REPO_DIR/bin/activate-agent.sh" ]]; then
     HERMES_HOME="$hermes_home" \
-    ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
-    ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
-    ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
-    ALMANAC_ENROLLMENT_STATE_FILE="$state_file" \
+    ARCLINK_MCP_URL="$ARCLINK_MCP_URL" \
+    ARCLINK_QMD_URL="$ARCLINK_QMD_URL" \
+    ARCLINK_BOOTSTRAP_TOKEN_FILE="$token_file" \
+    ARCLINK_ENROLLMENT_STATE_FILE="$state_file" \
     "$SHARED_REPO_DIR/bin/activate-agent.sh" || true
   fi
 
   activation_status="$(json_get "$state_file" "status")"
   if [[ "$activation_status" == "active" ]]; then
     HERMES_HOME="$hermes_home" \
-    ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
-    ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
-    ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
-    ALMANAC_ENROLLMENT_STATE_FILE="$state_file" \
+    ARCLINK_MCP_URL="$ARCLINK_MCP_URL" \
+    ARCLINK_QMD_URL="$ARCLINK_QMD_URL" \
+    ARCLINK_BOOTSTRAP_TOKEN_FILE="$token_file" \
+    ARCLINK_ENROLLMENT_STATE_FILE="$state_file" \
     "$SHARED_REPO_DIR/bin/user-agent-refresh.sh" >/dev/null 2>&1 || true
-  elif [[ "${ALMANAC_INIT_WAIT_FOR_APPROVAL:-0}" == "1" ]]; then
+  elif [[ "${ARCLINK_INIT_WAIT_FOR_APPROVAL:-0}" == "1" ]]; then
     echo "Waiting for operator approval..."
     while true; do
       sleep 3
-      "$SHARED_REPO_DIR/bin/almanac-rpc" \
-        --url "$ALMANAC_BOOTSTRAP_URL" \
+      "$SHARED_REPO_DIR/bin/arclink-rpc" \
+        --url "$ARCLINK_BOOTSTRAP_URL" \
         --tool "bootstrap.status" \
         --json-args "$(REQUEST_ID="$request_id" SOURCE_IP="$source_ip" python3 - <<'PY'
 import json
@@ -625,10 +625,10 @@ print(json.dumps({
 PY
         )" >/dev/null
       HERMES_HOME="$hermes_home" \
-      ALMANAC_MCP_URL="$ALMANAC_MCP_URL" \
-      ALMANAC_QMD_URL="$ALMANAC_QMD_URL" \
-      ALMANAC_BOOTSTRAP_TOKEN_FILE="$token_file" \
-      ALMANAC_ENROLLMENT_STATE_FILE="$state_file" \
+      ARCLINK_MCP_URL="$ARCLINK_MCP_URL" \
+      ARCLINK_QMD_URL="$ARCLINK_QMD_URL" \
+      ARCLINK_BOOTSTRAP_TOKEN_FILE="$token_file" \
+      ARCLINK_ENROLLMENT_STATE_FILE="$state_file" \
       "$SHARED_REPO_DIR/bin/activate-agent.sh" || true
       activation_status="$(json_get "$state_file" "status")"
       if [[ "$activation_status" == "active" || "$activation_status" == "denied" || "$activation_status" == "expired" ]]; then
@@ -657,16 +657,16 @@ Channels:
 Shared repo:
   $SHARED_REPO_DIR
 Local Hermes wrapper:
-  $HOME/.local/bin/almanac-agent-hermes
+  $HOME/.local/bin/arclink-agent-hermes
 Backup helper:
-  $HOME/.local/bin/almanac-agent-configure-backup
+  $HOME/.local/bin/arclink-agent-configure-backup
   Use this to set up this agent's separate private GitHub backup deploy key.
 Control plane:
-  $ALMANAC_MCP_URL
+  $ARCLINK_MCP_URL
 Bootstrap handshake:
-  $ALMANAC_BOOTSTRAP_URL
+  $ARCLINK_BOOTSTRAP_URL
 qmd:
-  $ALMANAC_QMD_URL
+  $ARCLINK_QMD_URL
 
 EOF
     return 0
@@ -693,16 +693,16 @@ Channels:
 Shared repo:
   $SHARED_REPO_DIR
 Local Hermes wrapper:
-  $HOME/.local/bin/almanac-agent-hermes
+  $HOME/.local/bin/arclink-agent-hermes
 Backup helper:
-  $HOME/.local/bin/almanac-agent-configure-backup
+  $HOME/.local/bin/arclink-agent-configure-backup
   Use this after approval to set up this agent's separate private GitHub backup deploy key.
 Control plane:
-  $ALMANAC_MCP_URL
+  $ARCLINK_MCP_URL
 Bootstrap handshake:
-  $ALMANAC_BOOTSTRAP_URL
+  $ARCLINK_BOOTSTRAP_URL
 qmd:
-  $ALMANAC_QMD_URL
+  $ARCLINK_QMD_URL
 
 The installed 4-hour user refresh timer will activate this agent automatically after approval.
 EOF
@@ -720,10 +720,10 @@ run_update_flow() {
   if [[ -d "$SHARED_REPO_DIR/skills" ]]; then
     install_default_skills "$HERMES_HOME_DEFAULT"
   fi
-  if [[ "$(id -un)" == "$ALMANAC_SERVICE_USER" && -x "$SHARED_REPO_DIR/bin/install-user-services.sh" ]]; then
-    ALMANAC_ALLOW_NO_USER_BUS=1 "$SHARED_REPO_DIR/bin/install-user-services.sh" || true
+  if [[ "$(id -un)" == "$ARCLINK_SERVICE_USER" && -x "$SHARED_REPO_DIR/bin/install-user-services.sh" ]]; then
+    ARCLINK_ALLOW_NO_USER_BUS=1 "$SHARED_REPO_DIR/bin/install-user-services.sh" || true
     if [[ -x "$SHARED_REPO_DIR/bin/health.sh" ]]; then
-      ALMANAC_ALLOW_SCAFFOLD_DEFAULTS=1 "$SHARED_REPO_DIR/bin/health.sh" || true
+      ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 "$SHARED_REPO_DIR/bin/health.sh" || true
     fi
   fi
 }

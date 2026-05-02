@@ -89,7 +89,7 @@ maybe_wait_for_tailscale_funnel_enablement() {
   echo "If the approval page asks for DNS prerequisites, enable MagicDNS and HTTPS Certificates at:" >&2
   echo "  https://login.tailscale.com/admin/dns" >&2
   echo "Press ENTER after enabling Tailscale Funnel to retry, or Ctrl+C to stop." >&2
-  if [[ "${ALMANAC_TAILSCALE_INTERACTIVE_ENABLE:-1}" == "1" && -t 0 ]]; then
+  if [[ "${ARCLINK_TAILSCALE_INTERACTIVE_ENABLE:-1}" == "1" && -t 0 ]]; then
     read -r -p "> "
     return 0
   fi
@@ -101,7 +101,7 @@ run_funnel_cmd() {
   local output=""
   local status=0
   local _attempt=""
-  local timeout_duration="${ALMANAC_TAILSCALE_COMMAND_TIMEOUT:-60s}"
+  local timeout_duration="${ARCLINK_TAILSCALE_COMMAND_TIMEOUT:-60s}"
   local command_timeout_duration=""
 
   command_timeout_duration="$(tailscale_command_timeout_duration "$timeout_duration")"
@@ -157,7 +157,7 @@ ensure_no_conflicting_funnel_service() {
   result="$(
     TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
       "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
-      "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
+      "${ARCLINK_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
 import sys
@@ -213,7 +213,7 @@ verify_funnel_config() {
 
   if TAILSCALE_FUNNEL_JSON="$ts_json" python3 - \
     "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
-    "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
+    "${ARCLINK_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
 import sys
@@ -287,6 +287,6 @@ detect_tailscale_runtime || {
 }
 ensure_no_conflicting_funnel_service
 run_funnel_cmd tailscale funnel --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" off >/dev/null 2>&1 || true
-run_funnel_cmd tailscale funnel --bg --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "http://127.0.0.1:${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" >/dev/null
+run_funnel_cmd tailscale funnel --bg --yes --https="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" "http://127.0.0.1:${ARCLINK_NOTION_WEBHOOK_PORT:-8283}" >/dev/null
 verify_funnel_config
 print_funnel_summary

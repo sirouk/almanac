@@ -35,7 +35,7 @@ import sqlite3, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path("python").resolve()))
-import almanac_control as control
+import arclink_control as control
 import arclink_api_auth as api
 
 conn = sqlite3.connect(":memory:")
@@ -79,7 +79,7 @@ from pathlib import Path
 
 repo = Path.cwd()
 sys.path.insert(0, str(repo / "python"))
-import almanac_control as control
+import arclink_control as control
 import arclink_api_auth as api
 
 conn = sqlite3.connect(":memory:")
@@ -149,7 +149,7 @@ Run at minimum:
 - `python3 tests/test_arclink_product_surface.py`
 - `python3 tests/test_arclink_public_bots.py`
 - `python3 tests/test_public_repo_hygiene.py`
-- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+- `python3 -m py_compile python/arclink_control.py python/arclink_*.py`
 - `python3 -m ruff check python/arclink_dashboard.py python/arclink_api_auth.py python/arclink_product_surface.py python/arclink_public_bots.py tests/test_arclink_dashboard.py tests/test_arclink_api_auth.py tests/test_arclink_product_surface.py tests/test_arclink_public_bots.py`
 - `git diff --check`
 

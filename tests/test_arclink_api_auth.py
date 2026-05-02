@@ -65,7 +65,7 @@ def seed_paid_deployment(control, onboarding, conn):
 
 
 def test_sessions_store_hashes_and_user_api_is_scoped_to_principal() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_user_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_user_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_user_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_user_test")
     conn = memory_db(control)
@@ -103,7 +103,7 @@ def test_sessions_store_hashes_and_user_api_is_scoped_to_principal() -> None:
 
 
 def test_public_onboarding_api_rate_limits_and_reuses_shared_contract() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_onboarding_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_onboarding_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_api_auth_onboarding_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_onboarding_test")
     conn = memory_db(control)
@@ -146,7 +146,7 @@ def test_public_onboarding_api_rate_limits_and_reuses_shared_contract() -> None:
 
 
 def test_public_onboarding_api_rejects_invalid_channel_before_rate_limit() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_invalid_onboarding_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_invalid_onboarding_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_invalid_onboarding_test")
     conn = memory_db(control)
 
@@ -163,7 +163,7 @@ def test_public_onboarding_api_rejects_invalid_channel_before_rate_limit() -> No
 
 
 def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_admin_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_admin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_admin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_admin_test")
     conn = memory_db(control)
@@ -251,7 +251,7 @@ def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> No
 
 
 def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_transport_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_transport_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_transport_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_transport_test")
     conn = memory_db(control)
@@ -299,7 +299,7 @@ def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> No
 
 
 def test_revoke_session_rejects_invalid_kind_before_update_or_audit() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_revoke_kind_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_revoke_kind_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_revoke_kind_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_revoke_kind_test")
     conn = memory_db(control)
@@ -338,7 +338,7 @@ def test_revoke_session_rejects_invalid_kind_before_update_or_audit() -> None:
 
 
 def test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit() -> None:
-    control = load_module("almanac_control.py", "almanac_control_api_auth_missing_revoke_test")
+    control = load_module("arclink_control.py", "arclink_control_api_auth_missing_revoke_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_missing_revoke_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_missing_revoke_test")
     conn = memory_db(control)

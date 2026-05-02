@@ -1,12 +1,12 @@
 /.git
 /.specify
-/config/almanac.env
+/config/arclink.env
 /config/install.answers.env
-/.almanac-operator.env
+/.arclink-operator.env
 /.env
 /.env.*
 /.ralphie
-/almanac-priv
+/arclink-priv
 /completion_log
 /consensus
 /coverage

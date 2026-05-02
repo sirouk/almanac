@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/common.sh"
 
-STATUS_DIR="${ALMANAC_DOCKER_JOB_STATUS_DIR:-$STATE_DIR/docker/jobs}"
+STATUS_DIR="${ARCLINK_DOCKER_JOB_STATUS_DIR:-$STATE_DIR/docker/jobs}"
 STATUS_FILE="$STATUS_DIR/$JOB_NAME.json"
 mkdir -p "$STATUS_DIR"
 output_file=""

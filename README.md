@@ -1,7 +1,7 @@
 # ArcLink
 
 ArcLink is the self-serve private AI deployment product being built from the
-Almanac substrate. It keeps Almanac's proven Hermes, qmd, vault, memory,
+ArcLink substrate. It keeps ArcLink's proven Hermes, qmd, vault, memory,
 Nextcloud, code-server, Notion, bot, health, and deploy machinery, then adds
 ArcLink product identity, hosted API contracts, Stripe entitlements,
 Cloudflare/Traefik intent, Chutes-first provider defaults, responsive user and
@@ -10,7 +10,7 @@ proof harness.
 
 `deploy.sh` still plays a real role: it is the host bootstrap and operations
 entrypoint for the underlying machine. It installs or repairs the Docker or
-baremetal Almanac runtime that ArcLink builds on. ArcLink's Python control
+baremetal ArcLink runtime that ArcLink builds on. ArcLink's Python control
 plane owns product state, provisioning intent, provider gates, admin actions,
 and live-proof orchestration.
 
@@ -31,11 +31,11 @@ credentials are supplied.
 ## What Ships Today
 
 ArcLink currently ships as an additive product/control-plane layer on top of the
-Almanac runtime. The combined system provides:
+ArcLink runtime. The combined system provides:
 
 - Host bootstrap, Docker install/repair, health, upgrade, and recovery tooling
   through `deploy.sh`.
-- A public infrastructure repo plus a nested private `almanac-priv/` repo for
+- A public infrastructure repo plus a nested private `arclink-priv/` repo for
   sensitive runtime state.
 - A shared vault on disk, exposed in Nextcloud as `/Vault`.
 - qmd collections for authored vault files, PDF-ingested markdown, and indexed
@@ -50,11 +50,11 @@ Almanac runtime. The combined system provides:
   custom provider.
 - Thinking-level selection for agents, with Chutes `:THINKING` model handling
   when enabled.
-- Shared Notion SSOT reads and safe writes through an Almanac broker.
+- Shared Notion SSOT reads and safe writes through an ArcLink broker.
 - Vault, skills, plugins, Notion, upgrade, and assigned-work notifications.
 - PDF extraction into generated markdown, with optional vision captions.
 - Repo sync for explicitly cloned git checkouts inside the vault.
-- GitHub backup for `almanac-priv/`.
+- GitHub backup for `arclink-priv/`.
 - Optional per-user Hermes-home backups.
 - Optional remote control of a user agent over Tailscale SSH.
 - Health, repair, enrollment cleanup, and upgrade tooling.
@@ -103,7 +103,7 @@ flowchart LR
     Operator[Operator] --> Curator[Curator Hermes]
     User[Enrolled user] --> Onboarding[Discord/Telegram onboarding]
     Onboarding --> Curator
-    Curator --> Control[almanac-mcp control plane]
+    Curator --> Control[arclink-mcp control plane]
     Control --> Provisioner[Enrollment provisioner]
     Provisioner --> Unix[Unix user + systemd user services]
     Provisioner --> Agent[User Hermes agent]
@@ -141,7 +141,7 @@ flowchart LR
     TailscaleServe --> QMD
     TailscaleFunnel[Tailscale Funnel public webhook] --> NotionWebhook
 
-    PrivateRepo[almanac-priv] --> Backup[GitHub backup job]
+    PrivateRepo[arclink-priv] --> Backup[GitHub backup job]
     Backup --> GitHub[Private GitHub backup repo]
 ```
 
@@ -150,9 +150,9 @@ flowchart LR
 The historical baremetal deployed layout is:
 
 ```text
-/home/almanac/
-  almanac/                 # public repo: scripts, units, templates, skills
-    almanac-priv/          # private nested repo: config, vault, runtime state
+/home/arclink/
+  arclink/                 # public repo: scripts, units, templates, skills
+    arclink-priv/          # private nested repo: config, vault, runtime state
 ```
 
 The Docker-first ArcLink host can also run from a root-owned or operator-owned
@@ -160,19 +160,19 @@ checkout such as:
 
 ```text
 /root/arclink/
-  almanac-priv/            # generated private runtime state
+  arclink-priv/            # generated private runtime state
 ```
 
 The exact host checkout path is less important than keeping the public repo and
 private runtime directory together. Docker mode records the chosen host paths in
-`almanac-priv/config/docker.env`.
+`arclink-priv/config/docker.env`.
 
-`almanac-priv/` contains the sensitive and living parts:
+`arclink-priv/` contains the sensitive and living parts:
 
 ```text
-almanac-priv/
+arclink-priv/
   config/
-    almanac.env
+    arclink.env
   vault/
   published/
   quarto/
@@ -185,14 +185,14 @@ almanac-priv/
     runtime/
 ```
 
-The public repo ignores `almanac-priv/`. Back up the inner private repo, not
+The public repo ignores `arclink-priv/`. Back up the inner private repo, not
 the outer infrastructure repo.
 
 ## Host Deployment From Scratch
 
 For ArcLink today, the recommended first host path is Docker Compose through
 `deploy.sh`. That gives you the operational substrate quickly while preserving
-the same health, repair, upgrade, and recovery entrypoint the older Almanac
+the same health, repair, upgrade, and recovery entrypoint the older ArcLink
 host path uses.
 
 ### 1. Prepare The Host
@@ -219,7 +219,7 @@ Until the dedicated ArcLink repository exists, the working branch is
 `arclink` in this repository.
 
 ```bash
-git clone -b arclink https://github.com/sirouk/almanac.git /root/arclink
+git clone -b arclink https://github.com/sirouk/arclink.git /root/arclink
 cd /root/arclink
 ```
 
@@ -232,7 +232,7 @@ cd /root/arclink
 ```
 
 `./deploy.sh docker install` is idempotent. It bootstraps
-`almanac-priv/`, writes `almanac-priv/config/docker.env`, generates local
+`arclink-priv/`, writes `arclink-priv/config/docker.env`, generates local
 runtime secrets for fresh installs, builds the app image, starts Docker Compose,
 runs Curator setup unless skipped, reconciles Docker state, records release
 state, prints ports, runs health checks, and runs the live-smoke checks that do
@@ -240,8 +240,8 @@ not require external provider credentials.
 
 ### 4. Know What Is Live And What Is Gated
 
-After Docker install, the host substrate can run the existing Almanac/ArcLink
-services: Nextcloud, qmd MCP, Almanac MCP, Notion webhook, vault watch, agent
+After Docker install, the host substrate can run the existing ArcLink/ArcLink
+services: Nextcloud, qmd MCP, ArcLink MCP, Notion webhook, vault watch, agent
 supervisor, health watch, refresh jobs, PDF ingest, memory synthesis, and
 supporting jobs from `compose.yaml`.
 
@@ -267,13 +267,13 @@ Docker-first.
 
 ## Deployment Paths
 
-ArcLink inherits two deployment paths from Almanac. They share the same
+ArcLink inherits two deployment paths from ArcLink. They share the same
 repository and operator control center, but they do not mean the same thing.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
 | **Docker-first** | ArcLink MVP host deployment, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
-| **Baremetal** | Legacy/full Almanac shared-host installs, operator onboarding, enrolled Unix users, systemd user services, production upgrades. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
+| **Baremetal** | Legacy/full ArcLink shared-host installs, operator onboarding, enrolled Unix users, systemd user services, production upgrades. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
 
 If a command does not include the word `docker`, it uses the baremetal path.
 Docker is always explicit under `./deploy.sh docker ...`.
@@ -302,7 +302,7 @@ shared-host system, performs operator onboarding/config collection, uses `sudo`
 for privileged host setup, manages systemd units, provisions enrolled Unix
 users, and drives production upgrades from the configured upstream.
 
-Use baremetal when you want the complete current Almanac operating model:
+Use baremetal when you want the complete current ArcLink operating model:
 Curator onboarding, per-user Unix accounts, user-level systemd services,
 chat gateways, Tailscale Serve/Funnel integration, host health repair, and
 idempotent reinstall/upgrade flows.
@@ -345,7 +345,7 @@ Common direct modes:
 ./deploy.sh enrollment-align
 ./deploy.sh enrollment-reset
 ./deploy.sh rotate-nextcloud-secrets
-./bin/almanac-ctl upgrade check
+./bin/arclink-ctl upgrade check
 ```
 
 Install asks for the service user, repo paths, org identity fields, Tailscale
@@ -358,8 +358,8 @@ the steps that need root.
 Before a serious install, have these ready:
 
 - A Linux host where the operator can use `sudo`.
-- A GitHub repo for this public `almanac` codebase.
-- A private GitHub repo for `almanac-priv` backup.
+- A GitHub repo for this public `arclink` codebase.
+- A private GitHub repo for `arclink-priv` backup.
 - Tailscale on the host if you want tailnet-only browser, MCP, and remote
   agent access.
 - A Discord or Telegram operator channel if you want chat approvals.
@@ -375,7 +375,7 @@ deployment path today. It is designed for portable operation on servers,
 laptops, homelab machines, org evaluation boxes, and container-first
 environments where host systemd user services are not the runtime manager.
 
-Use containerized when you want the ArcLink/Almanac substrate: Almanac MCP, qmd
+Use containerized when you want the ArcLink/ArcLink substrate: ArcLink MCP, qmd
 MCP, Notion webhook, Nextcloud, Postgres, Redis, vault watching, PDF ingest,
 docs sync,
 notification delivery, curator refresh, qmd refresh, enrolled-agent
@@ -406,14 +406,14 @@ From the repo root:
 ```
 
 Docker bootstrap writes local runtime config under
-`almanac-priv/config/docker.env`, generates local Postgres and Nextcloud
+`arclink-priv/config/docker.env`, generates local Postgres and Nextcloud
 secrets for fresh installs, and assigns a coherent available host port block.
-The selected ports are persisted in `almanac-priv/state/docker/ports.json`.
+The selected ports are persisted in `arclink-priv/state/docker/ports.json`.
 Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
 Docker install asks the operator-facing configuration questions, writes
-`almanac-priv/config/docker.env`, applies the private operating profile when
+`arclink-priv/config/docker.env`, applies the private operating profile when
 present, records the release state, runs strict Docker health, and runs the live
 agent MCP tool smoke so the containerized path stays aligned with the baremetal
 operator contract. It also runs the Curator setup flow from the container so the
@@ -421,8 +421,8 @@ operator gets the same model, channel, and notification questions as a
 baremetal install. If OpenAI Codex is selected as the org-wide provider, Docker
 install captures that shared credential from the Curator Codex sign-in instead
 of starting a separate auth flow during the first questionnaire. Set
-`ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG=1` or
-`ALMANAC_DOCKER_SKIP_CURATOR_SETUP=1` for scripted installs that should skip
+`ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG=1` or
+`ARCLINK_DOCKER_SKIP_CURATOR_SETUP=1` for scripted installs that should skip
 those interactive phases.
 
 ArcLink SaaS settings live in `config/env.example` and `ARCLINK_*` variables.
@@ -430,10 +430,10 @@ Those product settings are separate from the generated Docker runtime file. The
 Docker file brings up the host substrate; the ArcLink hosted API, dashboards,
 provider boundaries, and live-proof runner consume the ArcLink configuration.
 
-Docker agent homes are stored under `almanac-priv/state/docker/users/`, so
+Docker agent homes are stored under `arclink-priv/state/docker/users/`, so
 container recreation does not erase enrolled-agent Hermes homes. Agent dashboard
 and code-server ports are published one surface at a time from the access-state
-ports Almanac allocates, so a single occupied port cannot block the whole stack.
+ports ArcLink allocates, so a single occupied port cannot block the whole stack.
 
 The Docker path keeps the same operator vocabulary for container-native work:
 
@@ -467,22 +467,22 @@ More detail lives in `docs/docker.md`.
 
 ## Deploy Keys
 
-Almanac intentionally keeps deploy keys separate:
+ArcLink intentionally keeps deploy keys separate:
 
-- **Almanac upstream deploy key**: read/write key for operator or agent code
-  pushes to the public `almanac` repo.
-- **`almanac-priv` backup deploy key**: read/write key for private host
+- **ArcLink upstream deploy key**: read/write key for operator or agent code
+  pushes to the public `arclink` repo.
+- **`arclink-priv` backup deploy key**: read/write key for private host
   backup.
 - **Per-user agent backup deploy key**: read/write key for that user's private
   Hermes-home backup repo.
 
 Do not reuse those keys. Different blast radius, different job.
 
-During `deploy.sh install`, Almanac can generate the upstream key, print the
+During `deploy.sh install`, ArcLink can generate the upstream key, print the
 public key, print the GitHub deploy-key settings URL, and verify read plus
 dry-run write access once you enable **Allow write access** in GitHub.
 
-For `almanac-priv`, health checks refuse unsafe backup shapes. A backup target
+For `arclink-priv`, health checks refuse unsafe backup shapes. A backup target
 should be private.
 
 ## Upgrades
@@ -493,14 +493,14 @@ Use:
 ./deploy.sh upgrade
 ```
 
-Upgrade fetches the configured upstream repo and branch from `almanac.env`,
+Upgrade fetches the configured upstream repo and branch from `arclink.env`,
 syncs the deployed public repo, refreshes shared services, repairs Curator,
 records the release state, and ends with health.
 
 Curator also runs:
 
 ```bash
-./bin/almanac-ctl upgrade check
+./bin/arclink-ctl upgrade check
 ```
 
 on a timer. It can notify the operator when upstream has moved. If the
@@ -515,10 +515,10 @@ Users normally start in a Discord or Telegram DM with Curator:
 1. Curator asks for name, purpose, Unix username, bot name, model provider,
    model id, and thinking level.
 2. The operator approves the onboarding request.
-3. Almanac creates the Unix user, enables linger, and provisions the user
+3. ArcLink creates the Unix user, enables linger, and provisions the user
    Hermes home.
 4. The user gives Curator their own bot token for the same platform.
-5. Curator wires the user's agent gateway. For Discord, Almanac opens the
+5. Curator wires the user's agent gateway. For Discord, ArcLink opens the
    user-agent bot DM directly by Discord user id and uses that DM as the home
    channel; the user does not need to add the bot to a server first.
    For Telegram, Curator points the user at the `@botname` handle so they can
@@ -529,8 +529,8 @@ Users normally start in a Discord or Telegram DM with Curator:
 The public curl bootstrap also exists for laptop-originated enrollment:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/example/almanac/main/init.sh \
-  | bash -s -- agent --target-host almanac.your-tailnet.ts.net
+curl -fsSL https://raw.githubusercontent.com/example/arclink/main/init.sh \
+  | bash -s -- agent --target-host arclink.your-tailnet.ts.net
 ```
 
 That submits a tailnet-scoped enrollment request. The host-side install still
@@ -541,7 +541,7 @@ happens only after operator approval.
 The user-facing provider list is intentionally small and practical:
 
 - **Org-provided**: appears first when deploy config includes
-  `ALMANAC_ORG_PROVIDER_ENABLED=1` plus an org provider credential. Users do
+  `ARCLINK_ORG_PROVIDER_ENABLED=1` plus an org provider credential. Users do
   not provide a model or provider credential; Curator shows the org provider
   and default model, then explains how to change models later.
 - **Chutes model provider**: first in the list when no org default is configured. Curator asks
@@ -549,8 +549,8 @@ The user-facing provider list is intentionally small and practical:
   thinking level. Hermes is configured as a custom OpenAI-compatible provider
   using `https://llm.chutes.ai/v1`.
 - **Claude Opus**: uses Claude Code OAuth. Curator gives the user the Claude
-  authorization URL, the user completes the browser flow, and Almanac exchanges
-  the callback code privately. Almanac seeds refreshable Claude Code
+  authorization URL, the user completes the browser flow, and ArcLink exchanges
+  the callback code privately. ArcLink seeds refreshable Claude Code
   credentials for Hermes. It does not ask for an Anthropic API key or a setup
   token in chat.
 - **OpenAI Codex**: uses the Codex device sign-in flow.
@@ -571,13 +571,13 @@ supports it.
 An enrolled user gets:
 
 - A Unix account on the shared host.
-- A private `HERMES_HOME` under `~/.local/share/almanac-agent/hermes-home`.
+- A private `HERMES_HOME` under `~/.local/share/arclink-agent/hermes-home`.
 - A chat bot lane on Discord or Telegram.
 - User systemd services for refresh, gateway, dashboard, and code workspace
   when enabled.
-- A `~/Almanac` symlink to the shared vault for VS Code / code-server file
+- A `~/ArcLink` symlink to the shared vault for VS Code / code-server file
   explorer convenience.
-- `$HERMES_HOME/Almanac` and `$HERMES_HOME/Vault` symlinks for agent-local
+- `$HERMES_HOME/ArcLink` and `$HERMES_HOME/Vault` symlinks for agent-local
   discovery and compatibility with older instructions.
 - Optional Nextcloud user access.
 - Optional private agent backup to a user-owned GitHub repo. Curator asks for a
@@ -588,7 +588,7 @@ An enrolled user gets:
   sends the dashboard and workspace links, the user-agent bot DMs the user
   directly with the same code. Operators can retry that outreach from the
   configured operator channel with `/retry_contact <unixusername|discordname>`
-  or from the host with `almanac-ctl onboarding retry-contact`; retries reuse
+  or from the host with `arclink-ctl onboarding retry-contact`; retries reuse
   the stored Curator confirmation code and refuse to send if that code is
   missing or mismatched. Discord onboarding users can also DM Curator
   `/retry-contact` to retry their own agent-bot DM with the same code.
@@ -653,30 +653,30 @@ file still use the compatibility name `org-profile`, but the profile can model
 a solo operator, family/household, project collective, organization, or hybrid.
 The shipped repo includes the schema, a compact fictional example, a full
 fictional ultimate ingestion example, an interactive private profile builder,
-and an `almanac-ctl org-profile` build, validate, preview, apply, and doctor
-workflow. Almanac still seeds `SOUL.md` and
-`state/almanac-identity-context.json` from onboarding/session data, then
+and an `arclink-ctl org-profile` build, validate, preview, apply, and doctor
+workflow. ArcLink still seeds `SOUL.md` and
+`state/arclink-identity-context.json` from onboarding/session data, then
 overlays applied profile slices when a profile match exists.
 
 The populated private file belongs at:
 
 ```text
-almanac-priv/config/org-profile.yaml
+arclink-priv/config/org-profile.yaml
 ```
 
 Operator-specific source repo manifests and optional extra MCP rails are private
 configuration too:
 
 ```text
-almanac-priv/config/team-resources.tsv
-ALMANAC_EXTRA_MCP_NAME
-ALMANAC_EXTRA_MCP_LABEL
-ALMANAC_EXTRA_MCP_URL
+arclink-priv/config/team-resources.tsv
+ARCLINK_EXTRA_MCP_NAME
+ARCLINK_EXTRA_MCP_LABEL
+ARCLINK_EXTRA_MCP_URL
 ```
 
 `config/team-resources.example.tsv` shows the manifest format with fictional
 repos. `bin/clone-team-resources.sh` reads the private manifest, clones or
-updates those repos into the shared vault, and writes `.almanac-source.json`
+updates those repos into the shared vault, and writes `.arclink-source.json`
 sidecars so qmd can index them.
 
 The public repo includes a schema and fictional example:
@@ -710,11 +710,11 @@ profile, while deploy keys, tokens, and credentials stay in private state.
 Typical operator flow:
 
 ```bash
-./bin/almanac-ctl org-profile build
-./bin/almanac-ctl org-profile validate
-./bin/almanac-ctl org-profile preview
-./bin/almanac-ctl org-profile apply --yes
-./bin/almanac-ctl org-profile doctor
+./bin/arclink-ctl org-profile build
+./bin/arclink-ctl org-profile validate
+./bin/arclink-ctl org-profile preview
+./bin/arclink-ctl org-profile apply --yes
+./bin/arclink-ctl org-profile doctor
 ```
 
 `./deploy.sh install` asks whether to launch the interactive builder once the
@@ -723,13 +723,13 @@ present so production agents stay aligned with the operator-owned contract.
 
 ## qmd Retrieval
 
-Almanac indexes three active knowledge lanes:
+ArcLink indexes three active knowledge lanes:
 
 - `vault`: authored markdown/text files anywhere under the shared vault root.
 - `vault-pdf-ingest`: generated markdown sidecars created from PDFs.
 - `notion-shared`: indexed shared Notion pages.
 
-Agents should prefer Almanac MCP wrappers over raw qmd calls:
+Agents should prefer ArcLink MCP wrappers over raw qmd calls:
 
 ```text
 knowledge.search-and-fetch   # best first move when source is unclear
@@ -746,9 +746,9 @@ Those wrappers normalize qmd resource shapes, include PDF-ingest by default,
 bound fetch sizes, and fall back from vector+lex search to lex-only when a
 fast retrieval path needs to stay alive.
 
-`almanac-memory-synth.timer` is a cached second-stage sensemaking lane. When an
+`arclink-memory-synth.timer` is a cached second-stage sensemaking lane. When an
 OpenAI-compatible vision/chat model is configured through
-`ALMANAC_MEMORY_SYNTH_*` or the existing `PDF_VISION_*` settings, it periodically
+`ARCLINK_MEMORY_SYNTH_*` or the existing `PDF_VISION_*` settings, it periodically
 summarizes bounded vault folders and indexed Notion areas into compact semantic
 cards. The synthesis prompt is domain-neutral: it is meant to work for families,
 creators, small businesses, communities, research groups, and larger
@@ -779,7 +779,7 @@ path and adds the new one on the next qmd update. The live watcher triggers on
 creates, deletes, moves, and text-file writes; the scheduled qmd timer also
 runs every 15 minutes as a backstop.
 
-PDFs are reconciled by Almanac before qmd refresh:
+PDFs are reconciled by ArcLink before qmd refresh:
 
 - `pdf-ingest` extracts text with the configured backend.
 - Generated markdown lands under `state/pdf-ingest/markdown`.
@@ -794,12 +794,12 @@ PDF manifest and generated sidecar cleanup on the next watcher/timer pass.
 
 ## Explicit Repo Sync
 
-Almanac does not crawl every GitHub URL in the vault.
+ArcLink does not crawl every GitHub URL in the vault.
 
 The repo-sync rail now means:
 
 1. Clone a repo into the vault yourself.
-2. Almanac discovers real `.git/` checkouts.
+2. ArcLink discovers real `.git/` checkouts.
 3. On refresh, it hard-syncs each checkout to `origin/<current-branch>`.
 
 The sync behavior is intentionally mirror-like:
@@ -811,8 +811,8 @@ git clean -fdx
 ```
 
 Local commits and dirty edits are overwritten. Untracked files are removed,
-including gitignored build caches. Pinned Almanac sync trees such as
-`Agents_KB/hermes-agent-docs/` are skipped via `.almanac-source.json`.
+including gitignored build caches. Pinned ArcLink sync trees such as
+`Agents_KB/hermes-agent-docs/` are skipped via `.arclink-source.json`.
 
 `Repos/` is only the default library convention. Repo sync walks the whole
 vault, so `Clients/Acme/api`, `Code/demo`, or any other real checkout under
@@ -822,16 +822,16 @@ the vault, qmd and repo sync stop tending it.
 
 ## Hermes Docs
 
-Almanac syncs Hermes documentation into this default location:
+ArcLink syncs Hermes documentation into this default location:
 
 ```text
 vault/Agents_KB/hermes-agent-docs/
 ```
 
-That sync is pinned to the same `ALMANAC_HERMES_AGENT_REF` as the shared
+That sync is pinned to the same `ARCLINK_HERMES_AGENT_REF` as the shared
 runtime by default. Agents can search their own operating documentation
 without reading docs for a Hermes version they are not running. Operators can
-override `ALMANAC_HERMES_DOCS_VAULT_DIR` if their vault uses a different docs
+override `ARCLINK_HERMES_DOCS_VAULT_DIR` if their vault uses a different docs
 layout.
 
 ## Notion SSOT
@@ -842,7 +842,7 @@ Configure the shared Notion workspace with:
 ./deploy.sh notion-ssot
 ```
 
-To move Almanac to a different Notion workspace, use:
+To move ArcLink to a different Notion workspace, use:
 
 ```bash
 ./deploy.sh notion-migrate
@@ -854,7 +854,7 @@ old workspace-specific caches and pending writes, clears user Notion identity
 verification so users can re-verify, and runs a fresh `notion-shared` index
 sync.
 
-To copy a page subtree between Notion workspaces without changing Almanac's
+To copy a page subtree between Notion workspaces without changing ArcLink's
 live SSOT configuration, use:
 
 ```bash
@@ -863,11 +863,11 @@ live SSOT configuration, use:
 
 That guided flow asks for source and destination token files, a source root
 page URL/ID, and a destination parent/root page URL/ID. It writes backups under
-`almanac-priv/state/notion-transfer/` and always runs a restore dry-run before
+`arclink-priv/state/notion-transfer/` and always runs a restore dry-run before
 allowing writes.
 
 The shared Notion lane uses one operator-managed internal integration, not
-per-user OAuth. Almanac verifies each user's local Notion identity through a
+per-user OAuth. ArcLink verifies each user's local Notion identity through a
 self-serve claim page, then uses that verified identity to scope reads and
 writes.
 
@@ -875,9 +875,9 @@ Notion write behavior:
 
 - `insert`, `update`, `append`, `create_page`, and `create_database` are supported.
 - `create_page` creates shared pages or list pages under the configured
-  Almanac root page or an explicit target page so the new page inherits that
+  ArcLink root page or an explicit target page so the new page inherits that
   parent page's organization access.
-- `create_database` creates shared databases under the configured Almanac root
+- `create_database` creates shared databases under the configured ArcLink root
   page or an explicit target page so the new database inherits that parent
   page's organization access.
 - `archive`, `delete`, `trash`, and destructive operations are rejected.
@@ -889,7 +889,7 @@ Notion write behavior:
 - Writes inside a verified user's lane can apply immediately.
 - Out-of-scope writes queue for approval instead of pretending they worked.
 - Successful page writes return receipt fields such as URL/page id.
-- Notion's native edit history shows the integration; Almanac keeps local
+- Notion's native edit history shows the integration; ArcLink keeps local
   attribution and audit context, and can stamp `Changed By` when the database
   exposes that people property.
 
@@ -899,7 +899,7 @@ verified user, use `ssot.read` and `ssot.write`.
 
 ## Notifications
 
-Almanac is designed to nudge agents without turning them into notification
+ArcLink is designed to nudge agents without turning them into notification
 confetti.
 
 Event lanes include:
@@ -921,7 +921,7 @@ Curator delivers ambient context through plugin-managed context and hot events
 through notification delivery. Agents should verify live state before writing
 shared systems.
 
-`almanac-health-watch.timer` runs the full host health check on a 15-minute
+`arclink-health-watch.timer` runs the full host health check on a 15-minute
 cadence and queues an operator notification when failures appear or change. It
 dedupes by failure fingerprint and sends a recovery notice when the health
 check clears.
@@ -934,10 +934,10 @@ The default posture is local-first and tailnet-first:
 - Tailscale Serve publishes selected routes when enabled.
 - Funnel is only used for the explicitly configured public webhook route.
 - Shared Notion deletes are blocked at the broker.
-- Public repo code and private `almanac-priv` state are separate.
+- Public repo code and private `arclink-priv` state are separate.
 - Backup deploy keys are separate from code-push deploy keys.
 - User agents get isolated Unix accounts and private Hermes homes.
-- User agents authenticate to Almanac MCP with a per-agent bootstrap token
+- User agents authenticate to ArcLink MCP with a per-agent bootstrap token
   stored in their private Hermes home; the managed-context plugin injects it
   automatically so agents do not expose or hand-type it. Baremetal
   realignment and Docker agent supervision both validate and repair that token
@@ -955,7 +955,7 @@ Recovery surfaces:
 
 ```bash
 ./bin/curator-tui.sh
-./bin/almanac-ctl
+./bin/arclink-ctl
 ./deploy.sh health
 ./deploy.sh curator-setup
 ./deploy.sh enrollment-align
@@ -965,17 +965,17 @@ Recovery surfaces:
 Useful operator commands:
 
 ```bash
-./bin/almanac-ctl onboarding list
-./bin/almanac-ctl onboarding approve <session-id>
-./bin/almanac-ctl onboarding deny <session-id>
-./bin/almanac-ctl onboarding retry-contact <unixusername|discordname>
-./bin/almanac-ctl provision list
-./bin/almanac-ctl provision retry <request-id>
-./bin/almanac-ctl agent list
-./bin/almanac-ctl agent show <agent-id>
-./bin/almanac-ctl vault list
-./bin/almanac-ctl vault reload-defs
-./bin/almanac-ctl upgrade check
+./bin/arclink-ctl onboarding list
+./bin/arclink-ctl onboarding approve <session-id>
+./bin/arclink-ctl onboarding deny <session-id>
+./bin/arclink-ctl onboarding retry-contact <unixusername|discordname>
+./bin/arclink-ctl provision list
+./bin/arclink-ctl provision retry <request-id>
+./bin/arclink-ctl agent list
+./bin/arclink-ctl agent show <agent-id>
+./bin/arclink-ctl vault list
+./bin/arclink-ctl vault reload-defs
+./bin/arclink-ctl upgrade check
 ```
 
 Telegram bot command menus use Telegram-compatible underscores for multiword
@@ -1014,12 +1014,12 @@ Most operators should use `deploy.sh`, but the pieces are intentionally plain:
 - `bin/pdf-ingest.sh`: PDF-to-markdown reconciliation.
 - `bin/sync-hermes-docs-into-vault.sh`: pinned Hermes docs sync.
 - `bin/vault-repo-sync.sh`: explicit local `.git/` checkout hard-sync.
-- `bin/backup-to-github.sh`: `almanac-priv` backup.
+- `bin/backup-to-github.sh`: `arclink-priv` backup.
 - `bin/health-watch.sh`: scheduled health checks with deduped operator alerts.
 - `bin/configure-agent-backup.sh`: per-user Hermes-home backup setup and
   deploy-key verification fallback outside Curator.
 - `bin/setup-remote-hermes-client.sh`: remote Hermes client helper that creates a local `hermes-<org>-remote-<user>` wrapper.
-- `bin/almanac-ctl`: operator CLI.
+- `bin/arclink-ctl`: operator CLI.
 
 ## Day Two Checklist
 
@@ -1028,7 +1028,7 @@ After install:
 1. Run `./deploy.sh health`.
 2. Confirm `Summary: ... 0 warn, 0 fail`.
 3. Configure Notion with `./deploy.sh notion-ssot` if you want shared SSOT.
-4. Add the `almanac-priv` backup deploy key to a private repo.
+4. Add the `arclink-priv` backup deploy key to a private repo.
 5. Enroll a test user from Discord or Telegram.
 6. Ask the agent to create a harmless Notion page.
 7. Ask the agent to refuse a delete request.
@@ -1040,14 +1040,14 @@ After install:
 ## ArcLink: Self-Serve AI Deployment SaaS
 
 ArcLink is the Chutes-first self-serve AI deployment product built on top of
-Almanac's shared-host substrate. It adds commercial SaaS primitives while
-preserving the existing Almanac deploy, onboarding, Hermes, qmd, vault, memory,
+ArcLink's shared-host substrate. It adds commercial SaaS primitives while
+preserving the existing ArcLink deploy, onboarding, Hermes, qmd, vault, memory,
 Notion, and service-health paths.
 
 ArcLink owns:
 
 - Product identity and `ARCLINK_*` configuration (`python/arclink_product.py`).
-- 22 `arclink_*` database tables in `python/almanac_control.py`.
+- 22 `arclink_*` database tables in `python/arclink_control.py`.
 - Stripe entitlement interpretation (`python/arclink_entitlements.py`).
 - Hostname, DNS drift, and Traefik intent (`python/arclink_ingress.py`).
 - Nextcloud isolation and SSH access strategy (`python/arclink_access.py`).

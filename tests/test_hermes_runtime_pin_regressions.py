@@ -9,9 +9,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 COMMON_SH = REPO / "bin" / "common.sh"
-ENV_EXAMPLE = REPO / "config" / "almanac.env.example"
+ENV_EXAMPLE = REPO / "config" / "arclink.env.example"
 PINS_JSON = REPO / "config" / "pins.json"
-PINNED_REF = "98d75dea5a86aec599b1e081f8bbe9170bd3f964"
+PINNED_REF = "73bf3ab1b22314ed9dfecbb59242c03742fe72af"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -44,7 +44,7 @@ def test_shared_runtime_pin_is_exposed_and_no_longer_floats() -> None:
         common_text,
     )
     expect(pinned_ref == PINNED_REF, f"unexpected hermes-agent pin: {pinned_ref}")
-    expect(f"ALMANAC_HERMES_AGENT_REF={pinned_ref}" in example_text, example_text)
+    expect(f"ARCLINK_HERMES_AGENT_REF={pinned_ref}" in example_text, example_text)
     expect("git clone --depth 1 https://github.com/NousResearch/hermes-agent.git" not in common_text, common_text)
     expect('git -C "$repo_dir" pull --ff-only' not in common_text, common_text)
     expect('git -C "$repo_dir" checkout --force --detach "$resolved_commit"' in common_text, common_text)
@@ -179,7 +179,7 @@ runtime_python_has_pip() {{ return 0; }}
 ensure_hermes_dashboard_assets() {{ log_call "ensure_hermes_dashboard_assets $1"; }}
 sync_hermes_dashboard_assets_into_runtime() {{ log_call "sync_hermes_dashboard_assets_into_runtime $1 $2"; }}
 RUNTIME_DIR={shlex.quote(str(runtime_dir))}
-ALMANAC_HERMES_AGENT_REF={desired_commit}
+ARCLINK_HERMES_AGENT_REF={desired_commit}
 ensure_shared_hermes_runtime
 printf 'HEAD=%s\\n' "$(cat {shlex.quote(str(repo_dir / '.head-commit'))})"
 printf 'HAS_HERMES=%s\\n' "$(test -x {shlex.quote(str(venv_dir / 'bin' / 'hermes'))} && printf yes || printf no)"

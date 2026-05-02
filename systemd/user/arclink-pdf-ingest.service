@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink PDF ingestion and qmd refresh
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/pdf-ingest.sh

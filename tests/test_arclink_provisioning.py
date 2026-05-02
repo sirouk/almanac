@@ -60,7 +60,7 @@ def render_text(value) -> str:
 
 
 def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_render_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_render_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_render_test")
     conn = memory_db(control)
     seed_deployment(
@@ -107,11 +107,11 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["nextcloud_db_password"]["target"] == "/run/secrets/nextcloud_db_password", str(compose_secrets))
     expect(compose_secrets["nextcloud_admin_password"]["target"] == "/run/secrets/nextcloud_admin_password", str(compose_secrets))
     expect(compose_secrets["code_server_password"]["target"] == "/run/secrets/code_server_password", str(compose_secrets))
-    expect(intent["environment"]["HERMES_HOME"] == "/home/almanac/.hermes", str(intent["environment"]))
+    expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
-    expect(intent["environment"]["QMD_STATE_DIR"] == "/home/almanac/.qmd", str(intent["environment"]))
-    expect(intent["environment"]["ALMANAC_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
-    for key in ("HERMES_HOME", "VAULT_DIR", "QMD_STATE_DIR", "ALMANAC_MEMORY_SYNTH_STATE_DIR"):
+    expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
+    for key in ("HERMES_HOME", "VAULT_DIR", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
         expect(not intent["environment"][key].startswith("/arcdata/"), f"{key} leaked host root")
     expect(services["nextcloud"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_html"], str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_HOST"] == "nextcloud-db", str(services["nextcloud"]))
@@ -133,7 +133,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["nextcloud-db"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_db"], str(services["nextcloud-db"]))
     expect(services["nextcloud-redis"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_redis"], str(services["nextcloud-redis"]))
     expect(services["qmd-mcp"]["volumes"][1]["target"] == intent["environment"]["QMD_STATE_DIR"], str(services["qmd-mcp"]))
-    expect(services["memory-synth"]["volumes"][0]["target"] == intent["environment"]["ALMANAC_MEMORY_SYNTH_STATE_DIR"], str(services["memory-synth"]))
+    expect(services["memory-synth"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"], str(services["memory-synth"]))
     expect("PASSWORD_REF" not in services["code-server"]["environment"], str(services["code-server"]))
     expect("cat /run/secrets/code_server_password" in " ".join(services["code-server"]["command"]), str(services["code-server"]))
     expect(
@@ -165,7 +165,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
 
 
 def test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_gate_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_gate_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_gate_test")
     conn = memory_db(control)
     seed_deployment(control, conn, entitlement_state="none", status="entitlement_required")
@@ -181,7 +181,7 @@ def test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible() -
 
 
 def test_secret_validator_fails_job_and_same_idempotency_key_can_resume_after_fix() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_resume_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_resume_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_resume_test")
     conn = memory_db(control)
     seed_deployment(control, conn, metadata={"chutes_secret_ref": "sk_live_plaintext"})
@@ -210,7 +210,7 @@ def test_secret_validator_fails_job_and_same_idempotency_key_can_resume_after_fi
 
 
 def test_failed_provisioning_retry_clears_stale_timestamps_and_error() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_timestamp_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_timestamp_test")
     conn = memory_db(control)
     control.create_arclink_provisioning_job(
         conn,
@@ -277,7 +277,7 @@ def test_secret_validator_rejects_plaintext_provider_and_gateway_values() -> Non
 
 
 def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_secret_resolution_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_secret_resolution_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_secret_resolution_test")
     conn = memory_db(control)
     seed_deployment(control, conn)
@@ -309,7 +309,7 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
 
 
 def test_failed_execution_job_gets_idempotent_rollback_plan_event() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_rollback_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_rollback_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_rollback_test")
     conn = memory_db(control)
     seed_deployment(control, conn)
@@ -345,7 +345,7 @@ def test_failed_execution_job_gets_idempotent_rollback_plan_event() -> None:
 
 
 def test_rendered_services_include_resource_limits_and_healthchecks() -> None:
-    control = load_module("almanac_control.py", "almanac_control_provisioning_limits_test")
+    control = load_module("arclink_control.py", "arclink_control_provisioning_limits_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_limits_test")
     conn = memory_db(control)
     seed_deployment(control, conn)

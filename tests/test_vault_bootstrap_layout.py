@@ -89,10 +89,10 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
             "# Google Workspace\n",
             encoding="utf-8",
         )
-        legacy_flat_skill_note = vault_dir / "Skills" / "almanac-qmd-mcp.md"
+        legacy_flat_skill_note = vault_dir / "Skills" / "arclink-qmd-mcp.md"
         legacy_flat_skill_note.parent.mkdir(parents=True, exist_ok=True)
         legacy_flat_skill_note.write_text(
-            "<!-- managed: almanac-generated-vault-note -->\n# Legacy flat skill note\n",
+            "<!-- managed: arclink-generated-vault-note -->\n# Legacy flat skill note\n",
             encoding="utf-8",
         )
 
@@ -105,7 +105,7 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
                 "--vault-dir",
                 str(vault_dir),
                 "--repo-url",
-                "https://github.com/example/almanac",
+                "https://github.com/example/arclink",
                 "--hermes-skills-dir",
                 str(hermes_skills_dir),
             ],
@@ -132,33 +132,33 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
         projects_readme = (vault_dir / "Projects" / "README.md").read_text(encoding="utf-8")
         expect("organization" in projects_readme.lower(), projects_readme)
 
-        repos_note = (vault_dir / "Repos" / "almanac.md").read_text(encoding="utf-8")
-        expect("https://github.com/example/almanac" in repos_note, repos_note)
+        repos_note = (vault_dir / "Repos" / "arclink.md").read_text(encoding="utf-8")
+        expect("https://github.com/example/arclink" in repos_note, repos_note)
 
-        project_note = (vault_dir / "Projects" / "almanac.md").read_text(encoding="utf-8")
-        expect("Almanac" in project_note, project_note)
+        project_note = (vault_dir / "Projects" / "arclink.md").read_text(encoding="utf-8")
+        expect("ArcLink" in project_note, project_note)
 
-        almanac_skill_notes = sorted(path.name for path in (vault_dir / "Agents_Skills" / "Almanac").glob("*.md") if path.name != "README.md")
+        arclink_skill_notes = sorted(path.name for path in (vault_dir / "Agents_Skills" / "ArcLink").glob("*.md") if path.name != "README.md")
         expected_skill_notes = {
-            "almanac-first-contact.md",
-            "almanac-notion-knowledge.md",
-            "almanac-notion-mcp.md",
-            "almanac-qmd-mcp.md",
-            "almanac-resources.md",
-            "almanac-ssot.md",
-            "almanac-ssot-connect.md",
-            "almanac-upgrade-orchestrator.md",
-            "almanac-vault-reconciler.md",
-            "almanac-vaults.md",
+            "arclink-first-contact.md",
+            "arclink-notion-knowledge.md",
+            "arclink-notion-mcp.md",
+            "arclink-qmd-mcp.md",
+            "arclink-resources.md",
+            "arclink-ssot.md",
+            "arclink-ssot-connect.md",
+            "arclink-upgrade-orchestrator.md",
+            "arclink-vault-reconciler.md",
+            "arclink-vaults.md",
         }
-        expect(expected_skill_notes.issubset(set(almanac_skill_notes)), f"missing seeded Almanac skill notes: expected {expected_skill_notes}, got {almanac_skill_notes}")
+        expect(expected_skill_notes.issubset(set(arclink_skill_notes)), f"missing seeded ArcLink skill notes: expected {expected_skill_notes}, got {arclink_skill_notes}")
         expect(not legacy_flat_skill_note.exists(), f"expected generated flat skill note to be removed: {legacy_flat_skill_note}")
         hermes_skill_note = vault_dir / "Agents_Skills" / "Hermes" / "productivity" / "google-workspace.md"
         expect(hermes_skill_note.is_file(), f"missing Hermes bundled skill note: {hermes_skill_note}")
         expect("Gmail" in hermes_skill_note.read_text(encoding="utf-8"), hermes_skill_note.read_text(encoding="utf-8"))
 
         plugin_notes = sorted(path.name for path in (vault_dir / "Agents_Plugins").glob("*.md") if path.name != "README.md")
-        expected_plugin_notes = {"almanac-managed-context.md"}
+        expected_plugin_notes = {"arclink-managed-context.md"}
         expect(expected_plugin_notes.issubset(set(plugin_notes)), f"missing seeded plugin notes: expected {expected_plugin_notes}, got {plugin_notes}")
         print("PASS test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legacy_defaults")
 
@@ -171,26 +171,26 @@ def test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrati
 
         legacy_skills_dir = vault_dir / "Skills"
         legacy_plugins_dir = vault_dir / "Plugins"
-        (legacy_skills_dir / "Almanac").mkdir(parents=True, exist_ok=True)
+        (legacy_skills_dir / "ArcLink").mkdir(parents=True, exist_ok=True)
         legacy_plugins_dir.mkdir(parents=True, exist_ok=True)
         (legacy_skills_dir / ".vault").write_text(
-            "# managed: almanac-default-vault\nname: Skills\n",
+            "# managed: arclink-default-vault\nname: Skills\n",
             encoding="utf-8",
         )
         (legacy_skills_dir / "README.md").write_text(
-            "<!-- managed: almanac-default-vault -->\n# Skills\n",
+            "<!-- managed: arclink-default-vault -->\n# Skills\n",
             encoding="utf-8",
         )
-        (legacy_skills_dir / "Almanac" / "almanac-ssot.md").write_text(
-            "<!-- managed: almanac-generated-vault-note -->\n# Old SSOT note\n",
+        (legacy_skills_dir / "ArcLink" / "arclink-ssot.md").write_text(
+            "<!-- managed: arclink-generated-vault-note -->\n# Old SSOT note\n",
             encoding="utf-8",
         )
         (legacy_skills_dir / "custom-playbook.md").write_text(
             "# Custom legacy skill note\n\nKeep this where the operator put it.\n",
             encoding="utf-8",
         )
-        (legacy_plugins_dir / "almanac-managed-context.md").write_text(
-            "<!-- managed: almanac-generated-vault-note -->\n# Old plugin note\n",
+        (legacy_plugins_dir / "arclink-managed-context.md").write_text(
+            "<!-- managed: arclink-generated-vault-note -->\n# Old plugin note\n",
             encoding="utf-8",
         )
         (legacy_plugins_dir / "local-plugin-idea.md").write_text(
@@ -208,7 +208,7 @@ def test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrati
                     "--vault-dir",
                     str(vault_dir),
                     "--repo-url",
-                    "https://github.com/example/almanac",
+                    "https://github.com/example/arclink",
                 ],
                 env={**os.environ},
                 text=True,
@@ -221,15 +221,15 @@ def test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrati
         expect((legacy_plugins_dir / "local-plugin-idea.md").is_file(), "expected custom legacy Plugins content to be preserved")
         expect(not (legacy_skills_dir / ".vault").exists(), "expected managed legacy Skills metadata to move away")
         expect(not (legacy_skills_dir / "README.md").exists(), "expected managed legacy Skills README to move away")
-        expect(not (legacy_skills_dir / "Almanac" / "almanac-ssot.md").exists(), "expected managed legacy skill note to move away")
-        expect(not (legacy_plugins_dir / "almanac-managed-context.md").exists(), "expected managed legacy plugin note to move away")
+        expect(not (legacy_skills_dir / "ArcLink" / "arclink-ssot.md").exists(), "expected managed legacy skill note to move away")
+        expect(not (legacy_plugins_dir / "arclink-managed-context.md").exists(), "expected managed legacy plugin note to move away")
 
         skills_metadata = (vault_dir / "Agents_Skills" / ".vault").read_text(encoding="utf-8")
         plugins_metadata = (vault_dir / "Agents_Plugins" / ".vault").read_text(encoding="utf-8")
         expect("name: Agents_Skills" in skills_metadata, skills_metadata)
         expect("name: Agents_Plugins" in plugins_metadata, plugins_metadata)
-        expect((vault_dir / "Agents_Skills" / "Almanac" / "almanac-ssot.md").is_file(), "expected migrated/generated Almanac skill note")
-        expect((vault_dir / "Agents_Plugins" / "almanac-managed-context.md").is_file(), "expected migrated/generated plugin note")
+        expect((vault_dir / "Agents_Skills" / "ArcLink" / "arclink-ssot.md").is_file(), "expected migrated/generated ArcLink skill note")
+        expect((vault_dir / "Agents_Plugins" / "arclink-managed-context.md").is_file(), "expected migrated/generated plugin note")
         print("PASS test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrating_managed_files")
 
 
@@ -254,14 +254,14 @@ def test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git(
                 "--vault-dir",
                 str(vault_dir),
             ],
-            env={**os.environ, "ALMANAC_UPSTREAM_REPO_URL": "https://github.com/example/almanac.git"},
+            env={**os.environ, "ARCLINK_UPSTREAM_REPO_URL": "https://github.com/example/arclink.git"},
             text=True,
             capture_output=True,
             check=False,
         )
         expect(result.returncode == 0, f"expected reconcile-vault-layout env fallback to succeed, got rc={result.returncode} stderr={result.stderr!r}")
-        repos_note = (vault_dir / "Repos" / "almanac.md").read_text(encoding="utf-8")
-        expect("https://github.com/example/almanac" in repos_note, repos_note)
+        repos_note = (vault_dir / "Repos" / "arclink.md").read_text(encoding="utf-8")
+        expect("https://github.com/example/arclink" in repos_note, repos_note)
         print("PASS test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git")
 
 

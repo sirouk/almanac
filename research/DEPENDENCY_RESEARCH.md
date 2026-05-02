@@ -8,7 +8,7 @@
 | Python | `python/`, `tests/`, `requirements-dev.txt` | Hosted API, auth, onboarding, entitlements, provider adapters, provisioning, executor, dashboards read models, diagnostics, fleet, rollout, live proof | Keep as primary business/control-plane layer. |
 | Bash | `deploy.sh`, `bin/`, `test.sh` | Bootstrap, deploy, health, Docker operations, job wrappers, operator flows | Preserve; wrap rather than rewrite. |
 | Docker Compose | `compose.yaml`, Docker health/deploy scripts, executor tests | MVP runtime and per-deployment provisioning target | Keep as first deployment substrate. |
-| SQLite | `python/almanac_control.py`, schema tests | Almanac and ArcLink control-plane state | Keep first; maintain Postgres-compatible schema habits. |
+| SQLite | `python/arclink_control.py`, schema tests | ArcLink and ArcLink control-plane state | Keep first; maintain Postgres-compatible schema habits. |
 | Postgres | `compose.yaml`, pins/config | Nextcloud database today; possible future ArcLink SaaS state | Keep as service dependency; defer SaaS migration. |
 | Redis | `compose.yaml`, pins/config | Nextcloud cache today; possible jobs/pubsub/rate-limit layer | Keep as available secondary service. |
 | Hermes | runtime pins, plugins, hooks, skills, gateway scripts | Agent runtime, skills, managed context, chat gateways, dashboard/cron behavior | Preserve and expose as a core product strength. |
@@ -28,7 +28,7 @@
 
 | Decision area | Preferred | Alternative | Reasoning |
 | --- | --- | --- | --- |
-| Product evolution | Add ArcLink modules beside Almanac | Full rename/rewrite first | Additive approach preserves working deploy/runtime behavior. |
+| Product evolution | Add ArcLink modules beside ArcLink | Full rename/rewrite first | Additive approach preserves working deploy/runtime behavior. |
 | Deployment substrate | Docker Compose | Kubernetes/Nomad | Compose is enough for MVP and is already supported. |
 | State database | SQLite-first | Immediate Postgres migration | Existing tests and helpers are SQLite-based; migrate after contracts stabilize. |
 | Async jobs | Durable DB-backed state machine first | Redis queue first | Idempotency and audit matter before throughput scaling. |
@@ -42,7 +42,7 @@
 ## Compatibility Rules
 
 - Prefer `ARCLINK_*` for new product-facing configuration.
-- Preserve `ALMANAC_*` aliases where existing deployment or runtime paths need
+- Preserve `ARCLINK_*` aliases where existing deployment or runtime paths need
   migration safety.
 - Treat blank env values as unset.
 - Store secret values only in private state or live environment; diagnostics and

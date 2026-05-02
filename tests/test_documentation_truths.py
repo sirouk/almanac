@@ -25,10 +25,10 @@ def test_agents_service_user_unit_list_matches_templates() -> None:
     body = (REPO / "AGENTS.md").read_text(encoding="utf-8")
     section = _section_between(
         body,
-        "Main service-user units installed for the Almanac service user:",
+        "Main service-user units installed for the ArcLink service user:",
         "Whether Curator uses onboarding services",
     )
-    documented_units = set(re.findall(r"\balmanac-[a-z0-9-]+\.(?:service|timer|path)\b", section))
+    documented_units = set(re.findall(r"\barclink-[a-z0-9-]+\.(?:service|timer|path)\b", section))
     template_units = {path.name for path in (REPO / "systemd" / "user").iterdir() if path.is_file()}
     expect(
         documented_units == template_units,
@@ -40,11 +40,11 @@ def test_agents_service_user_unit_list_matches_templates() -> None:
 def test_org_profile_docs_mark_cli_as_shipped_contract() -> None:
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     org_doc = (REPO / "docs" / "org-profile.md").read_text(encoding="utf-8")
-    ctl = (REPO / "python" / "almanac_ctl.py").read_text(encoding="utf-8")
+    ctl = (REPO / "python" / "arclink_ctl.py").read_text(encoding="utf-8")
     normalized_readme = " ".join(readme.split())
     expect('subparsers.add_parser("org-profile")' in ctl, "org-profile CLI should be implemented")
     expect(
-        "`almanac-ctl org-profile`" in readme
+        "`arclink-ctl org-profile`" in readme
         and "build, validate, preview, apply, and doctor workflow" in normalized_readme,
         readme,
     )

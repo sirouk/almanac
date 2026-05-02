@@ -1,4 +1,0 @@
-name: almanac-telegram-start
-description: Rewrite Telegram /start into a normal first message for Almanac agents.
-events:
-  - command:start

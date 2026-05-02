@@ -1,5 +1,5 @@
 # slug|git-url|branch|note
-# Copy this file into almanac-priv/config/team-resources.tsv and replace these
+# Copy this file into arclink-priv/config/team-resources.tsv and replace these
 # fictional examples with private operator resources. Keep real org, family,
 # project, and personal source refs out of the public repo.
 project-handbook|https://github.com/example/project-handbook.git|main|Private project handbook and source packet

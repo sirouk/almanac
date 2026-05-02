@@ -2,12 +2,12 @@
 
 ## Foundation (2026-05-01)
 
-Initial ArcLink foundation landed as an additive layer on the Almanac substrate.
+Initial ArcLink foundation landed as an additive layer on the ArcLink substrate.
 All work is no-secret testable; no live provider credentials are required.
 
 ### Modules Delivered
 
-- **arclink_product.py**: `ARCLINK_*` / `ALMANAC_*` config resolution with
+- **arclink_product.py**: `ARCLINK_*` / `ARCLINK_*` config resolution with
   blank-safe precedence and conflict diagnostics.
 - **arclink_chutes.py**: Chutes catalog client with direct API key and bearer
   auth support; fake no-secret adapter for tests.
@@ -62,7 +62,7 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
 
 ### Schema
 
-22 `arclink_*` tables are owned by `almanac_control.py`:
+22 `arclink_*` tables are owned by `arclink_control.py`:
 
 - `arclink_users`, `arclink_webhook_events`, `arclink_deployments`,
   `arclink_subscriptions`
@@ -79,7 +79,7 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
 ### Key Design Decisions
 
 - **Additive**: ArcLink namespaces (`ARCLINK_*`, `arclink_*`) sit alongside
-  Almanac; no existing paths are renamed or broken.
+  ArcLink; no existing paths are renamed or broken.
 - **No-secret first**: All unit/regression tests run without live credentials.
   Fake adapters default everywhere.
 - **Dry-run before live**: Provisioning renders intent records before any

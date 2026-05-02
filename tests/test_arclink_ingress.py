@@ -39,7 +39,7 @@ def memory_db(control):
 
 
 def test_dns_reconciler_persists_desired_records_and_records_drift_events() -> None:
-    control = load_module("almanac_control.py", "almanac_control_ingress_dns_test")
+    control = load_module("arclink_control.py", "arclink_control_ingress_dns_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_dns_test")
     ingress = load_module("arclink_ingress.py", "arclink_ingress_dns_test")
     conn = memory_db(control)
@@ -76,7 +76,7 @@ def test_traefik_dynamic_labels_match_golden_file_for_all_host_roles() -> None:
 
 
 def test_dns_provision_creates_records_and_marks_provisioned() -> None:
-    control = load_module("almanac_control.py", "almanac_control_ingress_prov_test")
+    control = load_module("arclink_control.py", "arclink_control_ingress_prov_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_prov_test")
     ingress = load_module("arclink_ingress.py", "arclink_ingress_prov_test")
     conn = memory_db(control)
@@ -104,7 +104,7 @@ def test_dns_provision_creates_records_and_marks_provisioned() -> None:
 
 
 def test_dns_teardown_removes_records_and_marks_torn_down() -> None:
-    control = load_module("almanac_control.py", "almanac_control_ingress_tear_test")
+    control = load_module("arclink_control.py", "arclink_control_ingress_tear_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_tear_test")
     ingress = load_module("arclink_ingress.py", "arclink_ingress_tear_test")
     conn = memory_db(control)
@@ -136,7 +136,7 @@ def test_dns_teardown_removes_records_and_marks_torn_down() -> None:
 
 
 def test_dns_provision_is_idempotent_on_retry() -> None:
-    control = load_module("almanac_control.py", "almanac_control_ingress_retry_test")
+    control = load_module("arclink_control.py", "arclink_control_ingress_retry_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_retry_test")
     ingress = load_module("arclink_ingress.py", "arclink_ingress_retry_test")
     conn = memory_db(control)

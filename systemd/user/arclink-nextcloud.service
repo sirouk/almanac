@@ -1,0 +1,14 @@
+[Unit]
+Description=ArcLink Nextcloud stack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=0
+ExecStart=%h/arclink/bin/nextcloud-up.sh
+ExecStop=%h/arclink/bin/nextcloud-down.sh
+
+[Install]
+WantedBy=default.target

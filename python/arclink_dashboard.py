@@ -6,7 +6,7 @@ import os
 import sqlite3
 from typing import Any, Mapping
 
-from almanac_control import append_arclink_audit, utc_now_iso
+from arclink_control import append_arclink_audit, utc_now_iso
 from arclink_adapters import arclink_hostnames
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_product import primary_provider
@@ -119,7 +119,7 @@ def build_scale_operations_snapshot(
     capacity = fleet_capacity_summary(conn)
 
     # Stale queued actions (queued for over threshold)
-    from almanac_control import parse_utc_iso, utc_now
+    from arclink_control import parse_utc_iso, utc_now
     now = utc_now()
     queued_rows = conn.execute(
         "SELECT * FROM arclink_action_intents WHERE status IN ('queued', 'running') ORDER BY created_at ASC",

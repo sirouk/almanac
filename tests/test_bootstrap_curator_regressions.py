@@ -36,11 +36,11 @@ def test_fresh_install_prompts_for_channels_even_with_tui_only_default() -> None
         tmp_path = Path(tmp)
         manifest_path = tmp_path / "curator-manifest.json"
         script = f"""
-ALMANAC_CURATOR_CHANNELS=tui-only
-ALMANAC_CURATOR_MANIFEST={shlex.quote(str(manifest_path))}
-ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
-ALMANAC_CURATOR_SKIP_HERMES_SETUP=0
-ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=0
+ARCLINK_CURATOR_CHANNELS=tui-only
+ARCLINK_CURATOR_MANIFEST={shlex.quote(str(manifest_path))}
+ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
+ARCLINK_CURATOR_SKIP_HERMES_SETUP=0
+ARCLINK_CURATOR_SKIP_GATEWAY_SETUP=0
 ask_default() {{
   case "$1" in
     *Discord*) printf '%s' yes ;;
@@ -74,11 +74,11 @@ def test_existing_channels_reuse_noninteractive_without_prompt() -> None:
         manifest_path.write_text("{}", encoding="utf-8")
         prompt_log = tmp_path / "prompt.log"
         script = f"""
-ALMANAC_CURATOR_CHANNELS=tui-only,discord
-ALMANAC_CURATOR_MANIFEST={shlex.quote(str(manifest_path))}
-ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
-ALMANAC_CURATOR_SKIP_HERMES_SETUP=0
-ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=0
+ARCLINK_CURATOR_CHANNELS=tui-only,discord
+ARCLINK_CURATOR_MANIFEST={shlex.quote(str(manifest_path))}
+ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
+ARCLINK_CURATOR_SKIP_HERMES_SETUP=0
+ARCLINK_CURATOR_SKIP_GATEWAY_SETUP=0
 PROMPT_LOG={shlex.quote(str(prompt_log))}
 ask_default() {{
   printf '%s\\n' "$1" >> "$PROMPT_LOG"
@@ -121,11 +121,11 @@ def test_notify_channel_defaults_to_only_selected_platform_without_reusing_tui_o
 PROMPT_LOG={shlex.quote(str(prompt_log))}
 OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
 OPERATOR_NOTIFY_CHANNEL_ID=
-ALMANAC_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
-ALMANAC_CURATOR_SKIP_HERMES_SETUP=0
-ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=0
-ALMANAC_CURATOR_NOTIFY_PLATFORM=
-ALMANAC_CURATOR_NOTIFY_CHANNEL_ID=
+ARCLINK_CURATOR_FORCE_CHANNEL_RECONFIGURE=0
+ARCLINK_CURATOR_SKIP_HERMES_SETUP=0
+ARCLINK_CURATOR_SKIP_GATEWAY_SETUP=0
+ARCLINK_CURATOR_NOTIFY_PLATFORM=
+ARCLINK_CURATOR_NOTIFY_CHANNEL_ID=
 ask_default() {{
   printf '%s\\n' "$1 [$2]" >> "$PROMPT_LOG"
   printf '%s' "${{2:-}}"
@@ -136,7 +136,10 @@ confirm_default() {{
 }}
 {helpers}
 {snippet}
-mapfile -t result < <(resolve_notify_channel "tui-only,discord")
+result=()
+while IFS= read -r line; do
+  result+=("$line")
+done < <(resolve_notify_channel "tui-only,discord")
 printf 'PLATFORM=%s\\n' "${{result[0]:-}}"
 printf 'CHANNEL=%s\\n' "${{result[1]:-}}"
 printf 'PROMPTS_BEGIN\\n'
@@ -188,7 +191,7 @@ def test_ensure_curator_hermes_reuses_healthy_runtime_before_refreshing() -> Non
     text = BOOTSTRAP_CURATOR.read_text()
     snippet = extract(text, "ensure_curator_hermes() {", "main() {")
     script = f"""
-RUNTIME_DIR=/srv/almanac/runtime
+RUNTIME_DIR=/srv/arclink/runtime
 runtime_python_has_pip() {{ return 0; }}
 shared_runtime_python_is_share_safe() {{ return 0; }}
 ensure_shared_hermes_runtime() {{
@@ -197,8 +200,8 @@ ensure_shared_hermes_runtime() {{
 }}
 mkdir() {{ command mkdir "$@"; }}
 {snippet}
-mkdir -p /tmp/almanac-bootstrap-curator-test/hermes-venv/bin
-RUNTIME_DIR=/tmp/almanac-bootstrap-curator-test
+mkdir -p /tmp/arclink-bootstrap-curator-test/hermes-venv/bin
+RUNTIME_DIR=/tmp/arclink-bootstrap-curator-test
 touch "$RUNTIME_DIR/hermes-venv/bin/hermes" "$RUNTIME_DIR/hermes-venv/bin/python3"
 chmod +x "$RUNTIME_DIR/hermes-venv/bin/hermes" "$RUNTIME_DIR/hermes-venv/bin/python3"
 ensure_curator_hermes
@@ -232,8 +235,8 @@ def test_curator_defaults_wires_vault_agents_skills_without_exported_env() -> No
         script = f"""
 set -euo pipefail
 VAULT_DIR={shlex.quote(str(vault_dir))}
-unset ALMANAC_AGENT_VAULT_DIR
-unset ALMANAC_SHARED_SKILLS_DIR
+unset ARCLINK_AGENT_VAULT_DIR
+unset ARCLINK_SHARED_SKILLS_DIR
 RUNTIME_DIR=/tmp/unused-runtime
 {snippet}
 ensure_hermes_agent_defaults {shlex.quote(str(hermes_home))} python3
@@ -254,26 +257,26 @@ def test_main_runs_curator_defaults_when_setup_is_skipped() -> None:
         bootstrap_dir = tmp_path / "bootstrap"
         (bootstrap_dir / "bin").mkdir(parents=True)
         (bootstrap_dir / "python").mkdir()
-        for name in ("sync-hermes-bundled-skills.sh", "install-almanac-skills.sh", "install-almanac-plugins.sh", "migrate-hermes-config.sh"):
+        for name in ("sync-hermes-bundled-skills.sh", "install-arclink-skills.sh", "install-arclink-plugins.sh", "migrate-hermes-config.sh"):
             script_path = bootstrap_dir / "bin" / name
             script_path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             script_path.chmod(0o755)
-        ctl_path = bootstrap_dir / "python" / "almanac_ctl.py"
+        ctl_path = bootstrap_dir / "python" / "arclink_ctl.py"
         ctl_path.write_text("import sys\nraise SystemExit(0)\n", encoding="utf-8")
 
         script = f"""
 set -euo pipefail
 BOOTSTRAP_DIR={shlex.quote(str(bootstrap_dir))}
 RUNTIME_DIR={shlex.quote(str(tmp_path / "runtime"))}
-ALMANAC_USER=almanac
-ALMANAC_CURATOR_HERMES_HOME={shlex.quote(str(tmp_path / "hermes-home"))}
-ALMANAC_CURATOR_SKIP_HERMES_SETUP=1
-ALMANAC_CURATOR_SKIP_GATEWAY_SETUP=1
-ALMANAC_CURATOR_FORCE_HERMES_SETUP=0
-ALMANAC_CURATOR_FORCE_GATEWAY_SETUP=0
-ALMANAC_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
-ALMANAC_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
-ALMANAC_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
+ARCLINK_USER=arclink
+ARCLINK_CURATOR_HERMES_HOME={shlex.quote(str(tmp_path / "hermes-home"))}
+ARCLINK_CURATOR_SKIP_HERMES_SETUP=1
+ARCLINK_CURATOR_SKIP_GATEWAY_SETUP=1
+ARCLINK_CURATOR_FORCE_HERMES_SETUP=0
+ARCLINK_CURATOR_FORCE_GATEWAY_SETUP=0
+ARCLINK_MODEL_PRESET_CODEX=openai-codex:gpt-5.5
+ARCLINK_MODEL_PRESET_OPUS=anthropic:claude-opus-4-7
+ARCLINK_MODEL_PRESET_CHUTES=chutes:moonshotai/Kimi-K2.6-TEE
 OPERATOR_NOTIFY_CHANNEL_PLATFORM=tui-only
 OPERATOR_NOTIFY_CHANNEL_ID=
 OPERATOR_GENERAL_CHANNEL_PLATFORM=
@@ -313,7 +316,7 @@ test_case() {{
   ran_model_setup=0
   ran_gateway_setup=0
   hermes_state_file=
-  ALMANAC_CURATOR_HERMES_HOME=/tmp/hermes-home
+  ARCLINK_CURATOR_HERMES_HOME=/tmp/hermes-home
   hermes_bin=/tmp/hermes
   probe_hermes_state_json() {{
     printf '%s' '{{"model_preset":"custom","model_string":"stale:model","channels_csv":"tui-only"}}'
@@ -376,7 +379,7 @@ fi
         expect(result.returncode == 0, f"gateway soft-success case failed: {result.stderr}")
         expect("RESULT=success" in result.stdout, f"expected soft success, got: {result.stdout!r}")
         expect(
-            "Almanac will restart the configured gateway service below" in result.stderr,
+            "ArcLink will restart the configured gateway service below" in result.stderr,
             f"expected root-restart soft-success warning, got: {result.stderr!r}",
         )
     print("PASS test_run_curator_gateway_setup_treats_root_restart_as_soft_success")
@@ -388,8 +391,8 @@ def test_operator_notify_falls_back_to_tui_only_when_target_verification_fails()
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         bootstrap_dir = tmp_path / "bootstrap"
-        ctl_path = bootstrap_dir / "bin" / "almanac-ctl"
-        log_path = tmp_path / "almanac-ctl.log"
+        ctl_path = bootstrap_dir / "bin" / "arclink-ctl"
+        log_path = tmp_path / "arclink-ctl.log"
         ctl_path.parent.mkdir(parents=True, exist_ok=True)
         ctl_path.write_text(
             f"""#!/usr/bin/env bash
@@ -407,7 +410,10 @@ exit 0
         script = f"""
 BOOTSTRAP_DIR={shlex.quote(str(bootstrap_dir))}
 {helpers}
-mapfile -t configured < <(configure_operator_notify_channel "discord" "555026921809772555")
+configured=()
+while IFS= read -r line; do
+  configured+=("$line")
+done < <(configure_operator_notify_channel "discord" "555026921809772555")
 printf 'PLATFORM=%s\\n' "${{configured[0]:-}}"
 printf 'CHANNEL=%s\\n' "${{configured[1]:-}}"
 printf 'LOG_BEGIN\\n'

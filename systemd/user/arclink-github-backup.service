@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink vault backup to GitHub
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/backup-to-github.sh

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check ArcLink health and notify the operator
+
+[Timer]
+OnActiveSec=5m
+OnUnitActiveSec=15m
+AccuracySec=1m
+Unit=arclink-health-watch.service
+
+[Install]
+WantedBy=timers.target

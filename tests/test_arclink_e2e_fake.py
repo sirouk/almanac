@@ -24,7 +24,7 @@ _MOD_SUFFIX = "_e2e_fake"
 
 
 def _load():
-    control = load_module("almanac_control.py", f"control{_MOD_SUFFIX}")
+    control = load_module("arclink_control.py", f"control{_MOD_SUFFIX}")
     api = load_module("arclink_api_auth.py", f"api{_MOD_SUFFIX}")
     hosted = load_module("arclink_hosted_api.py", f"hosted{_MOD_SUFFIX}")
     adapters = load_module("arclink_adapters.py", f"adapters{_MOD_SUFFIX}")

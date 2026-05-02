@@ -10,14 +10,14 @@ fi
 
 MODE=""
 FORWARD_ARGS=()
-REPO_URL="${ALMANAC_INIT_REPO_URL:-https://github.com/example/almanac.git}"
-RAW_INIT_URL="${ALMANAC_INIT_RAW_URL:-https://raw.githubusercontent.com/example/almanac/main/init.sh}"
-CACHE_DIR="${ALMANAC_INIT_CACHE_DIR:-$HOME/.cache/almanac-init}"
+REPO_URL="${ARCLINK_INIT_REPO_URL:-https://github.com/example/arclink.git}"
+RAW_INIT_URL="${ARCLINK_INIT_RAW_URL:-https://raw.githubusercontent.com/example/arclink/main/init.sh}"
+CACHE_DIR="${ARCLINK_INIT_CACHE_DIR:-$HOME/.cache/arclink-init}"
 REPO_DIR="$CACHE_DIR/repo"
-TARGET_HOST="${ALMANAC_TARGET_HOST:-}"
-TARGET_USER="${ALMANAC_TARGET_USER:-$(id -un 2>/dev/null || printf '')}"
-PUBLIC_MCP_URL="${ALMANAC_PUBLIC_MCP_URL:-}"
-PUBLIC_MCP_PATH="${ALMANAC_PUBLIC_MCP_PATH:-/almanac-mcp}"
+TARGET_HOST="${ARCLINK_TARGET_HOST:-}"
+TARGET_USER="${ARCLINK_TARGET_USER:-$(id -un 2>/dev/null || printf '')}"
+PUBLIC_MCP_URL="${ARCLINK_PUBLIC_MCP_URL:-}"
+PUBLIC_MCP_PATH="${ARCLINK_PUBLIC_MCP_PATH:-/arclink-mcp}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -79,16 +79,16 @@ have_tty() {
 }
 
 remote_bootstrap_hint() {
-  local host_example="${TARGET_HOST:-almanac.example.test}"
+  local host_example="${TARGET_HOST:-arclink.example.test}"
   cat >&2 <<EOF
-Remote enrollment from a non-Linux client needs the Almanac host.
+Remote enrollment from a non-Linux client needs the ArcLink host.
 
 Use one of these forms:
-  curl -fsSL $RAW_INIT_URL | ALMANAC_TARGET_HOST=$host_example bash -s -- $MODE
+  curl -fsSL $RAW_INIT_URL | ARCLINK_TARGET_HOST=$host_example bash -s -- $MODE
   curl -fsSL $RAW_INIT_URL | bash -s -- $MODE --target-host $host_example
 
-Note: ALMANAC_TARGET_HOST must be set for bash, not curl. This will not work:
-  ALMANAC_TARGET_HOST=$host_example curl -fsSL ... | bash -s -- $MODE
+Note: ARCLINK_TARGET_HOST must be set for bash, not curl. This will not work:
+  ARCLINK_TARGET_HOST=$host_example curl -fsSL ... | bash -s -- $MODE
 EOF
 }
 
@@ -171,15 +171,15 @@ request_remote_enrollment() {
   local bootstrap_url requester_identity request_json
 
   if [[ -z "$TARGET_HOST" ]]; then
-    TARGET_HOST="$(prompt_tty "Target Almanac hostname")"
+    TARGET_HOST="$(prompt_tty "Target ArcLink hostname")"
   fi
   if [[ -z "$TARGET_HOST" ]]; then
-    echo "Target Almanac hostname is required." >&2
+    echo "Target ArcLink hostname is required." >&2
     exit 1
   fi
 
-  if [[ -z "$TARGET_USER" && -n "${ALMANAC_TARGET_USER:-}" ]]; then
-    TARGET_USER="$ALMANAC_TARGET_USER"
+  if [[ -z "$TARGET_USER" && -n "${ARCLINK_TARGET_USER:-}" ]]; then
+    TARGET_USER="$ARCLINK_TARGET_USER"
   fi
   if [[ -z "$TARGET_USER" ]] && have_tty; then
     TARGET_USER="$(prompt_tty "Unix username to provision on $TARGET_HOST" "$(id -un 2>/dev/null || printf '')")"
@@ -196,14 +196,14 @@ request_remote_enrollment() {
   fi
 
   bootstrap_url="$(remote_bootstrap_url)"
-  requester_identity="${ALMANAC_REQUESTER_IDENTITY:-$(id -un 2>/dev/null || printf "$TARGET_USER")}"
+  requester_identity="${ARCLINK_REQUESTER_IDENTITY:-$(id -un 2>/dev/null || printf "$TARGET_USER")}"
 
   request_json="$(
-    ALMANAC_REMOTE_BOOTSTRAP_URL="$bootstrap_url" \
-    ALMANAC_REMOTE_REQUESTER_IDENTITY="$requester_identity" \
-    ALMANAC_REMOTE_UNIX_USER="$TARGET_USER" \
-    ALMANAC_REMOTE_MODEL_PRESET="${ALMANAC_INIT_MODEL_PRESET:-}" \
-    ALMANAC_REMOTE_CHANNELS="${ALMANAC_INIT_CHANNELS:-}" \
+    ARCLINK_REMOTE_BOOTSTRAP_URL="$bootstrap_url" \
+    ARCLINK_REMOTE_REQUESTER_IDENTITY="$requester_identity" \
+    ARCLINK_REMOTE_UNIX_USER="$TARGET_USER" \
+    ARCLINK_REMOTE_MODEL_PRESET="${ARCLINK_INIT_MODEL_PRESET:-}" \
+    ARCLINK_REMOTE_CHANNELS="${ARCLINK_INIT_CHANNELS:-}" \
     python3 - <<'PY'
 import json
 import os
@@ -259,15 +259,15 @@ def rpc(url: str, payload: dict, session_id: str | None = None) -> tuple[str | N
     return response_headers.get("mcp-session-id") or session_id, parsed
 
 
-url = os.environ["ALMANAC_REMOTE_BOOTSTRAP_URL"]
-channels = [item.strip() for item in os.environ.get("ALMANAC_REMOTE_CHANNELS", "").split(",") if item.strip()]
+url = os.environ["ARCLINK_REMOTE_BOOTSTRAP_URL"]
+channels = [item.strip() for item in os.environ.get("ARCLINK_REMOTE_CHANNELS", "").split(",") if item.strip()]
 arguments = {
-    "requester_identity": os.environ["ALMANAC_REMOTE_REQUESTER_IDENTITY"],
-    "unix_user": os.environ["ALMANAC_REMOTE_UNIX_USER"],
+    "requester_identity": os.environ["ARCLINK_REMOTE_REQUESTER_IDENTITY"],
+    "unix_user": os.environ["ARCLINK_REMOTE_UNIX_USER"],
     "auto_provision": True,
 }
-if os.environ.get("ALMANAC_REMOTE_MODEL_PRESET"):
-    arguments["model_preset"] = os.environ["ALMANAC_REMOTE_MODEL_PRESET"]
+if os.environ.get("ARCLINK_REMOTE_MODEL_PRESET"):
+    arguments["model_preset"] = os.environ["ARCLINK_REMOTE_MODEL_PRESET"]
 if channels:
     arguments["channels"] = channels
 
@@ -280,7 +280,7 @@ session_id, _ = rpc(
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "almanac-init", "version": "1.0"},
+            "clientInfo": {"name": "arclink-init", "version": "1.0"},
         },
     },
 )

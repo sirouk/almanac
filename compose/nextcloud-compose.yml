@@ -1,6 +1,6 @@
 services:
   db:
-    image: ${ALMANAC_POSTGRES_IMAGE:-docker.io/library/postgres}:${ALMANAC_POSTGRES_TAG:-16-alpine}
+    image: ${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}:${ARCLINK_POSTGRES_TAG:-16-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
@@ -15,13 +15,13 @@ services:
       retries: 5
 
   redis:
-    image: ${ALMANAC_REDIS_IMAGE:-docker.io/library/redis}:${ALMANAC_REDIS_TAG:-7-alpine}
+    image: ${ARCLINK_REDIS_IMAGE:-docker.io/library/redis}:${ARCLINK_REDIS_TAG:-7-alpine}
     restart: unless-stopped
     volumes:
       - "${NEXTCLOUD_REDIS_DIR}:/data"
 
   app:
-    image: ${ALMANAC_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ALMANAC_NEXTCLOUD_TAG:-31-apache}
+    image: ${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ARCLINK_NEXTCLOUD_TAG:-31-apache}
     restart: unless-stopped
     depends_on:
       - db
@@ -39,7 +39,7 @@ services:
       NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1 ${NEXTCLOUD_TRUSTED_DOMAIN:-localhost}
       OVERWRITEPROTOCOL: https
     volumes:
-      - "${NEXTCLOUD_ALMANAC_CONFIG_FILE}:/almanac-config/almanac.config.php:ro"
+      - "${NEXTCLOUD_ARCLINK_CONFIG_FILE}:/arclink-config/arclink.config.php:ro"
       - "${NEXTCLOUD_HTML_DIR}:/var/www/html"
       - "${NEXTCLOUD_DATA_DIR}:/var/www/html/data"
       - "${NEXTCLOUD_PRE_INSTALL_HOOK_DIR}:/docker-entrypoint-hooks.d/pre-installation"

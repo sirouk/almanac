@@ -6,15 +6,15 @@ usage() {
 Usage: setup-remote-hermes-client.sh [--host tailnet-host] [--user remote-unix-user] [--org organization-name] [--key-path ~/.ssh/key]
 
 Create a local SSH/tailnet wrapper that starts Hermes on a remote
-Almanac-enrolled user account. This is remote-agent control, not local Hermes
+ArcLink-enrolled user account. This is remote-agent control, not local Hermes
 with a remote terminal backend.
 EOF
 }
 
-TARGET_HOST="${ALMANAC_REMOTE_HERMES_HOST:-}"
-TARGET_USER="${ALMANAC_REMOTE_HERMES_USER:-}"
-TARGET_ORG="${ALMANAC_REMOTE_HERMES_ORG:-}"
-KEY_PATH="${ALMANAC_REMOTE_HERMES_KEY_PATH:-$HOME/.ssh/almanac-remote-hermes-ed25519}"
+TARGET_HOST="${ARCLINK_REMOTE_HERMES_HOST:-}"
+TARGET_USER="${ARCLINK_REMOTE_HERMES_USER:-}"
+TARGET_ORG="${ARCLINK_REMOTE_HERMES_ORG:-}"
+KEY_PATH="${ARCLINK_REMOTE_HERMES_KEY_PATH:-$HOME/.ssh/arclink-remote-hermes-ed25519}"
 
 is_tailnet_host() {
   python3 - "$1" <<'PY'
@@ -121,7 +121,7 @@ fi
 
 mkdir -p "$(dirname "$KEY_PATH")" "$HOME/.local/bin"
 if [[ ! -f "$KEY_PATH" ]]; then
-  key_comment="almanac-remote-hermes@$(hostname -s 2>/dev/null || printf 'client')"
+  key_comment="arclink-remote-hermes@$(hostname -s 2>/dev/null || printf 'client')"
   ssh-keygen -q -t ed25519 -N '' -C "$key_comment" -f "$KEY_PATH"
 fi
 chmod 600 "$KEY_PATH"
@@ -149,7 +149,7 @@ wrapper_path="$HOME/.local/bin/hermes-${org_slug}-remote-${user_slug}"
 cat >"$wrapper_path" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-remote_cmd='exec "\$HOME/.local/bin/almanac-agent-hermes"'
+remote_cmd='exec "\$HOME/.local/bin/arclink-agent-hermes"'
 for arg in "\$@"; do
   printf -v quoted '%q' "\$arg"
   remote_cmd+=" \$quoted"
@@ -176,7 +176,7 @@ Remote Hermes client prepared
   organization: ${TARGET_ORG:-$TARGET_HOST}
 
 What this does:
-  The wrapper runs Hermes on the remote Almanac host inside your agent lane.
+  The wrapper runs Hermes on the remote ArcLink host inside your agent lane.
   It uses the remote Hermes config, skills, MCP tools, plugins, and files.
   Do not run your local 'hermes' command for this path; run the wrapper below.
 

@@ -1,0 +1,6 @@
+[Unit]
+Description=ArcLink qmd index refresh
+
+[Service]
+Type=oneshot
+ExecStart=%h/arclink/bin/qmd-refresh.sh

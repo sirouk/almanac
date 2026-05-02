@@ -8,19 +8,19 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "Hermes docs sync"
 ensure_layout
 
-if [[ "${ALMANAC_HERMES_DOCS_SYNC_ENABLED:-1}" != "1" ]]; then
+if [[ "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}" != "1" ]]; then
   echo "Hermes docs sync is disabled."
   exit 0
 fi
 
-repo_url="${ALMANAC_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
-repo_ref="${ALMANAC_HERMES_DOCS_REF:-${ALMANAC_HERMES_AGENT_REF:-main}}"
-source_subdir="${ALMANAC_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
-checkout_dir="${ALMANAC_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
-target_dir="${ALMANAC_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Agents_KB/hermes-agent-docs}"
+repo_url="${ARCLINK_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
+repo_ref="${ARCLINK_HERMES_DOCS_REF:-${ARCLINK_HERMES_AGENT_REF:-main}}"
+source_subdir="${ARCLINK_HERMES_DOCS_SOURCE_SUBDIR:-website/docs}"
+checkout_dir="${ARCLINK_HERMES_DOCS_STATE_DIR:-$STATE_DIR/hermes-docs-src}"
+target_dir="${ARCLINK_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Agents_KB/hermes-agent-docs}"
 canonical_target_dir="$VAULT_DIR/Agents_KB/hermes-agent-docs"
 legacy_target_dir="$VAULT_DIR/Repos/hermes-agent-docs"
-meta_file="$target_dir/.almanac-source.json"
+meta_file="$target_dir/.arclink-source.json"
 
 if [[ "$target_dir" == "$canonical_target_dir" && -d "$legacy_target_dir" ]]; then
   mkdir -p "$(dirname "$target_dir")"
@@ -66,7 +66,7 @@ if command -v rsync >/dev/null 2>&1; then
     --exclude='.github' \
     "$source_dir"/ "$target_dir"/
 else
-  find "$target_dir" -mindepth 1 -maxdepth 1 ! -name '.almanac-source.json' -exec rm -rf {} +
+  find "$target_dir" -mindepth 1 -maxdepth 1 ! -name '.arclink-source.json' -exec rm -rf {} +
   cp -R "$source_dir"/. "$target_dir"/
 fi
 

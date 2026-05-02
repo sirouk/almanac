@@ -33,7 +33,7 @@ payment testing.
   remain.
 - The failed webhook row should remain replayable in a predictable state.
 - Processed events must remain idempotent.
-- Existing helper APIs in `python/almanac_control.py` should keep their public
+- Existing helper APIs in `python/arclink_control.py` should keep their public
   semantics unless tests are updated intentionally. Prefer adding `commit=False`
   or internal no-commit variants for webhook use instead of breaking unrelated
   callers.
@@ -137,9 +137,9 @@ Run at minimum:
 
 ```bash
 python3 tests/test_arclink_entitlements.py
-python3 -m py_compile python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py
-python3 -m pyflakes python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py
-python3 -m ruff check python/arclink_entitlements.py python/almanac_control.py tests/test_arclink_entitlements.py
+python3 -m py_compile python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py
+python3 -m pyflakes python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py
+python3 -m ruff check python/arclink_entitlements.py python/arclink_control.py tests/test_arclink_entitlements.py
 git diff --check
 git diff --cached --check
 ```

@@ -1,6 +1,0 @@
-[Unit]
-Description=Almanac semantic memory synthesis
-
-[Service]
-Type=oneshot
-ExecStart=%h/almanac/bin/memory-synth.sh

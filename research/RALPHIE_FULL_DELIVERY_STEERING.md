@@ -6,7 +6,7 @@ and no-secret smoke surface.
 
 ## Mission
 
-Transform Almanac into ArcLink end to end:
+Transform ArcLink into ArcLink end to end:
 
 - Chutes-first, self-serve, paid, single-user AI infrastructure.
 - Entry through website workflow, Telegram public onboarding bot, or Discord
@@ -25,18 +25,18 @@ Transform Almanac into ArcLink end to end:
 
 ## Non-Negotiable Product Direction
 
-- Preserve Almanac's proven orchestration. Do not throw away Hermes, qmd,
+- Preserve ArcLink's proven orchestration. Do not throw away Hermes, qmd,
   managed context, memory synthesis, vault watch, Notion rails, health watch,
   agent supervisor, Nextcloud, code-server, Telegram/Discord onboarding, or
   provider auth.
-- New public/product surfaces must say ArcLink, not Almanac. Legacy
-  `ALMANAC_*` compatibility may remain only as aliases for existing installs.
+- New public/product surfaces must say ArcLink, not ArcLink. Legacy
+  `ARCLINK_*` compatibility may remain only as aliases for existing installs.
 - Chutes is the default inference path. The default base URL is
   `https://llm.chutes.ai/v1`; the default model is
   `moonshotai/Kimi-K2.6-TEE` until the model catalog refresh path proves a
   better current default.
 - BYOK/OpenAI Codex and Anthropic Claude remain power-user lanes. Keep their
-  auth flows compatible with the existing Almanac provider-auth machinery.
+  auth flows compatible with the existing ArcLink provider-auth machinery.
 - Surface the technology tastefully. Hermes, qmd, memory stubs, vaults,
   Chutes, skills, health, and private infrastructure are product strengths.
 - The first screen of the website/app must be usable onboarding, not a
@@ -184,7 +184,7 @@ Keep no-secret work moving, but ask for these before live E2E:
 ## Do Not Do
 
 - Do not collapse the product into only a WSGI demo.
-- Do not remove existing Almanac services to simplify the plan.
+- Do not remove existing ArcLink services to simplify the plan.
 - Do not use path-prefix routing for Nextcloud/code-server unless tested.
 - Do not expose raw SSH through HTTP/Traefik HostSNI as if it works.
 - Do not place plaintext provider/customer secrets in tests, docs, logs, or

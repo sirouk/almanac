@@ -11,7 +11,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
-CONTROL_PY = PYTHON_DIR / "almanac_control.py"
+CONTROL_PY = PYTHON_DIR / "arclink_control.py"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -22,11 +22,11 @@ def expect(condition: bool, message: str) -> None:
 def load_control():
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    spec = importlib.util.spec_from_file_location("almanac_control_arclink_schema_test", CONTROL_PY)
+    spec = importlib.util.spec_from_file_location("arclink_control_arclink_schema_test", CONTROL_PY)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load module from {CONTROL_PY}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["almanac_control_arclink_schema_test"] = module
+    sys.modules["arclink_control_arclink_schema_test"] = module
     spec.loader.exec_module(module)
     return module
 

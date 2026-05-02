@@ -1,7 +1,7 @@
-/config/almanac.env
+/config/arclink.env
 /config/install.answers.env
-/.almanac-operator.env
-/almanac-priv/
+/.arclink-operator.env
+/arclink-priv/
 __pycache__/
 *.pyc
 .env

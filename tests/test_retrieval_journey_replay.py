@@ -54,7 +54,7 @@ def test_journeys_cover_world_class_personas_and_sources() -> None:
 
 def test_payload_texts_ignores_query_echo_and_checks_fetched_evidence() -> None:
     mod = load_module()
-    needle = "ALMANAC_REPLAY_echo_probe"
+    needle = "ARCLINK_REPLAY_echo_probe"
     echoed_payload = {
         "query": needle,
         "fetched": [
@@ -86,9 +86,9 @@ def test_payload_texts_ignores_query_echo_and_checks_fetched_evidence() -> None:
 def test_seed_vault_creates_repo_bulk_and_extractable_pdf() -> None:
     mod = load_module()
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "Almanac"
+        root = Path(tmp) / "ArcLink"
         replay_root = mod.seed_vault(root, "seedprobe", bulk_count=3, include_pdf=True)
-        expect(".almanac" not in replay_root.as_posix(), "replay root must not use a hidden path skipped by qmd")
+        expect(".arclink" not in replay_root.as_posix(), "replay root must not use a hidden path skipped by qmd")
         expect((replay_root / "business" / "mira-board-prep.md").exists(), "business markdown missing")
         expect((replay_root / "family" / "rowan-week.txt").exists(), "family text missing")
         expect((replay_root / "repos" / "fluxbridge" / ".git").exists(), "local cloned-repo fixture missing")
@@ -133,17 +133,17 @@ def test_scorecard_records_accuracy_and_persona_timings() -> None:
     print("PASS test_scorecard_records_accuracy_and_persona_timings")
 
 
-def test_almanac_ctl_exposes_retrieval_replay_command() -> None:
-    ctl = (REPO / "python" / "almanac_ctl.py").read_text(encoding="utf-8")
-    wrapper = (REPO / "bin" / "almanac-ctl").read_text(encoding="utf-8")
-    expect('subparsers.add_parser("retrieval")' in ctl, "retrieval domain missing from almanac_ctl")
+def test_arclink_ctl_exposes_retrieval_replay_command() -> None:
+    ctl = (REPO / "python" / "arclink_ctl.py").read_text(encoding="utf-8")
+    wrapper = (REPO / "bin" / "arclink-ctl").read_text(encoding="utf-8")
+    expect('subparsers.add_parser("retrieval")' in ctl, "retrieval domain missing from arclink_ctl")
     expect('retrieval_sub.add_parser("replay")' in ctl, "retrieval replay command missing")
     expect('"unset QMD_INDEX_DB_PATH INDEX_PATH; "' in ctl, "qmd refresh runuser command should clear root-derived qmd cache env")
     expect('export XDG_CACHE_HOME="$HOME/.cache";' in ctl, "qmd refresh runuser command should pin service-user cache")
     expect('domain_arg="$arg"' in wrapper, "wrapper should detect domain after global flags")
     expect('"$domain_arg" == "retrieval" && "$action_arg" == "replay"' in wrapper, "retrieval replay should sudo through wrapper")
-    expect('ALMANAC_CONFIG_FILE="${ALMANAC_CONFIG_FILE:-$CONFIG_FILE}"' in wrapper, "sudo re-exec should preserve discovered config")
-    print("PASS test_almanac_ctl_exposes_retrieval_replay_command")
+    expect('ARCLINK_CONFIG_FILE="${ARCLINK_CONFIG_FILE:-$CONFIG_FILE}"' in wrapper, "sudo re-exec should preserve discovered config")
+    print("PASS test_arclink_ctl_exposes_retrieval_replay_command")
 
 
 def main() -> int:
@@ -151,7 +151,7 @@ def main() -> int:
     test_payload_texts_ignores_query_echo_and_checks_fetched_evidence()
     test_seed_vault_creates_repo_bulk_and_extractable_pdf()
     test_scorecard_records_accuracy_and_persona_timings()
-    test_almanac_ctl_exposes_retrieval_replay_command()
+    test_arclink_ctl_exposes_retrieval_replay_command()
     print("PASS all 5 retrieval journey replay tests")
     return 0
 

@@ -15,11 +15,11 @@ if [[ $# -lt 1 ]]; then
 fi
 
 HERMES_HOME_TARGET="$1"
-STATE_FILE="$HERMES_HOME_TARGET/state/almanac-agent-backup.env"
+STATE_FILE="$HERMES_HOME_TARGET/state/arclink-agent-backup.env"
 GITHUB_API_BASE="${AGENT_BACKUP_GITHUB_API_BASE:-https://api.github.com}"
 BACKUP_RECONCILE_PUSH_REQUIRED=1
 
-if [[ "${GITHUB_API_BASE%/}" != "https://api.github.com" && "${ALMANAC_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
+if [[ "${GITHUB_API_BASE%/}" != "https://api.github.com" && "${ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
   echo "Refusing non-default GitHub API base for backup visibility checks: $GITHUB_API_BASE" >&2
   echo "This override is reserved for tests; production backup safety must verify against https://api.github.com." >&2
   exit 1
@@ -36,8 +36,8 @@ source "$STATE_FILE"
 AGENT_BACKUP_REMOTE="${AGENT_BACKUP_REMOTE:-}"
 AGENT_BACKUP_BRANCH="${AGENT_BACKUP_BRANCH:-main}"
 AGENT_BACKUP_INCLUDE_SESSIONS="${AGENT_BACKUP_INCLUDE_SESSIONS:-1}"
-AGENT_BACKUP_KEY_PATH="${AGENT_BACKUP_KEY_PATH:-$HOME/.ssh/almanac-agent-backup-ed25519}"
-AGENT_BACKUP_KNOWN_HOSTS_FILE="${AGENT_BACKUP_KNOWN_HOSTS_FILE:-$HOME/.ssh/almanac-agent-backup-known_hosts}"
+AGENT_BACKUP_KEY_PATH="${AGENT_BACKUP_KEY_PATH:-$HOME/.ssh/arclink-agent-backup-ed25519}"
+AGENT_BACKUP_KNOWN_HOSTS_FILE="${AGENT_BACKUP_KNOWN_HOSTS_FILE:-$HOME/.ssh/arclink-agent-backup-known_hosts}"
 AGENT_BACKUP_REPO_DIR="${AGENT_BACKUP_REPO_DIR:-$HERMES_HOME_TARGET/state/agent-home-backup/repo}"
 
 github_owner_repo_from_remote() {
@@ -78,7 +78,7 @@ request = urllib.request.Request(
     f"{base}/repos/{owner_repo}",
     headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "almanac-agent-backup-check",
+        "User-Agent": "arclink-agent-backup-check",
     },
 )
 try:
@@ -207,10 +207,10 @@ copy_path "memories"
 copy_path "skills"
 copy_path "plugins"
 copy_path "cron"
-copy_path "state/almanac-identity-context.json"
-copy_path "state/almanac-enrollment.json"
-copy_path "state/almanac-prefill-messages.json"
-copy_path "state/almanac-vault-reconciler.json"
+copy_path "state/arclink-identity-context.json"
+copy_path "state/arclink-enrollment.json"
+copy_path "state/arclink-prefill-messages.json"
+copy_path "state/arclink-vault-reconciler.json"
 
 if [[ "$AGENT_BACKUP_INCLUDE_SESSIONS" == "1" ]]; then
   copy_path "sessions"
@@ -239,10 +239,10 @@ PY
 
 git -C "$AGENT_BACKUP_REPO_DIR" add -A
 if [[ -n "$(git -C "$AGENT_BACKUP_REPO_DIR" status --porcelain)" ]]; then
-  GIT_AUTHOR_NAME="Almanac Agent Backup" \
-  GIT_AUTHOR_EMAIL="almanac-agent@localhost" \
-  GIT_COMMITTER_NAME="Almanac Agent Backup" \
-  GIT_COMMITTER_EMAIL="almanac-agent@localhost" \
+  GIT_AUTHOR_NAME="ArcLink Agent Backup" \
+  GIT_AUTHOR_EMAIL="arclink-agent@localhost" \
+  GIT_COMMITTER_NAME="ArcLink Agent Backup" \
+  GIT_COMMITTER_EMAIL="arclink-agent@localhost" \
     git -C "$AGENT_BACKUP_REPO_DIR" commit -m "agent backup: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 fi
 

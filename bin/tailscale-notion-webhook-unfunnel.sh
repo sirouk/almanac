@@ -16,9 +16,9 @@ fi
 
 status_json="$(tailscale funnel status --json 2>/dev/null || true)"
 owned_config="$(
-  ALMANAC_TAILSCALE_FUNNEL_STATUS_JSON="$status_json" python3 - \
+  ARCLINK_TAILSCALE_FUNNEL_STATUS_JSON="$status_json" python3 - \
     "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" \
-    "${ALMANAC_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
+    "${ARCLINK_NOTION_WEBHOOK_PORT:-8283}" <<'PY'
 import json
 import os
 import sys
@@ -27,7 +27,7 @@ port = str(sys.argv[1])
 backend_port = str(sys.argv[2])
 
 try:
-    data = json.loads(os.environ.get("ALMANAC_TAILSCALE_FUNNEL_STATUS_JSON") or "{}")
+    data = json.loads(os.environ.get("ARCLINK_TAILSCALE_FUNNEL_STATUS_JSON") or "{}")
 except Exception:
     raise SystemExit(0)
 

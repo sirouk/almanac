@@ -89,7 +89,7 @@ PYTHONPATH=python python3 tests/test_arclink_live_journey.py
 PYTHONPATH=python python3 tests/test_arclink_host_readiness.py
 PYTHONPATH=python python3 tests/test_arclink_diagnostics.py
 PYTHONPATH=python python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
+python3 -m py_compile python/arclink_control.py python/arclink_*.py
 ```
 
 Run broader hosted API, dashboard, web, or browser checks only if the pass

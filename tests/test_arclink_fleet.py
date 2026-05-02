@@ -36,7 +36,7 @@ def memory_db(control):
 
 
 def test_register_fleet_host() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_reg")
+    control = load_module("arclink_control.py", "arclink_control_fleet_reg")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_reg")
     conn = memory_db(control)
     host = fleet.register_fleet_host(conn, hostname="host-1.example.com", region="eu-central", capacity_slots=20)
@@ -51,7 +51,7 @@ def test_register_fleet_host() -> None:
 
 
 def test_register_rejects_empty_hostname() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_empty")
+    control = load_module("arclink_control.py", "arclink_control_fleet_empty")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_empty")
     conn = memory_db(control)
     try:
@@ -63,7 +63,7 @@ def test_register_rejects_empty_hostname() -> None:
 
 
 def test_update_fleet_host_drain() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_drain")
+    control = load_module("arclink_control.py", "arclink_control_fleet_drain")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_drain")
     conn = memory_db(control)
     host = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
@@ -73,7 +73,7 @@ def test_update_fleet_host_drain() -> None:
 
 
 def test_fleet_capacity_summary() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_cap")
+    control = load_module("arclink_control.py", "arclink_control_fleet_cap")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_cap")
     conn = memory_db(control)
     fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
@@ -86,7 +86,7 @@ def test_fleet_capacity_summary() -> None:
 
 
 def test_place_deployment_chooses_healthy_host() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_place")
+    control = load_module("arclink_control.py", "arclink_control_fleet_place")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_place")
     conn = memory_db(control)
     fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=5)
@@ -98,7 +98,7 @@ def test_place_deployment_chooses_healthy_host() -> None:
 
 
 def test_place_deployment_rejects_saturated_hosts() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_sat")
+    control = load_module("arclink_control.py", "arclink_control_fleet_sat")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_sat")
     conn = memory_db(control)
     host = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=1)
@@ -112,7 +112,7 @@ def test_place_deployment_rejects_saturated_hosts() -> None:
 
 
 def test_place_deployment_rejects_draining_hosts() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_drn")
+    control = load_module("arclink_control.py", "arclink_control_fleet_drn")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_drn")
     conn = memory_db(control)
     host = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
@@ -126,7 +126,7 @@ def test_place_deployment_rejects_draining_hosts() -> None:
 
 
 def test_place_deployment_rejects_unhealthy_hosts() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_unh")
+    control = load_module("arclink_control.py", "arclink_control_fleet_unh")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_unh")
     conn = memory_db(control)
     host = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
@@ -140,7 +140,7 @@ def test_place_deployment_rejects_unhealthy_hosts() -> None:
 
 
 def test_placement_idempotent() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_idem")
+    control = load_module("arclink_control.py", "arclink_control_fleet_idem")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_idem")
     conn = memory_db(control)
     fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
@@ -151,7 +151,7 @@ def test_placement_idempotent() -> None:
 
 
 def test_remove_placement() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_rm")
+    control = load_module("arclink_control.py", "arclink_control_fleet_rm")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_rm")
     conn = memory_db(control)
     fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
@@ -164,7 +164,7 @@ def test_remove_placement() -> None:
 
 
 def test_region_filter() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_rgn")
+    control = load_module("arclink_control.py", "arclink_control_fleet_rgn")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_rgn")
     conn = memory_db(control)
     fleet.register_fleet_host(conn, hostname="h1.test", region="us-east", capacity_slots=10)
@@ -175,7 +175,7 @@ def test_region_filter() -> None:
 
 
 def test_placement_rejects_secret_required_tags() -> None:
-    control = load_module("almanac_control.py", "almanac_control_fleet_secret_tags")
+    control = load_module("arclink_control.py", "arclink_control_fleet_secret_tags")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_secret_tags")
     conn = memory_db(control)
     fleet.register_fleet_host(conn, hostname="h1.test", tags={"tier": "paid"})

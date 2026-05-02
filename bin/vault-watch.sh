@@ -216,11 +216,11 @@ is_vault_definition_path() {
 
 run_vault_reload_defs() {
   echo "Vault watcher: reloading .vault definitions..."
-  if [[ -x "$SCRIPT_DIR/almanac-ctl" ]]; then
+  if [[ -x "$SCRIPT_DIR/arclink-ctl" ]]; then
     local err_file=""
     err_file="$(mktemp)"
     if ! PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-        "$SCRIPT_DIR/almanac-ctl" --json vault reload-defs >/dev/null 2>"$err_file"; then
+        "$SCRIPT_DIR/arclink-ctl" --json vault reload-defs >/dev/null 2>"$err_file"; then
       echo "Vault watcher: reload-defs failed (continuing):" >&2
       cat "$err_file" >&2 || true
     fi
@@ -232,14 +232,14 @@ run_vault_notify_paths() {
   if (( ${#vault_watch_notify_paths[@]} == 0 )); then
     return 0
   fi
-  if [[ ! -x "$SCRIPT_DIR/almanac-ctl" ]]; then
+  if [[ ! -x "$SCRIPT_DIR/arclink-ctl" ]]; then
     return 0
   fi
   echo "Vault watcher: routing subscriber notifications for changed vault content..."
   local err_file=""
   err_file="$(mktemp)"
   if ! PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-      "$SCRIPT_DIR/almanac-ctl" --json vault notify-paths --source vault-watch "${vault_watch_notify_paths[@]}" >/dev/null 2>"$err_file"; then
+      "$SCRIPT_DIR/arclink-ctl" --json vault notify-paths --source vault-watch "${vault_watch_notify_paths[@]}" >/dev/null 2>"$err_file"; then
     echo "Vault watcher: notify-paths failed (continuing):" >&2
     cat "$err_file" >&2 || true
   fi
@@ -250,14 +250,14 @@ request_memory_synth_refresh() {
   local enabled=""
   local change_enabled=""
 
-  change_enabled="$(lowercase "${ALMANAC_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}")"
+  change_enabled="$(lowercase "${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}")"
   case "$change_enabled" in
     0|false|no|off|disabled)
       return 0
       ;;
   esac
 
-  enabled="$(lowercase "${ALMANAC_MEMORY_SYNTH_ENABLED:-auto}")"
+  enabled="$(lowercase "${ARCLINK_MEMORY_SYNTH_ENABLED:-auto}")"
   case "$enabled" in
     0|false|no|off|disabled)
       return 0

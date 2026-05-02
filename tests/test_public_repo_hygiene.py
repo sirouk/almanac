@@ -41,10 +41,10 @@ def private_terms_pattern() -> re.Pattern[str]:
 
 
 def private_terms() -> list[str]:
-    configured = os.environ.get("ALMANAC_PUBLIC_HYGIENE_TERMS", "")
+    configured = os.environ.get("ARCLINK_PUBLIC_HYGIENE_TERMS", "")
     terms = [term.strip() for term in configured.splitlines() if term.strip()]
-    terms_file_env = os.environ.get("ALMANAC_PUBLIC_HYGIENE_TERMS_FILE", "")
-    terms_file = Path(terms_file_env) if terms_file_env else REPO / "almanac-priv" / "config" / "public-hygiene-terms.txt"
+    terms_file_env = os.environ.get("ARCLINK_PUBLIC_HYGIENE_TERMS_FILE", "")
+    terms_file = Path(terms_file_env) if terms_file_env else REPO / "arclink-priv" / "config" / "public-hygiene-terms.txt"
     if terms_file.exists():
         for line in terms_file.read_text(encoding="utf-8").splitlines():
             term = line.strip()
@@ -89,9 +89,9 @@ PROVIDER_CODE_PATHS = {
     Path("python/arclink_executor.py"),
     Path("python/arclink_provisioning.py"),
     Path("python/arclink_product.py"),
-    Path("python/almanac_model_providers.py"),
-    Path("python/almanac_onboarding_flow.py"),
-    Path("python/almanac_onboarding_provider_auth.py"),
+    Path("python/arclink_model_providers.py"),
+    Path("python/arclink_onboarding_flow.py"),
+    Path("python/arclink_onboarding_provider_auth.py"),
     Path("tests/test_arclink_chutes_and_adapters.py"),
     Path("tests/test_arclink_diagnostics.py"),
     Path("tests/test_arclink_e2e_live.py"),
@@ -99,7 +99,7 @@ PROVIDER_CODE_PATHS = {
     Path("tests/test_arclink_executor.py"),
     Path("tests/test_arclink_provisioning.py"),
     Path("tests/test_arclink_product_config.py"),
-    Path("tests/test_almanac_onboarding_prompts.py"),
+    Path("tests/test_arclink_onboarding_prompts.py"),
     Path("tests/test_deploy_regressions.py"),
     Path("tests/test_model_providers.py"),
 }
@@ -146,7 +146,7 @@ def test_no_private_operator_names_in_public_files() -> None:
     violations: list[str] = []
     for path in public_repo_files():
         rel = relative(path)
-        if rel.parts and rel.parts[0] == "almanac-priv":
+        if rel.parts and rel.parts[0] == "arclink-priv":
             continue
         text = read_text(path)
         if text is None:
@@ -161,7 +161,7 @@ def test_provider_name_is_only_used_for_model_provider_context() -> None:
     violations: list[str] = []
     for path in public_repo_files():
         rel = relative(path)
-        if rel.parts and rel.parts[0] == "almanac-priv":
+        if rel.parts and rel.parts[0] == "arclink-priv":
             continue
         text = read_text(path)
         if text is None:
@@ -182,7 +182,7 @@ def test_no_live_deployment_identifiers_in_public_files() -> None:
     violations: list[str] = []
     for path in public_repo_files():
         rel = relative(path)
-        if rel.parts and rel.parts[0] == "almanac-priv":
+        if rel.parts and rel.parts[0] == "arclink-priv":
             continue
         text = read_text(path)
         if text is None:

@@ -55,19 +55,19 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         hermes_home = root / "hermes-home"
         workspace_home = root / "workspace"
         vault_dir = root / "shared" / "vault"
-        access_state = hermes_home / "state" / "almanac-web-access.json"
+        access_state = hermes_home / "state" / "arclink-web-access.json"
         access_state.parent.mkdir(parents=True, exist_ok=True)
         workspace_home.mkdir(parents=True, exist_ok=True)
         vault_dir.mkdir(parents=True, exist_ok=True)
         (workspace_home / "Vault").symlink_to(vault_dir)
-        workspace_file = hermes_home / "state" / "code-server" / "workspace" / "almanac.code-workspace"
+        workspace_file = hermes_home / "state" / "code-server" / "workspace" / "arclink.code-workspace"
         workspace_file.parent.mkdir(parents=True, exist_ok=True)
         workspace_file.write_text(
             json.dumps(
                 {
                     "folders": [
                         {"name": "Workspace", "path": "/workspace"},
-                        {"name": "Almanac", "path": "/almanac-vault"},
+                        {"name": "ArcLink", "path": "/arclink-vault"},
                     ]
                 }
             ),
@@ -93,18 +93,18 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         expect(settings.get("workbench.colorTheme") == "Default Dark Modern", settings_path.read_text(encoding="utf-8"))
         expect(settings.get("workbench.secondarySideBar.defaultVisibility") == "hidden", settings_path.read_text(encoding="utf-8"))
         expect(settings.get("workbench.startupEditor") == "none", settings_path.read_text(encoding="utf-8"))
-        almanac_alias = workspace_home / "Almanac"
-        expect(almanac_alias.is_symlink(), f"expected friendly Almanac symlink at {almanac_alias}")
-        expect(os.readlink(almanac_alias) == str(vault_dir), f"bad Almanac alias target: {os.readlink(almanac_alias)!r}")
+        arclink_alias = workspace_home / "ArcLink"
+        expect(arclink_alias.is_symlink(), f"expected friendly ArcLink symlink at {arclink_alias}")
+        expect(os.readlink(arclink_alias) == str(vault_dir), f"bad ArcLink alias target: {os.readlink(arclink_alias)!r}")
         expect(not workspace_file.exists(), f"expected stale duplicate workspace file to be removed: {workspace_file}")
         podman_args = podman_log.read_text(encoding="utf-8")
         expect(f"{workspace_home}:/workspace:rw" in podman_args, podman_args)
-        expect(f"{vault_dir}:/almanac-vault:rw" in podman_args, podman_args)
+        expect(f"{vault_dir}:/arclink-vault:rw" in podman_args, podman_args)
         expect(f"{vault_dir}:{vault_dir}:rw" in podman_args, podman_args)
         expect("--user 0:0" not in podman_args, podman_args)
         expect("--userns=keep-id" in podman_args, podman_args)
         expect(f"--user {workspace_home.stat().st_uid}:{workspace_home.stat().st_gid}" in podman_args, podman_args)
-        expect("/almanac-workspace" not in podman_args, podman_args)
+        expect("/arclink-workspace" not in podman_args, podman_args)
         expect("/workspace\n" in podman_args or podman_args.rstrip().endswith(" /workspace"), podman_args)
 
         settings_path.write_text(
@@ -138,7 +138,7 @@ def test_run_agent_code_server_supports_docker_runtime_without_podman() -> None:
 
         hermes_home = root / "hermes-home"
         workspace_home = root / "workspace"
-        access_state = hermes_home / "state" / "almanac-web-access.json"
+        access_state = hermes_home / "state" / "arclink-web-access.json"
         access_state.parent.mkdir(parents=True, exist_ok=True)
         workspace_home.mkdir(parents=True, exist_ok=True)
         access_state.write_text(
@@ -147,7 +147,7 @@ def test_run_agent_code_server_supports_docker_runtime_without_podman() -> None:
                     "code_port": 39022,
                     "password": "pw",
                     "unix_user": "agent-docker",
-                    "code_container_name": "almanac-agent-docker-code",
+                    "code_container_name": "arclink-agent-docker-code",
                 }
             ),
             encoding="utf-8",
@@ -158,12 +158,12 @@ def test_run_agent_code_server_supports_docker_runtime_without_podman() -> None:
             workspace_home,
             hermes_home,
             fakebin,
-            ALMANAC_CONTAINER_RUNTIME="docker",
+            ARCLINK_CONTAINER_RUNTIME="docker",
         )
         expect(result.returncode == 0, f"run-agent-code-server docker mode failed: stdout={result.stdout!r} stderr={result.stderr!r}")
         docker_args = docker_log.read_text(encoding="utf-8")
-        expect("rm -f almanac-agent-docker-code" in docker_args, docker_args)
-        expect("run --rm --name almanac-agent-docker-code --pull missing" in docker_args, docker_args)
+        expect("rm -f arclink-agent-docker-code" in docker_args, docker_args)
+        expect("run --rm --name arclink-agent-docker-code --pull missing" in docker_args, docker_args)
         expect("--replace" not in docker_args, docker_args)
         expect("--userns=keep-id" not in docker_args, docker_args)
         expect(f"{workspace_home}:/workspace:rw" in docker_args, docker_args)

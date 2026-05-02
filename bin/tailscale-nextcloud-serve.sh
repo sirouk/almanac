@@ -89,7 +89,7 @@ maybe_wait_for_tailscale_serve_enablement() {
   echo "If the approval page asks for DNS prerequisites, enable MagicDNS and HTTPS Certificates at:" >&2
   echo "  https://login.tailscale.com/admin/dns" >&2
   echo "Press ENTER after enabling Tailscale Serve to retry, or Ctrl+C to stop." >&2
-  if [[ "${ALMANAC_TAILSCALE_INTERACTIVE_ENABLE:-1}" == "1" && -t 0 ]]; then
+  if [[ "${ARCLINK_TAILSCALE_INTERACTIVE_ENABLE:-1}" == "1" && -t 0 ]]; then
     read -r -p "> "
     return 0
   fi
@@ -101,7 +101,7 @@ run_serve_cmd() {
   local output=""
   local status=0
   local _attempt=""
-  local timeout_duration="${ALMANAC_TAILSCALE_COMMAND_TIMEOUT:-60s}"
+  local timeout_duration="${ARCLINK_TAILSCALE_COMMAND_TIMEOUT:-60s}"
   local command_timeout_duration=""
   local output_file=""
 
@@ -166,7 +166,7 @@ verify_serve_config() {
     return 1
   fi
 
-  if TAILSCALE_SERVE_JSON="$ts_json" python3 - "${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp" "${TAILSCALE_ALMANAC_MCP_PATH}" <<'PY'
+  if TAILSCALE_SERVE_JSON="$ts_json" python3 - "${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp" "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${ARCLINK_MCP_PORT}/mcp" "${TAILSCALE_ARCLINK_MCP_PATH}" <<'PY'
 import json
 import os
 import sys
@@ -175,8 +175,8 @@ serve_port = str(sys.argv[1])
 expected_root = sys.argv[2]
 expected_qmd = sys.argv[3]
 expected_path = sys.argv[4]
-expected_almanac_mcp = sys.argv[5]
-expected_almanac_mcp_path = sys.argv[6]
+expected_arclink_mcp = sys.argv[5]
+expected_arclink_mcp_path = sys.argv[6]
 
 try:
     data = json.loads(os.environ["TAILSCALE_SERVE_JSON"])
@@ -193,11 +193,11 @@ for hostport, host_cfg in web.items():
     handlers = host_cfg.get("Handlers") or {}
     root = handlers.get("/") or {}
     qmd = handlers.get(expected_path) or {}
-    almanac_mcp = handlers.get(expected_almanac_mcp_path) or {}
+    arclink_mcp = handlers.get(expected_arclink_mcp_path) or {}
     if (
         root.get("Proxy") == expected_root
         and qmd.get("Proxy") == expected_qmd
-        and almanac_mcp.get("Proxy") == expected_almanac_mcp
+        and arclink_mcp.get("Proxy") == expected_arclink_mcp
     ):
         raise SystemExit(0)
 
@@ -207,7 +207,7 @@ PY
     return 0
   fi
 
-  echo "tailscale serve config does not expose Nextcloud, qmd MCP, and Almanac MCP as expected." >&2
+  echo "tailscale serve config does not expose Nextcloud, qmd MCP, and ArcLink MCP as expected." >&2
   return 1
 }
 
@@ -234,6 +234,6 @@ detect_tailscale_runtime || true
 
 run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}"
 run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp"
-run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_ALMANAC_MCP_PATH}" "http://127.0.0.1:${ALMANAC_MCP_PORT}/mcp"
+run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_ARCLINK_MCP_PATH}" "http://127.0.0.1:${ARCLINK_MCP_PORT}/mcp"
 verify_serve_config
 print_serve_summary

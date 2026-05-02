@@ -1,0 +1,10 @@
+[Unit]
+Description=Reconcile ArcLink PDFs into qmd every 5 minutes
+
+[Timer]
+OnBootSec=4m
+OnUnitActiveSec=5m
+Unit=arclink-pdf-ingest.service
+
+[Install]
+WantedBy=timers.target

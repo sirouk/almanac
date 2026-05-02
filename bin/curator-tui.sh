@@ -12,8 +12,8 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "curator TUI"
 ensure_layout
 
-if [[ ! -d "$ALMANAC_CURATOR_HERMES_HOME" ]]; then
-  echo "Curator Hermes home not found at $ALMANAC_CURATOR_HERMES_HOME" >&2
+if [[ ! -d "$ARCLINK_CURATOR_HERMES_HOME" ]]; then
+  echo "Curator Hermes home not found at $ARCLINK_CURATOR_HERMES_HOME" >&2
   echo "Run deploy.sh curator-setup to provision it." >&2
   exit 2
 fi
@@ -30,4 +30,4 @@ if [[ -d "$RUNTIME_DIR/hermes-agent-src/skills" ]]; then
   bundled_skills_env=(HERMES_BUNDLED_SKILLS="${HERMES_BUNDLED_SKILLS:-$RUNTIME_DIR/hermes-agent-src/skills}")
 fi
 
-exec env HERMES_HOME="$ALMANAC_CURATOR_HERMES_HOME" "${bundled_skills_env[@]}" "$HERMES_BIN" "$@"
+exec env HERMES_HOME="$ARCLINK_CURATOR_HERMES_HOME" "${bundled_skills_env[@]}" "$HERMES_BIN" "$@"

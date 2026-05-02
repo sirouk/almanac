@@ -39,7 +39,7 @@ def test_setup_remote_hermes_client_generates_key_and_wrapper() -> None:
                 "--org",
                 "OrgName",
                 "--key-path",
-                str(home / ".ssh" / "almanac-remote-hermes-ed25519"),
+                str(home / ".ssh" / "arclink-remote-hermes-ed25519"),
             ],
             env={
                 **os.environ,
@@ -58,13 +58,13 @@ def test_setup_remote_hermes_client_generates_key_and_wrapper() -> None:
         expect(wrappers[0].name == "hermes-orgname-remote-alex", f"unexpected wrapper name: {wrappers[0].name}")
         wrapper_text = wrappers[0].read_text(encoding="utf-8")
         expect("alex@agent.example.ts.net" in wrapper_text, wrapper_text)
-        expect('remote_cmd=\'exec "$HOME/.local/bin/almanac-agent-hermes"\'' in wrapper_text, wrapper_text)
+        expect('remote_cmd=\'exec "$HOME/.local/bin/arclink-agent-hermes"\'' in wrapper_text, wrapper_text)
         expect("printf -v quoted '%q'" in wrapper_text, wrapper_text)
         expect('ssh_tty_args=()' in wrapper_text, wrapper_text)
         expect('if [[ -t 0 && -t 1 ]]; then' in wrapper_text, wrapper_text)
         expect("StrictHostKeyChecking=yes" in wrapper_text, wrapper_text)
-        expect((home / ".ssh" / "almanac-remote-hermes-ed25519").is_file(), "expected generated private key")
-        expect((home / ".ssh" / "almanac-remote-hermes-ed25519.pub").is_file(), "expected generated public key")
+        expect((home / ".ssh" / "arclink-remote-hermes-ed25519").is_file(), "expected generated private key")
+        expect((home / ".ssh" / "arclink-remote-hermes-ed25519.pub").is_file(), "expected generated public key")
         expect("remote Hermes config, skills, MCP tools, plugins, and files" in result.stdout, result.stdout)
         expect("Do not run your local 'hermes' command" in result.stdout, result.stdout)
         expect("Public key to send back to Curator:" not in result.stdout, result.stdout)

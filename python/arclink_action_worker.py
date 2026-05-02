@@ -6,7 +6,7 @@ import secrets
 import sqlite3
 from typing import Any, Mapping
 
-from almanac_control import append_arclink_audit, append_arclink_event, utc_now_iso
+from arclink_control import append_arclink_audit, append_arclink_event, utc_now_iso
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_executor import (
     ArcLinkExecutor,
@@ -297,7 +297,7 @@ def recover_stale_actions(
     stale_threshold_seconds: int = _STALE_THRESHOLD_SECONDS,
 ) -> list[dict[str, Any]]:
     """Return running actions older than threshold to queued or failed."""
-    from almanac_control import parse_utc_iso, utc_now
+    from arclink_control import parse_utc_iso, utc_now
     now = utc_now()
     rows = conn.execute(
         "SELECT * FROM arclink_action_intents WHERE status = 'running' ORDER BY updated_at ASC",

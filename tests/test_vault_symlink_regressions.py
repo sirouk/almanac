@@ -56,13 +56,13 @@ def bash_script_for_user_links(*, root: Path, vault_dir: Path, unix_user: str, e
     one_link_fn = extract_function(text, "ensure_one_vault_link")
     user_link_fn = extract_function(text, "ensure_user_vault_link")
     home_dir = root / "home" / "user"
-    hermes_home = home_dir / ".local" / "share" / "almanac-agent" / "hermes-home"
+    hermes_home = home_dir / ".local" / "share" / "arclink-agent" / "hermes-home"
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 VAULT_DIR={str(vault_dir)!r}
 UNIX_USER={unix_user!r}
 TARGET_VAULT_LINK_PATH=""
-TARGET_ALMANAC_LINK_PATH={str(home_dir / "Almanac")!r}
+TARGET_ARCLINK_LINK_PATH={str(home_dir / "ArcLink")!r}
 TARGET_HERMES_HOME={str(hermes_home)!r}
 {one_link_fn}
 {user_link_fn}
@@ -168,7 +168,7 @@ def test_vault_symlink_is_idempotent_when_already_correct() -> None:
     print("PASS test_vault_symlink_is_idempotent_when_already_correct")
 
 
-def test_user_vault_links_create_almanac_alias_and_internal_compat_links() -> None:
+def test_user_vault_links_create_arclink_alias_and_internal_compat_links() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         vault_dir = root / "vault"
@@ -182,12 +182,12 @@ def test_user_vault_links_create_almanac_alias_and_internal_compat_links() -> No
         result = run_bash(script)
         expect(result.returncode == 0, f"user link fanout failed: {result.stderr!r}")
         home_dir = root / "home" / "user"
-        hermes_home = home_dir / ".local" / "share" / "almanac-agent" / "hermes-home"
+        hermes_home = home_dir / ".local" / "share" / "arclink-agent" / "hermes-home"
         expect(not (home_dir / "Vault").exists(), "home-level Vault alias should be opt-in to avoid duplicate Explorer roots")
-        for path in (home_dir / "Almanac", hermes_home / "Vault", hermes_home / "Almanac"):
+        for path in (home_dir / "ArcLink", hermes_home / "Vault", hermes_home / "ArcLink"):
             expect(path.is_symlink(), f"expected symlink at {path}")
             expect(os.readlink(path) == str(vault_dir), f"bad target for {path}: {os.readlink(path)!r}")
-    print("PASS test_user_vault_links_create_almanac_alias_and_internal_compat_links")
+    print("PASS test_user_vault_links_create_arclink_alias_and_internal_compat_links")
 
 
 def test_user_vault_links_create_home_vault_only_when_explicitly_requested() -> None:
@@ -215,12 +215,12 @@ def test_refresh_repair_chowns_local_bin_when_root_creates_wrappers() -> None:
     install_text = INSTALL_SH.read_text(encoding="utf-8")
     fn = extract_function(text, "install_local_user_wrappers")
     expect('chown "$UNIX_USER:$UNIX_USER" "$TARGET_LOCAL_BIN_DIR"' in fn, fn)
-    expect("almanac-agent-hermes" in fn, fn)
-    expect("almanac-agent-configure-backup" in fn, fn)
+    expect("arclink-agent-hermes" in fn, fn)
+    expect("arclink-agent-configure-backup" in fn, fn)
     expect("should_restart_gateway" in fn, fn)
-    expect("systemctl --user restart almanac-user-agent-gateway.service" in fn, fn)
+    expect("systemctl --user restart arclink-user-agent-gateway.service" in fn, fn)
     expect("ensure_user_vault_link || true" not in text, "refresh must not silently ignore missing vault links")
-    expect('ensure_one_vault_link "$HOME/Almanac" || status=1' in install_text, install_text)
+    expect('ensure_one_vault_link "$HOME/ArcLink" || status=1' in install_text, install_text)
     print("PASS test_refresh_repair_chowns_local_bin_when_root_creates_wrappers")
 
 
@@ -229,7 +229,7 @@ def main() -> int:
     test_vault_symlink_replaces_stale_symlink_to_wrong_target()
     test_vault_symlink_refuses_to_overwrite_real_directory()
     test_vault_symlink_is_idempotent_when_already_correct()
-    test_user_vault_links_create_almanac_alias_and_internal_compat_links()
+    test_user_vault_links_create_arclink_alias_and_internal_compat_links()
     test_user_vault_links_create_home_vault_only_when_explicitly_requested()
     test_refresh_repair_chowns_local_bin_when_root_creates_wrappers()
     print("PASS all 7 vault symlink regression tests")

@@ -1,5 +1,73 @@
 # Build Completion Notes
 
+## 2026-05-02 Hosted API Contract Expansion
+
+Scope: expanded the hosted API boundary and API/auth layer with health,
+provider state, reconciliation, billing portal, and Telegram/Discord webhook
+routes, plus corresponding test coverage.
+
+Rationale:
+
+- Added `GET /health` as a public liveness check (DB reachable = ok/degraded)
+  so load balancers and monitoring can probe the API without auth.
+- Added `GET /user/provider-state` and `GET /admin/provider-state` to surface
+  current provider, default model, and per-deployment model assignments through
+  the session-authenticated API boundary.
+- Added `GET /admin/reconciliation` to expose Stripe-vs-local entitlement drift
+  through the admin session gate, consuming the existing
+  `detect_stripe_reconciliation_drift` helper.
+- Added `POST /webhooks/telegram` and `POST /webhooks/discord` routes to the
+  hosted router, delegating to the existing runtime adapter handlers with
+  proper error shaping.
+- Removed redundant `_rowdict` wrappers from `arclink_api_auth.py` and
+  `arclink_dashboard.py`, using the shared `rowdict` from `arclink_boundary`.
+
+Files changed:
+
+- `python/arclink_hosted_api.py` (733 -> 777 lines) -- new routes and handlers.
+- `python/arclink_api_auth.py` (813 -> 862 lines) -- `read_provider_state_api`,
+  `read_admin_reconciliation_api`, removed `_rowdict`.
+- `python/arclink_dashboard.py` -- removed `_rowdict`.
+- `tests/test_arclink_hosted_api.py` (26 -> 30 test functions) -- health,
+  provider state, reconciliation, billing portal tests.
+- Research docs updated to reflect new line counts, test counts, and P1 gap
+  narrowing.
+
+Known risks:
+
+- Hosted API is still not deployed behind a production reverse proxy or
+  identity provider.
+- Provider state read exposes deployment model assignments; access control is
+  session-scoped but not deployment-scoped.
+- Reconciliation drift detection depends on local DB state; live Stripe API
+  comparison remains E2E-gated.
+
+## 2026-05-02 Remove Redundant _rowdict Wrappers
+
+Scope: removed private `_rowdict` wrapper functions from `arclink_api_auth.py`
+and `arclink_dashboard.py`, replacing all call sites with the shared `rowdict`
+helper already imported from `arclink_boundary`.
+
+Rationale:
+
+- Both modules had identical `_rowdict(row)` one-liners that delegated to the
+  shared `rowdict` from `arclink_boundary`. The indirection added no value and
+  obscured the actual dependency.
+- The shared `rowdict` is the canonical row-to-dict helper across the codebase;
+  using it directly makes the ownership and contract clearer.
+
+Files changed:
+
+- `python/arclink_api_auth.py` — removed `_rowdict` definition (3 lines),
+  replaced 5 call sites with `rowdict`.
+- `python/arclink_dashboard.py` — removed `_rowdict` definition (3 lines),
+  replaced 6 call sites with `rowdict`.
+
+Known risks:
+
+- None. Pure rename with no behavioral change; `rowdict` was already the
+  underlying implementation.
+
 ## 2026-05-01 Active Lint-Repair Gate Build
 
 Scope: completed the current BUILD gate from `IMPLEMENTATION_PLAN.md` and

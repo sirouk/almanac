@@ -21,14 +21,14 @@
 | Stripe | `python/arclink_adapters.py`, `python/arclink_entitlements.py` | Payment, checkout, entitlement gate | Keep fake/no-secret unit surface; add live adapter behind E2E config. |
 | Cloudflare + Traefik | `python/arclink_ingress.py`, `python/arclink_access.py`, `python/arclink_executor.py` | DNS, tunnel/access strategy, host routing | Keep host-per-service plan; defer live mutation to executor/E2E slice. |
 | Python WSGI stdlib surface | `python/arclink_product_surface.py` | Local no-secret onboarding/dashboard/API prototype | Keep short-term as a contract probe; do not treat as production UI. |
-| Python API/auth helpers | `python/arclink_api_auth.py` | Initial no-secret user/admin session, CSRF, rate-limit, MFA-ready, scoped read, and queued mutation boundary | Keep and harden before production frontend or live actions. |
-| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,288 lines), 1 web test | Production web app: landing, login, onboarding, user/admin dashboards | Foundation landed; wire to hosted API and extend views. |
+| Python API/auth helpers | `python/arclink_api_auth.py` (813 lines) | Initial no-secret user/admin session, CSRF, rate-limit, MFA-ready, scoped read, and queued mutation boundary | Keep and harden before production frontend or live actions. |
+| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,550 lines), 1 web test | Production web app: landing, login, onboarding, user/admin dashboards | Foundation landed; wire to hosted API and extend views. |
 
 ## Repository Signals
 
 | Signal | Finding | Interpretation |
 | --- | ---: | --- |
-| Python files | 136 | Primary implementation and regression-test surface. |
+| Python files | 134+ | Primary implementation and regression-test surface. |
 | Shell scripts | 75 | Operational/deploy substrate remains significant. |
 | Markdown files | 63 | Planning, docs, skills, and operating guides are extensive. |
 | Compose files | 2 | Docker-first path exists and should be evolved. |

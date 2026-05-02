@@ -296,9 +296,8 @@ Acceptance:
 
 ## Required Accounts And Secrets
 
-Do not put these in git. Store live values only in a root-owned env file such
-as `/root/arclink/.env.live` with mode `0600`, or in the selected secrets
-manager. Use fake adapters until these exist.
+Do not put these in git. Store live values only in a root-owned env file or
+secrets manager. Use fake adapters until these exist.
 
 ### Cloudflare
 

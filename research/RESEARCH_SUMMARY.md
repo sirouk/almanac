@@ -1,6 +1,6 @@
 # Research Summary
 
-<confidence>95</confidence>
+<confidence>97</confidence>
 
 ## Goal
 
@@ -84,14 +84,15 @@ The plan is ready for BUILD handoff. All previously identified lint repairs
 safe generic errors, public bot rate limiting) are completed and passing.
 
 Current state:
-- 130 ArcLink test functions across 18 test files (+ 1 hygiene test that flags
+- 132 ArcLink test functions across 17 test files (+ 1 hygiene test that flags
   "Chutes" in docs context; cosmetic, not blocking).
-- 16 ArcLink Python modules (7,094 lines).
-- Hosted API boundary exists with route dispatch, session transport, CORS,
-  request-ID, safe errors, and Stripe webhook skip.
+- 17 ArcLink Python modules (7,303 lines).
+- Hosted API boundary (777 lines) with route dispatch, session transport, CORS,
+  request-ID, safe errors, health endpoint, provider state reads,
+  reconciliation, Stripe webhook skip, and Telegram/Discord webhook routes.
 - Next.js 15 + Tailwind 4 web app foundation with landing page, onboarding,
-  login, user dashboard, and admin dashboard views (~1,375 lines across 8
-  source files), plus 1 web test file.
+  login, user dashboard, and admin dashboard views (~1,593 lines across 9
+  source files), plus 2 web test files.
 - Telegram runtime adapter landed (`arclink_telegram.py`, 219 lines) with
   fake-mode long-polling, update parsing, and shared turn handler dispatch.
 - Discord runtime adapter landed (`arclink_discord.py`, 255 lines) with
@@ -99,16 +100,21 @@ Current state:
   and shared turn handler dispatch.
 - Entitlements module at 435 lines with reconciliation drift detection,
   targeted comp, and profile-only upsert preservation.
-- API/auth module at 853 lines; hosted API at 667 lines.
+- API/auth module at 862 lines; dashboard module at 937 lines.
 
-BUILD should continue with:
+BUILD should continue with the Production Grade Steering checklist
+(`research/RALPHIE_PRODUCTION_GRADE_STEERING.md`, Production 1-16) as the
+controlling definition of done:
 
-1. Harden the hosted API boundary with remaining contract coverage and
-   production deployment config.
-2. Wire the Next.js web app to the hosted API for real data flow.
-3. Add live HTTP transport to Telegram/Discord adapters when tokens present.
-4. Add live-gated Docker/Cloudflare/Stripe/Chutes executor paths.
-5. Run live E2E with real credentials when available.
+1. Production 1-2: Complete the hosted API versioned contract with auth/CSRF/
+   audit on every mutating route and negative tests.
+2. Production 3-6: Harden Stripe, Cloudflare, Docker Compose executor, and
+   Chutes boundaries with fake tests and live-gated paths.
+3. Production 7-10: Wire web app to hosted API, prove onboarding parity across
+   web/Telegram/Discord, and build responsive user/admin dashboards.
+4. Production 11-12: Fake and live E2E harnesses for the full journey.
+5. Production 13-16: Deployment assets, observability, data safety, and
+   documentation truth.
 
 ## Remaining Risks
 

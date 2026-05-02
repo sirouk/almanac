@@ -1,8 +1,12 @@
 # Ralphie Steering: Next ArcLink Delivery Pass
 
-Use this file as the first practical backlog after commit `9e50eeb`. The
-foundation is strong, but the next pass must move from documented readiness to
-executable host readiness and live-gated deployment proof.
+Use this file as the controlling backlog after commit `a9ea651`.
+
+The no-secret foundation is strong and should not be rebuilt. Gaps A-C are
+landed for host readiness, provider diagnostics, and the injectable Docker
+executor runner. The next work is to finish as much of Gap D/E as possible
+without live credentials, while keeping live provider mutation blocked until an
+operator supplies real accounts and keys.
 
 ## Do Not Rebuild
 
@@ -15,60 +19,74 @@ Do not rebuild these slices unless a focused test fails:
 - Browser product proof.
 - Fake E2E journey harness.
 - P13-P16 documentation assets.
+- Host readiness CLI, provider diagnostics CLI, and injectable Docker runner
+  added in `a9ea651`.
 
 ## Next Build Order
 
-### 1. Host Readiness And Bootstrap
+### 1. Full Live E2E Journey Expansion (Gap D)
 
-Add executable, no-secret host readiness tooling.
-
-Required:
-
-- A command or script that checks Docker, Docker Compose, available ports,
-  writable ArcLink state root, expected env vars, and Traefik/Cloudflare
-  strategy without mutating live providers.
-- A machine-readable readiness result that the admin dashboard or operator can
-  consume later.
-- Tests for missing Docker, missing state root, missing env, and safe redaction.
-- Documentation linking the readiness command from the operations runbook.
-
-### 2. Live Readiness Diagnostics
-
-Add a secret-safe diagnostic layer for external providers.
+Expand the live E2E harness from separate provider smoke checks into one
+credential-gated customer journey.
 
 Required:
 
-- Stripe, Cloudflare, Chutes, Telegram, Discord, and host Docker diagnostics.
-- Missing credential names are reported; credential values are never returned.
-- Diagnostics are no-op/read-only unless an explicit live E2E flag is set.
-- Tests prove redaction and missing-credential behavior.
+- Keep `tests/test_arclink_e2e_live.py` skipped unless `ARCLINK_E2E_LIVE=1`
+  and required credentials are present.
+- Add one ordered journey path:
+  website signup/onboarding -> Stripe checkout/webhook entitlement ->
+  provisioning intent -> Docker executor dry-run/live handoff -> Cloudflare
+  DNS/readiness -> user dashboard verification -> admin health/audit view.
+- Keep provider smoke checks if useful, but the final proof must be a single
+  journey object with step names, prerequisites, safe skip reasons, and
+  evidence fields.
+- Do not print or persist secret values. Evidence may name env var names and
+  provider account IDs only if they are non-secret.
+- Add tests that prove the live journey skips cleanly without credentials and
+  that fake/no-secret evidence stays machine-readable.
 
-### 3. Live-Gated Docker Executor Path
+### 2. Deployment Evidence Ledger (Gap E)
 
-Improve the executor toward real deployment without enabling mutation by
-default.
-
-Required:
-
-- Explicit live flags and idempotency key.
-- State root and secret resolver required before any Docker mutation.
-- Dry-run output remains secret-free.
-- Real Docker commands are isolated behind an injectable runner for tests.
-- Rollback/teardown refuses destructive volume deletes without explicit
-  destructive confirmation.
-
-### 4. Full Live E2E Expansion
-
-Keep skipped without credentials, but make the harness ready for real proof.
+Create a safe evidence format before live credentials exist.
 
 Required:
 
-- One path that can run website onboarding -> checkout -> webhook/entitlement ->
-  provisioning -> DNS/health -> user/admin dashboard verification.
-- Provider checks can remain separate, but the final live proof must be one
-  customer journey.
-- Clearly documented env names and setup steps in
-  `docs/arclink/live-e2e-secrets-needed.md`.
+- Add a small evidence recorder or schema for live deployment proof. It should
+  capture step name, status, timestamps, URLs/hostnames, health summaries,
+  commit hash, and redacted provider identifiers.
+- Include a template under `docs/arclink/` for the future credentialed live run.
+- Add tests proving evidence output is deterministic and secret-redacted.
+- Document that real deployment evidence remains externally blocked until the
+  operator supplies Stripe, Cloudflare, Chutes, Telegram, Discord, and live host
+  credentials.
+
+### 3. Readiness/Diagnostics Operator Integration
+
+Wire the new host readiness and provider diagnostics into operator-facing
+surfaces without claiming live proof.
+
+Required:
+
+- Link the readiness and diagnostics CLI commands from the operations runbook.
+- If a hosted API/admin endpoint already exists for infrastructure/provider
+  state, add read-only adapters for readiness/diagnostic snapshots there.
+- If the UI already has matching admin panels, surface "not configured",
+  "ready", and "live proof blocked" states without exposing secret values.
+- Add focused tests only for touched API/UI code. Do not rebuild dashboards.
+
+### 4. Live Credential Handoff
+
+When Ralphie reaches a credential-blocked operation, pause only that live
+operation and name the exact missing key/account.
+
+External blockers:
+
+- Stripe secret key, webhook secret, product/price IDs.
+- Cloudflare zone ID and scoped DNS token for `arclink.online`.
+- Chutes owner/admin key.
+- Telegram bot token.
+- Discord app ID, public key, bot token, guild/channel.
+- Final production host credentials or provider API token beyond existing SSH.
 
 ## Validation Floor
 
@@ -79,12 +97,10 @@ git diff --check
 PYTHONPATH=python python3 tests/test_public_repo_hygiene.py
 PYTHONPATH=python python3 tests/test_arclink_e2e_fake.py
 PYTHONPATH=python python3 tests/test_arclink_e2e_live.py
+PYTHONPATH=python python3 tests/test_arclink_host_readiness.py
+PYTHONPATH=python python3 tests/test_arclink_diagnostics.py
+PYTHONPATH=python python3 tests/test_arclink_executor.py
 ```
 
-Run additional focused tests for touched modules. Browser claims still require
-Playwright evidence.
-
-## Live Credential Ask
-
-When Ralphie reaches a live-blocked step, pause only that live proof and name
-the exact missing account/key. Keep no-secret implementation moving around it.
+Run additional focused tests for touched modules. Browser/UI claims still
+require Playwright evidence.

@@ -8,6 +8,8 @@ and the full customer journey are proven with real credentials.
 
 Latest accepted commits on branch `arclink`:
 
+- `a9ea651` - host readiness CLI, provider diagnostics CLI, injectable Docker
+  runner, and no-secret tests.
 - `9e50eeb` - operations/deployment documentation assets.
 - `211bea7` - fake E2E journey harness and live E2E scaffold.
 - `adde1ff` - browser product proof.
@@ -22,6 +24,8 @@ Landed no-secret foundation:
 - Playwright browser product proof exists for desktop/mobile.
 - Fake full journey E2E exists.
 - Live E2E scaffold exists and skips cleanly without secrets.
+- Host readiness, provider diagnostics, and injectable Docker runner no-secret
+  surfaces exist.
 - Deployment, ingress, secret, backup/restore, operations, observability, data
   safety, and documentation-truth assets exist.
 
@@ -29,15 +33,15 @@ Landed no-secret foundation:
 
 Do not declare final form while any non-external item below is unfinished.
 
-- [ ] Gap A: Add executable host deployment assets, not only docs. Produce a
+- [x] Gap A: Add executable host deployment assets, not only docs. Produce a
   no-secret host bootstrap/check script or compose wrapper that validates
   required binaries, env shape, state directories, Traefik/Cloudflare strategy,
   and API health without mutating live providers by default.
-- [ ] Gap B: Deepen the live-gated Docker executor from intent/fake coverage
+- [x] Gap B: Deepen the live-gated Docker executor from intent/fake coverage
   toward a real operator path. It must refuse to run unless explicit live flags,
   a state root, and a secret resolver are present. Dry-run tests must remain the
   default.
-- [ ] Gap C: Add live-readiness diagnostics for Stripe, Cloudflare, Chutes,
+- [x] Gap C: Add live-readiness diagnostics for Stripe, Cloudflare, Chutes,
   Telegram, Discord, and host Docker. Diagnostics should say exactly which
   env/account is missing and must never print secret values.
 - [ ] Gap D: Expand the live E2E harness from provider smoke checks toward the
@@ -61,7 +65,6 @@ These are blocked until the operator supplies credentials or account setup:
 
 ## Next Ralphie Objective
 
-Start with Gap A and Gap C because they do not require live secrets and will
-make the real deployment safer. Do not rebuild P1-11 or P13-P16 unless a failing
-test proves a regression. Do not mark P12 or final form complete until
-credential-backed E2E evidence exists.
+Start with Gap D/E scaffolding because Gaps A-C are now landed. Do not rebuild
+P1-11, P13-P16, or Gaps A-C unless a failing test proves a regression. Do not
+mark P12 or final form complete until credential-backed E2E evidence exists.

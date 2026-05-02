@@ -1,22 +1,42 @@
-# Almanac
+# ArcLink
 
-Almanac is a shared-host operating layer for Hermes agents.
+ArcLink is the self-serve private AI deployment product being built from the
+Almanac substrate. It keeps Almanac's proven Hermes, qmd, vault, memory,
+Nextcloud, code-server, Notion, bot, health, and deploy machinery, then adds
+ArcLink product identity, hosted API contracts, Stripe entitlements,
+Cloudflare/Traefik intent, Chutes-first provider defaults, responsive user and
+admin dashboards, fleet operations, rollout records, and a secret-gated live
+proof harness.
 
-It gives an operator one steady Curator agent, gives each enrolled user their
-own isolated Hermes lane, and keeps everyone pointed at the same living
-knowledge base: files in the vault, PDF-derived notes, synced documentation,
-and shared Notion context.
+`deploy.sh` still plays a real role: it is the host bootstrap and operations
+entrypoint for the underlying machine. It installs or repairs the Docker or
+baremetal Almanac runtime that ArcLink builds on. ArcLink's Python control
+plane owns product state, provisioning intent, provider gates, admin actions,
+and live-proof orchestration.
 
-The vibe is a control room, not a toy box. Almanac should feel calm, useful,
-and a little magical because the boring parts are handled correctly: Unix
-accounts, service repair, deploy keys, qmd indexing, Notion guardrails,
-backups, onboarding, and recovery paths.
+Use this mental split:
+
+```text
+deploy.sh                 host setup, Docker stack, health, repair, upgrades
+python/arclink_*.py       SaaS control plane, provisioning intent, executor gates
+web/                      ArcLink user/admin dashboard shell
+docs/arclink/             product, operations, safety, and live-proof docs
+```
+
+Production live proof is intentionally not claimed yet. The no-secret
+foundation is implemented and tested; the full live journey is blocked until
+real Stripe, Cloudflare, Chutes, Telegram, Discord, and production host
+credentials are supplied.
 
 ## What Ships Today
 
-Almanac currently provisions and manages:
+ArcLink currently ships as an additive product/control-plane layer on top of the
+Almanac runtime. The combined system provides:
 
-- A public infrastructure repo plus a nested private `almanac-priv/` repo.
+- Host bootstrap, Docker install/repair, health, upgrade, and recovery tooling
+  through `deploy.sh`.
+- A public infrastructure repo plus a nested private `almanac-priv/` repo for
+  sensitive runtime state.
 - A shared vault on disk, exposed in Nextcloud as `/Vault`.
 - qmd collections for authored vault files, PDF-ingested markdown, and indexed
   shared Notion pages.
@@ -38,9 +58,16 @@ Almanac currently provisions and manages:
 - Optional per-user Hermes-home backups.
 - Optional remote control of a user agent over Tailscale SSH.
 - Health, repair, enrollment cleanup, and upgrade tooling.
+- ArcLink `ARCLINK_*` config, hosted API, auth/CSRF, Stripe/Cloudflare/Chutes
+  fake/live boundaries, public onboarding contracts, dashboards, fleet
+  placement, admin action worker, rollouts, diagnostics, host readiness, and
+  live-proof evidence tooling.
+- A Next.js 15 + Tailwind 4 ArcLink web shell with route smoke tests and
+  browser product checks.
 
 The important design choice: agents do not need to rummage around blindly.
-They get high-level MCP tools that know the shape of Almanac.
+They get high-level MCP tools that know the shape of the substrate, while
+ArcLink gives operators and customers a cleaner product surface.
 
 ## Mental Model
 
@@ -120,13 +147,25 @@ flowchart LR
 
 ## Repository Layout
 
-The intended deployed layout is:
+The historical baremetal deployed layout is:
 
 ```text
 /home/almanac/
   almanac/                 # public repo: scripts, units, templates, skills
     almanac-priv/          # private nested repo: config, vault, runtime state
 ```
+
+The Docker-first ArcLink host can also run from a root-owned or operator-owned
+checkout such as:
+
+```text
+/root/arclink/
+  almanac-priv/            # generated private runtime state
+```
+
+The exact host checkout path is less important than keeping the public repo and
+private runtime directory together. Docker mode records the chosen host paths in
+`almanac-priv/config/docker.env`.
 
 `almanac-priv/` contains the sensitive and living parts:
 
@@ -149,15 +188,92 @@ almanac-priv/
 The public repo ignores `almanac-priv/`. Back up the inner private repo, not
 the outer infrastructure repo.
 
+## Host Deployment From Scratch
+
+For ArcLink today, the recommended first host path is Docker Compose through
+`deploy.sh`. That gives you the operational substrate quickly while preserving
+the same health, repair, upgrade, and recovery entrypoint the older Almanac
+host path uses.
+
+### 1. Prepare The Host
+
+Use a fresh Debian/Ubuntu server or VM with root or sudo access.
+
+Minimum packages:
+
+```bash
+apt-get update
+apt-get install -y git ca-certificates curl
+```
+
+Install Docker Engine with the provider method you trust, then confirm:
+
+```bash
+docker --version
+docker compose version
+```
+
+### 2. Clone ArcLink
+
+Until the dedicated ArcLink repository exists, the working branch is
+`arclink` in this repository.
+
+```bash
+git clone -b arclink https://github.com/sirouk/almanac.git /root/arclink
+cd /root/arclink
+```
+
+### 3. Bring Up The Docker Host Stack
+
+```bash
+./deploy.sh docker install
+./deploy.sh docker ports
+./deploy.sh docker health
+```
+
+`./deploy.sh docker install` is idempotent. It bootstraps
+`almanac-priv/`, writes `almanac-priv/config/docker.env`, generates local
+runtime secrets for fresh installs, builds the app image, starts Docker Compose,
+runs Curator setup unless skipped, reconciles Docker state, records release
+state, prints ports, runs health checks, and runs the live-smoke checks that do
+not require external provider credentials.
+
+### 4. Know What Is Live And What Is Gated
+
+After Docker install, the host substrate can run the existing Almanac/ArcLink
+services: Nextcloud, qmd MCP, Almanac MCP, Notion webhook, vault watch, agent
+supervisor, health watch, refresh jobs, PDF ingest, memory synthesis, and
+supporting jobs from `compose.yaml`.
+
+The SaaS control plane and web shell are present in code, tests, and docs, but
+credentialed production proof is still gated. Do not mark the system
+launch-live until the explicit Production 12 live run is completed with real
+Stripe, Cloudflare, Chutes, Telegram, Discord, and production host credentials.
+
+### 5. Day-Two Host Commands
+
+```bash
+./deploy.sh docker health
+./deploy.sh docker logs [SERVICE]
+./deploy.sh docker ps
+./deploy.sh docker upgrade
+./deploy.sh docker pins-check
+./deploy.sh docker rotate-nextcloud-secrets
+```
+
+Use baremetal `./deploy.sh install` only when you intentionally want the older
+systemd/user-service shared-host path. ArcLink's MVP deployment substrate is
+Docker-first.
+
 ## Deployment Paths
 
-Almanac has two deployment paths. They share the same repository and the same
-operator control center, but they do not mean the same thing.
+ArcLink inherits two deployment paths from Almanac. They share the same
+repository and operator control center, but they do not mean the same thing.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
-| **Baremetal** | Full live shared-host installs, operator onboarding, enrolled Unix users, systemd user services, production upgrades. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
-| **Containerized** | Portable Docker installs for individuals, families, org pilots, homelabs, local validation, and container-first operation. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
+| **Docker-first** | ArcLink MVP host deployment, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
+| **Baremetal** | Legacy/full Almanac shared-host installs, operator onboarding, enrolled Unix users, systemd user services, production upgrades. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
 
 If a command does not include the word `docker`, it uses the baremetal path.
 Docker is always explicit under `./deploy.sh docker ...`.
@@ -254,13 +370,14 @@ Before a serious install, have these ready:
 
 ## Containerized Path
 
-Containerized is the Docker Compose path. It is designed for portable operation
-on laptops, homelab servers, family servers, org evaluation boxes, and
-container-first environments where host systemd user services are not the
-runtime manager.
+Containerized is the Docker Compose path and the recommended ArcLink host
+deployment path today. It is designed for portable operation on servers,
+laptops, homelab machines, org evaluation boxes, and container-first
+environments where host systemd user services are not the runtime manager.
 
-Use containerized when you want Almanac MCP, qmd MCP, Notion webhook,
-Nextcloud, Postgres, Redis, vault watching, PDF ingest, docs sync,
+Use containerized when you want the ArcLink/Almanac substrate: Almanac MCP, qmd
+MCP, Notion webhook, Nextcloud, Postgres, Redis, vault watching, PDF ingest,
+docs sync,
 notification delivery, curator refresh, qmd refresh, enrolled-agent
 supervision, and Docker-native health watch containers under Docker Compose.
 
@@ -307,6 +424,11 @@ of starting a separate auth flow during the first questionnaire. Set
 `ALMANAC_DOCKER_SKIP_OPERATOR_CONFIG=1` or
 `ALMANAC_DOCKER_SKIP_CURATOR_SETUP=1` for scripted installs that should skip
 those interactive phases.
+
+ArcLink SaaS settings live in `config/env.example` and `ARCLINK_*` variables.
+Those product settings are separate from the generated Docker runtime file. The
+Docker file brings up the host substrate; the ArcLink hosted API, dashboards,
+provider boundaries, and live-proof runner consume the ArcLink configuration.
 
 Docker agent homes are stored under `almanac-priv/state/docker/users/`, so
 container recreation does not erase enrolled-agent Hermes homes. Agent dashboard
@@ -925,28 +1047,40 @@ Notion, and service-health paths.
 ArcLink owns:
 
 - Product identity and `ARCLINK_*` configuration (`python/arclink_product.py`).
-- 18 `arclink_*` database tables in `python/almanac_control.py`.
+- 22 `arclink_*` database tables in `python/almanac_control.py`.
 - Stripe entitlement interpretation (`python/arclink_entitlements.py`).
 - Hostname, DNS drift, and Traefik intent (`python/arclink_ingress.py`).
 - Nextcloud isolation and SSH access strategy (`python/arclink_access.py`).
 - No-secret provisioning dry-run intent (`python/arclink_provisioning.py`).
 - Guarded mutating executor boundary (`python/arclink_executor.py`).
+- Fleet registry and placement (`python/arclink_fleet.py`).
+- Admin action worker (`python/arclink_action_worker.py`).
+- Rollout/rollback records (`python/arclink_rollout.py`).
 - Public onboarding session contracts (`python/arclink_onboarding.py`).
 - User/admin dashboard read models (`python/arclink_dashboard.py`).
 - API/auth boundary with hashed sessions and CSRF (`python/arclink_api_auth.py`).
 - Hosted WSGI API under `/api/v1` (`python/arclink_hosted_api.py`).
 - Local no-secret product surface prototype (`python/arclink_product_surface.py`).
 - Public Telegram/Discord bot skeletons (`python/arclink_public_bots.py`).
+- Telegram and Discord runtime adapters (`python/arclink_telegram.py`,
+  `python/arclink_discord.py`).
+- Host readiness, diagnostics, live journey, evidence, and live runner modules.
 - Chutes catalog and adapter contracts (`python/arclink_chutes.py`,
   `python/arclink_adapters.py`).
+- Next.js/Tailwind web app in `web/` for the ArcLink landing, onboarding, user
+  dashboard, and admin dashboard.
 
 ### ArcLink Current Status
 
-The foundation is additive and no-secret testable. All 14 ArcLink modules
-compile and all ArcLink tests pass without live provider credentials. The
-executor boundary fails closed by default; fake adapters prove contract
-behavior. Production live execution, frontend dashboard (Next.js/Tailwind),
-live public bots, and real E2E with credentials remain follow-up work.
+The foundation is additive and no-secret testable. The current codebase has
+non-external coverage for Production 1-11 and Production 13-16 in
+`research/RALPHIE_PRODUCTION_GRADE_STEERING.md`. The executor boundary fails
+closed by default, fake adapters prove contract behavior, and the live proof
+runner can execute once credentials exist.
+
+Production 12 is the remaining external gate: real Stripe, Cloudflare, Chutes,
+Telegram, Discord, and production host credentials are required before ArcLink
+can be claimed live-proven end to end.
 
 Detailed ArcLink documentation:
 
@@ -954,13 +1088,14 @@ Detailed ArcLink documentation:
 docs/arclink/foundation.md           # behavior notes and config
 docs/arclink/foundation-runbook.md   # assumptions, ownership, runbook, repair
 docs/arclink/architecture.md         # module map and data flow
+docs/arclink/operations-runbook.md   # host operations, health, scale ops
 docs/arclink/brand-system.md         # visual identity and voice
 docs/arclink/live-e2e-secrets-needed.md  # credential checklist for live testing
 ```
 
 ## Project Posture
 
-Almanac is meant to supercharge a team, not bury it in ceremony.
+ArcLink is meant to supercharge a team, not bury it in ceremony.
 
 The right outcome is:
 
@@ -972,5 +1107,5 @@ The right outcome is:
 - The system feels smooth when it works and honest when it cannot.
 
 If something is clunky, it is a bug or a design debt. The whole point of
-Almanac is to make the sharp machinery feel like a calm room people can work
+ArcLink is to make the sharp machinery feel like a calm room people can work
 inside.

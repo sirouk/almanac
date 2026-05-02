@@ -142,12 +142,24 @@ ARCLINK_EXTRA_MCP_NAME="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
 ARCLINK_EXTRA_MCP_LABEL="${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
 ARCLINK_EXTRA_MCP_URL="${ARCLINK_EXTRA_MCP_URL:-}"
 __arclink_upstream_repo_default=""
+__arclink_canonical_upstream_repo_url="https://github.com/sirouk/arclink.git"
 if command -v git >/dev/null 2>&1; then
   __arclink_upstream_repo_default="$(git -C "$BOOTSTRAP_DIR" remote get-url origin 2>/dev/null || true)"
 fi
-ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-${__arclink_upstream_repo_default:-https://github.com/example/arclink.git}}"
-unset __arclink_upstream_repo_default
-ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+__arclink_legacy_repo_name="alma""nac"
+case "$__arclink_upstream_repo_default" in
+  *github.com:sirouk/$__arclink_legacy_repo_name.git|*github.com/sirouk/$__arclink_legacy_repo_name|*github.com/sirouk/$__arclink_legacy_repo_name.git)
+    __arclink_upstream_repo_default="$__arclink_canonical_upstream_repo_url"
+    ;;
+esac
+ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-${__arclink_upstream_repo_default:-$__arclink_canonical_upstream_repo_url}}"
+unset __arclink_upstream_repo_default __arclink_legacy_repo_name __arclink_canonical_upstream_repo_url
+__arclink_upstream_branch_default=""
+if command -v git >/dev/null 2>&1; then
+  __arclink_upstream_branch_default="$(git -C "$BOOTSTRAP_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+fi
+ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-${__arclink_upstream_branch_default:-arclink}}"
+unset __arclink_upstream_branch_default
 ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
 ARCLINK_AGENT_CODE_PORT_BASE="${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
@@ -944,7 +956,7 @@ choose_mode() {
   cat <<'EOF'
 ArcLink deploy menu
 
-  1) Install / repair from current checkout
+  1) Baremetal shared-host install / repair from current checkout
   2) Upgrade deployed host from configured upstream
   3) Write config only
   4) Notion SSOT setup / test
@@ -959,13 +971,13 @@ ArcLink deploy menu
  13) Print agent payload
  14) Health check
  15) Remove / teardown
- 16) Docker control center
+ 16) Docker-first control center (recommended for ArcLink SaaS hosts)
  17) Exit
 EOF
 
   while true; do
-    read -r -p "Choose mode [1]: " answer
-    case "${answer:-1}" in
+    read -r -p "Choose mode [16]: " answer
+    case "${answer:-16}" in
       1) MODE="install"; return 0 ;;
       2) MODE="upgrade"; return 0 ;;
       3) MODE="write-config"; return 0 ;;
@@ -2000,8 +2012,8 @@ emit_runtime_config() {
     write_kv ARCLINK_EXTRA_MCP_NAME "${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
     write_kv ARCLINK_EXTRA_MCP_LABEL "${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
     write_kv ARCLINK_EXTRA_MCP_URL "${ARCLINK_EXTRA_MCP_URL:-}"
-    write_kv ARCLINK_UPSTREAM_REPO_URL "${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
-    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-main}"
+    write_kv ARCLINK_UPSTREAM_REPO_URL "${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
+    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-arclink}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_USER "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_PATH "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
@@ -2070,7 +2082,7 @@ org_profile_builder_python() {
   local repo_dir="${1:-$BOOTSTRAP_DIR}"
   local venv_dir="" python_bin=""
 
-  if python3 -c 'import yaml' >/dev/null 2>&1; then
+  if python3 -c 'import yaml, jsonschema' >/dev/null 2>&1; then
     printf '%s\n' "python3"
     return 0
   fi
@@ -2081,10 +2093,10 @@ org_profile_builder_python() {
     mkdir -p "$(dirname "$venv_dir")"
     python3 -m venv "$venv_dir"
   fi
-  if ! "$python_bin" -c 'import yaml' >/dev/null 2>&1; then
-    "$python_bin" -m pip install --upgrade --quiet PyYAML
+  if ! "$python_bin" -c 'import yaml, jsonschema' >/dev/null 2>&1; then
+    "$python_bin" -m pip install --upgrade --quiet PyYAML jsonschema
   fi
-  "$python_bin" -c 'import yaml' >/dev/null
+  "$python_bin" -c 'import yaml, jsonschema' >/dev/null
   printf '%s\n' "$python_bin"
 }
 
@@ -2212,7 +2224,28 @@ git_origin_url() {
   git -C "$repo_dir" remote get-url origin 2>/dev/null || true
 }
 
+canonical_arclink_upstream_repo_url() {
+  printf '%s\n' "https://github.com/sirouk/arclink.git"
+}
+
+is_legacy_pre_rebrand_repo_url() {
+  local legacy_repo_name="alma""nac"
+
+  case "${1:-}" in
+    *github.com:sirouk/$legacy_repo_name.git|*github.com/sirouk/$legacy_repo_name|*github.com/sirouk/$legacy_repo_name.git)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 is_placeholder_arclink_upstream_repo_url() {
+  if is_legacy_pre_rebrand_repo_url "${1:-}"; then
+    return 0
+  fi
+
   case "${1:-}" in
     ""|https://github.com/example/arclink|https://github.com/example/arclink.git|git@github.com:example/arclink.git)
       return 0
@@ -2227,10 +2260,10 @@ default_arclink_upstream_repo_url() {
   local origin_url=""
 
   origin_url="$(git_origin_url "$BOOTSTRAP_DIR")"
-  if [[ -n "$origin_url" ]]; then
+  if [[ -n "$origin_url" ]] && ! is_legacy_pre_rebrand_repo_url "$origin_url"; then
     printf '%s\n' "$origin_url"
   else
-    printf '%s\n' "https://github.com/example/arclink.git"
+    canonical_arclink_upstream_repo_url
   fi
 }
 
@@ -2811,7 +2844,7 @@ print_post_install_guide() {
 
   echo "ArcLink software updates"
   echo "  Tracked upstream:"
-  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}#${ARCLINK_UPSTREAM_BRANCH:-main}"
+  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   echo "  Release state:"
   echo "    ${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   echo "  Upgrade command:"
@@ -4129,7 +4162,8 @@ collect_install_answers() {
 
   load_detected_config || true
 
-  echo "ArcLink deploy: install / repair from current checkout"
+  echo "ArcLink deploy: baremetal shared-host install / repair from current checkout"
+  echo "For the Docker-first ArcLink SaaS host path, use: ./deploy.sh docker install"
   echo
 
   detected_user="${ARCLINK_USER:-}"
@@ -4269,9 +4303,9 @@ EOF
   QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   collect_upstream_git_answers
   ARCLINK_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
   collect_backup_git_answers
@@ -4444,9 +4478,9 @@ collect_remove_answers() {
   QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
   QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
   BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
   BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-$ARCLINK_USER@localhost}"
@@ -4498,9 +4532,9 @@ prepare_deployed_context() {
   ARCLINK_ARCHIVED_AGENTS_DIR="${ARCLINK_ARCHIVED_AGENTS_DIR:-$STATE_DIR/archived-agents}"
   CONFIG_TARGET="${DISCOVERED_CONFIG:-${ARCLINK_CONFIG_FILE:-$ARCLINK_PRIV_CONFIG_DIR/arclink.env}}"
   ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
-  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
@@ -6427,7 +6461,7 @@ _run_component_apply() {
   load_detected_config || true
   exec env \
     ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
-    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
@@ -7766,7 +7800,7 @@ run_upgrade_flow() {
   echo "ArcLink deploy: upgrade from configured upstream"
   echo
   echo "Config:   $CONFIG_TARGET"
-  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}#${ARCLINK_UPSTREAM_BRANCH:-main}"
+  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   echo "Target:   $ARCLINK_REPO_DIR"
 
   require_main_upstream_branch_for_upgrade
@@ -8031,9 +8065,9 @@ EOF
   ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
   ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
+  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   collect_upstream_git_answers
 
   BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-ed25519}"

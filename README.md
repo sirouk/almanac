@@ -267,16 +267,17 @@ Docker-first.
 
 ## Deployment Paths
 
-ArcLink inherits two deployment paths from ArcLink. They share the same
-repository and operator control center, but they do not mean the same thing.
+ArcLink keeps two deployment paths in this repository. They share the same
+operator control center, but they do not mean the same thing.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
 | **Docker-first** | ArcLink MVP host deployment, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
 | **Baremetal** | Legacy/full ArcLink shared-host installs, operator onboarding, enrolled Unix users, systemd user services, production upgrades. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
 
-If a command does not include the word `docker`, it uses the baremetal path.
-Docker is always explicit under `./deploy.sh docker ...`.
+The interactive `./deploy.sh` menu defaults to the Docker control center.
+Direct commands that do not include the word `docker`, such as `./deploy.sh
+install`, still use the baremetal path.
 
 ## Local Validation
 
@@ -328,7 +329,7 @@ actual shared-host stack expects Linux system services.
 From the repo root:
 
 ```bash
-./deploy.sh
+./deploy.sh install
 ```
 
 Common direct modes:

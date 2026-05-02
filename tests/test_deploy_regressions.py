@@ -1396,6 +1396,44 @@ printf 'KEEP_DEFAULT=%q\\n' "$keep_default_result"
     print("PASS test_secret_prompt_helpers_do_not_prefix_newlines")
 
 
+def test_deploy_menu_defaults_to_docker_first() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "choose_mode() {", "docker_usage() {")
+    expect(
+        "Baremetal shared-host install / repair" in snippet,
+        "expected option 1 to be explicitly marked as the baremetal substrate path",
+    )
+    expect(
+        "Docker-first control center (recommended for ArcLink SaaS hosts)" in snippet,
+        "expected Docker control center to be labeled as the recommended SaaS path",
+    )
+    expect('read -r -p "Choose mode [16]: "' in snippet, "expected menu default to be Docker-first")
+    expect('case "${answer:-16}"' in snippet, "expected blank menu selection to choose Docker mode")
+    print("PASS test_deploy_menu_defaults_to_docker_first")
+
+
+def test_baremetal_install_banner_points_to_docker_first_path() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    expect(
+        "ArcLink deploy: baremetal shared-host install / repair from current checkout" in snippet,
+        "expected baremetal install heading to be explicit",
+    )
+    expect(
+        "For the Docker-first ArcLink SaaS host path, use: ./deploy.sh docker install" in snippet,
+        "expected baremetal path to point operators to Docker-first install",
+    )
+    print("PASS test_baremetal_install_banner_points_to_docker_first_path")
+
+
+def test_org_profile_builder_installs_jsonschema() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "org_profile_builder_python() {", "maybe_run_org_profile_builder() {")
+    expect("import yaml, jsonschema" in snippet, "expected profile builder dependency probe to include jsonschema")
+    expect("PyYAML jsonschema" in snippet, "expected profile builder venv install to include jsonschema")
+    print("PASS test_org_profile_builder_installs_jsonschema")
+
+
 def test_collect_install_answers_randomizes_placeholder_passwords() -> None:
     text = DEPLOY_SH.read_text()
     helpers = extract(text, "random_secret() {", "write_kv() {")
@@ -2783,6 +2821,7 @@ def test_bootstrap_system_supports_optional_podman_and_tailscale_install() -> No
     expect("install_podman_if_requested()" in text, text)
     expect("install_tailscale_if_requested()" in text, text)
     expect("curl -fsSL https://tailscale.com/install.sh | sh" in text, text)
+    expect("python3-jsonschema" in text and "python3-yaml" in text, text)
     expect("systemd=true" in text and "wsl --shutdown" in text, text)
     print("PASS test_bootstrap_system_supports_optional_podman_and_tailscale_install")
 
@@ -2945,6 +2984,9 @@ def main() -> int:
         test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint,
         test_collect_install_answers_does_not_prompt_for_telegram_token_up_front,
         test_secret_prompt_helpers_do_not_prefix_newlines,
+        test_deploy_menu_defaults_to_docker_first,
+        test_baremetal_install_banner_points_to_docker_first_path,
+        test_org_profile_builder_installs_jsonschema,
         test_collect_install_answers_randomizes_placeholder_passwords,
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,

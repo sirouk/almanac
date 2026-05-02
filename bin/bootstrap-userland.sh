@@ -14,7 +14,7 @@ reconcile_vault_layout() {
   python3 "$SCRIPT_DIR/reconcile-vault-layout.py" \
     --repo-dir "$BOOTSTRAP_DIR" \
     --vault-dir "$VAULT_DIR" \
-    --repo-url "${ARCLINK_UPSTREAM_REPO_URL:-}" \
+    --repo-url "${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/sirouk/arclink.git}" \
     "${hermes_skills_args[@]}"
 }
 

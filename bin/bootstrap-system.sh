@@ -149,6 +149,8 @@ install_base_linux_packages() {
     inotify-tools \
     git \
     python3 \
+    python3-jsonschema \
+    python3-yaml \
     poppler-utils \
     uidmap \
     slirp4netns \

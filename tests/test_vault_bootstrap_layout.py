@@ -265,11 +265,47 @@ def test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git(
         print("PASS test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git")
 
 
+def test_reconcile_vault_layout_sanitizes_pre_rebrand_origin() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo_dir = root / "repo-copy"
+        vault_dir = root / "vault"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        vault_dir.mkdir(parents=True, exist_ok=True)
+
+        (repo_dir / "templates").symlink_to(REPO / "templates", target_is_directory=True)
+        (repo_dir / "skills").symlink_to(REPO / "skills", target_is_directory=True)
+        (repo_dir / "plugins").symlink_to(REPO / "plugins", target_is_directory=True)
+
+        legacy_repo = "alma" "nac"
+        result = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--repo-dir",
+                str(repo_dir),
+                "--vault-dir",
+                str(vault_dir),
+                "--repo-url",
+                f"https://github.com/sirouk/{legacy_repo}.git",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected reconcile-vault-layout legacy URL fallback to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        repos_note = (vault_dir / "Repos" / "arclink.md").read_text(encoding="utf-8")
+        expect("https://github.com/sirouk/arclink" in repos_note, repos_note)
+        expect(legacy_repo not in repos_note, repos_note)
+        print("PASS test_reconcile_vault_layout_sanitizes_pre_rebrand_origin")
+
+
 def main() -> int:
     test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legacy_defaults()
     test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrating_managed_files()
     test_reconcile_vault_layout_uses_upstream_repo_env_when_repo_dir_is_not_git()
-    print("PASS all 3 vault bootstrap layout regression tests")
+    test_reconcile_vault_layout_sanitizes_pre_rebrand_origin()
+    print("PASS all 4 vault bootstrap layout regression tests")
     return 0
 
 

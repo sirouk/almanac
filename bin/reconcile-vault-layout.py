@@ -19,6 +19,8 @@ AGENT_LAYOUT_MIGRATIONS = (
     (LEGACY_AGENT_SKILLS_DIRNAME, AGENT_SKILLS_DIRNAME),
     (LEGACY_AGENT_PLUGINS_DIRNAME, AGENT_PLUGINS_DIRNAME),
 )
+CANONICAL_REPO_URL = "https://github.com/sirouk/arclink"
+LEGACY_REPO_NAME = "alma" "nac"
 
 LEGACY_DEFAULTS: dict[str, dict[str, str]] = {
     "Inbox": {
@@ -226,6 +228,8 @@ def normalize_repo_url(repo_url: str) -> str:
     value = repo_url.strip()
     if value.endswith(".git"):
         value = value[:-4]
+    if re.search(rf"github\.com[:/]sirouk/{LEGACY_REPO_NAME}$", value):
+        value = CANONICAL_REPO_URL
     return value.rstrip("/")
 
 

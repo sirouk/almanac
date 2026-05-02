@@ -465,6 +465,27 @@ cat "$SYSTEMCTL_LOG"
     print("PASS test_disable_curator_native_gateway_resets_failed_state")
 
 
+def test_hermes_setup_runs_with_utf8_environment() -> None:
+    text = BOOTSTRAP_CURATOR.read_text()
+    expect("run_hermes_utf8()" in text, "expected shared UTF-8 Hermes wrapper")
+    expect('LANG="${ARCLINK_UTF8_LOCALE:-C.UTF-8}"' in text, "expected Hermes wrapper to force UTF-8 LANG")
+    expect('LC_ALL="${ARCLINK_UTF8_LOCALE:-C.UTF-8}"' in text, "expected Hermes wrapper to force UTF-8 LC_ALL")
+    expect('PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"' in text, "expected Hermes wrapper to force UTF-8 Python I/O")
+    expect(
+        'run_hermes_utf8 "$ARCLINK_CURATOR_HERMES_HOME" "$hermes_bin" setup model' in text,
+        "expected model setup to use UTF-8 wrapper",
+    )
+    expect(
+        'run_hermes_utf8 "$hermes_home" "$hermes_bin" gateway setup' in text,
+        "expected gateway setup to use UTF-8 wrapper",
+    )
+    expect(
+        'run_hermes_utf8 "$hermes_home" "$hermes_bin" dump' in text,
+        "expected Hermes state probe to use UTF-8 wrapper",
+    )
+    print("PASS test_hermes_setup_runs_with_utf8_environment")
+
+
 def main() -> int:
     tests = [
         test_fresh_install_prompts_for_channels_even_with_tui_only_default,
@@ -478,6 +499,7 @@ def main() -> int:
         test_run_curator_gateway_setup_treats_root_restart_as_soft_success,
         test_operator_notify_falls_back_to_tui_only_when_target_verification_fails,
         test_disable_curator_native_gateway_resets_failed_state,
+        test_hermes_setup_runs_with_utf8_environment,
     ]
     for test in tests:
         test()

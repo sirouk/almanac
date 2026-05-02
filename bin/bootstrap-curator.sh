@@ -247,12 +247,24 @@ EOF
   fi
 }
 
+run_hermes_utf8() {
+  local hermes_home="$1"
+  shift
+
+  env \
+    LANG="${ARCLINK_UTF8_LOCALE:-C.UTF-8}" \
+    LC_ALL="${ARCLINK_UTF8_LOCALE:-C.UTF-8}" \
+    PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}" \
+    HERMES_HOME="$hermes_home" \
+    "$@"
+}
+
 probe_hermes_state_json() {
   local hermes_home="$1"
   local hermes_bin="${2:-hermes}"
   local dump_file=""
   dump_file="$(mktemp)"
-  if ! HERMES_HOME="$hermes_home" "$hermes_bin" dump >"$dump_file" 2>/dev/null; then
+  if ! run_hermes_utf8 "$hermes_home" "$hermes_bin" dump >"$dump_file" 2>/dev/null; then
     rm -f "$dump_file"
     return 1
   fi
@@ -334,10 +346,10 @@ run_curator_gateway_setup() {
   print_gateway_setup_guidance "$requested_channels_csv"
   echo "Running curator Hermes gateway setup ..."
   if [[ -x "$setup_cmd" ]]; then
-    if "$setup_cmd" "$hermes_bin" "$hermes_home"; then
+    if env LANG="${ARCLINK_UTF8_LOCALE:-C.UTF-8}" LC_ALL="${ARCLINK_UTF8_LOCALE:-C.UTF-8}" PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}" "$setup_cmd" "$hermes_bin" "$hermes_home"; then
       return 0
     fi
-  elif HERMES_HOME="$hermes_home" "$hermes_bin" gateway setup; then
+  elif run_hermes_utf8 "$hermes_home" "$hermes_bin" gateway setup; then
     return 0
   fi
 
@@ -894,7 +906,7 @@ PY
 
   if [[ "$skip_setup" != "1" && -t 0 ]] && should_rerun_setup "Hermes model/provider setup" "$force_setup"; then
     echo "Running curator Hermes model/provider setup in $ARCLINK_CURATOR_HERMES_HOME ..."
-    HERMES_HOME="$ARCLINK_CURATOR_HERMES_HOME" "$hermes_bin" setup model
+    run_hermes_utf8 "$ARCLINK_CURATOR_HERMES_HOME" "$hermes_bin" setup model
     ran_model_setup="1"
   fi
   ensure_hermes_agent_defaults "$ARCLINK_CURATOR_HERMES_HOME" "$RUNTIME_DIR/hermes-venv/bin/python3"

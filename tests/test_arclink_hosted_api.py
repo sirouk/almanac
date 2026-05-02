@@ -978,6 +978,7 @@ def test_telegram_webhook_route() -> None:
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload.get("ok") is True, str(payload))
     expect(payload.get("action") != "ignored", f"expected handled action: {payload}")
+    expect(payload.get("sent") is False, f"no live Telegram transport should be used in this test: {payload}")
 
     # Non-text update (no message) should be ignored
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -988,6 +989,62 @@ def test_telegram_webhook_route() -> None:
     expect(payload.get("action") == "ignored", str(payload))
 
     print("PASS test_telegram_webhook_route")
+
+
+def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_send_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_send_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_send_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    class CaptureTransport:
+        def __init__(self) -> None:
+            self.sent_messages = []
+
+        def send_message(self, chat_id: str, text: str):
+            self.sent_messages.append({"chat_id": chat_id, "text": text})
+            return {"message_id": len(self.sent_messages)}
+
+    transport = CaptureTransport()
+    update = {
+        "update_id": 1,
+        "message": {
+            "message_id": 1,
+            "chat": {"id": 12345},
+            "from": {"id": 67890},
+            "text": "/help",
+        },
+    }
+    status, payload, _ = hosted._handle_telegram_webhook(
+        conn,
+        update,
+        "req_tg_send",
+        config,
+        adapters.FakeStripeClient(),
+        telegram_transport=transport,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload.get("sent") is True, str(payload))
+    expect(len(transport.sent_messages) == 1, str(transport.sent_messages))
+    expect(transport.sent_messages[0]["chat_id"] == "12345", str(transport.sent_messages))
+    expect("/connect-notion" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
+
+    class FailingTransport:
+        def send_message(self, chat_id: str, text: str):
+            raise RuntimeError("telegram api unavailable")
+
+    status, payload, _ = hosted._handle_telegram_webhook(
+        conn,
+        update,
+        "req_tg_send_failure",
+        config,
+        adapters.FakeStripeClient(),
+        telegram_transport=FailingTransport(),
+    )
+    expect(status == 200, f"reply send failure should still ack webhook: {status} {payload}")
+    expect(payload.get("sent") is False, str(payload))
+    print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
 
 
 def test_discord_webhook_route() -> None:
@@ -1655,6 +1712,7 @@ def main() -> int:
     test_admin_logout_clears_cookies_and_revokes_session()
     test_stripe_webhook_processes_entitlement_transition()
     test_telegram_webhook_route()
+    test_telegram_webhook_sends_reply_when_transport_is_available()
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
     test_user_provider_state_route()
@@ -1675,7 +1733,7 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
     test_admin_scale_operations_requires_auth_and_returns_snapshot()
-    print("PASS all 45 ArcLink hosted API tests")
+    print("PASS all 46 ArcLink hosted API tests")
     return 0
 
 

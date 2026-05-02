@@ -60,7 +60,7 @@ from arclink_discord import (
     handle_discord_webhook_request,
 )
 from arclink_product import base_domain as default_base_domain
-from arclink_telegram import TelegramConfig, handle_telegram_update
+from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
 logger = logging.getLogger("arclink.hosted_api")
 
@@ -539,6 +539,7 @@ def _handle_telegram_webhook(
     request_id: str,
     config: HostedApiConfig,
     stripe_client: Any,
+    telegram_transport: Any | None = None,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Handle an incoming Telegram Bot API update (webhook mode)."""
     result = handle_telegram_update(
@@ -549,7 +550,26 @@ def _handle_telegram_webhook(
     )
     if result is None:
         return _json_response(200, {"ok": True, "action": "ignored"}, request_id=request_id)
-    return _json_response(200, {"ok": True, "action": result.get("action", "reply")}, request_id=request_id)
+    sent = False
+    if telegram_transport is not None:
+        try:
+            telegram_transport.send_message(result["chat_id"], result["text"])
+            sent = True
+        except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
+            logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
+    else:
+        telegram_config = TelegramConfig.from_env(config.env)
+        if telegram_config.is_live:
+            try:
+                LiveTelegramTransport(telegram_config).send_message(result["chat_id"], result["text"])
+                sent = True
+            except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
+                logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
+    return _json_response(
+        200,
+        {"ok": True, "action": result.get("action", "reply"), "sent": sent},
+        request_id=request_id,
+    )
 
 
 def _handle_discord_webhook(

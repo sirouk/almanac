@@ -37,6 +37,64 @@ def memory_db(control):
     return conn
 
 
+def seed_active_public_bot_deployment(
+    control,
+    conn,
+    *,
+    channel: str = "telegram",
+    channel_identity: str = "tg:42",
+    prefix: str = "arc-testpod",
+    base_domain: str = "control.example.ts.net",
+) -> dict[str, str]:
+    user_id = f"arcusr_{prefix.replace('-', '_')}"
+    deployment_id = f"arcdep_{prefix.replace('-', '_')}"
+    session_id = f"onb_{prefix.replace('-', '_')}"
+    now = control.utc_now_iso()
+    control.upsert_arclink_user(
+        conn,
+        user_id=user_id,
+        email=f"{prefix}@example.test",
+        display_name="Bot Buyer",
+        entitlement_state="paid",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        prefix=prefix,
+        base_domain=base_domain,
+        status="active",
+        metadata={
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": base_domain,
+            "tailscale_host_strategy": "path",
+            "selected_plan_id": "starter",
+        },
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_onboarding_sessions (
+          session_id, channel, channel_identity, status, current_step,
+          email_hint, display_name_hint, selected_plan_id, selected_model_id,
+          user_id, deployment_id, checkout_state, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, 'first_contacted', 'first_agent_contact', ?, ?, 'starter', 'moonshotai/Kimi-K2.6-TEE', ?, ?, 'paid', '{}', ?, ?)
+        """,
+        (
+            session_id,
+            channel,
+            channel_identity,
+            f"{prefix}@example.test",
+            "Bot Buyer",
+            user_id,
+            deployment_id,
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    return {"user_id": user_id, "deployment_id": deployment_id, "session_id": session_id, "prefix": prefix}
+
+
 def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_test")
@@ -122,7 +180,7 @@ def test_public_bot_turns_use_shared_onboarding_rate_limit() -> None:
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_rate_limit_test")
     conn = memory_db(control)
 
-    for _ in range(5):
+    for _ in range(20):
         turn = bots.handle_arclink_public_bot_turn(
             conn,
             channel="discord",
@@ -147,15 +205,119 @@ def test_public_bot_turns_use_shared_onboarding_rate_limit() -> None:
             "SELECT scope, subject FROM rate_limits WHERE subject = 'discord:limited' ORDER BY id"
         ).fetchall()
     ]
-    expect(len(rows) == 5 and {row["scope"] for row in rows} == {"arclink:onboarding:discord"}, str(rows))
+    expect(len(rows) == 20 and {row["scope"] for row in rows} == {"arclink:onboarding:discord"}, str(rows))
     print("PASS test_public_bot_turns_use_shared_onboarding_rate_limit")
+
+
+def test_public_bot_connect_notion_resolves_active_deployment_and_records_event() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_notion_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_notion_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-notionpod")
+
+    turn = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/connect-notion",
+    )
+    expect(turn.action == "connect_notion", str(turn))
+    expect(
+        "https://control.example.ts.net/u/arc-notionpod/notion/webhook" in turn.reply,
+        turn.reply,
+    )
+    ready = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="ready",
+    )
+    expect(ready.action == "connect_notion_ready", str(ready))
+    stored = conn.execute(
+        "SELECT metadata_json, current_step FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (seeded["session_id"],),
+    ).fetchone()
+    metadata = json.loads(stored["metadata_json"])
+    expect("public_bot_workflow" not in metadata, str(metadata))
+    expect(metadata.get("connect_notion_user_marked_ready_at"), str(metadata))
+    events = [
+        row["event_type"]
+        for row in conn.execute(
+            "SELECT event_type FROM arclink_events WHERE subject_id = ? ORDER BY created_at, event_id",
+            (seeded["deployment_id"],),
+        ).fetchall()
+    ]
+    expect("public_bot:connect_notion_requested" in events, str(events))
+    expect("public_bot:connect_notion_ready" in events, str(events))
+    print("PASS test_public_bot_connect_notion_resolves_active_deployment_and_records_event")
+
+
+def test_public_bot_config_backup_collects_private_repo_without_secret_leakage() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_backup_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_backup_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="discord",
+        channel_identity="discord:buyer",
+        prefix="arc-backuppod",
+    )
+
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:buyer",
+        text="/config-backup",
+    )
+    expect(opened.action == "prompt_backup_repo", str(opened))
+    expect("owner/repo" in opened.reply and "dedicated deploy key" in opened.reply, opened.reply)
+    recorded = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:buyer",
+        text="sirouk/arclink-agent-backup",
+    )
+    expect(recorded.action == "record_backup_repo", str(recorded))
+    expect("sirouk/arclink-agent-backup/settings/keys" in recorded.reply, recorded.reply)
+    stored = conn.execute(
+        "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (seeded["session_id"],),
+    ).fetchone()
+    metadata = json.loads(stored["metadata_json"])
+    expect(metadata.get("config_backup_owner_repo") == "sirouk/arclink-agent-backup", str(metadata))
+    expect("public_bot_workflow" not in metadata, str(metadata))
+    dumped = json.dumps([dict(row) for row in conn.execute("SELECT * FROM arclink_events").fetchall()])
+    expect("secret" not in dumped.lower() and "token" not in dumped.lower(), dumped)
+    print("PASS test_public_bot_config_backup_collects_private_repo_without_secret_leakage")
+
+
+def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_no_session_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_no_session_test")
+    conn = memory_db(control)
+
+    turn = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:new",
+        text="/connect-notion",
+    )
+    expect(turn.action == "connect_notion_unavailable", str(turn))
+    expect("after your ArcLink pod exists" in turn.reply, turn.reply)
+    count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
+    expect(count == 0, f"workflow command should not create an onboarding session, got {count}")
+    print("PASS test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions")
 
 
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_contract_rejects_wrong_channel_and_secret_metadata()
     test_public_bot_turns_use_shared_onboarding_rate_limit()
-    print("PASS all 3 ArcLink public bot tests")
+    test_public_bot_connect_notion_resolves_active_deployment_and_records_event()
+    test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
+    test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
+    print("PASS all 6 ArcLink public bot tests")
     return 0
 
 

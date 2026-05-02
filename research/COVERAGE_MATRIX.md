@@ -94,7 +94,7 @@
 
 ## Coverage Verdict
 
-Coverage is sufficient for BUILD to continue. 147 ArcLink test functions across
+Coverage is sufficient for BUILD to continue. 152 ArcLink test functions across
 17 test files (plus 4 hygiene and 2 web tests) cover the no-secret foundation. The controlling definition of done
 is `research/RALPHIE_PRODUCTION_GRADE_STEERING.md` (Production 1-16). All 16
 items are unchecked. No item requires live credentials to begin; 6 external

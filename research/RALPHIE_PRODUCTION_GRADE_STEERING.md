@@ -49,16 +49,16 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
 - [x] Production 2: Every mutating API route has explicit auth, role checks,
   CSRF or webhook signature validation, structured audit logging, and negative
   tests that prove unauthorized users cannot mutate state.
-- [ ] Production 3: Stripe boundary supports checkout, webhook ingestion,
+- [x] Production 3: Stripe boundary supports checkout, webhook ingestion,
   subscription state, billing portal, refunds or admin notes, failed payment
   state, and Stripe-vs-local reconciliation with fake tests.
-- [ ] Production 4: Cloudflare boundary supports hostname reservation,
+- [x] Production 4: Cloudflare boundary supports hostname reservation,
   DNS record creation, propagation/drift checks, teardown, retry safety, and
   fake tests.
-- [ ] Production 5: Docker Compose executor can render, validate, start, stop,
+- [x] Production 5: Docker Compose executor can render, validate, start, stop,
   restart, inspect, and teardown per-user stacks with resource limits, health
   checks, volume isolation, and dry-run/fake coverage.
-- [ ] Production 6: Chutes default provider flow includes owner-side key
+- [x] Production 6: Chutes default provider flow includes owner-side key
   lifecycle, per-deployment key state, model catalog/default selection,
   inference smoke path, failure reporting, and fake tests.
 - [ ] Production 7: Telegram and Discord onboarding flows share the same state
@@ -109,12 +109,11 @@ and docs. Do not mark the project done while any non-external item remains.
    - A tiny documentation/spec correction is allowed, especially making `429`
      explicit anywhere the OpenAPI contract still describes rate limit as
      `401`.
-2. Close real Provider Boundary gaps (Production 3-6), by audit first:
-   - Inspect existing Stripe, Cloudflare, Docker executor, and Chutes tests.
-   - If a capability is already implemented and tested, record it as done
-     instead of rewriting it.
-   - Fill only missing behavior, missing tests, or missing docs.
-3. Build Product Surface (Production 7-10):
+2. Respect the landed provider checkpoint:
+   - Production 3-6 no-secret/fake boundaries are complete in the current provider-boundary slice.
+   - Do not rebuild Stripe, Cloudflare, Docker executor, or Chutes boundaries unless a regression is proven by a failing test.
+   - Live provider proof remains deferred to Production 12 and requires real credentials.
+3. Build Product Surface (Production 7-10) next:
    - Wire the Next.js user dashboard to `/api/v1` endpoints instead of mock
      data.
    - Wire the Next.js admin dashboard to `/api/v1/admin/*` endpoints instead of

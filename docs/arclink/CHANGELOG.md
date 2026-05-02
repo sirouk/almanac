@@ -93,6 +93,40 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
 - Profile-only upsert preservation: `upsert_arclink_user()` no longer resets
   entitlement state during profile-only updates for returning users.
 
+## Provider Boundary Progress (2026-05-02)
+
+Incremental Production 3-6 work: resource limits, healthchecks, and expanded
+fake adapter coverage.
+
+### Provisioning (Production 5)
+
+- `arclink_provisioning.py` now renders per-service `deploy.resources.limits`
+  (memory and CPU) for all 13 Compose services via `ARCLINK_DEFAULT_RESOURCE_LIMITS`.
+- Healthchecks added for data/web services: `nextcloud-db` (pg_isready),
+  `nextcloud-redis` (redis-cli ping), `nextcloud` (curl status.php),
+  `code-server` (curl healthz).
+- `_service()` helper accepts optional `deploy` and `healthcheck` dicts.
+- New test: `test_rendered_services_include_resource_limits_and_healthchecks`
+  verifies every service has limits, data services have healthchecks, app-only
+  services do not, and all volumes stay under the deployment root.
+
+### Stripe Boundary (Production 3)
+
+- `FakeStripeClient.create_portal_session()` tested: unique session IDs,
+  customer/return-URL round-trip.
+- Admin refund and cancel action types tested with audited notes, metadata
+  storage, and plaintext-secret rejection.
+
+### Cloudflare Boundary (Production 4)
+
+- Fake Cloudflare propagation check tested: provision records, verify zero
+  drift, teardown, verify drift returns.
+
+### Chutes Provider (Production 6)
+
+- Catalog refresh test: simulates model list update, validates new model passes
+  `validate_default_chutes_model`.
+
 ### Known Gaps
 
 - No production live execution adapters (Docker, Cloudflare, Chutes, Stripe).

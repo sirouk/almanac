@@ -174,6 +174,78 @@ def test_fake_inference_smoke_and_failure_reporting() -> None:
     print("PASS test_fake_inference_smoke_and_failure_reporting")
 
 
+def test_fake_stripe_billing_portal_session() -> None:
+    mod = load_module("arclink_adapters.py", "arclink_adapters_portal_test")
+    stripe = mod.FakeStripeClient()
+    session = stripe.create_portal_session(customer_id="cus_test_1", return_url="https://example.test/dashboard")
+    expect(session["id"].startswith("bps_test_"), str(session))
+    expect(session["url"].startswith("https://stripe.test/portal/"), str(session))
+    expect(session["customer_id"] == "cus_test_1", str(session))
+    expect(session["return_url"] == "https://example.test/dashboard", str(session))
+    expect(len(stripe.portal_sessions) == 1, str(stripe.portal_sessions))
+    # Second portal session gets a new id
+    session2 = stripe.create_portal_session(customer_id="cus_test_1", return_url="https://example.test/dashboard")
+    expect(session2["id"] != session["id"], f"expected unique portal session ids: {session['id']} {session2['id']}")
+    print("PASS test_fake_stripe_billing_portal_session")
+
+
+def test_fake_cloudflare_propagation_check_after_provision() -> None:
+    mod = load_module("arclink_adapters.py", "arclink_adapters_propagation_test")
+    cloudflare = mod.FakeCloudflareClient()
+    hostnames = mod.arclink_hostnames("prop123", "example.test")
+    desired = [
+        mod.DnsRecord(hostname=hostnames[role], record_type="CNAME", target="edge.example.test")
+        for role in ("dashboard", "files", "code", "hermes")
+    ]
+    # Before provisioning: all missing
+    drift_before = cloudflare.drift(desired)
+    expect(len(drift_before) == 4, str(drift_before))
+    # Provision all records
+    for record in desired:
+        cloudflare.upsert_record(record)
+    # After provisioning: no drift (propagation check passes)
+    drift_after = cloudflare.drift(desired)
+    expect(drift_after == [], str(drift_after))
+    # Teardown and verify records removed
+    removed = cloudflare.teardown_records([r.hostname for r in desired])
+    expect(len(removed) == 4, str(removed))
+    drift_torn = cloudflare.drift(desired)
+    expect(len(drift_torn) == 4, str(drift_torn))
+    print("PASS test_fake_cloudflare_propagation_check_after_provision")
+
+
+def test_chutes_catalog_refresh_picks_up_new_models() -> None:
+    mod = load_module("arclink_chutes.py", "arclink_chutes_catalog_refresh_test")
+    initial_catalog: dict[str, Any] = {
+        "data": [
+            {"id": "moonshotai/Kimi-K2.6-TEE", "capabilities": {"tools": True, "reasoning": True, "structured_outputs": True, "confidential_compute": True}},
+        ]
+    }
+    http = FixtureHttpClient(initial_catalog)
+    client = mod.ChutesCatalogClient(http)
+    models_v1 = client.list_models()
+    expect(len(models_v1) == 1, str(models_v1))
+
+    # Simulate catalog update with a new model added
+    updated_catalog: dict[str, Any] = {
+        "data": [
+            {"id": "moonshotai/Kimi-K2.6-TEE", "capabilities": {"tools": True, "reasoning": True, "structured_outputs": True, "confidential_compute": True}},
+            {"id": "new-model/v2-TEE", "capabilities": {"tools": True, "reasoning": True, "structured_outputs": True, "confidential_compute": True}},
+        ]
+    }
+    http.payload = updated_catalog
+    models_v2 = client.list_models()
+    expect(len(models_v2) == 2, str(models_v2))
+    expect("new-model/v2-TEE" in models_v2, str(models_v2))
+    # Validate the new model passes validation
+    model = mod.validate_default_chutes_model(
+        models_v2,
+        env={"ARCLINK_CHUTES_DEFAULT_MODEL": "new-model/v2-TEE"},
+    )
+    expect(model.model_id == "new-model/v2-TEE", str(model))
+    print("PASS test_chutes_catalog_refresh_picks_up_new_models")
+
+
 def main() -> int:
     test_chutes_catalog_parses_and_validates_default_model()
     test_chutes_catalog_fails_for_missing_or_unsupported_default()
@@ -183,7 +255,10 @@ def main() -> int:
     test_cloudflare_drift_and_traefik_label_rendering()
     test_chutes_key_rotate_and_state_tracking()
     test_fake_inference_smoke_and_failure_reporting()
-    print("PASS all 8 ArcLink Chutes/adapter tests")
+    test_fake_stripe_billing_portal_session()
+    test_fake_cloudflare_propagation_check_after_provision()
+    test_chutes_catalog_refresh_picks_up_new_models()
+    print("PASS all 11 ArcLink Chutes/adapter tests")
     return 0
 
 

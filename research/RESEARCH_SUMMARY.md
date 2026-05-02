@@ -1,6 +1,6 @@
 # Research Summary
 
-<confidence>97</confidence>
+<confidence>98</confidence>
 
 ## Goal
 
@@ -84,9 +84,9 @@ The plan is ready for BUILD handoff. All previously identified lint repairs
 safe generic errors, public bot rate limiting) are completed and passing.
 
 Current state:
-- 147 ArcLink test functions across 17 test files (+ 4 hygiene tests, 2 web
-  tests).
-- 17 ArcLink Python modules (7,792 lines).
+- 152 ArcLink test functions across 17 test files (+ 4 hygiene tests, 2 web
+  tests). All 156 tests passing (2026-05-02).
+- 17 ArcLink Python modules (7,849 lines).
 - Hosted API boundary (1,078 lines) with route dispatch, session transport,
   CORS, request-ID, safe errors, health endpoint, provider state reads,
   reconciliation, billing portal, Stripe webhook skip, OpenAPI spec endpoint,
@@ -108,20 +108,17 @@ Current state:
 
 BUILD should continue with the Production Grade Steering checklist
 (`research/RALPHIE_PRODUCTION_GRADE_STEERING.md`, Production 1-16) as the
-controlling definition of done:
+controlling definition of done.
 
-The steering doc's Current Next Objective Queue defines the immediate work:
-
-1. API contract truth: OpenAPI 3.1 spec (landed), route-table coverage tests,
-   served and checked-in contract.
-2. Rate-limit transport: `Retry-After` and `X-RateLimit-*` headers on
-   rate-limited public routes with negative tests.
-3. Hosted API correctness: fix WSGI `503 Service Unavailable` status text for
-   degraded health; add focused test.
-4. Operational docs: concise runbooks for API, ingress/DNS, Docker executor,
-   Chutes, Stripe, and rollback. Keep claims fake/live accurate.
-5. Then Production 7-16: bot parity, dashboards wired to API, fake/live E2E,
-   deployment assets, observability, data safety, documentation truth.
+Production 1-2 (API contract hardening) are landed at commit `019f75d`.
+Production 3-6 (provider boundaries) are landed for the no-secret/fake layer in
+the current provider-boundary slice. The immediate BUILD priority is
+Production 7-10: bot parity plus user/admin dashboards wired to the hosted API,
+followed by Production 11-16 (E2E, deploy, ops, docs).
+The product gap is turning proven backend contracts into a usable ArcLink
+product surface: API-wired dashboards, public web onboarding parity, fake
+full-journey E2E, deploy assets, observability, data safety, and live-gated
+proof harnesses.
 
 ## Remaining Risks
 

@@ -154,11 +154,70 @@ def test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_ef
     print("PASS test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects")
 
 
+def test_admin_refund_and_cancel_actions_record_audited_notes() -> None:
+    control = load_module("almanac_control.py", "almanac_control_admin_refund_cancel_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_refund_cancel_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn, deployment_id="dep_1", user_id="user_1",
+        prefix="refund-test", status="provisioning_ready",
+    )
+    # Queue a refund admin action with admin notes
+    refund = dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_1",
+        action_type="refund",
+        target_kind="user",
+        target_id="user_1",
+        reason="customer requested refund for billing error",
+        idempotency_key="refund-user1-1",
+        metadata={"stripe_customer_ref": "secret://arclink/stripe/customer/user_1", "admin_note": "prorated refund approved"},
+    )
+    expect(refund["status"] == "queued", str(refund))
+    # Queue a cancel admin action
+    cancel = dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_1",
+        action_type="cancel",
+        target_kind="user",
+        target_id="user_1",
+        reason="customer requested subscription cancellation",
+        idempotency_key="cancel-user1-1",
+        metadata={"admin_note": "immediate cancellation per support ticket #42"},
+    )
+    expect(cancel["status"] == "queued", str(cancel))
+    # Both actions should have audit entries with reasons
+    audits = conn.execute(
+        "SELECT action, reason FROM arclink_audit_log WHERE target_id = 'user_1' ORDER BY created_at"
+    ).fetchall()
+    expect(len(audits) == 2, str([dict(r) for r in audits]))
+    expect(audits[0]["action"] == "admin_action:refund", str(dict(audits[0])))
+    expect("billing error" in audits[0]["reason"], str(dict(audits[0])))
+    expect(audits[1]["action"] == "admin_action:cancel", str(dict(audits[1])))
+    expect("cancellation" in audits[1]["reason"], str(dict(audits[1])))
+    # Action intents store the admin notes in metadata
+    intents = conn.execute(
+        "SELECT action_type, metadata_json FROM arclink_action_intents WHERE target_id = 'user_1' ORDER BY created_at"
+    ).fetchall()
+    expect(len(intents) == 2, str([dict(r) for r in intents]))
+    refund_meta = json.loads(intents[0]["metadata_json"])
+    expect("admin_note" in refund_meta, str(refund_meta))
+    expect(refund_meta["admin_note"] == "prorated refund approved", str(refund_meta))
+    cancel_meta = json.loads(intents[1]["metadata_json"])
+    expect("admin_note" in cancel_meta, str(cancel_meta))
+    # No plaintext secrets in stored metadata
+    for intent in intents:
+        expect("sk_" not in intent["metadata_json"], str(dict(intent)))
+    print("PASS test_admin_refund_and_cancel_actions_record_audited_notes")
+
+
 def main() -> int:
     test_admin_action_requires_reason_and_queues_audited_intent()
     test_admin_action_idempotency_reuses_intent_without_duplicate_audit()
     test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects()
-    print("PASS all 3 ArcLink admin action tests")
+    test_admin_refund_and_cancel_actions_record_audited_notes()
+    print("PASS all 4 ArcLink admin action tests")
     return 0
 
 

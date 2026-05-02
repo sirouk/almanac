@@ -28,20 +28,12 @@ explicitly gated.
 
 ## Active Build Order
 
-### 1. Provider Boundary Truth Audit
+### 1. Production Web App
 
-Confirm what is already landed for Stripe, Cloudflare, Docker executor, and
-Chutes, then close only real gaps.
-
-Acceptance:
-
-- Production 3-6 checklist state reflects real code and tests.
-- Any missing provider behavior gets fake/default tests first.
-- Live calls remain behind explicit secret/operator gates.
-- No existing adapter contract is rewritten without a failing test or a clear
-  production safety reason.
-
-### 2. Production Web App
+Provider Boundary Truth Audit is complete for the no-secret/fake layer. Stripe,
+Cloudflare, Docker executor, and Chutes should not be rebuilt unless a failing
+test proves a regression. Live proof remains deferred to the secret-gated E2E
+harness.
 
 Required capabilities:
 
@@ -61,7 +53,7 @@ Acceptance:
 - Text does not overflow buttons/cards/panels.
 - The UI does not claim live provisioning if only fake adapters are active.
 
-### 3. Public Bot Runtime Adapters
+### 2. Public Bot Runtime Adapters
 
 Add Telegram and Discord runtime adapters only after they share the same
 public onboarding contract as the web flow.
@@ -75,7 +67,7 @@ Required capabilities:
   response copy.
 - No live send/webhook mutation in normal unit tests.
 
-### 4. Live-Gated Provisioning Executor
+### 3. Live-Gated Provisioning Executor
 
 Keep fake adapters as the default. Add live mutation only behind an explicit
 operator/E2E switch and documented credentials.

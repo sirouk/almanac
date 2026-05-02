@@ -29,7 +29,7 @@ Rate limits are enforced per-scope using a sliding window stored in the `rate_li
 | `onboarding:{channel}` | 5 requests | 15 min |
 | `public_bot:{channel}` | via `check_arclink_rate_limit` | configurable |
 
-When exceeded, the API returns `401` with `{"error": "ArcLink rate limit exceeded"}`.
+When exceeded, the API returns `429` with `{"error": "ArcLink rate limit exceeded"}`, `Retry-After`, and `X-RateLimit-*` headers.
 
 ## CORS
 
@@ -93,7 +93,8 @@ All errors return JSON with `error` and `request_id` fields:
 | Status | Meaning |
 |--------|---------|
 | 400 | Bad request / generic error |
-| 401 | Auth failure or rate limit exceeded |
+| 401 | Auth failure |
+| 429 | Rate limit exceeded |
 | 404 | Route not found |
 | 503 | Health check degraded (DB unreachable) |
 

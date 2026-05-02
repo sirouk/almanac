@@ -240,8 +240,10 @@ def _service(
     labels: Mapping[str, str] | None = None,
     depends_on: list[str] | None = None,
     secrets: list[dict[str, str]] | None = None,
+    deploy: Mapping[str, Any] | None = None,
+    healthcheck: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    svc: dict[str, Any] = {
         "image": image,
         "command": command,
         "environment": dict(environment),
@@ -250,6 +252,40 @@ def _service(
         "depends_on": list(depends_on or []),
         "secrets": list(secrets or []),
     }
+    if deploy:
+        svc["deploy"] = dict(deploy)
+    if healthcheck:
+        svc["healthcheck"] = dict(healthcheck)
+    return svc
+
+
+def _resource_limit(memory: str, cpus: str) -> dict[str, Any]:
+    return {"resources": {"limits": {"memory": memory, "cpus": cpus}}}
+
+
+ARCLINK_DEFAULT_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
+    "dashboard":               _resource_limit("256M", "0.5"),
+    "hermes-gateway":          _resource_limit("512M", "1.0"),
+    "hermes-dashboard":        _resource_limit("256M", "0.5"),
+    "qmd-mcp":                 _resource_limit("512M", "1.0"),
+    "vault-watch":             _resource_limit("128M", "0.25"),
+    "memory-synth":            _resource_limit("256M", "0.5"),
+    "nextcloud-db":            _resource_limit("512M", "0.5"),
+    "nextcloud-redis":         _resource_limit("128M", "0.25"),
+    "nextcloud":               _resource_limit("512M", "1.0"),
+    "code-server":             _resource_limit("1G",   "1.0"),
+    "notification-delivery":   _resource_limit("128M", "0.25"),
+    "health-watch":            _resource_limit("128M", "0.25"),
+    "managed-context-install": _resource_limit("128M", "0.25"),
+}
+
+
+ARCLINK_DEFAULT_HEALTHCHECKS: dict[str, dict[str, str]] = {
+    "nextcloud-db":    {"test": "pg_isready -U nextcloud", "interval": "30s", "timeout": "5s", "retries": "3"},
+    "nextcloud-redis": {"test": "redis-cli ping", "interval": "30s", "timeout": "5s", "retries": "3"},
+    "nextcloud":       {"test": "curl -f http://localhost/status.php || exit 1", "interval": "60s", "timeout": "10s", "retries": "3"},
+    "code-server":     {"test": "curl -f http://localhost:8080/healthz || exit 1", "interval": "60s", "timeout": "5s", "retries": "3"},
+}
 
 
 def _render_services(
@@ -263,12 +299,17 @@ def _render_services(
 ) -> dict[str, dict[str, Any]]:
     app_image = "${ALMANAC_DOCKER_IMAGE:-almanac/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
+
+    _limits = ARCLINK_DEFAULT_RESOURCE_LIMITS.get
+    _hc = ARCLINK_DEFAULT_HEALTHCHECKS.get
+
     return {
         "dashboard": _service(
             image=app_image,
             command=["./bin/arclink-dashboard-placeholder.sh"],
             environment=env,
             labels=labels["dashboard"],
+            deploy=_limits("dashboard"),
         ),
         "hermes-gateway": _service(
             image=app_image,
@@ -277,6 +318,7 @@ def _render_services(
             volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
             labels=labels["hermes"],
             depends_on=["qmd-mcp", "managed-context-install"],
+            deploy=_limits("hermes-gateway"),
         ),
         "hermes-dashboard": _service(
             image=app_image,
@@ -284,6 +326,7 @@ def _render_services(
             environment=env,
             volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
             depends_on=["managed-context-install"],
+            deploy=_limits("hermes-dashboard"),
         ),
         "qmd-mcp": _service(
             image=app_image,
@@ -293,6 +336,7 @@ def _render_services(
                 {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
                 {"source": roots["qmd"], "target": CONTAINER_QMD_STATE_DIR},
             ],
+            deploy=_limits("qmd-mcp"),
         ),
         "vault-watch": _service(
             image=app_image,
@@ -300,6 +344,7 @@ def _render_services(
             environment=env,
             volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}],
             depends_on=["qmd-mcp"],
+            deploy=_limits("vault-watch"),
         ),
         "memory-synth": _service(
             image=app_image,
@@ -307,6 +352,7 @@ def _render_services(
             environment=env,
             volumes=[{"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR}],
             depends_on=["qmd-mcp"],
+            deploy=_limits("memory-synth"),
         ),
         "nextcloud-db": _service(
             image="${ALMANAC_POSTGRES_IMAGE:-docker.io/library/postgres}:${ALMANAC_POSTGRES_TAG:-16-alpine}",
@@ -318,12 +364,16 @@ def _render_services(
             },
             volumes=[{"source": roots["nextcloud_db"], "target": "/var/lib/postgresql/data"}],
             secrets=[{"source": "nextcloud_db_password", "target": secret_target["nextcloud_db_password"]}],
+            deploy=_limits("nextcloud-db"),
+            healthcheck=_hc("nextcloud-db"),
         ),
         "nextcloud-redis": _service(
             image="${ALMANAC_REDIS_IMAGE:-docker.io/library/redis}:${ALMANAC_REDIS_TAG:-7-alpine}",
             command=["redis-server", "--appendonly", "yes"],
             environment={},
             volumes=[{"source": roots["nextcloud_redis"], "target": "/data"}],
+            deploy=_limits("nextcloud-redis"),
+            healthcheck=_hc("nextcloud-redis"),
         ),
         "nextcloud": _service(
             image="${ALMANAC_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ALMANAC_NEXTCLOUD_TAG:-31-apache}",
@@ -348,6 +398,8 @@ def _render_services(
                 {"source": "nextcloud_db_password", "target": secret_target["nextcloud_db_password"]},
                 {"source": "nextcloud_admin_password", "target": secret_target["nextcloud_admin_password"]},
             ],
+            deploy=_limits("nextcloud"),
+            healthcheck=_hc("nextcloud"),
         ),
         "code-server": _service(
             image="${ALMANAC_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}",
@@ -363,16 +415,20 @@ def _render_services(
             volumes=[{"source": roots["code_workspace"], "target": "/workspace"}],
             labels=labels["code"],
             secrets=[{"source": "code_server_password", "target": secret_target["code_server_password"]}],
+            deploy=_limits("code-server"),
+            healthcheck=_hc("code-server"),
         ),
         "notification-delivery": _service(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/almanac-notification-delivery.sh"],
             environment=env,
+            deploy=_limits("notification-delivery"),
         ),
         "health-watch": _service(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "health-watch", "300", "./bin/health-watch.sh"],
             environment=env,
+            deploy=_limits("health-watch"),
         ),
         "managed-context-install": _service(
             image=app_image,
@@ -382,6 +438,7 @@ def _render_services(
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
             },
             volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
+            deploy=_limits("managed-context-install"),
         ),
     }
 

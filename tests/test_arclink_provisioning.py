@@ -344,6 +344,39 @@ def test_failed_execution_job_gets_idempotent_rollback_plan_event() -> None:
     print("PASS test_failed_execution_job_gets_idempotent_rollback_plan_event")
 
 
+def test_rendered_services_include_resource_limits_and_healthchecks() -> None:
+    control = load_module("almanac_control.py", "almanac_control_provisioning_limits_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_limits_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep_1")
+    services = intent["compose"]["services"]
+
+    # Every service has deploy.resources.limits
+    for name, svc in services.items():
+        expect("deploy" in svc, f"{name} missing deploy")
+        limits = svc["deploy"]["resources"]["limits"]
+        expect("memory" in limits and "cpus" in limits, f"{name} missing limits: {limits}")
+
+    # Specific healthchecks on data/web services
+    for name in ("nextcloud-db", "nextcloud-redis", "nextcloud", "code-server"):
+        expect("healthcheck" in services[name], f"{name} missing healthcheck")
+        hc = services[name]["healthcheck"]
+        expect("test" in hc and "interval" in hc, f"{name} healthcheck incomplete: {hc}")
+
+    # App-only services should NOT have healthcheck
+    for name in ("dashboard", "vault-watch", "notification-delivery", "health-watch", "managed-context-install"):
+        expect("healthcheck" not in services[name], f"{name} should not have healthcheck")
+
+    # Volume isolation: each service's volumes only reference its own deployment root
+    dep_root = intent["state_roots"]["root"]
+    for name, svc in services.items():
+        for vol in svc["volumes"]:
+            expect(vol["source"].startswith(dep_root), f"{name} volume {vol['source']} not under {dep_root}")
+
+    print("PASS test_rendered_services_include_resource_limits_and_healthchecks")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible()
@@ -352,7 +385,8 @@ def main() -> int:
     test_secret_validator_rejects_plaintext_provider_and_gateway_values()
     test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit()
     test_failed_execution_job_gets_idempotent_rollback_plan_event()
-    print("PASS all 7 ArcLink provisioning tests")
+    test_rendered_services_include_resource_limits_and_healthchecks()
+    print("PASS all 8 ArcLink provisioning tests")
     return 0
 
 

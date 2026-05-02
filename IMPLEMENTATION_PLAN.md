@@ -18,8 +18,8 @@ external credential.
 
 ## Current Status
 
-- 17 ArcLink Python modules (7,792 lines).
-- 17 test files (147 test functions) + 4 hygiene tests + 2 web tests.
+- 17 ArcLink Python modules (7,849 lines).
+- 17 test files (152 test functions) + 4 hygiene tests + 2 web tests.
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files).
 - Hosted API boundary (1,078 lines) with route dispatch, session/cookie
   transport, CORS, request-ID, safe errors, health, provider-state,
@@ -30,7 +30,7 @@ external credential.
 - Entitlements (435 lines) with drift detection, targeted comp, profile-only
   preservation.
 - 18 `arclink_*` tables. Fake adapters default for all providers.
-- All 147 ArcLink tests passing (verified 2026-05-02).
+- All 156 tests passing (152 ArcLink + 4 hygiene, verified 2026-05-02).
 
 This is not live SaaS yet. The code records intent and proves no-secret
 behavior.
@@ -133,6 +133,11 @@ git diff --check
 ```
 
 ### Phase 2: Provider Boundaries (Production 3-6)
+
+Status: no-secret/fake boundaries are landed in the current provider-boundary
+slice. Treat this section as historical acceptance criteria unless a regression
+or missing live-gated E2E hook is proven. Live account-backed proof remains
+blocked until Production 12 credentials exist.
 
 **Production 3: Stripe Boundary**
 
@@ -303,7 +308,7 @@ These require real accounts/credentials. Build fake/live boundaries first.
 - Next.js web app views use mock data; API wiring is the immediate next step.
 - Telegram/Discord adapters have fake-mode dispatch; live HTTP transport
   depends on bot tokens.
-- 1 hygiene test fails (provider name in docs context); cosmetic, not blocking.
+- All hygiene tests passing as of 2026-05-02.
 - Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, OAuth, and host
   execution require real credentials and E2E verification.
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.

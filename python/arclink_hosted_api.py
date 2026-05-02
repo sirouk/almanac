@@ -571,7 +571,7 @@ def _qparam(name: str) -> dict:
 
 
 _RESP_OK_UNAUTH = {"200": {"description": "OK"}, "401": {"description": "Unauthorized"}}
-_RESP_CREATED_UNAUTH = {"201": {"description": "Session created with Set-Cookie"}, "401": {"description": "Unknown email or rate limited"}}
+_RESP_CREATED_UNAUTH = {"201": {"description": "Session created with Set-Cookie"}, "401": {"description": "Unknown email"}, "429": {"description": "Rate limit exceeded"}}
 _RESP_OK_INVALID = {"200": {"description": "OK"}, "400": {"description": "Invalid input"}}
 _WEBHOOK_BODY = _openapi_json_body({})
 

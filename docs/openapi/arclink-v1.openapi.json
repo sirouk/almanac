@@ -507,7 +507,10 @@
             "description": "Session created with Set-Cookie"
           },
           "401": {
-            "description": "Unknown email or rate limited"
+            "description": "Unknown email"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "Admin login (creates session)",
@@ -570,7 +573,10 @@
             "description": "Session created with Set-Cookie"
           },
           "401": {
-            "description": "Unknown email or rate limited"
+            "description": "Unknown email"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "User login (creates session)",

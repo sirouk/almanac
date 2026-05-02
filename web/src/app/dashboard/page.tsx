@@ -93,7 +93,7 @@ export default function DashboardPage() {
       if (mounted) setLoading(false);
     });
     return () => { mounted = false; };
-  }, []);
+  }, [router]);
 
   if (loading) {
     return (

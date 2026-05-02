@@ -52,7 +52,7 @@ export default function AdminPage() {
       else if (r.status === 401) router.push("/login");
       else setError("Failed to load admin data.");
     }).catch(() => setError("Failed to load admin data."));
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (tab === "health") api.adminServiceHealth().then((r) => { if (r.status === 200) setHealth(r.data as typeof health); });

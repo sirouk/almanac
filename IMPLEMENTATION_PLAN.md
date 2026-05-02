@@ -19,8 +19,9 @@ external credential.
 ## Current Status
 
 - 17 ArcLink Python modules (7,877 lines).
-- 17 test files + 4 hygiene + 2 web tests = 160 ArcLink tests passing.
-- Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files).
+- 17 test files + 4 hygiene + 2 web tests + 1 browser suite =
+  160 ArcLink tests plus 41 browser product checks passing.
+- Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
 - Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
 - API/auth module (887 lines), dashboard module (937 lines).
@@ -41,8 +42,14 @@ external credential.
 - **Production 9** (Admin dashboard): All 18 tabs wired to hosted API, admin
   actions form with all target kinds, session revocation, provider state,
   reconciliation drift, responsive layout. Landed at commit `8cd17a4`.
+- **Production 10** (Browser product proof): Playwright suite covers `/`,
+  `/login`, `/onboarding`, `/dashboard`, and `/admin` across desktop/mobile
+  with deterministic API mocks, fake-adapter labeling, accessible forms,
+  loading/empty/error states, mobile overflow checks, dashboard tab checks,
+  and fake onboarding flow. Proof: `npm run test:browser` -> 41 passed,
+  3 desktop-only skips on 2026-05-02.
 
-Do not rebuild P1-9 unless a regression is proven by a failing test.
+Do not rebuild P1-10 unless a regression is proven by a failing test.
 
 ## Chosen Architecture
 
@@ -64,11 +71,11 @@ PLAN is complete when:
 - Live blockers are documented as E2E prerequisites.
 - The next tasks are actionable and testable.
 
-## BUILD Tasks (Remaining: Production 10-16)
+## BUILD Tasks (Remaining: Production 11-16)
 
-### Phase 3: Brand and UI Polish (Production 10)
+### Phase 3: Brand and UI Polish (Production 10) -- COMPLETE
 
-**Production 10: Web UI Product Checks**
+**Production 10: Web UI Product Checks -- COMPLETE**
 
 - Apply ArcLink brand system fully: Jet Black `#080808`, Carbon `#0F0F0E`,
   Soft White `#E7E6E6`, Signal Orange `#FB5005`.
@@ -94,7 +101,7 @@ cd web && npx tsc --noEmit && node --test tests/test_page_smoke.mjs
 # npm run test:browser
 ```
 
-### Phase 4: E2E Journey (Production 11-12)
+### Phase 4: E2E Journey (Production 11-12) -- NEXT
 
 **Production 11: Fake E2E Harness**
 

@@ -115,10 +115,11 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
   actions, sessions, provider, reconciliation) wired to all hosted API admin
   endpoints via api.ts. Queue-action and revoke-session forms with CSRF.
   Sidebar + mobile tab layout. StatusBadge and ErrorAlert shared components.
-- [ ] Production 10: Web UI passes professional product checks: ArcLink brand
+- [x] Production 10: Web UI passes professional product checks: ArcLink brand
   system, mobile layouts, no overlapping text, no placeholder claims of live
   services, accessible forms, clear empty/error/loading states, and route-level
-  smoke tests.
+  smoke tests. Browser proof: `cd web && npm run test:browser` completed
+  with 41 passed and 3 desktop-only skips on 2026-05-02.
 - [ ] Production 11: E2E harness proves the fake full journey: web signup,
   onboarding answers, checkout simulation, entitlement activation,
   provisioning request, service health visibility, admin audit, and user
@@ -146,35 +147,27 @@ loop. Complete these in order, one coherent slice per build cycle, with tests
 and docs. Do not mark the project done while any non-external item remains.
 
 1. Respect the landed checkpoint:
-   - Production 1-9 are complete through commit `8cd17a4`.
+   - Production 1-10 are complete through the P10 browser proof commit.
    - Do not rebuild hosted API, auth, Stripe, Cloudflare, Docker executor,
-     Chutes, Telegram, Discord, user dashboard, or admin dashboard slices unless
-     a regression is proven by a failing test.
+     Chutes, Telegram, Discord, user dashboard, admin dashboard, or browser
+     product-proof slices unless a regression is proven by a failing test.
    - Live provider proof remains deferred to Production 12 and requires real
      credentials.
-2. Complete Browser/Product Proof (Production 10) next:
-   - Add or wire a Playwright-equivalent browser harness for `/`, `/login`,
-     `/onboarding`, `/dashboard`, and `/admin`.
-   - Run desktop and narrow mobile viewports with deterministic mocked API
-     responses for user/admin pages.
-   - Prove no blank pages, text overlap, clipped controls, hidden primary
-     actions, unsupported live claims, or fake/local adapter ambiguity.
-   - Capture screenshots or equivalent artifacts into an ignored directory and
-     document how to regenerate them.
-   - Add package/test scripts so the browser proof is repeatable locally and in
-     CI without live secrets.
-3. Prove the Journey (Production 11-12):
-   - Add a no-secret fake E2E harness for web signup, onboarding, checkout
-     simulation, entitlement activation, provisioning request, service-health
-     visibility, admin audit, and user dashboard state.
+2. Prove the Journey (Production 11-12) next:
+   - Add a no-secret fake E2E harness for web signup, onboarding answers,
+     checkout simulation, entitlement activation, provisioning request, service
+     health visibility, admin audit, and user dashboard state.
    - Add a secret-gated live E2E harness that skips cleanly until Stripe,
      Cloudflare, Chutes, Telegram, Discord, and Docker live credentials exist.
-4. Finish Operations (Production 13-16):
+3. Finish Operations (Production 13-16):
    - Deployment assets, env examples, runbooks, backup/restore, health checks,
      restart/release/rollback procedures.
    - Observability and admin-facing drift/audit visibility.
    - Data-safety documentation and destructive-action safeguards.
    - Documentation truth pass: no live claim without live proof.
+4. Keep the proof ledger current:
+   - Each completed production item must update this checklist and name the
+     proof command, commit, and remaining external blockers.
 
 Current live blockers remain external: Stripe, Cloudflare, Chutes, Telegram,
 Discord, and final production-host credentials. Fake/live boundaries and tests

@@ -584,6 +584,7 @@ function RevokeSessionForm() {
           required
           value={targetSessionId}
           onChange={(e) => setTargetSessionId(e.target.value)}
+          aria-label="Target session ID"
           placeholder="Target session ID"
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange"
         />
@@ -599,6 +600,7 @@ function RevokeSessionForm() {
           required
           value={reason}
           onChange={(e) => setReason(e.target.value)}
+          aria-label="Reason for revoking session"
           placeholder="Reason (required)"
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange sm:col-span-2"
         />
@@ -688,6 +690,7 @@ function QueueActionForm({ onQueued }: { onQueued: () => void }) {
           required
           value={actionType}
           onChange={(e) => setActionType(e.target.value)}
+          aria-label="Action type"
           placeholder="Action type (e.g. restart)"
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange"
         />
@@ -706,6 +709,7 @@ function QueueActionForm({ onQueued }: { onQueued: () => void }) {
           required
           value={targetId}
           onChange={(e) => setTargetId(e.target.value)}
+          aria-label="Target ID"
           placeholder="Target ID"
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange"
         />
@@ -713,6 +717,7 @@ function QueueActionForm({ onQueued }: { onQueued: () => void }) {
           required
           value={reason}
           onChange={(e) => setReason(e.target.value)}
+          aria-label="Reason for action"
           placeholder="Reason (required)"
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange"
         />

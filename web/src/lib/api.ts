@@ -93,4 +93,6 @@ export const api = {
   adminReconciliation: () => request("/admin/reconciliation"),
 
   adminOperatorSnapshot: () => request("/admin/operator-snapshot"),
+
+  adminScaleOperations: () => request("/admin/scale-operations"),
 };

@@ -1471,6 +1471,96 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON arclink_action_intents (target_kind, target_id, status, created_at)
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS arclink_fleet_hosts (
+          host_id TEXT PRIMARY KEY,
+          hostname TEXT NOT NULL,
+          region TEXT NOT NULL DEFAULT '',
+          tags_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'active',
+          drain INTEGER NOT NULL DEFAULT 0,
+          capacity_slots INTEGER NOT NULL DEFAULT 10,
+          observed_load INTEGER NOT NULL DEFAULT 0,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS arclink_deployment_placements (
+          placement_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL,
+          host_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          placed_at TEXT NOT NULL,
+          removed_at TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS arclink_action_attempts (
+          attempt_id TEXT PRIMARY KEY,
+          action_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          executor_adapter TEXT NOT NULL DEFAULT '',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL,
+          finished_at TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS arclink_rollouts (
+          rollout_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL DEFAULT '',
+          version_tag TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'planned',
+          wave_count INTEGER NOT NULL DEFAULT 1,
+          current_wave INTEGER NOT NULL DEFAULT 0,
+          waves_json TEXT NOT NULL DEFAULT '[]',
+          rollback_plan_json TEXT NOT NULL DEFAULT '{}',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_fleet_hosts_hostname
+        ON arclink_fleet_hosts (LOWER(hostname))
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_deployment_placements_deployment
+        ON arclink_deployment_placements (deployment_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_deployment_placements_host
+        ON arclink_deployment_placements (host_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_action_attempts_action
+        ON arclink_action_attempts (action_id, started_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_rollouts_deployment_status
+        ON arclink_rollouts (deployment_id, status)
+        """
+    )
     conn.commit()
 
 

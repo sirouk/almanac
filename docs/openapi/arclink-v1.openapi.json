@@ -1,23 +1,46 @@
 {
-  "openapi": "3.1.0",
-  "info": {
-    "title": "ArcLink Hosted API",
-    "version": "1.0.0",
-    "description": "ArcLink self-serve AI deployment platform API."
-  },
-  "servers": [
-    {
-      "url": "/",
-      "description": "Relative to deployment host"
+  "components": {
+    "securitySchemes": {
+      "sessionAuth": {
+        "description": "Session-based auth via cookies or headers.",
+        "in": "header",
+        "name": "X-ArcLink-Session-Id",
+        "type": "apiKey"
+      }
     }
-  ],
+  },
+  "info": {
+    "description": "ArcLink self-serve AI deployment platform API.",
+    "title": "ArcLink Hosted API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
   "paths": {
     "/api/v1/admin/actions": {
       "get": {
         "operationId": "admin_queued_actions",
-        "summary": "Read queued admin actions",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -27,41 +50,52 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read queued admin actions",
+        "tags": [
+          "admin"
         ]
       },
       "post": {
         "operationId": "admin_action",
-        "summary": "Queue an admin action (mutation)",
-        "tags": [
-          "admin"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "action_type": {
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string"
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action_type",
+                  "target_kind",
+                  "target_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Action queued"
@@ -70,53 +104,35 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "action_type": {
-                    "type": "string"
-                  },
-                  "target_kind": {
-                    "type": "string"
-                  },
-                  "target_id": {
-                    "type": "string"
-                  },
-                  "reason": {
-                    "type": "string"
-                  },
-                  "idempotency_key": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "action_type",
-                  "target_kind",
-                  "target_id"
-                ]
-              }
-            }
-          }
-        },
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Queue an admin action (mutation)",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/audit": {
       "get": {
         "operationId": "admin_audit",
-        "summary": "Read audit trail",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -126,35 +142,56 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read audit trail",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/dashboard": {
       "get": {
         "operationId": "admin_dashboard",
-        "summary": "Read admin dashboard (all deployments)",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "channel",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -164,56 +201,35 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "channel",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read admin dashboard (all deployments)",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/dns-drift": {
       "get": {
         "operationId": "admin_dns_drift",
-        "summary": "Read DNS drift reports",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -223,35 +239,35 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read DNS drift reports",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/events": {
       "get": {
         "operationId": "admin_events",
-        "summary": "Read structured events",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -261,36 +277,20 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read structured events",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/operator-snapshot": {
       "get": {
         "operationId": "admin_operator_snapshot",
-        "summary": "Read operator snapshot (host readiness, diagnostics, journey, evidence)",
-        "tags": [
-          "admin"
-        ],
         "responses": {
           "200": {
             "description": "Operator snapshot"
@@ -303,16 +303,16 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read operator snapshot (host readiness, diagnostics, journey, evidence)",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/provider-state": {
       "get": {
         "operationId": "admin_provider_state",
-        "summary": "Read provider/model state (admin)",
-        "tags": [
-          "admin"
-        ],
         "responses": {
           "200": {
             "description": "Provider state"
@@ -325,15 +325,38 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read provider/model state (admin)",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/provisioning-jobs": {
       "get": {
         "operationId": "admin_provisioning_jobs",
-        "summary": "Read provisioning job queue",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -343,43 +366,20 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read provisioning job queue",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/reconciliation": {
       "get": {
         "operationId": "admin_reconciliation",
-        "summary": "Read Stripe-vs-local reconciliation report",
-        "tags": [
-          "admin"
-        ],
         "responses": {
           "200": {
             "description": "Reconciliation data"
@@ -392,15 +392,60 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read Stripe-vs-local reconciliation report",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/scale-operations": {
+      "get": {
+        "operationId": "admin_scale_operations",
+        "responses": {
+          "200": {
+            "description": "Scale operations snapshot"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read scale operations snapshot (fleet, placements, action attempts, rollouts)",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/service-health": {
       "get": {
         "operationId": "admin_service_health",
-        "summary": "Read service health across deployments",
-        "tags": [
-          "admin"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -410,43 +455,48 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read service health across deployments",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/admin/sessions/revoke": {
       "post": {
         "operationId": "session_revoke",
-        "summary": "Revoke a session (admin action)",
-        "tags": [
-          "admin"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "session_kind": {
+                    "enum": [
+                      "user",
+                      "admin"
+                    ],
+                    "type": "string"
+                  },
+                  "target_session_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target_session_id",
+                  "session_kind"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Session revoked"
@@ -455,48 +505,47 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "target_session_id": {
-                    "type": "string"
-                  },
-                  "session_kind": {
-                    "type": "string",
-                    "enum": [
-                      "user",
-                      "admin"
-                    ]
-                  },
-                  "reason": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "target_session_id",
-                  "session_kind"
-                ]
-              }
-            }
-          }
-        },
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Revoke a session (admin action)",
+        "tags": [
+          "admin"
         ]
       }
     },
     "/api/v1/auth/admin/login": {
       "post": {
         "operationId": "admin_login",
-        "summary": "Admin login (creates session)",
-        "tags": [
-          "auth"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "login_subject": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  },
+                  "mfa_verified": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "email"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Session created with Set-Cookie"
@@ -508,42 +557,15 @@
             "description": "Rate limit exceeded"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "email": {
-                    "type": "string",
-                    "format": "email"
-                  },
-                  "login_subject": {
-                    "type": "string"
-                  },
-                  "mfa_verified": {
-                    "type": "boolean"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "email"
-                ]
-              }
-            }
-          }
-        }
+        "summary": "Admin login (creates session)",
+        "tags": [
+          "auth"
+        ]
       }
     },
     "/api/v1/auth/admin/logout": {
       "post": {
         "operationId": "admin_logout",
-        "summary": "Admin logout (revokes session)",
-        "tags": [
-          "auth"
-        ],
         "responses": {
           "200": {
             "description": "Session revoked"
@@ -556,16 +578,40 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Admin logout (revokes session)",
+        "tags": [
+          "auth"
         ]
       }
     },
     "/api/v1/auth/user/login": {
       "post": {
         "operationId": "user_login",
-        "summary": "User login (creates session)",
-        "tags": [
-          "auth"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "login_subject": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "email"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Session created with Set-Cookie"
@@ -577,39 +623,15 @@
             "description": "Rate limit exceeded"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "email": {
-                    "type": "string",
-                    "format": "email"
-                  },
-                  "login_subject": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "email"
-                ]
-              }
-            }
-          }
-        }
+        "summary": "User login (creates session)",
+        "tags": [
+          "auth"
+        ]
       }
     },
     "/api/v1/auth/user/logout": {
       "post": {
         "operationId": "user_logout",
-        "summary": "User logout (revokes session)",
-        "tags": [
-          "auth"
-        ],
         "responses": {
           "200": {
             "description": "Session revoked"
@@ -622,16 +644,16 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "User logout (revokes session)",
+        "tags": [
+          "auth"
         ]
       }
     },
     "/api/v1/health": {
       "get": {
         "operationId": "health",
-        "summary": "Liveness/readiness health check",
-        "tags": [
-          "health"
-        ],
         "responses": {
           "200": {
             "description": "Healthy"
@@ -639,16 +661,48 @@
           "503": {
             "description": "Degraded (DB unreachable)"
           }
-        }
+        },
+        "summary": "Liveness/readiness health check",
+        "tags": [
+          "health"
+        ]
       }
     },
     "/api/v1/onboarding/answer": {
       "post": {
         "operationId": "public_onboarding_answer",
-        "summary": "Answer onboarding question",
-        "tags": [
-          "onboarding"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "answer_summary": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "model_id": {
+                    "type": "string"
+                  },
+                  "plan_id": {
+                    "type": "string"
+                  },
+                  "question_key": {
+                    "type": "string"
+                  },
+                  "session_id": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Answer recorded"
@@ -657,47 +711,40 @@
             "description": "Invalid input"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "session_id": {
-                    "type": "string"
-                  },
-                  "question_key": {
-                    "type": "string"
-                  },
-                  "answer_summary": {
-                    "type": "string"
-                  },
-                  "email": {
-                    "type": "string"
-                  },
-                  "display_name": {
-                    "type": "string"
-                  },
-                  "plan_id": {
-                    "type": "string"
-                  },
-                  "model_id": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
+        "summary": "Answer onboarding question",
+        "tags": [
+          "onboarding"
+        ]
       }
     },
     "/api/v1/onboarding/checkout": {
       "post": {
         "operationId": "public_onboarding_checkout",
-        "summary": "Open Stripe checkout for onboarding session",
-        "tags": [
-          "onboarding"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "cancel_url": {
+                    "format": "uri",
+                    "type": "string"
+                  },
+                  "price_id": {
+                    "type": "string"
+                  },
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "success_url": {
+                    "format": "uri",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Checkout URL returned"
@@ -706,40 +753,53 @@
             "description": "Invalid input"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "session_id": {
-                    "type": "string"
-                  },
-                  "price_id": {
-                    "type": "string"
-                  },
-                  "success_url": {
-                    "type": "string",
-                    "format": "uri"
-                  },
-                  "cancel_url": {
-                    "type": "string",
-                    "format": "uri"
-                  }
-                }
-              }
-            }
-          }
-        }
+        "summary": "Open Stripe checkout for onboarding session",
+        "tags": [
+          "onboarding"
+        ]
       }
     },
     "/api/v1/onboarding/start": {
       "post": {
         "operationId": "public_onboarding_start",
-        "summary": "Begin onboarding flow",
-        "tags": [
-          "onboarding"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "channel": {
+                    "enum": [
+                      "web",
+                      "telegram",
+                      "discord"
+                    ],
+                    "type": "string"
+                  },
+                  "channel_identity": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  },
+                  "model_id": {
+                    "type": "string"
+                  },
+                  "plan_id": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Onboarding session created"
@@ -748,67 +808,29 @@
             "description": "Invalid input"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "channel": {
-                    "type": "string",
-                    "enum": [
-                      "web",
-                      "telegram",
-                      "discord"
-                    ]
-                  },
-                  "channel_identity": {
-                    "type": "string"
-                  },
-                  "email": {
-                    "type": "string",
-                    "format": "email"
-                  },
-                  "display_name": {
-                    "type": "string"
-                  },
-                  "plan_id": {
-                    "type": "string"
-                  },
-                  "model_id": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  }
-                }
-              }
-            }
-          }
-        }
+        "summary": "Begin onboarding flow",
+        "tags": [
+          "onboarding"
+        ]
       }
     },
     "/api/v1/openapi.json": {
       "get": {
         "operationId": "openapi_spec",
-        "summary": "OpenAPI 3.1 specification",
-        "tags": [
-          "meta"
-        ],
         "responses": {
           "200": {
             "description": "OpenAPI JSON document"
           }
-        }
+        },
+        "summary": "OpenAPI 3.1 specification",
+        "tags": [
+          "meta"
+        ]
       }
     },
     "/api/v1/user/billing": {
       "get": {
         "operationId": "user_billing",
-        "summary": "Read user billing and entitlement state",
-        "tags": [
-          "user"
-        ],
         "responses": {
           "200": {
             "description": "Billing data"
@@ -821,15 +843,24 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read user billing and entitlement state",
+        "tags": [
+          "user"
         ]
       }
     },
     "/api/v1/user/dashboard": {
       "get": {
         "operationId": "user_dashboard",
-        "summary": "Read user dashboard",
-        "tags": [
-          "user"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_id",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -839,29 +870,35 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "user_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read user dashboard",
+        "tags": [
+          "user"
         ]
       }
     },
     "/api/v1/user/portal": {
       "post": {
         "operationId": "user_portal_link",
-        "summary": "Generate Stripe billing portal link",
-        "tags": [
-          "user"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "return_url": {
+                    "format": "uri",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Portal URL returned"
@@ -870,35 +907,20 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "return_url": {
-                    "type": "string",
-                    "format": "uri"
-                  }
-                }
-              }
-            }
-          }
-        },
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Generate Stripe billing portal link",
+        "tags": [
+          "user"
         ]
       }
     },
     "/api/v1/user/provider-state": {
       "get": {
         "operationId": "user_provider_state",
-        "summary": "Read provider/model state (user)",
-        "tags": [
-          "user"
-        ],
         "responses": {
           "200": {
             "description": "Provider state"
@@ -911,15 +933,24 @@
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read provider/model state (user)",
+        "tags": [
+          "user"
         ]
       }
     },
     "/api/v1/user/provisioning": {
       "get": {
         "operationId": "user_provisioning_status",
-        "summary": "Read user provisioning and deployment status",
-        "tags": [
-          "user"
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -929,29 +960,30 @@
             "description": "Unauthorized"
           }
         },
-        "parameters": [
-          {
-            "name": "deployment_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "security": [
           {
             "sessionAuth": []
           }
+        ],
+        "summary": "Read user provisioning and deployment status",
+        "tags": [
+          "user"
         ]
       }
     },
     "/api/v1/webhooks/discord": {
       "post": {
         "operationId": "discord_webhook",
-        "summary": "Discord interaction webhook receiver",
-        "tags": [
-          "webhooks"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {},
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Interaction handled"
@@ -960,25 +992,25 @@
             "description": "Invalid signature"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {}
-              }
-            }
-          }
-        }
+        "summary": "Discord interaction webhook receiver",
+        "tags": [
+          "webhooks"
+        ]
       }
     },
     "/api/v1/webhooks/stripe": {
       "post": {
         "operationId": "stripe_webhook",
-        "summary": "Stripe webhook receiver",
-        "tags": [
-          "webhooks"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {},
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Webhook processed"
@@ -987,51 +1019,41 @@
             "description": "Invalid signature"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {}
-              }
-            }
-          }
-        }
+        "summary": "Stripe webhook receiver",
+        "tags": [
+          "webhooks"
+        ]
       }
     },
     "/api/v1/webhooks/telegram": {
       "post": {
         "operationId": "telegram_webhook",
-        "summary": "Telegram Bot API webhook receiver",
-        "tags": [
-          "webhooks"
-        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {},
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Update processed"
           }
         },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {}
-              }
-            }
-          }
-        }
+        "summary": "Telegram Bot API webhook receiver",
+        "tags": [
+          "webhooks"
+        ]
       }
     }
   },
-  "components": {
-    "securitySchemes": {
-      "sessionAuth": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-ArcLink-Session-Id",
-        "description": "Session-based auth via cookies or headers."
-      }
+  "servers": [
+    {
+      "description": "Relative to deployment host",
+      "url": "/"
     }
-  }
+  ]
 }

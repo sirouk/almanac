@@ -51,7 +51,7 @@ from arclink_api_auth import (
     revoke_arclink_session,
     start_public_onboarding_api,
 )
-from arclink_dashboard import build_operator_snapshot
+from arclink_dashboard import build_operator_snapshot, build_scale_operations_snapshot
 from arclink_discord import (
     ArcLinkDiscordError,
     DiscordConfig,
@@ -506,6 +506,17 @@ def _handle_admin_operator_snapshot(
     return _json_response(200, snapshot, request_id=request_id)
 
 
+def _handle_admin_scale_operations(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="admin")
+    authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+    snapshot = build_scale_operations_snapshot(conn)
+    return _json_response(200, snapshot, request_id=request_id)
+
+
 def _handle_health(
     conn: sqlite3.Connection,
     request_id: str,
@@ -766,6 +777,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["admin"],
         "responses": {"200": {"description": "Operator snapshot"}, "401": {"description": "Unauthorized"}},
     },
+    "admin_scale_operations": {
+        "summary": "Read scale operations snapshot (fleet, placements, action attempts, rollouts)",
+        "tags": ["admin"],
+        "responses": {"200": {"description": "Scale operations snapshot"}, "401": {"description": "Unauthorized"}},
+    },
     "admin_provider_state": {
         "summary": "Read provider/model state (admin)",
         "tags": ["admin"],
@@ -876,6 +892,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/provider-state"): "admin_provider_state",
     ("POST", "/admin/sessions/revoke"): "session_revoke",
     ("GET", "/admin/operator-snapshot"): "admin_operator_snapshot",
+    ("GET", "/admin/scale-operations"): "admin_scale_operations",
     ("GET", "/user/provider-state"): "user_provider_state",
     ("GET", "/health"): "health",
     ("GET", "/openapi.json"): "openapi_spec",
@@ -976,6 +993,8 @@ def route_arclink_hosted_api(
             result = _handle_session_revoke(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "admin_operator_snapshot":
             result = _handle_admin_operator_snapshot(conn, headers, request_id, cfg)
+        elif route_key == "admin_scale_operations":
+            result = _handle_admin_scale_operations(conn, headers, request_id)
         elif route_key == "admin_provider_state":
             result = _handle_provider_state(conn, headers, request_id, cfg, "admin")
         elif route_key == "user_provider_state":

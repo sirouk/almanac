@@ -37,6 +37,7 @@ export default function AdminPage() {
   const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
   const [reconciliation, setReconciliation] = useState<{ drift?: Record<string, string>[]; summary?: Record<string, unknown> } | null>(null);
   const [operatorSnapshot, setOperatorSnapshot] = useState<Record<string, unknown> | null>(null);
+  const [scaleOperations, setScaleOperations] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const router = useRouter();
 
@@ -62,7 +63,10 @@ export default function AdminPage() {
     if (tab === "events") api.adminEvents().then((r) => { if (r.status === 200) setEvents(r.data as typeof events); });
     if (tab === "provider") api.adminProviderState().then((r) => { if (r.status === 200) setProviderState(r.data as typeof providerState); });
     if (tab === "reconciliation") api.adminReconciliation().then((r) => { if (r.status === 200) setReconciliation(r.data as typeof reconciliation); });
-    if (tab === "operator") api.adminOperatorSnapshot().then((r) => { if (r.status === 200) setOperatorSnapshot(r.data as typeof operatorSnapshot); });
+    if (tab === "operator") {
+      api.adminOperatorSnapshot().then((r) => { if (r.status === 200) setOperatorSnapshot(r.data as typeof operatorSnapshot); });
+      api.adminScaleOperations().then((r) => { if (r.status === 200) setScaleOperations(r.data as typeof scaleOperations); });
+    }
   }, [tab]);
 
   const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
@@ -539,6 +543,7 @@ export default function AdminPage() {
                 <>
                   <OperatorSection title="Host Readiness" ready={(operatorSnapshot.host_readiness as Record<string, unknown>)?.ready as boolean} checks={((operatorSnapshot.host_readiness as Record<string, unknown>)?.checks as Record<string, unknown>[]) || []} />
                   <OperatorSection title="Provider Diagnostics" ready={(operatorSnapshot.provider_diagnostics as Record<string, unknown>)?.all_ok as boolean} checks={((operatorSnapshot.provider_diagnostics as Record<string, unknown>)?.checks as Record<string, unknown>[]) || []} />
+                  <ScaleOperationsSection snapshot={scaleOperations} />
                   <div className="rounded-lg border border-border bg-surface p-4">
                     <div className="flex items-center justify-between">
                       <h3 className="font-display font-semibold">Live Journey</h3>
@@ -677,6 +682,90 @@ function StatCard({ label, value }: { label: string; value: number }) {
     <div className="rounded-lg border border-border bg-surface p-4">
       <p className="text-sm text-soft-white/60">{label}</p>
       <p className="mt-1 font-display text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function ScaleOperationsSection({ snapshot }: { snapshot: Record<string, unknown> | null }) {
+  const capacity = (snapshot?.fleet_capacity as Record<string, unknown>) || {};
+  const staleActions = (snapshot?.stale_actions as Record<string, unknown>[]) || [];
+  const attempts = (snapshot?.recent_action_attempts as Record<string, unknown>[]) || [];
+  const rollouts = (snapshot?.active_rollouts as Record<string, unknown>[]) || [];
+  const placements = (snapshot?.placements as Record<string, unknown>[]) || [];
+  const lastExecutor = (snapshot?.last_executor_result as Record<string, unknown>) || {};
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-display font-semibold">Scale Operations</h3>
+        <StatusBadge status={staleActions.length ? "attention" : "ready"} />
+      </div>
+      {snapshot ? (
+        <>
+          <div className="mt-3 grid gap-3 sm:grid-cols-4">
+            <MiniMetric label="Hosts" value={capacity.total_hosts as number || 0} />
+            <MiniMetric label="Active" value={capacity.active_hosts as number || 0} />
+            <MiniMetric label="Slots" value={capacity.total_slots as number || 0} />
+            <MiniMetric label="Free" value={capacity.available_slots as number || 0} />
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <OperatorList title="Placements" rows={placements} primary="deployment_id" secondary="host_id" statusKey="status" empty="No placements recorded." />
+            <OperatorList title="Active Rollouts" rows={rollouts} primary="version_tag" secondary="deployment_id" statusKey="status" empty="No active rollouts." />
+            <OperatorList title="Stale Actions" rows={staleActions} primary="action_type" secondary="target" statusKey="status" empty="No stale queued actions." />
+            <OperatorList title="Recent Attempts" rows={attempts} primary="action_id" secondary="executor_adapter" statusKey="status" empty="No executor attempts." />
+          </div>
+          <p className="mt-4 text-xs text-soft-white/50">
+            Last executor: {(lastExecutor.action_id as string) || "none"} {(lastExecutor.status as string) ? `(${lastExecutor.status as string})` : ""}
+          </p>
+        </>
+      ) : (
+        <p className="mt-2 text-sm text-soft-white/40">Loading scale operations...</p>
+      )}
+    </div>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-border/70 bg-carbon px-3 py-2">
+      <p className="text-xs text-soft-white/40">{label}</p>
+      <p className="font-display text-lg font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function OperatorList({
+  title,
+  rows,
+  primary,
+  secondary,
+  statusKey,
+  empty,
+}: {
+  title: string;
+  rows: Record<string, unknown>[];
+  primary: string;
+  secondary: string;
+  statusKey: string;
+  empty: string;
+}) {
+  return (
+    <div>
+      <h4 className="mb-2 text-xs font-semibold uppercase text-soft-white/40">{title}</h4>
+      {rows.length ? (
+        <div className="space-y-2">
+          {rows.slice(0, 4).map((row, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 rounded border border-border/60 bg-carbon px-3 py-2 text-xs">
+              <div className="min-w-0">
+                <p className="truncate font-mono text-soft-white/80">{(row[primary] as string) || "unknown"}</p>
+                <p className="truncate text-soft-white/40">{(row[secondary] as string) || ""}</p>
+              </div>
+              <StatusBadge status={(row[statusKey] as string) || "unknown"} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-soft-white/40">{empty}</p>
+      )}
     </div>
   );
 }

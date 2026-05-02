@@ -107,6 +107,92 @@ def build_operator_snapshot(
     }
 
 
+def build_scale_operations_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    stale_action_threshold_seconds: int = 3600,
+) -> dict[str, Any]:
+    """Build operator-visible scale operations read model."""
+    from arclink_fleet import fleet_capacity_summary, list_fleet_hosts
+    from arclink_rollout import list_rollouts
+
+    capacity = fleet_capacity_summary(conn)
+
+    # Stale queued actions (queued for over threshold)
+    from almanac_control import parse_utc_iso, utc_now
+    now = utc_now()
+    queued_rows = conn.execute(
+        "SELECT * FROM arclink_action_intents WHERE status IN ('queued', 'running') ORDER BY created_at ASC",
+    ).fetchall()
+    stale_actions = []
+    for row in queued_rows:
+        created = parse_utc_iso(row["created_at"])
+        if created is None:
+            continue
+        elapsed = (now - created).total_seconds()
+        if elapsed >= stale_action_threshold_seconds:
+            stale_actions.append({
+                "action_id": str(row["action_id"]),
+                "action_type": str(row["action_type"]),
+                "status": str(row["status"]),
+                "target": f"{row['target_kind']}:{row['target_id']}",
+                "elapsed_seconds": int(elapsed),
+            })
+
+    # Recent action attempts
+    recent_attempts = [
+        {
+            "attempt_id": str(r["attempt_id"]),
+            "action_id": str(r["action_id"]),
+            "status": str(r["status"]),
+            "executor_adapter": str(r["executor_adapter"]),
+            "error": str(r["error"] or ""),
+            "started_at": str(r["started_at"]),
+            "finished_at": str(r["finished_at"] or ""),
+        }
+        for r in conn.execute(
+            "SELECT * FROM arclink_action_attempts ORDER BY started_at DESC LIMIT 20",
+        ).fetchall()
+    ]
+    placements = [
+        {
+            "placement_id": str(r["placement_id"]),
+            "deployment_id": str(r["deployment_id"]),
+            "host_id": str(r["host_id"]),
+            "status": str(r["status"]),
+            "placed_at": str(r["placed_at"]),
+            "removed_at": str(r["removed_at"] or ""),
+        }
+        for r in conn.execute(
+            "SELECT * FROM arclink_deployment_placements ORDER BY placed_at DESC LIMIT 20",
+        ).fetchall()
+    ]
+
+    # Active rollouts
+    active_rollouts = [
+        {
+            "rollout_id": str(r["rollout_id"]),
+            "deployment_id": str(r["deployment_id"]),
+            "version_tag": str(r["version_tag"]),
+            "status": str(r["status"]),
+            "current_wave": int(r["current_wave"]),
+            "wave_count": int(r["wave_count"]),
+        }
+        for r in conn.execute(
+            "SELECT * FROM arclink_rollouts WHERE status IN ('planned', 'in_progress', 'paused') ORDER BY created_at DESC LIMIT 20",
+        ).fetchall()
+    ]
+
+    return {
+        "fleet_capacity": capacity,
+        "placements": placements,
+        "stale_actions": stale_actions,
+        "recent_action_attempts": recent_attempts,
+        "last_executor_result": recent_attempts[0] if recent_attempts else {},
+        "active_rollouts": active_rollouts,
+    }
+
+
 def _json_loads(value: str | None) -> dict[str, Any]:
     return json_loads_safe(value)
 

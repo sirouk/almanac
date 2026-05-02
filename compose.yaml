@@ -17,6 +17,7 @@ x-almanac-app: &almanac-app
     ALMANAC_DOCKER_MODE: "1"
     ALMANAC_SQLITE_JOURNAL_MODE: ${ALMANAC_SQLITE_JOURNAL_MODE:-DELETE}
     ALMANAC_BACKEND_ALLOWED_CIDRS: ${ALMANAC_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}
+    ALMANAC_HTTP_TRUST_HOSTS: ${ALMANAC_HTTP_TRUST_HOSTS:-almanac-mcp,qmd-mcp,notion-webhook,nextcloud,postgres,redis}
     QMD_MCP_HOST_PORT: ${QMD_MCP_PORT:-8181}
     ALMANAC_CONFIG_FILE: /home/almanac/almanac/almanac-priv/config/docker.env
     ALMANAC_REPO_DIR: /home/almanac/almanac

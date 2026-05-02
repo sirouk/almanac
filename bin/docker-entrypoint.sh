@@ -132,6 +132,7 @@ write_default_docker_config() {
 ALMANAC_NAME=almanac
 ALMANAC_USER=almanac
 ALMANAC_BACKEND_ALLOWED_CIDRS=172.16.0.0/12
+ALMANAC_HTTP_TRUST_HOSTS=almanac-mcp,qmd-mcp,notion-webhook,nextcloud,postgres,redis
 ALMANAC_HOME=/home/almanac
 ALMANAC_REPO_DIR=$CONFIG_REPO_DIR
 ALMANAC_PRIV_DIR=$CONFIG_PRIV_DIR

@@ -6,6 +6,7 @@ import os
 import pwd
 import re
 import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -16,6 +17,13 @@ from almanac_control import Config, connect_db, ensure_agent_mcp_bootstrap_token
 
 STOP = False
 SAFE_PATH = "/home/almanac/.local/bin:/opt/almanac/runtime/hermes-venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Tracks unix_users whose home tree has already been chowned in this supervisor
+# run. Recursive chown on bind-mounted volumes (Docker Desktop on macOS) fails
+# with EINVAL on socket/FIFO files and floods stderr while also blocking the
+# poll loop's SIGTERM responsiveness. The supervisor itself only creates root-
+# owned dirs the first time it sees an agent, so a one-shot chown is correct.
+_CHOWN_DONE: set[str] = set()
 
 
 def _stop(_signum, _frame) -> None:
@@ -47,6 +55,7 @@ def docker_mode_env(cfg: Config) -> dict[str, str]:
         "ALMANAC_DOCKER_HOST_PRIV_DIR": str(os.environ.get("ALMANAC_DOCKER_HOST_PRIV_DIR") or ""),
         "ALMANAC_DOCKER_IMAGE": str(os.environ.get("ALMANAC_DOCKER_IMAGE") or "almanac/app:local"),
         "ALMANAC_DOCKER_NETWORK": str(os.environ.get("ALMANAC_DOCKER_NETWORK") or "almanac_default"),
+        "ALMANAC_HTTP_TRUST_HOSTS": str(os.environ.get("ALMANAC_HTTP_TRUST_HOSTS") or "almanac-mcp,qmd-mcp,notion-webhook,nextcloud,postgres,redis"),
     }
 
 
@@ -94,6 +103,26 @@ def home_from_hermes(hermes_home: Path) -> Path:
         return hermes_home.parent
 
 
+def _selective_chown(root: Path, uid: int, gid: int) -> None:
+    try:
+        os.lchown(str(root), uid, gid)
+    except OSError:
+        pass
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            target = os.path.join(dirpath, name)
+            try:
+                mode = os.lstat(target).st_mode
+            except OSError:
+                continue
+            if stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode):
+                continue
+            try:
+                os.lchown(target, uid, gid)
+            except OSError:
+                pass
+
+
 def ensure_container_user(unix_user: str, home: Path) -> tuple[int, int]:
     home.mkdir(parents=True, exist_ok=True)
     if subprocess.run(["id", "-u", unix_user], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
@@ -105,7 +134,9 @@ def ensure_container_user(unix_user: str, home: Path) -> tuple[int, int]:
         home / ".local" / "state" / "almanac-agent",
     ):
         path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chown", "-R", f"{unix_user}:{unix_user}", str(home)], check=False)
+    if unix_user not in _CHOWN_DONE:
+        _selective_chown(home, info.pw_uid, info.pw_gid)
+        _CHOWN_DONE.add(unix_user)
     return info.pw_uid, info.pw_gid
 
 

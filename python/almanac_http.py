@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,12 +30,22 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
+def _trusted_internal_hosts() -> set[str]:
+    raw = os.environ.get("ALMANAC_HTTP_TRUST_HOSTS", "").strip()
+    if not raw:
+        return set()
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
 def enforce_secure_transport(url: str, *, allow_loopback_http: bool = True) -> None:
     parsed = urllib.parse.urlparse(url)
     scheme = parsed.scheme.lower()
     if scheme != "http":
         return
-    if allow_loopback_http and _is_loopback_host(parsed.hostname or ""):
+    host = (parsed.hostname or "").strip().lower()
+    if allow_loopback_http and _is_loopback_host(host):
+        return
+    if host and host in _trusted_internal_hosts():
         return
     raise RuntimeError(f"insecure transport refused for non-loopback URL: {url}")
 

@@ -1426,8 +1426,15 @@ def test_deploy_menu_defaults_to_sovereign_control_node() -> None:
         "Shared Host Docker control center (containerized operator substrate)" in mode_snippet,
         "expected top-level menu to expose Shared Host Docker mode",
     )
-    expect('read -r -p "Choose ArcLink mode [2]: "' in mode_snippet, "expected top-level default to be Sovereign Control Node mode")
-    expect('case "${answer:-2}"' in mode_snippet, "expected blank top-level selection to choose Sovereign Control Node mode")
+    sovereign_index = mode_snippet.index("1) Sovereign Control Node control center")
+    shared_index = mode_snippet.index("2) Shared Host mode control center")
+    docker_index = mode_snippet.index("3) Shared Host Docker control center")
+    expect(
+        sovereign_index < shared_index < docker_index,
+        "expected top-level menu to list Sovereign first, then Shared Host, then Shared Host Docker",
+    )
+    expect('read -r -p "Choose ArcLink mode [1]: "' in mode_snippet, "expected top-level default to be Sovereign Control Node mode")
+    expect('case "${answer:-1}"' in mode_snippet, "expected blank top-level selection to choose Sovereign Control Node mode")
     expect('MODE="control"' in mode_snippet and 'CONTROL_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Sovereign Control Node mode to route to its submenu")
     expect('MODE="docker"' in mode_snippet and 'DOCKER_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Shared Host Docker mode to route to its submenu")
     print("PASS test_deploy_menu_defaults_to_sovereign_control_node")

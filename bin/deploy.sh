@@ -1092,23 +1092,23 @@ choose_mode() {
     cat <<'EOF'
 ArcLink deploy menu
 
-  1) Shared Host mode control center (operator-led)
-  2) Sovereign Control Node control center (billing, bots, fleet, provisioning)
+  1) Sovereign Control Node control center (billing, bots, fleet, provisioning)
+  2) Shared Host mode control center (operator-led)
   3) Shared Host Docker control center (containerized operator substrate)
   4) Exit
 EOF
 
-    read -r -p "Choose ArcLink mode [2]: " answer
-    case "${answer:-2}" in
+    read -r -p "Choose ArcLink mode [1]: " answer
+    case "${answer:-1}" in
       1)
-        if choose_shared_host_mode; then
-          return 0
-        fi
-        ;;
-      2)
         MODE="control"
         CONTROL_DEPLOY_COMMAND="menu"
         return 0
+        ;;
+      2)
+        if choose_shared_host_mode; then
+          return 0
+        fi
         ;;
       3)
         MODE="docker"

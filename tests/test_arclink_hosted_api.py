@@ -1464,6 +1464,84 @@ def test_admin_operator_snapshot_requires_auth_and_returns_snapshot() -> None:
     print("PASS test_admin_operator_snapshot_requires_auth_and_returns_snapshot")
 
 
+def test_admin_scale_operations_requires_auth_and_returns_snapshot() -> None:
+    control = load_module("almanac_control.py", "almanac_control_scale_ops_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_scale_ops_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_scale_ops_test")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_scale_ops_test")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_scale_ops_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_scale_ops_test")
+    rollout = load_module("arclink_rollout.py", "arclink_rollout_scale_ops_test")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_scale_ops_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    api.upsert_arclink_admin(conn, admin_id="admin_scale", email="scale@example.test", role="ops")
+
+    fleet.register_fleet_host(conn, hostname="scale-1.example.test", region="us-east", capacity_slots=4)
+    fleet.place_deployment(conn, deployment_id="dep_scale", region="us-east")
+
+    dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_scale",
+        action_type="restart",
+        target_kind="deployment",
+        target_id="dep_scale",
+        reason="test worker route",
+        idempotency_key="scale_ops_worker",
+    )
+    executor = executor_mod.ArcLinkExecutor(
+        config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+    )
+    worker.process_next_arclink_action(conn, executor=executor)
+
+    stale = dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_scale",
+        action_type="dns_repair",
+        target_kind="deployment",
+        target_id="dep_scale",
+        reason="test stale route",
+        idempotency_key="scale_ops_stale",
+    )
+    conn.execute(
+        "UPDATE arclink_action_intents SET created_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+        (stale["action_id"],),
+    )
+    rollout.create_rollout(
+        conn,
+        deployment_id="dep_scale",
+        version_tag="v1.2.3",
+        waves=[{"percentage": 10, "hosts": ["scale-1.example.test"]}],
+        rollback_plan={
+            "actions": ["preserve_state_roots"],
+            "state_roots": {"deployment": "/arcdata/deployments/dep_scale"},
+        },
+    )
+    conn.commit()
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/scale-operations",
+        headers={}, config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}: {payload}")
+
+    session = api.create_arclink_admin_session(conn, admin_id="admin_scale", session_id="asess_scale")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/scale-operations",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["fleet_capacity"]["total_hosts"] == 1, f"fleet capacity missing: {payload}")
+    expect(payload["fleet_capacity"]["available_slots"] == 3, f"placement load missing: {payload['fleet_capacity']}")
+    expect(len(payload["placements"]) == 1, f"placement missing: {payload['placements']}")
+    expect(len(payload["recent_action_attempts"]) == 1, f"attempt missing: {payload['recent_action_attempts']}")
+    expect(payload["last_executor_result"]["status"] == "succeeded", f"last executor result missing: {payload}")
+    expect(len(payload["stale_actions"]) == 1, f"stale action missing: {payload['stale_actions']}")
+    expect(len(payload["active_rollouts"]) == 1, f"active rollout missing: {payload['active_rollouts']}")
+
+    print("PASS test_admin_scale_operations_requires_auth_and_returns_snapshot")
+
+
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
@@ -1507,7 +1585,8 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_missing_fields()
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
-    print("PASS all 42 ArcLink hosted API tests")
+    test_admin_scale_operations_requires_auth_and_returns_snapshot()
+    print("PASS all 43 ArcLink hosted API tests")
     return 0
 
 

@@ -191,43 +191,45 @@ deduplication.
 `docs/arclink/live-e2e-secrets-needed.md` and
 `docs/arclink/live-e2e-evidence-template.md` updated after code/tests landed.
 
-## BUILD Tasks: Next Pass (Scale Operations Spine) -- REQUIRED
+## BUILD Tasks: Next Pass (Scale Operations Spine) -- COMPLETE
 
-Plan refreshed: 2026-05-02 after the live-proof orchestration build. Backlog
-source:
+Plan refreshed: 2026-05-02 after the live-proof orchestration build. Completed
+2026-05-02 after scale-operations route coverage. Backlog source:
 - `research/RALPHIE_SCALE_OPERATIONS_STEERING.md`
 
-This is the next non-external gap. The product has queued admin action intents,
-fake/live-gated executor primitives, provisioning intent, dashboards, and live
-proof orchestration, but it still needs the durable operations spine that lets
-ArcLink run as a scaling service instead of a manually watched single host.
+The durable operations spine is implemented with SQLite-first helpers and
+read-model/API visibility. Rationale: this pass stayed inside existing
+Almanac/ArcLink modules and fake/live-gated executor boundaries instead of
+adding an external queue or orchestrator dependency before credentialed live
+proof.
 
-### Task 1: Fleet Registry And Placement -- REQUIRED
+### Task 1: Fleet Registry And Placement -- COMPLETE
 
-Add a SQLite-first host registry and placement policy for ArcLink deployment
-hosts: status, drain flag, region/tags, capacity, observed load, and
-deterministic placement decisions. Healthy hosts with enough headroom should
-win; unhealthy, draining, or saturated hosts must be rejected with useful
-errors.
+`python/arclink_fleet.py` provides host registry, capacity summary, drain and
+status updates, deterministic placement by headroom, region/tag filtering, and
+useful rejection reasons for unhealthy, draining, or saturated hosts.
 
-### Task 2: Admin Action Worker -- REQUIRED
+### Task 2: Admin Action Worker -- COMPLETE
 
-Add a bounded worker entrypoint that consumes queued `arclink_action_intents`
-and maps supported actions to fake/live-gated executor or safe local state
-operations. It must persist attempts/results, update statuses, write audit and
-event rows, remain idempotent on retry, and reject plaintext secret material.
+`python/arclink_action_worker.py` consumes queued `arclink_action_intents`,
+persists attempts/results, updates statuses, writes audit/event rows, recovers
+stale running work, maps supported actions through fake/live-gated executor or
+safe local transitions, and rejects/redacts secret material.
 
-### Task 3: Rollout/Rollback Model -- REQUIRED
+### Task 3: Rollout/Rollback Model -- COMPLETE
 
-Add durable release/rollout records or an equivalent tested model that supports
-canary waves, pause/failure state, version drift visibility, and rollback plans
-that preserve all customer state roots.
+`python/arclink_rollout.py` provides durable rollout records, canary wave
+advance/pause/fail states, version drift visibility, and rollback records that
+require `preserve_state_roots`.
 
-### Task 4: Operator Visibility -- REQUIRED
+### Task 4: Operator Visibility -- COMPLETE
 
-Extend admin read models/API enough to show fleet capacity, placement, action
-execution attempts, stale queued actions, rollout state, and last executor
-result. Keep all live provider claims credential-gated.
+`build_scale_operations_snapshot()` plus
+`GET /api/v1/admin/scale-operations` expose fleet capacity, placements, stale
+actions, action execution attempts, active rollout state, and last executor
+result behind admin auth. `web/src/app/admin/page.tsx` renders the operator
+view. `tests/test_arclink_hosted_api.py` now covers route auth and payload
+shape for this snapshot.
 
 ## Validation Floor
 

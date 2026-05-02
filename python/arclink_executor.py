@@ -918,6 +918,10 @@ def _materialize_docker_compose_files(
     root.mkdir(parents=True, exist_ok=True)
     config_root.mkdir(parents=True, exist_ok=True)
     secrets_root.mkdir(parents=True, exist_ok=True)
+    secrets_root.chmod(0o700)
+    for resolved in resolved_secrets.values():
+        if resolved.source_path:
+            Path(resolved.source_path).chmod(0o644)
 
     services = dict((intent.get("compose") or {}).get("services") or {}) if isinstance(intent.get("compose"), Mapping) else {}
     _ensure_volume_roots(services)
@@ -939,6 +943,9 @@ def _materialize_docker_compose_files(
         for name, resolved in resolved_secrets.items()
     }
     compose_doc: dict[str, Any] = {"services": compose_services}
+    compose_networks = dict((intent.get("compose") or {}).get("networks") or {}) if isinstance(intent.get("compose"), Mapping) else {}
+    if compose_networks:
+        compose_doc["networks"] = compose_networks
     if compose_secrets:
         compose_doc["secrets"] = compose_secrets
     compose_file.write_text(json.dumps(compose_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -947,7 +954,7 @@ def _materialize_docker_compose_files(
 
 def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for key in ("image", "command", "environment", "labels", "depends_on", "deploy", "healthcheck"):
+    for key in ("image", "entrypoint", "command", "environment", "labels", "depends_on", "deploy", "healthcheck", "networks"):
         value = service.get(key)
         if value not in (None, {}, []):
             out[key] = value

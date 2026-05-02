@@ -133,6 +133,16 @@ def test_cloudflare_drift_and_traefik_label_rendering() -> None:
     labels = mod.render_traefik_http_labels(service_name="dashboard", hostname=hostnames["dashboard"], port=8080)
     expect(labels["traefik.http.routers.arclink-dashboard.rule"] == "Host(`u-abc123.example.test`)", str(labels))
     expect(labels["traefik.http.services.arclink-dashboard.loadbalancer.server.port"] == "8080", str(labels))
+    labels = mod.render_traefik_http_path_labels(
+        service_name="dashboard",
+        hostname=hostnames["dashboard"],
+        path_prefix="/u/abc123",
+        port=3000,
+        docker_network="arclink_default",
+        priority=10,
+    )
+    expect(labels["traefik.docker.network"] == "arclink_default", str(labels))
+    expect(labels["traefik.http.routers.arclink-dashboard.priority"] == "10", str(labels))
     print("PASS test_cloudflare_drift_and_traefik_label_rendering")
 
 

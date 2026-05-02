@@ -255,6 +255,8 @@ def _render_notion_webhook_labels(
     callback_path: str,
     strip_prefix: str = "",
     port: int = 8283,
+    docker_network: str = "",
+    priority: int = 200,
 ) -> dict[str, str]:
     router = f"arclink-{prefix}-notion-webhook"
     clean_path = str(callback_path or "/notion/webhook").strip()
@@ -263,10 +265,14 @@ def _render_notion_webhook_labels(
     labels = {
         "traefik.enable": "true",
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`) && PathPrefix(`{clean_path}`)",
-        f"traefik.http.routers.{router}.entrypoints": "websecure",
-        f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.routers.{router}.entrypoints": "web",
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
     }
+    clean_network = str(docker_network or "").strip()
+    if clean_network:
+        labels["traefik.docker.network"] = clean_network
+    if int(priority or 0) > 0:
+        labels[f"traefik.http.routers.{router}.priority"] = str(int(priority))
     clean_strip = str(strip_prefix or "").strip()
     if clean_strip:
         if not clean_strip.startswith("/"):
@@ -294,10 +300,26 @@ def _render_compose_secrets(secret_refs: Mapping[str, str]) -> dict[str, dict[st
     return secrets
 
 
+def _control_network_alias(prefix: str, service_name: str) -> str:
+    clean_prefix = re.sub(r"[^a-z0-9-]+", "-", str(prefix or "").strip().lower()).strip("-")
+    clean_service = re.sub(r"[^a-z0-9-]+", "-", str(service_name or "").strip().lower()).strip("-")
+    return f"arclink-{clean_prefix}-{clean_service}"
+
+
+def _control_network(prefix: str, service_name: str) -> dict[str, Any]:
+    return {
+        "default": {},
+        "arclink-control": {
+            "aliases": [_control_network_alias(prefix, service_name)],
+        },
+    }
+
+
 def _service(
     *,
     image: str,
     command: list[str],
+    entrypoint: list[str] | None = None,
     environment: Mapping[str, str],
     volumes: list[dict[str, str]] | None = None,
     labels: Mapping[str, str] | None = None,
@@ -305,6 +327,7 @@ def _service(
     secrets: list[dict[str, str]] | None = None,
     deploy: Mapping[str, Any] | None = None,
     healthcheck: Mapping[str, str] | None = None,
+    networks: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     svc: dict[str, Any] = {
         "image": image,
@@ -315,10 +338,14 @@ def _service(
         "depends_on": list(depends_on or []),
         "secrets": list(secrets or []),
     }
+    if entrypoint:
+        svc["entrypoint"] = list(entrypoint)
     if deploy:
         svc["deploy"] = dict(deploy)
     if healthcheck:
         svc["healthcheck"] = dict(healthcheck)
+    if networks:
+        svc["networks"] = dict(networks)
     return svc
 
 
@@ -374,23 +401,25 @@ def _render_services(
             environment=env,
             labels=labels["dashboard"],
             deploy=_limits("dashboard"),
+            networks=_control_network(prefix, "dashboard"),
         ),
         "hermes-gateway": _service(
             image=app_image,
             command=["hermes", "gateway", "run", "--replace"],
             environment=env,
             volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
-            labels=labels["hermes"],
             depends_on=["qmd-mcp", "managed-context-install"],
             deploy=_limits("hermes-gateway"),
         ),
         "hermes-dashboard": _service(
             image=app_image,
-            command=["hermes", "dashboard", "--host", "0.0.0.0"],
+            command=["hermes", "dashboard", "--host", "0.0.0.0", "--port", "3210", "--insecure"],
             environment=env,
             volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
+            labels=labels["hermes"],
             depends_on=["managed-context-install"],
             deploy=_limits("hermes-dashboard"),
+            networks=_control_network(prefix, "hermes"),
         ),
         "qmd-mcp": _service(
             image=app_image,
@@ -464,12 +493,12 @@ def _render_services(
             ],
             deploy=_limits("nextcloud"),
             healthcheck=_hc("nextcloud"),
+            networks=_control_network(prefix, "nextcloud"),
         ),
         "code-server": _service(
             image="${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}",
+            entrypoint=["/bin/sh", "-lc"],
             command=[
-                "sh",
-                "-lc",
                 f"PASSWORD=\"$(cat {secret_target['code_server_password']})\" "
                 "exec code-server --bind-addr 0.0.0.0:8080 /workspace",
             ],
@@ -481,6 +510,7 @@ def _render_services(
             secrets=[{"source": "code_server_password", "target": secret_target["code_server_password"]}],
             deploy=_limits("code-server"),
             healthcheck=_hc("code-server"),
+            networks=_control_network(prefix, "code"),
         ),
         "notion-webhook": _service(
             image=app_image,
@@ -492,6 +522,7 @@ def _render_services(
                 {"source": "notion_webhook_secret", "target": secret_target["notion_webhook_secret"]},
             ] if "notion_webhook_secret" in secret_target else [],
             deploy=_limits("notion-webhook"),
+            networks=_control_network(prefix, "notion"),
         ),
         "notification-delivery": _service(
             image=app_image,
@@ -507,7 +538,7 @@ def _render_services(
         ),
         "managed-context-install": _service(
             image=app_image,
-            command=["./bin/install-arclink-plugins.sh", env["HERMES_HOME"]],
+            command=["./bin/install-arclink-plugins.sh", "/home/arclink/arclink", env["HERMES_HOME"]],
             environment={
                 "HERMES_HOME": env["HERMES_HOME"],
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
@@ -582,6 +613,11 @@ def render_arclink_provisioning_intent(
         if not clean_tailscale_dns_name:
             clean_tailscale_dns_name = clean_base_domain
     clean_edge_target = str(edge_target or metadata.get("edge_target") or f"edge.{clean_base_domain}").strip()
+    control_network_name = str(
+        source_env.get("ARCLINK_CONTROL_DOCKER_NETWORK")
+        or source_env.get("ARCLINK_DOCKER_NETWORK")
+        or "arclink_default"
+    ).strip()
     prefix = str(deployment["prefix"])
     roots = render_arclink_state_roots(deployment_id=deployment_id, prefix=prefix, state_root_base=state_root_base)
     if clean_ingress_mode == "tailscale":
@@ -602,6 +638,7 @@ def render_arclink_provisioning_intent(
         ingress_mode=clean_ingress_mode,
         tailscale_dns_name=clean_tailscale_dns_name,
         tailscale_host_strategy=clean_tailscale_strategy,
+        docker_network=control_network_name,
     )
     secret_refs = _render_secret_refs(deployment_id, metadata)
     compose_secrets = _render_compose_secrets(secret_refs)
@@ -624,6 +661,7 @@ def render_arclink_provisioning_intent(
         hostname=hostnames["dashboard"],
         callback_path=notion_callback_path,
         strip_prefix=f"/u/{prefix}" if clean_ingress_mode == "tailscale" and clean_tailscale_strategy == "path" else "",
+        docker_network=control_network_name,
     )
     deployment_env = {
         "ARCLINK_DEPLOYMENT_ID": deployment_id,
@@ -654,6 +692,7 @@ def render_arclink_provisioning_intent(
         "HERMES_HOME": CONTAINER_HERMES_HOME,
         "VAULT_DIR": CONTAINER_VAULT_DIR,
         "QMD_STATE_DIR": CONTAINER_QMD_STATE_DIR,
+        "QMD_INDEX_NAME": f"vault-{deployment_id}",
         "QMD_COLLECTION_NAME": f"vault-{deployment_id}",
         "ARCLINK_MEMORY_SYNTH_ENABLED": "auto",
         "ARCLINK_MEMORY_SYNTH_STATE_DIR": CONTAINER_MEMORY_STATE_DIR,
@@ -691,7 +730,16 @@ def render_arclink_provisioning_intent(
         "state_roots": roots,
         "environment": deployment_env,
         "secret_refs": secret_refs,
-        "compose": {"services": services, "secrets": compose_secrets},
+        "compose": {
+            "services": services,
+            "secrets": compose_secrets,
+            "networks": {
+                "arclink-control": {
+                    "external": True,
+                    "name": control_network_name,
+                }
+            },
+        },
         "runtime_resolution": {
             "stock_image_file_env": {
                 "nextcloud-db": ["POSTGRES_PASSWORD_FILE"],

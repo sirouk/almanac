@@ -265,29 +265,54 @@ def arclink_access_urls(
     return {role: f"https://{hostname}" for role, hostname in arclink_hostnames(prefix, base_domain).items()}
 
 
-def render_traefik_http_labels(*, service_name: str, hostname: str, port: int) -> dict[str, str]:
+def render_traefik_http_labels(
+    *,
+    service_name: str,
+    hostname: str,
+    port: int,
+    docker_network: str = "",
+    priority: int = 0,
+) -> dict[str, str]:
     router = f"arclink-{service_name}"
-    return {
+    labels = {
         "traefik.enable": "true",
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`)",
-        f"traefik.http.routers.{router}.entrypoints": "websecure",
-        f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.routers.{router}.entrypoints": "web",
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
     }
+    clean_network = str(docker_network or "").strip()
+    if clean_network:
+        labels["traefik.docker.network"] = clean_network
+    if int(priority or 0) > 0:
+        labels[f"traefik.http.routers.{router}.priority"] = str(int(priority))
+    return labels
 
 
-def render_traefik_http_path_labels(*, service_name: str, hostname: str, path_prefix: str, port: int) -> dict[str, str]:
+def render_traefik_http_path_labels(
+    *,
+    service_name: str,
+    hostname: str,
+    path_prefix: str,
+    port: int,
+    docker_network: str = "",
+    priority: int = 0,
+) -> dict[str, str]:
     router = f"arclink-{service_name}"
     middleware = f"{router}-strip"
     clean_path = str(path_prefix or "").strip()
     if not clean_path.startswith("/"):
         clean_path = f"/{clean_path}"
-    return {
+    labels = {
         "traefik.enable": "true",
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`) && PathPrefix(`{clean_path}`)",
-        f"traefik.http.routers.{router}.entrypoints": "websecure",
-        f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.routers.{router}.entrypoints": "web",
         f"traefik.http.routers.{router}.middlewares": middleware,
         f"traefik.http.middlewares.{middleware}.stripprefix.prefixes": clean_path,
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
     }
+    clean_network = str(docker_network or "").strip()
+    if clean_network:
+        labels["traefik.docker.network"] = clean_network
+    if int(priority or 0) > 0:
+        labels[f"traefik.http.routers.{router}.priority"] = str(int(priority))
+    return labels

@@ -19,7 +19,7 @@ from arclink_adapters import (
 ARCLINK_HOST_ROLES = ("dashboard", "files", "code", "hermes")
 ARCLINK_DEFAULT_SERVICE_PORTS = {
     "dashboard": 3000,
-    "files": 8080,
+    "files": 80,
     "code": 8080,
     "hermes": 3210,
 }
@@ -200,6 +200,7 @@ def render_traefik_dynamic_labels(
     tailscale_dns_name: str = "",
     tailscale_host_strategy: str = "path",
     service_ports: Mapping[str, int] | None = None,
+    docker_network: str = "",
 ) -> dict[str, dict[str, str]]:
     ports = dict(ARCLINK_DEFAULT_SERVICE_PORTS)
     ports.update(dict(service_ports or {}))
@@ -215,16 +216,20 @@ def render_traefik_dynamic_labels(
     labels: dict[str, dict[str, str]] = {}
     for role in ARCLINK_HOST_ROLES:
         if path_prefixes:
+            priority = 10 if role == "dashboard" else 100
             labels[role] = render_traefik_http_path_labels(
                 service_name=f"{prefix}-{role}",
                 hostname=hostnames[role],
                 path_prefix=path_prefixes[role],
                 port=int(ports[role]),
+                docker_network=docker_network,
+                priority=priority,
             )
         else:
             labels[role] = render_traefik_http_labels(
                 service_name=f"{prefix}-{role}",
                 hostname=hostnames[role],
                 port=int(ports[role]),
+                docker_network=docker_network,
             )
     return labels

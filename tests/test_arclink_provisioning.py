@@ -134,9 +134,14 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["nextcloud-db"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_db"], str(services["nextcloud-db"]))
     expect(services["nextcloud-redis"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_redis"], str(services["nextcloud-redis"]))
     expect(services["qmd-mcp"]["volumes"][1]["target"] == intent["environment"]["QMD_STATE_DIR"], str(services["qmd-mcp"]))
+    expect(services["qmd-mcp"]["environment"]["QMD_INDEX_NAME"] == "vault-dep_1", str(services["qmd-mcp"]))
     expect(services["memory-synth"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"], str(services["memory-synth"]))
     expect("PASSWORD_REF" not in services["code-server"]["environment"], str(services["code-server"]))
+    expect(services["code-server"]["entrypoint"] == ["/bin/sh", "-lc"], str(services["code-server"]))
     expect("cat /run/secrets/code_server_password" in " ".join(services["code-server"]["command"]), str(services["code-server"]))
+    expect(services["managed-context-install"]["command"][:2] == ["./bin/install-arclink-plugins.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
+    expect("--insecure" in services["hermes-dashboard"]["command"], str(services["hermes-dashboard"]))
+    expect("--port" in services["hermes-dashboard"]["command"] and "3210" in services["hermes-dashboard"]["command"], str(services["hermes-dashboard"]))
     expect(
         intent["runtime_resolution"]["stock_image_file_env"]["nextcloud"] == [
             "POSTGRES_PASSWORD_FILE",
@@ -149,7 +154,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         str(intent["runtime_resolution"]),
     )
     expect("chutes_api_key" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
-    expect(services["hermes-gateway"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-gateway"]))
+    expect(services["hermes-gateway"]["labels"] == {}, str(services["hermes-gateway"]))
+    expect(services["hermes-dashboard"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-dashboard"]))
+    expect(services["hermes-dashboard"]["labels"]["traefik.docker.network"] == "arclink_default", str(services["hermes-dashboard"]))
+    expect(services["nextcloud"]["labels"]["traefik.docker.network"] == "arclink_default", str(services["nextcloud"]))
     expect(intent["dns"]["files"]["hostname"] == "files-amber-vault-1a2b.example.test", str(intent["dns"]))
     expect(intent["access"]["urls"]["code"] == "https://code-amber-vault-1a2b.example.test", str(intent["access"]))
     expect(intent["access"]["urls"]["notion"] == "https://u-amber-vault-1a2b.example.test/notion/webhook", str(intent["access"]))
@@ -158,6 +166,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["integrations"]["notion"]["callback_url"] == intent["access"]["urls"]["notion"], str(intent["integrations"]))
     expect(intent["integrations"]["notion"]["secret_ref"] == "secret://arclink/notion/dep_1/webhook-secret", str(intent["integrations"]))
     expect(services["notion-webhook"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-notion-webhook.rule"] == "Host(`u-amber-vault-1a2b.example.test`) && PathPrefix(`/notion/webhook`)", str(services["notion-webhook"]))
+    expect(services["notion-webhook"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-notion-webhook.priority"] == "200", str(services["notion-webhook"]))
     expect(services["notion-webhook"]["environment"]["ARCLINK_NOTION_CALLBACK_URL"] == intent["access"]["urls"]["notion"], str(services["notion-webhook"]))
     text = render_text(intent)
     for forbidden in ("sk_", "whsec_", "xoxb-", "ntn_", "123456:"):
@@ -411,7 +420,13 @@ def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
         == "Host(`worker.example.test`) && PathPrefix(`/u/amber-vault-1a2b/files`)",
         str(labels),
     )
+    expect(labels["traefik.http.routers.arclink-amber-vault-1a2b-files.priority"] == "100", str(labels))
     expect("stripprefix.prefixes" in ".".join(labels), str(labels))
+    dashboard_labels = intent["compose"]["services"]["dashboard"]["labels"]
+    expect(
+        dashboard_labels["traefik.http.routers.arclink-amber-vault-1a2b-dashboard.priority"] == "10",
+        str(dashboard_labels),
+    )
     notion_labels = intent["compose"]["services"]["notion-webhook"]["labels"]
     expect(
         notion_labels["traefik.http.routers.arclink-amber-vault-1a2b-notion-webhook.rule"]

@@ -1,30 +1,26 @@
 {
   "code": {
     "traefik.enable": "true",
-    "traefik.http.routers.arclink-amber-vault-1a2b-code.entrypoints": "websecure",
+    "traefik.http.routers.arclink-amber-vault-1a2b-code.entrypoints": "web",
     "traefik.http.routers.arclink-amber-vault-1a2b-code.rule": "Host(`code-amber-vault-1a2b.example.test`)",
-    "traefik.http.routers.arclink-amber-vault-1a2b-code.tls": "true",
     "traefik.http.services.arclink-amber-vault-1a2b-code.loadbalancer.server.port": "8080"
   },
   "dashboard": {
     "traefik.enable": "true",
-    "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.entrypoints": "websecure",
+    "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.entrypoints": "web",
     "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.rule": "Host(`u-amber-vault-1a2b.example.test`)",
-    "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.tls": "true",
     "traefik.http.services.arclink-amber-vault-1a2b-dashboard.loadbalancer.server.port": "3000"
   },
   "files": {
     "traefik.enable": "true",
-    "traefik.http.routers.arclink-amber-vault-1a2b-files.entrypoints": "websecure",
+    "traefik.http.routers.arclink-amber-vault-1a2b-files.entrypoints": "web",
     "traefik.http.routers.arclink-amber-vault-1a2b-files.rule": "Host(`files-amber-vault-1a2b.example.test`)",
-    "traefik.http.routers.arclink-amber-vault-1a2b-files.tls": "true",
-    "traefik.http.services.arclink-amber-vault-1a2b-files.loadbalancer.server.port": "8080"
+    "traefik.http.services.arclink-amber-vault-1a2b-files.loadbalancer.server.port": "80"
   },
   "hermes": {
     "traefik.enable": "true",
-    "traefik.http.routers.arclink-amber-vault-1a2b-hermes.entrypoints": "websecure",
+    "traefik.http.routers.arclink-amber-vault-1a2b-hermes.entrypoints": "web",
     "traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule": "Host(`hermes-amber-vault-1a2b.example.test`)",
-    "traefik.http.routers.arclink-amber-vault-1a2b-hermes.tls": "true",
     "traefik.http.services.arclink-amber-vault-1a2b-hermes.loadbalancer.server.port": "3210"
   }
 }

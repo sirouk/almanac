@@ -43,6 +43,11 @@ does not mean ArcLink is complete. The next run should start from
 `research/RALPHIE_NEXT_PASS_STEERING.md` and turn the remaining delivery ladder
 into a fresh PLAN/BUILD cycle.
 
+After the hosted API boundary checkpoint, use
+`research/RALPHIE_FINAL_FORM_GAPS_STEERING.md` as the controlling backlog for
+the final product gaps. Every remaining layer must either be implemented with
+tests, blocked by a named missing live credential, or tracked as a defect.
+
 Priority order:
 
 1. Build the production API/auth boundary over the existing Python ArcLink

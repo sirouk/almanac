@@ -19,13 +19,17 @@ import time
 from typing import Any, Mapping
 from urllib.parse import parse_qs
 
-from arclink_adapters import FakeStripeClient, verify_stripe_webhook, StripeWebhookError
+from arclink_adapters import FakeStripeClient, StripeWebhookError
+from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
     GENERIC_ARCLINK_API_ERROR,
     ArcLinkApiAuthError,
+    _header as _api_header,
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
     create_arclink_admin_login_session_api,
+    create_arclink_user_login_session_api,
+    create_user_portal_link_api,
     extract_arclink_csrf_token,
     extract_arclink_session_credentials,
     open_public_onboarding_checkout_api,
@@ -83,12 +87,8 @@ class HostedApiConfig:
 
 def _request_id(headers: Mapping[str, Any]) -> str:
     """Extract or generate a request ID."""
-    for key, value in dict(headers or {}).items():
-        if str(key or "").lower() == REQUEST_ID_HEADER:
-            candidate = str(value or "").strip()[:64]
-            if candidate:
-                return candidate
-    return f"req_{secrets.token_hex(12)}"
+    candidate = _api_header(headers, REQUEST_ID_HEADER)[:64]
+    return candidate if candidate else f"req_{secrets.token_hex(12)}"
 
 
 def _json_body(body: str) -> dict[str, Any]:
@@ -121,6 +121,17 @@ def _json_response(
     return status, dict(payload), headers
 
 
+def _cookie_flags(config: HostedApiConfig, *, expire: bool = False) -> str:
+    flags = "; Path=/; HttpOnly; SameSite=Lax"
+    if expire:
+        flags += "; Max-Age=0"
+    if config.cookie_secure:
+        flags += "; Secure"
+    if config.cookie_domain:
+        flags += f"; Domain={config.cookie_domain}"
+    return flags
+
+
 def _session_cookies(
     session: Mapping[str, Any],
     *,
@@ -130,11 +141,7 @@ def _session_cookies(
     """Build Set-Cookie headers for session credentials."""
     cookies: list[tuple[str, str]] = []
     prefix = f"arclink_{kind}"
-    flags = "; Path=/; HttpOnly; SameSite=Lax"
-    if config.cookie_secure:
-        flags += "; Secure"
-    if config.cookie_domain:
-        flags += f"; Domain={config.cookie_domain}"
+    flags = _cookie_flags(config)
     for field, suffix in (
         ("session_id", "session_id"),
         ("session_token", "session_token"),
@@ -148,16 +155,9 @@ def _session_cookies(
 
 def _clear_session_cookies(kind: str, *, config: HostedApiConfig) -> list[tuple[str, str]]:
     """Build Set-Cookie headers that expire session cookies."""
-    cookies: list[tuple[str, str]] = []
     prefix = f"arclink_{kind}"
-    flags = "; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-    if config.cookie_secure:
-        flags += "; Secure"
-    if config.cookie_domain:
-        flags += f"; Domain={config.cookie_domain}"
-    for suffix in ("session_id", "session_token", "csrf"):
-        cookies.append(("Set-Cookie", f"{prefix}_{suffix}={flags}"))
-    return cookies
+    flags = _cookie_flags(config, expire=True)
+    return [("Set-Cookie", f"{prefix}_{suffix}={flags}") for suffix in ("session_id", "session_token", "csrf")]
 
 
 def _cors_headers(config: HostedApiConfig) -> list[tuple[str, str]]:
@@ -241,14 +241,20 @@ def _handle_stripe_webhook(
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     if not config.stripe_webhook_secret:
         return _json_response(200, {"status": "skipped", "reason": "no_webhook_secret"}, request_id=request_id)
-    sig = ""
-    for key, value in dict(headers).items():
-        if str(key or "").lower() == "stripe-signature":
-            sig = str(value or "")
-            break
-    event = verify_stripe_webhook(raw_body, sig, config.stripe_webhook_secret)
-    logger.info("stripe_webhook event_type=%s request_id=%s", event.get("type"), request_id)
-    return _json_response(200, {"status": "received", "event_type": str(event.get("type") or "")}, request_id=request_id)
+    sig = _api_header(headers, "stripe-signature")
+    result: StripeWebhookResult = process_stripe_webhook(
+        conn, payload=raw_body, signature=sig, secret=config.stripe_webhook_secret,
+    )
+    logger.info(
+        "stripe_webhook event_type=%s event_id=%s user_id=%s entitlement=%s replayed=%s request_id=%s",
+        result.event_type, result.event_id, result.user_id, result.entitlement_state, result.replayed, request_id,
+    )
+    return _json_response(200, {
+        "status": "processed",
+        "event_id": result.event_id,
+        "event_type": result.event_type,
+        "replayed": result.replayed,
+    }, request_id=request_id)
 
 
 def _handle_admin_login(
@@ -266,6 +272,41 @@ def _handle_admin_login(
     )
     cookies = _session_cookies(result.payload.get("session", {}), kind="admin", config=config)
     return _json_response(result.status, result.payload, request_id=request_id, extra_headers=cookies)
+
+
+def _handle_user_login(
+    conn: sqlite3.Connection,
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    result = create_arclink_user_login_session_api(
+        conn,
+        email=str(body.get("email") or ""),
+        login_subject=str(body.get("login_subject") or body.get("email") or ""),
+        metadata=body.get("metadata"),
+    )
+    cookies = _session_cookies(result.payload.get("session", {}), kind="user", config=config)
+    return _json_response(result.status, result.payload, request_id=request_id, extra_headers=cookies)
+
+
+def _handle_logout(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    kind: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind=kind)
+    result = revoke_arclink_session(
+        conn,
+        session_id=creds["session_id"],
+        session_kind=kind,
+        actor_id=creds["session_id"],
+        reason=f"{kind}_logout",
+    )
+    extra = _clear_session_cookies(kind, config=config)
+    return _json_response(200, {"session": result}, request_id=request_id, extra_headers=extra)
 
 
 def _handle_user_dashboard(
@@ -337,6 +378,23 @@ def _handle_user_billing(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_portal_link(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    stripe_client: Any,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = create_user_portal_link_api(
+        conn, session_id=creds["session_id"], session_token=creds["session_token"],
+        stripe_client=stripe_client,
+        return_url=str(body.get("return_url") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_user_provisioning_status(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -352,92 +410,29 @@ def _handle_user_provisioning_status(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
-def _handle_admin_service_health(
+_ADMIN_READ_HANDLERS: dict[str, tuple[Any, tuple[str, ...]]] = {
+    "admin_service_health": (read_admin_service_health_api, ("deployment_id", "status", "since")),
+    "admin_provisioning_jobs": (read_admin_provisioning_jobs_api, ("deployment_id", "status", "since")),
+    "admin_audit": (read_admin_audit_api, ("deployment_id", "since")),
+    "admin_events": (read_admin_events_api, ("deployment_id", "since")),
+    "admin_queued_actions": (read_admin_queued_actions_api, ("deployment_id", "status", "since")),
+    "admin_dns_drift": (read_admin_dns_drift_api, ("deployment_id", "since")),
+}
+
+
+def _handle_admin_read(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
     query: dict[str, str],
     request_id: str,
     config: HostedApiConfig,
+    route_key: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    api_fn, allowed_keys = _ADMIN_READ_HANDLERS[route_key]
     creds = extract_arclink_session_credentials(headers, session_kind="admin")
-    result = read_admin_service_health_api(
+    result = api_fn(
         conn, session_id=creds["session_id"], session_token=creds["session_token"],
-        **{k: v for k, v in query.items() if k in ("deployment_id", "status", "since")},
-    )
-    return _json_response(result.status, result.payload, request_id=request_id)
-
-
-def _handle_admin_provisioning_jobs(
-    conn: sqlite3.Connection,
-    headers: Mapping[str, Any],
-    query: dict[str, str],
-    request_id: str,
-    config: HostedApiConfig,
-) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
-    result = read_admin_provisioning_jobs_api(
-        conn, session_id=creds["session_id"], session_token=creds["session_token"],
-        **{k: v for k, v in query.items() if k in ("deployment_id", "status", "since")},
-    )
-    return _json_response(result.status, result.payload, request_id=request_id)
-
-
-def _handle_admin_audit(
-    conn: sqlite3.Connection,
-    headers: Mapping[str, Any],
-    query: dict[str, str],
-    request_id: str,
-    config: HostedApiConfig,
-) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
-    result = read_admin_audit_api(
-        conn, session_id=creds["session_id"], session_token=creds["session_token"],
-        **{k: v for k, v in query.items() if k in ("deployment_id", "since")},
-    )
-    return _json_response(result.status, result.payload, request_id=request_id)
-
-
-def _handle_admin_events(
-    conn: sqlite3.Connection,
-    headers: Mapping[str, Any],
-    query: dict[str, str],
-    request_id: str,
-    config: HostedApiConfig,
-) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
-    result = read_admin_events_api(
-        conn, session_id=creds["session_id"], session_token=creds["session_token"],
-        **{k: v for k, v in query.items() if k in ("deployment_id", "since")},
-    )
-    return _json_response(result.status, result.payload, request_id=request_id)
-
-
-def _handle_admin_queued_actions(
-    conn: sqlite3.Connection,
-    headers: Mapping[str, Any],
-    query: dict[str, str],
-    request_id: str,
-    config: HostedApiConfig,
-) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
-    result = read_admin_queued_actions_api(
-        conn, session_id=creds["session_id"], session_token=creds["session_token"],
-        **{k: v for k, v in query.items() if k in ("deployment_id", "status", "since")},
-    )
-    return _json_response(result.status, result.payload, request_id=request_id)
-
-
-def _handle_admin_dns_drift(
-    conn: sqlite3.Connection,
-    headers: Mapping[str, Any],
-    query: dict[str, str],
-    request_id: str,
-    config: HostedApiConfig,
-) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
-    result = read_admin_dns_drift_api(
-        conn, session_id=creds["session_id"], session_token=creds["session_token"],
-        **{k: v for k, v in query.items() if k in ("deployment_id", "since")},
+        **{k: v for k, v in query.items() if k in allowed_keys},
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -474,8 +469,12 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/onboarding/checkout"): "public_onboarding_checkout",
     ("POST", "/webhooks/stripe"): "stripe_webhook",
     ("POST", "/auth/admin/login"): "admin_login",
+    ("POST", "/auth/user/login"): "user_login",
+    ("POST", "/auth/user/logout"): "user_logout",
+    ("POST", "/auth/admin/logout"): "admin_logout",
     ("GET", "/user/dashboard"): "user_dashboard",
     ("GET", "/user/billing"): "user_billing",
+    ("POST", "/user/portal"): "user_portal_link",
     ("GET", "/user/provisioning"): "user_provisioning_status",
     ("GET", "/admin/dashboard"): "admin_dashboard",
     ("GET", "/admin/service-health"): "admin_service_health",
@@ -495,6 +494,7 @@ _PUBLIC_ROUTES = frozenset({
     "public_onboarding_checkout",
     "stripe_webhook",
     "admin_login",
+    "user_login",
 })
 
 
@@ -550,26 +550,24 @@ def route_arclink_hosted_api(
             result = _handle_stripe_webhook(conn, body, headers, request_id, cfg)
         elif route_key == "admin_login":
             result = _handle_admin_login(conn, parsed_body, request_id, cfg)
+        elif route_key == "user_login":
+            result = _handle_user_login(conn, parsed_body, request_id, cfg)
+        elif route_key == "user_logout":
+            result = _handle_logout(conn, headers, request_id, cfg, "user")
+        elif route_key == "admin_logout":
+            result = _handle_logout(conn, headers, request_id, cfg, "admin")
         elif route_key == "user_dashboard":
             result = _handle_user_dashboard(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_billing":
             result = _handle_user_billing(conn, headers, request_id, cfg)
+        elif route_key == "user_portal_link":
+            result = _handle_user_portal_link(conn, headers, parsed_body, request_id, cfg, stripe)
         elif route_key == "user_provisioning_status":
             result = _handle_user_provisioning_status(conn, headers, clean_query, request_id, cfg)
         elif route_key == "admin_dashboard":
             result = _handle_admin_dashboard(conn, headers, clean_query, request_id, cfg)
-        elif route_key == "admin_service_health":
-            result = _handle_admin_service_health(conn, headers, clean_query, request_id, cfg)
-        elif route_key == "admin_provisioning_jobs":
-            result = _handle_admin_provisioning_jobs(conn, headers, clean_query, request_id, cfg)
-        elif route_key == "admin_dns_drift":
-            result = _handle_admin_dns_drift(conn, headers, clean_query, request_id, cfg)
-        elif route_key == "admin_audit":
-            result = _handle_admin_audit(conn, headers, clean_query, request_id, cfg)
-        elif route_key == "admin_events":
-            result = _handle_admin_events(conn, headers, clean_query, request_id, cfg)
-        elif route_key == "admin_queued_actions":
-            result = _handle_admin_queued_actions(conn, headers, clean_query, request_id, cfg)
+        elif route_key in _ADMIN_READ_HANDLERS:
+            result = _handle_admin_read(conn, headers, clean_query, request_id, cfg, route_key)
         elif route_key == "admin_action":
             result = _handle_admin_action(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "session_revoke":

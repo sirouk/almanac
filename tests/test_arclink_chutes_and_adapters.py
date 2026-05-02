@@ -1,34 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import time
-from pathlib import Path
 from typing import Any, Mapping
 
-
-REPO = Path(__file__).resolve().parents[1]
-PYTHON_DIR = REPO / "python"
-
-
-def expect(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
-
-
-def load_module(filename: str, name: str):
-    if str(PYTHON_DIR) not in sys.path:
-        sys.path.insert(0, str(PYTHON_DIR))
-    path = PYTHON_DIR / filename
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load module from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+from arclink_test_helpers import expect, load_module
 
 
 class FixtureHttpClient:
@@ -123,6 +100,26 @@ def test_fake_stripe_webhook_and_sessions() -> None:
     print("PASS test_fake_stripe_webhook_and_sessions")
 
 
+def test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank() -> None:
+    mod = load_module("arclink_adapters.py", "arclink_adapters_resolver_test")
+    # No key -> FakeStripeClient
+    client = mod.resolve_stripe_client(env={})
+    expect(isinstance(client, mod.FakeStripeClient), type(client).__name__)
+    client = mod.resolve_stripe_client(env={"STRIPE_SECRET_KEY": ""})
+    expect(isinstance(client, mod.FakeStripeClient), type(client).__name__)
+    # LiveStripeClient refuses blank key
+    try:
+        mod.LiveStripeClient(secret_key="")
+    except ValueError as exc:
+        expect("STRIPE_SECRET_KEY" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected blank key to fail")
+    # With key -> LiveStripeClient (construction only, no network call)
+    client = mod.resolve_stripe_client(env={"STRIPE_SECRET_KEY": "sk_test_fake"})
+    expect(isinstance(client, mod.LiveStripeClient), type(client).__name__)
+    print("PASS test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank")
+
+
 def test_cloudflare_drift_and_traefik_label_rendering() -> None:
     mod = load_module("arclink_adapters.py", "arclink_adapters_dns_test")
     hostnames = mod.arclink_hostnames("abc123", "example.test")
@@ -144,8 +141,9 @@ def main() -> int:
     test_chutes_catalog_fails_for_missing_or_unsupported_default()
     test_fake_chutes_key_manager_uses_secret_references()
     test_fake_stripe_webhook_and_sessions()
+    test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank()
     test_cloudflare_drift_and_traefik_label_rendering()
-    print("PASS all 5 ArcLink Chutes/adapter tests")
+    print("PASS all 6 ArcLink Chutes/adapter tests")
     return 0
 
 

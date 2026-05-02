@@ -1,40 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.util
 import json
-import sqlite3
-import sys
-from pathlib import Path
 
-
-REPO = Path(__file__).resolve().parents[1]
-PYTHON_DIR = REPO / "python"
-
-
-def expect(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
-
-
-def load_module(filename: str, name: str):
-    if str(PYTHON_DIR) not in sys.path:
-        sys.path.insert(0, str(PYTHON_DIR))
-    path = PYTHON_DIR / filename
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load module from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def memory_db(control):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    control.ensure_schema(conn)
-    return conn
+from arclink_test_helpers import auth_headers, expect, load_module, memory_db
 
 
 def seed_paid_deployment(control, onboarding, conn):
@@ -122,10 +91,7 @@ def test_user_dashboard_requires_session_auth() -> None:
         conn,
         method="GET",
         path="/api/v1/user/dashboard",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -160,10 +126,7 @@ def test_admin_dashboard_requires_admin_session() -> None:
         conn,
         method="GET",
         path="/api/v1/admin/dashboard",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}")
@@ -196,10 +159,7 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
         conn,
         method="POST",
         path="/api/v1/admin/actions",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         body=action_body,
         config=config,
     )
@@ -211,11 +171,7 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
         conn,
         method="POST",
         path="/api/v1/admin/actions",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-            "X-ArcLink-CSRF-Token": session["csrf_token"],
-        },
+        headers=auth_headers(session, csrf=True),
         body=action_body,
         config=config,
     )
@@ -359,11 +315,7 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
         conn,
         method="POST",
         path="/api/v1/admin/sessions/revoke",
-        headers={
-            "Authorization": f"Bearer {admin_session['session_token']}",
-            "X-ArcLink-Session-Id": admin_session["session_id"],
-            "X-ArcLink-CSRF-Token": admin_session["csrf_token"],
-        },
+        headers=auth_headers(admin_session, csrf=True),
         body=json.dumps({"target_session_id": user_session["session_id"], "session_kind": "user", "reason": "test revoke"}),
         config=config,
     )
@@ -412,10 +364,7 @@ def test_user_billing_route_returns_entitlement_and_subscriptions() -> None:
     # With auth -> 200 with entitlement
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/user/billing",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -437,10 +386,7 @@ def test_user_provisioning_status_route() -> None:
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/user/provisioning",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -472,10 +418,7 @@ def test_admin_service_health_route() -> None:
     # With auth -> 200
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/admin/service-health",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -496,10 +439,7 @@ def test_admin_provisioning_jobs_route() -> None:
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/admin/provisioning-jobs",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -528,10 +468,7 @@ def test_admin_audit_route() -> None:
     # With auth -> 200
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/admin/audit",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -551,10 +488,7 @@ def test_admin_events_route() -> None:
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/admin/events",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -577,11 +511,7 @@ def test_admin_queued_actions_list_route() -> None:
     # Queue an action first
     hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/admin/actions",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-            "X-ArcLink-CSRF-Token": session["csrf_token"],
-        },
+        headers=auth_headers(session, csrf=True),
         body=json.dumps({
             "action_type": "restart", "target_kind": "deployment",
             "target_id": prepared["deployment_id"], "reason": "list test",
@@ -593,10 +523,7 @@ def test_admin_queued_actions_list_route() -> None:
     # GET list -> 200 with actions
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/admin/actions",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -604,6 +531,201 @@ def test_admin_queued_actions_list_route() -> None:
     expect(len(payload["actions"]) >= 1, f"expected at least 1 action, got {len(payload['actions'])}")
 
     print("PASS test_admin_queued_actions_list_route")
+
+
+def test_user_portal_link_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_portal_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_portal_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_portal_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_portal_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    # Set stripe_customer_id on user
+    conn.execute("UPDATE arclink_users SET stripe_customer_id = 'cus_portal_test' WHERE user_id = ?", (prepared["user_id"],))
+    conn.commit()
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_portal")
+
+    # No auth -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/portal", headers={},
+        body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}")
+
+    # With auth -> 200 with portal_url
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/portal",
+        headers=auth_headers(session),
+        body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect("portal_url" in payload, str(payload))
+    expect("stripe.test/portal" in payload["portal_url"], str(payload))
+
+    print("PASS test_user_portal_link_route")
+
+
+def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_userlogin_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_userlogin_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_userlogin_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
+    })
+    prepared = seed_paid_deployment(control, onboarding, conn)
+
+    # Login
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/user/login",
+        headers={},
+        body=json.dumps({"email": "hosted-user@example.test"}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}: {payload}")
+    cookie_headers = [v for k, v in headers if k == "Set-Cookie"]
+    expect(len(cookie_headers) >= 3, f"expected at least 3 Set-Cookie headers, got {len(cookie_headers)}")
+    cookie_text = " ".join(cookie_headers)
+    expect("arclink_user_session_id=" in cookie_text, "missing session_id cookie")
+    expect("arclink_user_session_token=" in cookie_text, "missing session_token cookie")
+    expect("arclink_user_csrf=" in cookie_text, "missing csrf cookie")
+    expect("HttpOnly" in cookie_text, "missing HttpOnly flag")
+    expect(".arclink.online" in cookie_text, "missing cookie domain")
+
+    session = payload["session"]
+
+    # Use session to access dashboard
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/dashboard",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}")
+
+    # Logout
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/user/logout",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["session"]["status"] == "revoked", str(payload))
+    clear_cookies = [v for k, v in headers if k == "Set-Cookie"]
+    expect(any("Max-Age=0" in c for c in clear_cookies), "expected clearing cookies")
+
+    # Session should no longer work
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/dashboard",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 after logout got {status}")
+
+    print("PASS test_user_login_sets_session_cookies_and_logout_clears_them")
+
+
+def test_public_onboarding_checkout_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_checkout_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_checkout_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_checkout_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Start onboarding first
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps({"channel": "web", "email": "checkout@example.test", "plan_id": "starter"}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}")
+    session_id = payload["session"]["session_id"]
+
+    # Open checkout
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/checkout",
+        headers={},
+        body=json.dumps({
+            "session_id": session_id,
+            "success_url": "https://app.arclink.online/success",
+            "cancel_url": "https://app.arclink.online/cancel",
+        }),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect("session" in payload, str(payload))
+    expect("checkout_url" in payload["session"], str(payload))
+    expect(payload["session"]["checkout_url"].startswith("https://"), str(payload))
+
+    print("PASS test_public_onboarding_checkout_route")
+
+
+def test_web_telegram_discord_onboarding_parity() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_parity_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_parity_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    sessions = {}
+    for channel, identity in [
+        ("web", "web@example.test"),
+        ("telegram", "tg_user_123"),
+        ("discord", "dc_user_456"),
+    ]:
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/onboarding/start",
+            headers={},
+            body=json.dumps({"channel": channel, "channel_identity": identity, "email": f"{channel}@example.test"}),
+            config=config,
+        )
+        expect(status == 201, f"expected 201 for {channel} got {status}: {payload}")
+        sessions[channel] = payload["session"]
+
+    # All sessions must have the same shape (same keys)
+    web_keys = set(sessions["web"].keys())
+    for channel in ("telegram", "discord"):
+        ch_keys = set(sessions[channel].keys())
+        expect(web_keys == ch_keys, f"parity mismatch: web={web_keys} vs {channel}={ch_keys}")
+
+    # All sessions should have distinct session_ids and user_ids
+    session_ids = {s["session_id"] for s in sessions.values()}
+    expect(len(session_ids) == 3, f"expected 3 distinct session_ids, got {session_ids}")
+
+    # All answer the same question
+    for channel, session in sessions.items():
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/onboarding/answer",
+            headers={},
+            body=json.dumps({
+                "session_id": session["session_id"],
+                "question_key": "name",
+                "display_name": f"User from {channel}",
+            }),
+            config=config,
+        )
+        expect(status == 200, f"expected 200 for {channel} answer got {status}: {payload}")
+
+    print("PASS test_web_telegram_discord_onboarding_parity")
 
 
 def test_admin_dns_drift_route() -> None:
@@ -617,16 +739,146 @@ def test_admin_dns_drift_route() -> None:
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/admin/dns-drift",
-        headers={
-            "Authorization": f"Bearer {session['session_token']}",
-            "X-ArcLink-Session-Id": session["session_id"],
-        },
+        headers=auth_headers(session),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect("dns_drift" in payload, str(payload))
 
     print("PASS test_admin_dns_drift_route")
+
+
+def test_admin_logout_clears_cookies_and_revokes_session() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_adminlogout_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_adminlogout_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_adminlogout_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
+    })
+    api.upsert_arclink_admin(conn, admin_id="admin_logout", email="logout@example.test", role="owner")
+
+    # Login
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/login",
+        headers={}, body=json.dumps({"email": "logout@example.test"}), config=config,
+    )
+    expect(status == 201, f"login expected 201 got {status}")
+    session = payload["session"]
+
+    # Verify session works
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/dashboard",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}")
+
+    # Logout
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/logout",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 200, f"logout expected 200 got {status}")
+    expect(payload["session"]["status"] == "revoked", str(payload))
+    clear_cookies = [v for k, v in headers if k == "Set-Cookie"]
+    expect(any("Max-Age=0" in c for c in clear_cookies), "expected clearing cookies")
+
+    # Session should no longer work
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/dashboard",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 after logout got {status}")
+
+    print("PASS test_admin_logout_clears_cookies_and_revokes_session")
+
+
+def test_stripe_webhook_processes_entitlement_transition() -> None:
+    import time as _time
+    control = load_module("almanac_control.py", "almanac_control_hosted_whprocess_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_whprocess_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_whprocess_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_whprocess_test")
+    conn = memory_db(control)
+    secret = "whsec_test_process"
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_WEBHOOK_SECRET": secret,
+    })
+    prepared = seed_paid_deployment(control, onboarding, conn)
+
+    # Build a checkout.session.completed event payload
+    event_payload = json.dumps({
+        "id": "evt_checkout_1",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_test_1",
+                "customer": "cus_test_1",
+                "subscription": "sub_test_1",
+                "client_reference_id": prepared["user_id"],
+                "metadata": {"arclink_onboarding_session_id": "onb_hosted"},
+            }
+        },
+    })
+    signature = adapters.sign_stripe_webhook(event_payload, secret, timestamp=int(_time.time()))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload, config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["status"] == "processed", str(payload))
+    expect(payload["event_id"] == "evt_checkout_1", str(payload))
+    expect(payload["event_type"] == "checkout.session.completed", str(payload))
+    expect(payload["replayed"] is False, str(payload))
+
+    # Replay same event -> idempotent
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload, config=config,
+    )
+    expect(status == 200, f"replay expected 200 got {status}")
+    expect(payload["replayed"] is True, f"expected replayed=True: {payload}")
+
+    print("PASS test_stripe_webhook_processes_entitlement_transition")
+
+
+def test_wsgi_adapter_smoke() -> None:
+    from io import BytesIO
+    control = load_module("almanac_control.py", "almanac_control_hosted_wsgi_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_wsgi_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    app = hosted.make_arclink_hosted_api_wsgi(conn, config=config)
+
+    captured: list[tuple[str, list]] = []
+
+    def start_response(status: str, headers: list) -> None:
+        captured.append((status, headers))
+
+    body = json.dumps({"channel": "web", "email": "wsgi@example.test"}).encode()
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/api/v1/onboarding/start",
+        "QUERY_STRING": "",
+        "CONTENT_LENGTH": str(len(body)),
+        "CONTENT_TYPE": "application/json",
+        "wsgi.input": BytesIO(body),
+    }
+    result = app(environ, start_response)
+    expect(len(captured) == 1, f"expected 1 start_response call, got {len(captured)}")
+    expect(captured[0][0].startswith("201"), f"expected 201 got {captured[0][0]}")
+    response = json.loads(result[0])
+    expect("session" in response, str(response))
+
+    print("PASS test_wsgi_adapter_smoke")
 
 
 def main() -> int:
@@ -646,8 +898,15 @@ def main() -> int:
     test_admin_audit_route()
     test_admin_events_route()
     test_admin_queued_actions_list_route()
+    test_user_portal_link_route()
+    test_user_login_sets_session_cookies_and_logout_clears_them()
+    test_public_onboarding_checkout_route()
+    test_web_telegram_discord_onboarding_parity()
     test_admin_dns_drift_route()
-    print("PASS all 17 ArcLink hosted API tests")
+    test_admin_logout_clears_cookies_and_revokes_session()
+    test_stripe_webhook_processes_entitlement_transition()
+    test_wsgi_adapter_smoke()
+    print("PASS all 24 ArcLink hosted API tests")
     return 0
 
 

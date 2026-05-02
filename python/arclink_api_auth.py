@@ -7,12 +7,12 @@ import hashlib
 import hmac
 from http.cookies import SimpleCookie
 import json
-import re
 import secrets
 import sqlite3
 from typing import Any, Mapping
 
 from almanac_control import append_arclink_audit, parse_utc_iso, utc_after_seconds_iso, utc_now, utc_now_iso
+from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_dashboard import queue_arclink_admin_action, read_arclink_admin_dashboard, read_arclink_user_dashboard
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
@@ -30,18 +30,6 @@ ARCLINK_SESSION_ID_HEADER = "x-arclink-session-id"
 ARCLINK_SESSION_TOKEN_HEADER = "x-arclink-session-token"
 ARCLINK_CSRF_HEADER = "x-arclink-csrf-token"
 GENERIC_ARCLINK_API_ERROR = "Request blocked. Check input and try again."
-_SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
-_PLAINTEXT_SECRET_RE = re.compile(
-    r"(?i)("
-    r"sk_(live|test)_[a-z0-9]|"
-    r"whsec_[a-z0-9]|"
-    r"gh[pousr]_[a-z0-9]|"
-    r"xox[baprs]-|"
-    r"ntn_[a-z0-9]|"
-    r"cloudflare[a-z0-9_-]*token|"
-    r"\b\d{6,}:[a-z0-9_-]{20,}\b"
-    r")"
-)
 
 
 class ArcLinkApiAuthError(ValueError):
@@ -129,39 +117,15 @@ def arclink_api_error_response(exc: BaseException, *, request_id: str = "") -> A
 
 
 def _json(value: Mapping[str, Any] | None) -> str:
-    payload = dict(value or {})
-    _reject_secret_material(payload)
-    return json.dumps(payload, sort_keys=True)
+    return json_dumps_safe(value, label="ArcLink API boundary", error_cls=ArcLinkApiAuthError)
 
 
 def _json_loads(value: str | None) -> dict[str, Any]:
-    if not value:
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return json_loads_safe(value)
 
 
 def _reject_secret_material(value: Any, *, path: str = "$") -> None:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            _reject_secret_material(child, path=f"{path}.{key}")
-        return
-    if isinstance(value, (list, tuple)):
-        for index, child in enumerate(value):
-            _reject_secret_material(child, path=f"{path}[{index}]")
-        return
-    if not isinstance(value, str):
-        return
-    text = value.strip()
-    if not text:
-        return
-    if _SECRET_KEY_RE.search(path) and not text.startswith("secret://"):
-        raise ArcLinkApiAuthError(f"ArcLink API boundary cannot store plaintext secret material at {path}")
-    if _PLAINTEXT_SECRET_RE.search(text):
-        raise ArcLinkApiAuthError(f"ArcLink API boundary cannot store plaintext secret material at {path}")
+    reject_secret_material(value, path=path, label="ArcLink API boundary", error_cls=ArcLinkApiAuthError)
 
 
 def _hash_token(token: str) -> str:
@@ -177,7 +141,7 @@ def _new_token(prefix: str) -> str:
 
 
 def _rowdict(row: sqlite3.Row | None) -> dict[str, Any]:
-    return dict(row) if row is not None else {}
+    return rowdict(row)
 
 
 def _require_active_time(row: Mapping[str, Any], *, kind: str) -> None:
@@ -488,6 +452,32 @@ def create_arclink_admin_login_session_api(
     return ArcLinkApiResponse(status=201, payload={"session": session})
 
 
+def create_arclink_user_login_session_api(
+    conn: sqlite3.Connection,
+    *,
+    email: str,
+    login_subject: str = "",
+    metadata: Mapping[str, Any] | None = None,
+) -> ArcLinkApiResponse:
+    clean_email = str(email or "").strip().lower()
+    clean_subject = str(login_subject or clean_email).strip().lower()
+    if not clean_email:
+        raise ArcLinkApiAuthError("ArcLink user login requires an email")
+    check_arclink_rate_limit(conn, scope="user_login", subject=clean_subject, limit=10, window_seconds=900)
+    row = conn.execute(
+        "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?) AND status = 'active'",
+        (clean_email,),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkApiAuthError("ArcLink user login principal not found")
+    session = create_arclink_user_session(
+        conn,
+        user_id=str(row["user_id"] or ""),
+        metadata={"login_subject": clean_subject, **dict(metadata or {})},
+    )
+    return ArcLinkApiResponse(status=201, payload={"session": session})
+
+
 def _public_session(row: Mapping[str, Any]) -> dict[str, Any]:
     public = {
         key: value
@@ -498,30 +488,29 @@ def _public_session(row: Mapping[str, Any]) -> dict[str, Any]:
     return public
 
 
-def authenticate_arclink_user_session(conn: sqlite3.Connection, *, session_id: str, session_token: str) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM arclink_user_sessions WHERE session_id = ?", (session_id,)).fetchone()
+def _authenticate_session(
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, kind: str,
+) -> dict[str, Any]:
+    clean_kind = _validate_session_kind(kind, operation="session authentication")
+    table = "arclink_admin_sessions" if clean_kind == "admin" else "arclink_user_sessions"
+    row = conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (session_id,)).fetchone()
     if row is None:
-        raise ArcLinkApiAuthError("ArcLink user session not found")
+        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session not found")
     record = dict(row)
-    _require_active_time(record, kind="user")
+    _require_active_time(record, kind=clean_kind)
     if not hmac.compare_digest(str(record["session_token_hash"] or ""), _hash_token(session_token)):
-        raise ArcLinkApiAuthError("ArcLink user session token mismatch")
-    conn.execute("UPDATE arclink_user_sessions SET last_seen_at = ? WHERE session_id = ?", (utc_now_iso(), session_id))
+        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session token mismatch")
+    conn.execute(f"UPDATE {table} SET last_seen_at = ? WHERE session_id = ?", (utc_now_iso(), session_id))
     conn.commit()
     return _public_session(record)
+
+
+def authenticate_arclink_user_session(conn: sqlite3.Connection, *, session_id: str, session_token: str) -> dict[str, Any]:
+    return _authenticate_session(conn, session_id=session_id, session_token=session_token, kind="user")
 
 
 def authenticate_arclink_admin_session(conn: sqlite3.Connection, *, session_id: str, session_token: str) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM arclink_admin_sessions WHERE session_id = ?", (session_id,)).fetchone()
-    if row is None:
-        raise ArcLinkApiAuthError("ArcLink admin session not found")
-    record = dict(row)
-    _require_active_time(record, kind="admin")
-    if not hmac.compare_digest(str(record["session_token_hash"] or ""), _hash_token(session_token)):
-        raise ArcLinkApiAuthError("ArcLink admin session token mismatch")
-    conn.execute("UPDATE arclink_admin_sessions SET last_seen_at = ? WHERE session_id = ?", (utc_now_iso(), session_id))
-    conn.commit()
-    return _public_session(record)
+    return _authenticate_session(conn, session_id=session_id, session_token=session_token, kind="admin")
 
 
 def require_arclink_csrf(conn: sqlite3.Connection, *, session_id: str, csrf_token: str, session_kind: str) -> bool:
@@ -663,6 +652,27 @@ def read_user_billing_api(
     return ArcLinkApiResponse(status=200, payload=billing)
 
 
+def create_user_portal_link_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    stripe_client: Any,
+    return_url: str = "",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(session["user_id"] or "")
+    row = conn.execute(
+        "SELECT stripe_customer_id FROM arclink_users WHERE user_id = ?",
+        (target_user,),
+    ).fetchone()
+    customer_id = str(row["stripe_customer_id"] or "") if row else ""
+    if not customer_id:
+        return ArcLinkApiResponse(status=400, payload={"error": "no_stripe_customer"})
+    portal = stripe_client.create_portal_session(customer_id=customer_id, return_url=return_url)
+    return ArcLinkApiResponse(status=200, payload={"portal_url": portal.get("url", "")})
+
+
 def read_user_provisioning_status_api(
     conn: sqlite3.Connection,
     *,
@@ -684,19 +694,30 @@ def read_user_provisioning_status_api(
     return ArcLinkApiResponse(status=200, payload={"deployments": deployments})
 
 
-def read_admin_service_health_api(
+def _read_admin_dashboard_slice_api(
     conn: sqlite3.Connection,
     *,
     session_id: str,
     session_token: str,
-    deployment_id: str = "",
-    status: str = "",
-    since: str = "",
+    payload_key: str,
+    dashboard_key: str = "",
+    post_filter: Any = None,
+    **filters: Any,
 ) -> ArcLinkApiResponse:
     authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
-    dashboard = read_arclink_admin_dashboard(
-        conn, deployment_id=deployment_id, status=status, since=since,
-    )
+    dashboard = read_arclink_admin_dashboard(conn, **filters)
+    source_key = dashboard_key or payload_key
+    data = dashboard.get(source_key, [])
+    if post_filter is not None:
+        data = [item for item in data if post_filter(item)]
+    return ArcLinkApiResponse(status=200, payload={payload_key: data})
+
+
+def read_admin_service_health_api(
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, **filters: Any,
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    dashboard = read_arclink_admin_dashboard(conn, **filters)
     return ArcLinkApiResponse(status=200, payload={
         "service_health": dashboard.get("service_health", []),
         "recent_failures": [f for f in dashboard.get("recent_failures", []) if f.get("kind") == "service_health"],
@@ -704,90 +725,33 @@ def read_admin_service_health_api(
 
 
 def read_admin_provisioning_jobs_api(
-    conn: sqlite3.Connection,
-    *,
-    session_id: str,
-    session_token: str,
-    deployment_id: str = "",
-    status: str = "",
-    since: str = "",
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, **filters: Any,
 ) -> ArcLinkApiResponse:
-    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
-    dashboard = read_arclink_admin_dashboard(
-        conn, deployment_id=deployment_id, status=status, since=since,
-    )
-    return ArcLinkApiResponse(status=200, payload={
-        "provisioning_jobs": dashboard.get("provisioning_jobs", []),
-    })
+    return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="provisioning_jobs", **filters)
 
 
 def read_admin_dns_drift_api(
-    conn: sqlite3.Connection,
-    *,
-    session_id: str,
-    session_token: str,
-    deployment_id: str = "",
-    since: str = "",
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, **filters: Any,
 ) -> ArcLinkApiResponse:
-    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
-    dashboard = read_arclink_admin_dashboard(
-        conn, deployment_id=deployment_id, since=since,
-    )
-    return ArcLinkApiResponse(status=200, payload={
-        "dns_drift": dashboard.get("dns_drift", []),
-    })
+    return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="dns_drift", **filters)
 
 
 def read_admin_audit_api(
-    conn: sqlite3.Connection,
-    *,
-    session_id: str,
-    session_token: str,
-    deployment_id: str = "",
-    since: str = "",
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, **filters: Any,
 ) -> ArcLinkApiResponse:
-    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
-    dashboard = read_arclink_admin_dashboard(
-        conn, deployment_id=deployment_id, since=since,
-    )
-    return ArcLinkApiResponse(status=200, payload={
-        "audit": dashboard.get("audit", []),
-    })
+    return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="audit", **filters)
 
 
 def read_admin_events_api(
-    conn: sqlite3.Connection,
-    *,
-    session_id: str,
-    session_token: str,
-    deployment_id: str = "",
-    since: str = "",
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, **filters: Any,
 ) -> ArcLinkApiResponse:
-    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
-    dashboard = read_arclink_admin_dashboard(
-        conn, deployment_id=deployment_id, since=since,
-    )
-    return ArcLinkApiResponse(status=200, payload={
-        "events": dashboard.get("events", []),
-    })
+    return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="events", **filters)
 
 
 def read_admin_queued_actions_api(
-    conn: sqlite3.Connection,
-    *,
-    session_id: str,
-    session_token: str,
-    deployment_id: str = "",
-    status: str = "",
-    since: str = "",
+    conn: sqlite3.Connection, *, session_id: str, session_token: str, **filters: Any,
 ) -> ArcLinkApiResponse:
-    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
-    dashboard = read_arclink_admin_dashboard(
-        conn, deployment_id=deployment_id, status=status, since=since,
-    )
-    return ArcLinkApiResponse(status=200, payload={
-        "actions": dashboard.get("action_intents", []),
-    })
+    return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="actions", dashboard_key="action_intents", **filters)
 
 
 def queue_admin_action_api(

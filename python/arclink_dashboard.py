@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import re
 import sqlite3
 from typing import Any, Mapping
 
 from almanac_control import append_arclink_audit, utc_now_iso
 from arclink_adapters import arclink_hostnames
+from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_product import primary_provider
 
 
@@ -58,58 +57,20 @@ ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
     "queued_actions",
 )
 
-_SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
-_PLAINTEXT_SECRET_RE = re.compile(
-    r"(?i)("
-    r"sk_(live|test)_[a-z0-9]|"
-    r"whsec_[a-z0-9]|"
-    r"gh[pousr]_[a-z0-9]|"
-    r"xox[baprs]-|"
-    r"ntn_[a-z0-9]|"
-    r"cloudflare[a-z0-9_-]*token|"
-    r"\b\d{6,}:[a-z0-9_-]{20,}\b"
-    r")"
-)
-
-
 class ArcLinkDashboardError(ValueError):
     pass
 
 
 def _json_loads(value: str | None) -> dict[str, Any]:
-    if not value:
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return json_loads_safe(value)
 
 
 def _reject_secret_material(value: Any, *, path: str = "$") -> None:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            _reject_secret_material(child, path=f"{path}.{key}")
-        return
-    if isinstance(value, (list, tuple)):
-        for index, child in enumerate(value):
-            _reject_secret_material(child, path=f"{path}[{index}]")
-        return
-    if not isinstance(value, str):
-        return
-    text = value.strip()
-    if not text:
-        return
-    if _SECRET_KEY_RE.search(path) and not text.startswith("secret://"):
-        raise ArcLinkDashboardError(f"ArcLink dashboard contract cannot store plaintext secret material at {path}")
-    if _PLAINTEXT_SECRET_RE.search(text):
-        raise ArcLinkDashboardError(f"ArcLink dashboard contract cannot store plaintext secret material at {path}")
+    reject_secret_material(value, path=path, label="ArcLink dashboard contract", error_cls=ArcLinkDashboardError)
 
 
 def _safe_json(value: Mapping[str, Any] | None) -> str:
-    payload = dict(value or {})
-    _reject_secret_material(payload)
-    return json.dumps(payload, sort_keys=True)
+    return json_dumps_safe(value, label="ArcLink dashboard contract", error_cls=ArcLinkDashboardError)
 
 
 def _stable_action_id(idempotency_key: str) -> str:
@@ -122,7 +83,7 @@ def _limit(value: int) -> int:
 
 
 def _rowdict(row: sqlite3.Row) -> dict[str, Any]:
-    return dict(row)
+    return rowdict(row)
 
 
 def _deployment_urls(prefix: str, base_domain: str) -> dict[str, str]:
@@ -591,6 +552,33 @@ def read_arclink_admin_dashboard(
         ).fetchall()
     ]
 
+    general_event_args: list[Any] = []
+    general_event_where = "WHERE 1 = 1"
+    if filters["deployment_id"]:
+        general_event_where += " AND subject_id = ?"
+        general_event_args.append(filters["deployment_id"])
+    general_event_where += _time_filter("created_at", filters["since"], general_event_args)
+    events = [
+        {
+            "event_id": str(row["event_id"] or ""),
+            "subject_kind": str(row["subject_kind"] or ""),
+            "subject_id": str(row["subject_id"] or ""),
+            "event_type": str(row["event_type"] or ""),
+            "deployment_id": str(row["subject_id"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        }
+        for row in conn.execute(
+            f"""
+            SELECT event_id, subject_kind, subject_id, event_type, created_at
+            FROM arclink_events
+            {general_event_where}
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ?
+            """,
+            (*general_event_args, limit),
+        ).fetchall()
+    ]
+
     dns_args: list[Any] = []
     dns_where = "WHERE event_type = 'dns_drift'"
     if filters["deployment_id"]:
@@ -725,6 +713,36 @@ def read_arclink_admin_dashboard(
             (*failure_health_args, limit),
         ).fetchall()
     )
+    user_args: list[Any] = []
+    user_where = "WHERE 1 = 1"
+    if filters["user_id"]:
+        user_where += " AND user_id = ?"
+        user_args.append(filters["user_id"])
+    if filters["status"]:
+        user_where += " AND entitlement_state = ?"
+        user_args.append(filters["status"])
+    user_where += _time_filter("created_at", filters["since"], user_args)
+    users = [
+        {
+            "user_id": str(row["user_id"] or ""),
+            "email": str(row["email"] or ""),
+            "display_name": str(row["display_name"] or ""),
+            "status": str(row["status"] or ""),
+            "stripe_customer_id": str(row["stripe_customer_id"] or ""),
+            "entitlement_state": str(row["entitlement_state"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        }
+        for row in conn.execute(
+            f"""
+            SELECT user_id, email, display_name, status, stripe_customer_id, entitlement_state, created_at
+            FROM arclink_users
+            {user_where}
+            ORDER BY created_at DESC, user_id DESC
+            LIMIT ?
+            """,
+            (*user_args, limit),
+        ).fetchall()
+    ]
     user_count = _count(conn, "SELECT COUNT(*) FROM arclink_users")
     now = utc_now_iso()
     active_user_sessions = _count(
@@ -823,14 +841,18 @@ def read_arclink_admin_dashboard(
         "filters": filters,
         "sections": admin_sections,
         "onboarding_funnel": {"sessions": session_counts, "events": event_counts},
+        "users": users,
         "subscriptions": subscriptions,
         "deployments": deployments,
         "service_health": service_health,
         "dns_drift": dns_drift,
         "provisioning_jobs": provisioning_jobs,
         "action_intents": action_intents,
+        "events": events,
         "audit_rows": audit_rows,
+        "audit": audit_rows,
         "recent_failures": recent_failures[:limit],
+        "active_sessions": {"user": active_user_sessions, "admin": active_admin_sessions},
     }
 
 

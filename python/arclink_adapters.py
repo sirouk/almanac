@@ -54,6 +54,68 @@ class FakeStripeClient:
         return dict(session)
 
 
+class LiveStripeClient:
+    """Live Stripe client that delegates to the stripe SDK.
+
+    Requires STRIPE_SECRET_KEY to be set. Refuses to construct without it.
+    """
+
+    def __init__(self, *, secret_key: str = "") -> None:
+        key = secret_key or ""
+        if not key.strip():
+            raise ValueError("LiveStripeClient requires a non-blank STRIPE_SECRET_KEY")
+        self._key = key.strip()
+
+    def _stripe_module(self):
+        import stripe as _stripe  # deferred import: only needed for live path
+        _stripe.api_key = self._key
+        return _stripe
+
+    def create_checkout_session(
+        self,
+        *,
+        user_id: str,
+        price_id: str,
+        success_url: str,
+        cancel_url: str,
+        client_reference_id: str = "",
+        metadata: dict[str, str] | None = None,
+        idempotency_key: str = "",
+    ) -> dict[str, Any]:
+        _stripe = self._stripe_module()
+        params: dict[str, Any] = {
+            "mode": "subscription",
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "client_reference_id": client_reference_id or user_id,
+            "metadata": dict(metadata or {}),
+        }
+        kwargs: dict[str, Any] = {}
+        if idempotency_key:
+            kwargs["idempotency_key"] = idempotency_key
+        session = _stripe.checkout.Session.create(**params, **kwargs)
+        return {"id": session.id, "url": session.url}
+
+    def create_portal_session(self, *, customer_id: str, return_url: str) -> dict[str, Any]:
+        _stripe = self._stripe_module()
+        session = _stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+        return {"id": session.id, "url": session.url}
+
+
+def resolve_stripe_client(env: dict[str, str] | None = None) -> FakeStripeClient | LiveStripeClient:
+    """Return a LiveStripeClient if STRIPE_SECRET_KEY is set, else FakeStripeClient."""
+    import os
+    source = env if env is not None else dict(os.environ)
+    key = str(source.get("STRIPE_SECRET_KEY") or "").strip()
+    if key:
+        return LiveStripeClient(secret_key=key)
+    return FakeStripeClient()
+
+
 def sign_stripe_webhook(payload: str, secret: str, *, timestamp: int | None = None) -> str:
     stamp = int(time.time()) if timestamp is None else int(timestamp)
     signed_payload = f"{stamp}.{payload}".encode("utf-8")

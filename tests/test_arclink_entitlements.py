@@ -1,42 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.util
 import json
-import sqlite3
-import sys
-import time
-from pathlib import Path
 
-
-REPO = Path(__file__).resolve().parents[1]
-PYTHON_DIR = REPO / "python"
-CONTROL_PY = PYTHON_DIR / "almanac_control.py"
-
-
-def expect(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
-
-
-def load_module(filename: str, name: str):
-    if str(PYTHON_DIR) not in sys.path:
-        sys.path.insert(0, str(PYTHON_DIR))
-    path = PYTHON_DIR / filename
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load module from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def memory_db(control):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    control.ensure_schema(conn)
-    return conn
+from arclink_test_helpers import expect, load_module, memory_db, sign_stripe
 
 
 def stripe_payload(
@@ -82,7 +49,7 @@ def stripe_payload(
 
 
 def sign(adapters, payload: str) -> str:
-    return adapters.sign_stripe_webhook(payload, "whsec_test", timestamp=int(time.time()))
+    return sign_stripe(adapters, payload)
 
 
 def test_stripe_webhook_verifier_rejects_blank_secret_and_accepts_fixture() -> None:
@@ -601,6 +568,156 @@ def test_targeted_comp_advances_only_named_deployment_without_global_comp() -> N
     print("PASS test_targeted_comp_advances_only_named_deployment_without_global_comp")
 
 
+def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> None:
+    control = load_module("almanac_control.py", "almanac_control_entitlement_checkout_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_checkout_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_checkout_test")
+    conn = memory_db(control)
+    # Create user through onboarding
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn, channel="web", channel_identity="checkout@example.test",
+        session_id="onb_checkout", email_hint="checkout@example.test",
+        display_name_hint="Checkout User", selected_plan_id="starter",
+    )
+    prepared = onboarding.prepare_arclink_onboarding_deployment(
+        conn, session_id=session["session_id"], base_domain="example.test", prefix="ck-test-1a2b",
+    )
+    # Simulate checkout.session.completed webhook
+    payload = json.dumps({
+        "id": "evt_checkout_completed",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_test_checkout",
+            "customer": "cus_checkout",
+            "subscription": "sub_checkout",
+            "client_reference_id": prepared["user_id"],
+            "metadata": {
+                "arclink_user_id": prepared["user_id"],
+                "arclink_onboarding_session_id": session["session_id"],
+            },
+        }},
+    }, sort_keys=True)
+    result = entitlements.process_stripe_webhook(
+        conn, payload=payload, signature=sign(adapters, payload), secret="whsec_test",
+    )
+    expect(result.event_type == "checkout.session.completed", str(result))
+    expect(result.entitlement_state == "paid", str(result))
+    expect(len(result.advanced_deployments) >= 1, str(result))
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = ?", (prepared["user_id"],)).fetchone()
+    expect(user["entitlement_state"] == "paid", str(dict(user)))
+    expect(user["stripe_customer_id"] == "cus_checkout", str(dict(user)))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = ?", (prepared["deployment_id"],)).fetchone()
+    expect(dep["status"] == "provisioning_ready", str(dict(dep)))
+    # Onboarding session should be synced
+    onb = conn.execute("SELECT checkout_session_id, stripe_customer_id FROM arclink_onboarding_sessions WHERE session_id = ?", (session["session_id"],)).fetchone()
+    expect(onb["checkout_session_id"] == "cs_test_checkout", str(dict(onb)))
+    expect(onb["stripe_customer_id"] == "cus_checkout", str(dict(onb)))
+    print("PASS test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding")
+
+
+def test_subscription_created_sets_paid_and_mirrors_subscription() -> None:
+    control = load_module("almanac_control.py", "almanac_control_entitlement_sub_created_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_created_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_created_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.reserve_arclink_deployment_prefix(
+        conn, deployment_id="dep_1", user_id="user_1",
+        prefix="sub-created", status="entitlement_required",
+    )
+    payload = stripe_payload(
+        event_id="evt_sub_created", event_type="customer.subscription.created",
+        status="active",
+    )
+    result = entitlements.process_stripe_webhook(
+        conn, payload=payload, signature=sign(adapters, payload), secret="whsec_test",
+    )
+    expect(result.entitlement_state == "paid", str(result))
+    expect(result.advanced_deployments == ("dep_1",), str(result))
+    user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user["entitlement_state"] == "paid", str(dict(user)))
+    sub = conn.execute("SELECT status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_test'").fetchone()
+    expect(sub["status"] == "active", str(dict(sub)))
+    print("PASS test_subscription_created_sets_paid_and_mirrors_subscription")
+
+
+def test_subscription_deleted_cancels_entitlement_and_audits() -> None:
+    control = load_module("almanac_control.py", "almanac_control_entitlement_sub_deleted_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_deleted_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_deleted_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn, deployment_id="dep_1", user_id="user_1",
+        prefix="sub-deleted", status="provisioning_ready",
+    )
+    payload = stripe_payload(
+        event_id="evt_sub_deleted", event_type="customer.subscription.deleted",
+        status="canceled",
+    )
+    result = entitlements.process_stripe_webhook(
+        conn, payload=payload, signature=sign(adapters, payload), secret="whsec_test",
+    )
+    expect(result.entitlement_state == "cancelled", str(result))
+    user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user["entitlement_state"] == "cancelled", str(dict(user)))
+    sub = conn.execute("SELECT status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_test'").fetchone()
+    expect(sub["status"] == "canceled", str(dict(sub)))
+    audit = conn.execute("SELECT action FROM arclink_audit_log WHERE target_id = 'user_1'").fetchone()
+    expect(audit["action"] == "payment_entitlement_blocked", str(dict(audit)))
+    # Replay is idempotent
+    replay = entitlements.process_stripe_webhook(
+        conn, payload=payload, signature=sign(adapters, payload), secret="whsec_test",
+    )
+    expect(replay.replayed, str(replay))
+    print("PASS test_subscription_deleted_cancels_entitlement_and_audits")
+
+
+def test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa() -> None:
+    control = load_module("almanac_control.py", "almanac_control_entitlement_drift_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_drift_test")
+    conn = memory_db(control)
+
+    # No drift when empty
+    expect(entitlements.detect_stripe_reconciliation_drift(conn) == [], "expected no drift")
+
+    # Active subscription without deployment
+    control.upsert_arclink_user(conn, user_id="user_sub_only", entitlement_state="paid")
+    control.upsert_arclink_subscription_mirror(
+        conn, subscription_id="stripe:sub_1", user_id="user_sub_only",
+        stripe_customer_id="cus_1", stripe_subscription_id="sub_1",
+        status="active", current_period_end="", raw={},
+    )
+    drift = entitlements.detect_stripe_reconciliation_drift(conn)
+    sub_drifts = [d for d in drift if d.kind == "subscription_without_deployment"]
+    expect(len(sub_drifts) == 1, str(drift))
+    expect(sub_drifts[0].user_id == "user_sub_only", str(sub_drifts[0]))
+
+    # Active deployment without subscription (and not comp)
+    control.upsert_arclink_user(conn, user_id="user_dep_only", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn, deployment_id="dep_orphan", user_id="user_dep_only",
+        prefix="orphan", status="provisioning_ready",
+    )
+    drift = entitlements.detect_stripe_reconciliation_drift(conn)
+    dep_drifts = [d for d in drift if d.kind == "deployment_without_subscription"]
+    expect(len(dep_drifts) == 1, str(drift))
+    expect(dep_drifts[0].user_id == "user_dep_only", str(dep_drifts[0]))
+
+    # Comp user with deployment should not show drift
+    control.upsert_arclink_user(conn, user_id="user_comp", entitlement_state="comp")
+    control.reserve_arclink_deployment_prefix(
+        conn, deployment_id="dep_comp", user_id="user_comp",
+        prefix="comp-ok", status="provisioning_ready",
+    )
+    drift = entitlements.detect_stripe_reconciliation_drift(conn)
+    comp_drifts = [d for d in drift if d.user_id == "user_comp"]
+    expect(len(comp_drifts) == 0, str(drift))
+
+    print("PASS test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa")
+
+
 def main() -> int:
     test_stripe_webhook_verifier_rejects_blank_secret_and_accepts_fixture()
     test_stripe_webhook_rejects_signature_mismatch()
@@ -616,7 +733,11 @@ def main() -> int:
     test_profile_only_upsert_preserves_paid_and_comp_entitlements()
     test_new_user_without_explicit_entitlement_defaults_to_none()
     test_targeted_comp_advances_only_named_deployment_without_global_comp()
-    print("PASS all 14 ArcLink entitlement tests")
+    test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding()
+    test_subscription_created_sets_paid_and_mirrors_subscription()
+    test_subscription_deleted_cancels_entitlement_and_audits()
+    test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
+    print("PASS all 18 ArcLink entitlement tests")
     return 0
 
 

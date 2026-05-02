@@ -21,6 +21,62 @@ class ArcLinkEntitlementError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class ReconciliationDrift:
+    kind: str  # "subscription_without_deployment" or "deployment_without_subscription"
+    user_id: str
+    detail: str
+
+
+def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[ReconciliationDrift]:
+    """Find users with active subscriptions but no deployment, or vice versa."""
+    drift: list[ReconciliationDrift] = []
+    # Active subscription but no active deployment
+    rows = conn.execute(
+        """
+        SELECT s.user_id, s.stripe_subscription_id
+        FROM arclink_subscriptions s
+        WHERE s.status IN ('active', 'trialing', 'paid')
+          AND NOT EXISTS (
+            SELECT 1 FROM arclink_deployments d
+            WHERE d.user_id = s.user_id
+              AND d.status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+          )
+        """
+    ).fetchall()
+    for row in rows:
+        drift.append(ReconciliationDrift(
+            kind="subscription_without_deployment",
+            user_id=row["user_id"],
+            detail=f"subscription {row['stripe_subscription_id']} active but no deployment",
+        ))
+    # Active deployment but no active subscription
+    rows = conn.execute(
+        """
+        SELECT d.user_id, d.deployment_id
+        FROM arclink_deployments d
+        WHERE d.status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+          AND NOT EXISTS (
+            SELECT 1 FROM arclink_subscriptions s
+            WHERE s.user_id = d.user_id
+              AND s.status IN ('active', 'trialing', 'paid')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM arclink_users u
+            WHERE u.user_id = d.user_id
+              AND u.entitlement_state = 'comp'
+          )
+        """
+    ).fetchall()
+    for row in rows:
+        drift.append(ReconciliationDrift(
+            kind="deployment_without_subscription",
+            user_id=row["user_id"],
+            detail=f"deployment {row['deployment_id']} active but no subscription or comp",
+        ))
+    return drift
+
+
 ENTITLEMENT_MUTATING_STRIPE_EVENTS = frozenset(
     {
         "checkout.session.completed",
@@ -57,44 +113,50 @@ def _event_object(event: Mapping[str, Any]) -> Mapping[str, Any]:
     return obj if isinstance(obj, Mapping) else {}
 
 
-def _subscription_details_metadata(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    details = value.get("subscription_details")
-    if not isinstance(details, Mapping):
-        return {}
-    raw = details.get("metadata")
-    return raw if isinstance(raw, Mapping) else {}
+def _safe_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
-def _subscription_details_raw_metadata(details: Mapping[str, Any]) -> Mapping[str, Any]:
-    raw = details.get("metadata")
-    return raw if isinstance(raw, Mapping) else {}
+def _nested_metadata(obj: Mapping[str, Any], *path: str) -> Mapping[str, Any]:
+    """Walk a dotted path of mapping keys, returning the final 'metadata' mapping."""
+    node: Any = obj
+    for key in path:
+        node = _safe_mapping(node).get(key)
+    return _safe_mapping(_safe_mapping(node).get("metadata"))
 
 
-def _parent_subscription_details(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    parent = value.get("parent")
-    if not isinstance(parent, Mapping):
-        return {}
-    details = parent.get("subscription_details")
-    return details if isinstance(details, Mapping) else {}
-
-
-def _stripe_user_id(obj: Mapping[str, Any]) -> str:
-    metadata = _metadata(obj)
-    parent_subscription_metadata = _subscription_details_raw_metadata(_parent_subscription_details(obj))
-    candidates = (
-        metadata.get("arclink_user_id"),
-        metadata.get("user_id"),
-        obj.get("client_reference_id"),
-        _subscription_details_metadata(obj).get("arclink_user_id"),
-        _subscription_details_metadata(obj).get("user_id"),
-        parent_subscription_metadata.get("arclink_user_id"),
-        parent_subscription_metadata.get("user_id"),
+def _all_metadata_sources(obj: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """Return the three metadata mappings we search for user/session ids."""
+    return (
+        _metadata(obj),
+        _nested_metadata(obj, "subscription_details"),
+        _nested_metadata(obj, "parent", "subscription_details"),
     )
+
+
+def _first_nonempty(candidates: tuple[Any, ...]) -> str:
+    """Return the first non-empty string from candidates."""
     for candidate in candidates:
         value = str(candidate or "").strip()
         if value:
             return value
-    raise ArcLinkEntitlementError("Stripe webhook did not include an ArcLink user id")
+    return ""
+
+
+def _stripe_user_id(obj: Mapping[str, Any]) -> str:
+    meta, sub_meta, parent_meta = _all_metadata_sources(obj)
+    result = _first_nonempty((
+        meta.get("arclink_user_id"),
+        meta.get("user_id"),
+        obj.get("client_reference_id"),
+        sub_meta.get("arclink_user_id"),
+        sub_meta.get("user_id"),
+        parent_meta.get("arclink_user_id"),
+        parent_meta.get("user_id"),
+    ))
+    if not result:
+        raise ArcLinkEntitlementError("Stripe webhook did not include an ArcLink user id")
+    return result
 
 
 def _stripe_subscription_id(obj: Mapping[str, Any]) -> str:
@@ -102,33 +164,28 @@ def _stripe_subscription_id(obj: Mapping[str, Any]) -> str:
         value = str(obj.get(key) or "").strip()
         if value.startswith("sub_"):
             return value
-    parent = obj.get("parent")
-    if isinstance(parent, Mapping):
-        value = str(parent.get("subscription") or "").strip()
+    parent = _safe_mapping(obj.get("parent"))
+    for key in ("subscription",):
+        value = str(parent.get(key) or "").strip()
         if value.startswith("sub_"):
             return value
-    parent_subscription = str(_parent_subscription_details(obj).get("subscription") or "").strip()
-    if parent_subscription.startswith("sub_"):
-        return parent_subscription
+    sub_details = _safe_mapping(parent.get("subscription_details"))
+    value = str(sub_details.get("subscription") or "").strip()
+    if value.startswith("sub_"):
+        return value
     return ""
 
 
 def _stripe_onboarding_session_id(obj: Mapping[str, Any]) -> str:
-    metadata = _metadata(obj)
-    parent_subscription_metadata = _subscription_details_raw_metadata(_parent_subscription_details(obj))
-    candidates = (
-        metadata.get("arclink_onboarding_session_id"),
-        metadata.get("onboarding_session_id"),
-        _subscription_details_metadata(obj).get("arclink_onboarding_session_id"),
-        _subscription_details_metadata(obj).get("onboarding_session_id"),
-        parent_subscription_metadata.get("arclink_onboarding_session_id"),
-        parent_subscription_metadata.get("onboarding_session_id"),
-    )
-    for candidate in candidates:
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return ""
+    meta, sub_meta, parent_meta = _all_metadata_sources(obj)
+    return _first_nonempty((
+        meta.get("arclink_onboarding_session_id"),
+        meta.get("onboarding_session_id"),
+        sub_meta.get("arclink_onboarding_session_id"),
+        sub_meta.get("onboarding_session_id"),
+        parent_meta.get("arclink_onboarding_session_id"),
+        parent_meta.get("onboarding_session_id"),
+    ))
 
 
 def _entitlement_for_stripe_event(event_type: str, obj: Mapping[str, Any]) -> str:

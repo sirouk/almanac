@@ -1,45 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.util
 import json
-import sqlite3
-import sys
-import time
-from pathlib import Path
 
+from arclink_test_helpers import expect, load_module, memory_db, sign_stripe
 
-REPO = Path(__file__).resolve().parents[1]
-PYTHON_DIR = REPO / "python"
-
-
-def expect(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
-
-
-def load_module(filename: str, name: str):
-    if str(PYTHON_DIR) not in sys.path:
-        sys.path.insert(0, str(PYTHON_DIR))
-    path = PYTHON_DIR / filename
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load module from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def memory_db(control):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    control.ensure_schema(conn)
-    return conn
-
-
-def sign(adapters, payload: str) -> str:
-    return adapters.sign_stripe_webhook(payload, "whsec_test", timestamp=int(time.time()))
 
 
 def checkout_completed_payload(session: dict[str, str], *, event_id: str = "evt_checkout_done") -> str:
@@ -210,7 +175,7 @@ def test_successful_checkout_uses_entitlement_gate_before_provisioning_ready() -
     )
     expect(not blocked["intent"]["execution"]["ready"], str(blocked["intent"]["execution"]))
     payload = checkout_completed_payload(opened)
-    result = entitlements.process_stripe_webhook(conn, payload=payload, signature=sign(adapters, payload), secret="whsec_test")
+    result = entitlements.process_stripe_webhook(conn, payload=payload, signature=sign_stripe(adapters, payload), secret="whsec_test")
     expect(result.entitlement_state == "paid", str(result))
     ready_session = conn.execute(
         "SELECT status, checkout_state FROM arclink_onboarding_sessions WHERE session_id = 'onb_paid'"
@@ -325,13 +290,57 @@ def test_prepare_onboarding_preserves_existing_entitlement() -> None:
     print("PASS test_prepare_onboarding_preserves_existing_entitlement")
 
 
+def test_web_telegram_discord_onboarding_parity() -> None:
+    """Prove all three channels create identical session shapes through the shared contract."""
+    control = load_module("almanac_control.py", "almanac_control_parity_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_parity_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_parity_test")
+    conn = memory_db(control)
+
+    channels = [
+        ("web", "web-user@example.test", "onb_web_parity"),
+        ("telegram", "tg_user_12345", "onb_tg_parity"),
+        ("discord", "dc_user_67890", "onb_dc_parity"),
+    ]
+    sessions = []
+    for channel, identity, sid in channels:
+        result = api.start_public_onboarding_api(
+            conn, channel=channel, channel_identity=identity,
+            email_hint=f"{channel}@example.test", display_name_hint=f"{channel} User",
+            selected_plan_id="starter",
+        )
+        expect(result.status == 201, f"{channel}: expected 201 got {result.status}: {result.payload}")
+        session = result.payload["session"]
+        sessions.append((channel, session))
+
+    # Verify all sessions have the same required keys
+    required_keys = {"session_id", "channel", "status"}
+    for channel, session in sessions:
+        for key in required_keys:
+            expect(key in session, f"{channel} missing key: {key}")
+        expect(session["channel"] == channel, f"{channel}: got {session['channel']}")
+        expect(session["status"] in ("active", "new", "started"), f"{channel}: status={session['status']}")
+
+    # Verify onboarding answer works identically for all channels
+    for channel, session in sessions:
+        answer_result = api.answer_public_onboarding_api(
+            conn, session_id=session["session_id"],
+            question_key="name", answer_summary="Test User",
+            display_name_hint=f"{channel} Final Name",
+        )
+        expect(answer_result.status == 200, f"{channel} answer: {answer_result.status}: {answer_result.payload}")
+
+    print("PASS test_web_telegram_discord_onboarding_parity")
+
+
 def main() -> int:
     test_public_onboarding_sessions_resume_without_duplicate_active_rows()
     test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked()
     test_successful_checkout_uses_entitlement_gate_before_provisioning_ready()
     test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens()
     test_prepare_onboarding_preserves_existing_entitlement()
-    print("PASS all 5 ArcLink onboarding tests")
+    test_web_telegram_discord_onboarding_parity()
+    print("PASS all 6 ArcLink onboarding tests")
     return 0
 
 

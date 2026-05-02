@@ -168,6 +168,10 @@ write to SQLite only.
 
 **Module:** `python/arclink_entitlements.py`
 
+Operator dashboard setup instructions live in
+`docs/arclink/operator-stripe-webhook.md`. Use that guide when creating the
+Stripe Dashboard event destination during install.
+
 **Operations:**
 | Function | Purpose |
 |----------|---------|
@@ -186,6 +190,17 @@ write to SQLite only.
 |-----|---------|
 | `STRIPE_SECRET_KEY` | Live API calls (portal links, subscription reads) |
 | `STRIPE_WEBHOOK_SECRET` | Signature verification on incoming webhooks |
+
+**Stripe Dashboard event destination:**
+- Destination URL: `https://<control-host>/api/v1/webhooks/stripe`.
+- Events from: `Your account`.
+- Event selection: `Selected events`, not `All events`.
+- Required events: `checkout.session.completed`,
+  `customer.subscription.created`, `customer.subscription.updated`,
+  `customer.subscription.deleted`, `invoice.payment_succeeded`,
+  `invoice.paid`, and `invoice.payment_failed`.
+- Signing secret: copy the endpoint `whsec_...` value into
+  `STRIPE_WEBHOOK_SECRET` through `./deploy.sh control reconfigure`.
 
 **Billing portal:** User requests via `POST /api/v1/user/portal`. Requires
 active user session + CSRF. Fake mode returns a placeholder URL.

@@ -447,6 +447,16 @@ uses `:443` by default for the public control/Notion path, and does not require
 Cloudflare DNS credentials. Missing provider credentials are allowed during
 bootstrap, but live E2E remains gated until they are present.
 
+Stripe setup should use a selected-event webhook destination, not "All events".
+Point Stripe at `https://<control-host>/api/v1/webhooks/stripe` and select:
+`checkout.session.completed`, `customer.subscription.created`,
+`customer.subscription.updated`, `customer.subscription.deleted`,
+`invoice.payment_succeeded`, `invoice.paid`, and `invoice.payment_failed`.
+Copy the endpoint signing secret into `STRIPE_WEBHOOK_SECRET` through
+`./deploy.sh control reconfigure`. Keep the signing secret in
+`arclink-priv/config/docker.env` only. The full operator walkthrough is in
+`docs/arclink/operator-stripe-webhook.md`.
+
 Tailscale mode keeps the control node application Dockerized. `deploy.sh`
 brings up the Docker stack, then uses the host Tailscale CLI only as the
 network edge to publish the Dockerized web, API, and Notion webhook services.

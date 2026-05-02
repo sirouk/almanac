@@ -18,10 +18,10 @@ external credential.
 
 ## Current Status
 
-- 17 ArcLink Python modules (7,303 lines).
-- 17 test files (132 test functions) + 1 hygiene test + 2 web tests.
+- 18 ArcLink Python modules (7,478 lines at the last Ralphie snapshot).
+- 17 test files (142 test functions) + 1 hygiene test + 2 web tests.
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files).
-- Hosted API boundary (777 lines) with route dispatch, session/cookie
+- Hosted API boundary (777+ lines) with route dispatch, session/cookie
   transport, CORS, request-ID, safe errors, Telegram/Discord webhook routes.
 - API/auth module (862 lines), dashboard module (937 lines).
 - Telegram/Discord runtime adapters with fake-mode dispatch.
@@ -76,6 +76,14 @@ PLAN is complete when:
   provider/model state, billing portal link generation, reconciliation
   summary, and admin DNS drift/provider state reads.
 - Version all routes under `/api/v1`.
+- Add a machine-readable OpenAPI 3.1 contract generated from or tested against
+  the canonical route table, expose it as `GET /api/v1/openapi.json`, and store
+  a checked-in copy at `docs/openapi/arclink-v1.openapi.json`.
+- Add rate-limit response headers for limited public surfaces:
+  `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
+  `X-RateLimit-Reset`.
+- Fix the WSGI status mapping so `/api/v1/health` degraded responses return
+  `503 Service Unavailable`, not a fallback `503 OK` reason phrase.
 - Ensure fake adapters default safely for every route.
 - Add route-level tests for each new endpoint.
 

@@ -96,6 +96,44 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
   live functionality; every remaining live blocker is named with the exact
   credential/account required.
 
+## Current Next Objective Queue
+
+This queue supersedes broad "Production 1-16 gaps" language for the next Ralphie
+loop. Complete these in order, one coherent slice per build cycle, with tests
+and docs. Do not mark the project done while any non-external item remains.
+
+1. API contract truth:
+   - Add a machine-readable OpenAPI 3.1 contract for `/api/v1`.
+   - Prefer generating it from, or testing it against, the canonical
+     `arclink_hosted_api._ROUTES` table.
+   - Expose `GET /api/v1/openapi.json` without secrets and commit a static copy
+     at `docs/openapi/arclink-v1.openapi.json`.
+   - Add tests proving every `_ROUTES` entry is represented in the spec and the
+     served JSON matches the checked-in contract.
+2. Rate-limit transport:
+   - Add `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
+     `X-RateLimit-Reset` headers on rate-limited public onboarding and login
+     responses.
+   - Add negative route tests that force 429/401 rate-limit behavior and assert
+     the headers are present without leaking subjects or secrets.
+3. Hosted API correctness:
+   - Fix WSGI status text for degraded health so status code 503 maps to
+     `503 Service Unavailable`, not the fallback `503 OK`.
+   - Add a focused WSGI test for degraded health status text.
+4. Operational docs for landed boundaries:
+   - Add concise runbooks for API, ingress/DNS, Docker executor, Chutes, Stripe,
+     and rollback behavior. Keep claims fake/live accurate.
+5. Then proceed to Production 7-16:
+   - Bot parity and live adapter gates.
+   - User/admin dashboards wired to the hosted API.
+   - Fake E2E full journey.
+   - Secret-gated live E2E harness.
+   - Deployment assets, observability, data safety, and documentation truth.
+
+Current live blockers remain external: Stripe, Cloudflare, Chutes, Telegram,
+Discord, and final production-host credentials. Fake/live boundaries and tests
+are not blocked by those credentials.
+
 ## External Live Proof Checklist
 
 - [ ] [external] Production Stripe account, API keys, webhook secret, product

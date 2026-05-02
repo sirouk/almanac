@@ -950,34 +950,34 @@ require_notion_subtree_ack() {
   done
 }
 
-choose_mode() {
+choose_shared_host_mode() {
   local answer=""
 
   cat <<'EOF'
-ArcLink deploy menu
+ArcLink Shared Host control center
 
-  1) Shared Host mode install / repair (operator-led)
-  2) Shared Host mode upgrade from configured upstream
-  3) Shared Host mode write config only
-  4) Shared Host mode Notion SSOT setup / test
-  5) Shared Host mode Notion workspace migration
-  6) Shared Host mode Notion page backup / restore
-  7) Shared Host mode enrollment status
-  8) Shared Host mode enrollment trace
-  9) Shared Host mode enrollment align / repair
- 10) Shared Host mode enrollment reset / cleanup
- 11) Shared Host mode Curator setup / repair
- 12) Shared Host mode rotate Nextcloud secrets
- 13) Shared Host mode print agent payload
- 14) Shared Host mode health check
- 15) Shared Host mode remove / teardown
- 16) Sovereign Node mode control center (Docker-first)
+  1) Install / repair from current checkout
+  2) Upgrade from configured upstream
+  3) Write config only
+  4) Notion SSOT setup / test
+  5) Notion workspace migration
+  6) Notion page backup / restore
+  7) Enrollment status
+  8) Enrollment trace
+  9) Enrollment align / repair
+ 10) Enrollment reset / cleanup
+ 11) Curator setup / repair
+ 12) Rotate Nextcloud secrets
+ 13) Print agent payload
+ 14) Health check
+ 15) Remove / teardown
+ 16) Back
  17) Exit
 EOF
 
   while true; do
-    read -r -p "Choose mode [16]: " answer
-    case "${answer:-16}" in
+    read -r -p "Choose Shared Host action [1]: " answer
+    case "${answer:-1}" in
       1) MODE="install"; return 0 ;;
       2) MODE="upgrade"; return 0 ;;
       3) MODE="write-config"; return 0 ;;
@@ -993,9 +993,43 @@ EOF
       13) MODE="agent-payload"; return 0 ;;
       14) MODE="health"; return 0 ;;
       15) MODE="remove"; return 0 ;;
-      16) MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"; return 0 ;;
+      16) return 1 ;;
       17) exit 0 ;;
       *) echo "Please choose 1 through 17." ;;
+    esac
+  done
+}
+
+choose_mode() {
+  local answer=""
+
+  while true; do
+    cat <<'EOF'
+ArcLink deploy menu
+
+  1) Shared Host mode control center (operator-led)
+  2) Sovereign Node mode control center (Docker-backed)
+  3) Exit
+EOF
+
+    read -r -p "Choose ArcLink mode [2]: " answer
+    case "${answer:-2}" in
+      1)
+        if choose_shared_host_mode; then
+          return 0
+        fi
+        ;;
+      2)
+        MODE="docker"
+        DOCKER_DEPLOY_COMMAND="menu"
+        return 0
+        ;;
+      3)
+        exit 0
+        ;;
+      *)
+        echo "Please choose 1 through 3."
+        ;;
     esac
   done
 }

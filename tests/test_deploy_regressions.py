@@ -1398,17 +1398,27 @@ printf 'KEEP_DEFAULT=%q\\n' "$keep_default_result"
 
 def test_deploy_menu_defaults_to_docker_first() -> None:
     text = DEPLOY_SH.read_text()
-    snippet = extract(text, "choose_mode() {", "docker_usage() {")
+    shared_snippet = extract(text, "choose_shared_host_mode() {", "choose_mode() {")
+    mode_snippet = extract(text, "choose_mode() {", "docker_usage() {")
     expect(
-        "Shared Host mode install / repair (operator-led)" in snippet,
-        "expected option 1 to be explicitly marked as the operator-led shared host path",
+        "ArcLink Shared Host control center" in shared_snippet,
+        "expected Shared Host actions to live in their own submenu",
     )
     expect(
-        "Sovereign Node mode control center (Docker-first)" in snippet,
-        "expected Docker control center to be labeled as the Sovereign Node path",
+        "Install / repair from current checkout" in shared_snippet,
+        "expected Shared Host install action to live inside the Shared Host submenu",
     )
-    expect('read -r -p "Choose mode [16]: "' in snippet, "expected menu default to be Docker-first")
-    expect('case "${answer:-16}"' in snippet, "expected blank menu selection to choose Docker mode")
+    expect(
+        "Shared Host mode control center (operator-led)" in mode_snippet,
+        "expected top-level menu to expose Shared Host mode",
+    )
+    expect(
+        "Sovereign Node mode control center (Docker-backed)" in mode_snippet,
+        "expected top-level menu to expose Sovereign Node mode",
+    )
+    expect('read -r -p "Choose ArcLink mode [2]: "' in mode_snippet, "expected top-level default to be Sovereign Node mode")
+    expect('case "${answer:-2}"' in mode_snippet, "expected blank top-level selection to choose Sovereign Node mode")
+    expect('MODE="docker"' in mode_snippet and 'DOCKER_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Sovereign Node mode to route to its submenu")
     print("PASS test_deploy_menu_defaults_to_docker_first")
 
 
@@ -1954,7 +1964,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
     expect("ArcLink Sovereign Node control center" in text, "expected Sovereign Node submenu")
-    expect('MODE="docker"; DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
+    expect('MODE="docker"' in text and 'DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Docker submenu")
     expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
     expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")
     expect("docker-install|docker-upgrade|docker-reconfigure" in text, "expected Docker shortcut aliases")

@@ -173,9 +173,10 @@ MCP bootstrap token before starting gateways or agent web surfaces.
 
 Pinned-component apply commands re-enter `./deploy.sh docker upgrade` after the
 pin bump and load upstream push/deploy-key settings from the Docker runtime
-config. The interactive `./deploy.sh` menu defaults to this Docker control
-center so new ArcLink SaaS hosts do not accidentally fall back into the
-Shared Host upgrade path.
+config. The interactive `./deploy.sh` menu first chooses between Shared Host
+Mode and Sovereign Node Mode, then opens the selected control center. The
+top-level default is Sovereign Node Mode so new ArcLink SaaS hosts do not
+accidentally fall back into the Shared Host upgrade path.
 
 Host/systemd-only commands remain explicit Shared Host operations. `./deploy.sh
 remove` tears down a host install; `./deploy.sh docker remove` is an alias for

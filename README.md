@@ -277,9 +277,11 @@ shapes.
 | **Sovereign Node Mode** | Individual/private ArcLink deployments, productized SaaS hosts, portable operation, local validation, and future per-deployment executor work. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose |
 | **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
 
-The interactive `./deploy.sh` menu exposes both modes and defaults to Sovereign
-Node Mode. Direct commands that do not include the word `docker`, such as
-`./deploy.sh install`, use Shared Host Mode.
+The interactive `./deploy.sh` menu first asks which mode you want, then opens
+that mode's control center. Shared Host actions live under the Shared Host menu.
+Sovereign Node actions live under the Sovereign Node menu. The top-level
+default is Sovereign Node Mode. Direct commands that do not include the word
+`docker`, such as `./deploy.sh install`, use Shared Host Mode.
 
 ## Local Validation
 
@@ -466,8 +468,9 @@ The Docker path keeps the same operator vocabulary for container-native work:
 
 Pinned-component Docker upgrades re-enter `./deploy.sh docker upgrade` after
 the pin bump and load upstream push/deploy-key settings from the Docker runtime
-config. Shared Host commands remain in Shared Host Mode unless the command
-includes `docker`.
+config. In the interactive flow, Sovereign Node commands stem from the
+Sovereign Node control center. Shared Host commands remain in Shared Host Mode
+unless the direct command includes `docker`.
 
 The Docker submenu is available with:
 

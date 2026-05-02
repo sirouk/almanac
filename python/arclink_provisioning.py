@@ -677,6 +677,7 @@ def render_arclink_provisioning_intent(
             or source_env.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH")
             or "/notion/webhook"
         ),
+        "ARCLINK_BACKEND_ALLOWED_CIDRS": str(source_env.get("ARCLINK_BACKEND_ALLOWED_CIDRS") or "172.16.0.0/12"),
         "ARCLINK_DASHBOARD_HOST": hostnames["dashboard"],
         "ARCLINK_FILES_HOST": hostnames["files"],
         "ARCLINK_CODE_HOST": hostnames["code"],

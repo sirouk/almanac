@@ -22,6 +22,9 @@ The control path delegates to the Docker substrate, but it does not mean
   admin dashboard.
 - `control-api`: the hosted `/api/v1` WSGI API over ArcLink's existing Python
   contracts.
+- `control-provisioner`: the disabled-by-default Sovereign worker loop that
+  claims paid `provisioning_ready` deployments and applies them to fleet hosts
+  when `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`.
 - `arclink-mcp`, `qmd-mcp`, `notion-webhook`, job loops, Redis/Postgres, and
   Nextcloud as the local control-node substrate.
 
@@ -79,8 +82,16 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      - `hermes-<prefix>.<base-domain>`
 
 7. **Execution and health**
+   - `python/arclink_sovereign_worker.py` is the control-node worker. It:
+     claims paid deployments, registers an optional starter local host, places
+     the deployment onto a fleet host, renders the pod intent, applies
+     Cloudflare DNS, applies Docker Compose locally or over SSH, records service
+     health, and writes audited timeline events.
    - `python/arclink_executor.py` is the executor boundary for Docker Compose,
      Cloudflare DNS/access, Chutes key lifecycle, Stripe actions, and rollback.
+     In live mode it materializes compose/env/secret files under the deployment
+     root, supports local and SSH Docker Compose runners, and uses the
+     Cloudflare API for DNS upserts.
    - `python/arclink_action_worker.py` consumes queued admin actions.
    - `control-api` exposes admin health, DNS drift, reconciliation, actions,
      payments, bots, security, and scale-operation views.
@@ -108,11 +119,20 @@ are present in `arclink-priv/config/docker.env`:
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_APP_ID`
 - `DISCORD_PUBLIC_KEY`
+- `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`
+- `ARCLINK_EXECUTOR_ADAPTER=ssh` for remote fleet hosts, or `local` for a
+  starter single-host deployment.
+- `ARCLINK_EDGE_TARGET`, usually a load-balancer or ingress hostname that every
+  per-user subdomain CNAME points at.
+- For SSH fleet execution, put the worker-host SSH key material and
+  `known_hosts` entries under `arclink-priv/secrets/ssh/`; that directory is
+  mounted read-only into `control-provisioner`.
 
 ## Current Boundary
 
-The control node now starts the hosted API and web control center from
-`deploy.sh control`. The remaining live-provider work is not a UI/menu problem:
-it is the hardened worker-host executor path that turns `provisioning_ready`
-deployments into applied remote Docker Compose stacks with Cloudflare records and
-post-apply health proof. That path must stay secret-safe and idempotent.
+The control node starts the hosted API, web control center, and provisioner loop
+from `deploy.sh control`. The worker-host path now exists for local and SSH
+Docker Compose execution, with Cloudflare DNS upserts and secret-file
+materialization. Live proof is still gated by real provider credentials,
+registered fleet capacity, SSH reachability to worker hosts, and service health
+checks against the deployed pods.

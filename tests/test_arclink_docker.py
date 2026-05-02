@@ -41,6 +41,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect('profiles: ["build"]' in body, body)
     expect("ARCLINK_BACKEND_ALLOWED_CIDRS:" in body, body)
     expect("ARCLINK_BASE_DOMAIN:" in body and "ARCLINK_PRIMARY_PROVIDER:" in body, body)
+    expect("ARCLINK_CONTROL_PROVISIONER_ENABLED:" in body and "ARCLINK_EXECUTOR_ADAPTER:" in body, body)
     expect("STRIPE_WEBHOOK_SECRET:" in body and "CLOUDFLARE_API_TOKEN:" in body and "CHUTES_API_KEY:" in body, body)
     expect("ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}" in body, body)
     expect("QMD_MCP_HOST_PORT:" in body, body)
@@ -61,6 +62,7 @@ def test_compose_defines_full_stack_services() -> None:
         "notion-webhook:",
         "control-api:",
         "control-web:",
+        "control-provisioner:",
         "vault-watch:",
         "agent-supervisor:",
         "ssot-batcher:",
@@ -81,6 +83,9 @@ def test_compose_defines_full_stack_services() -> None:
     expect("127.0.0.1:${ARCLINK_API_PORT:-8900}:8900" in body, body)
     expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:3000" in body, body)
     expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
+    expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)
+    expect("./arclink-priv/secrets/ssh:/root/.ssh:ro" in body, body)
+    expect("${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}" in body, body)
     expect("ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor" in body, body)
     expect("ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}" in body, body)
     expect("Intentional trusted-host boundary" in body, body)
@@ -115,6 +120,7 @@ def test_docker_operator_commands_are_present() -> None:
         "ports)",
         "logs)",
         "health)",
+        "provision-once)",
         "notion-ssot)",
         "notion-migrate)",
         "notion-transfer)",
@@ -149,8 +155,10 @@ def test_docker_operator_commands_are_present() -> None:
     expect("18900 + offset" in body and "13000 + offset" in body, body)
     expect("ports.json" in body, body)
     expect("agent-supervisor" in body, body)
+    expect("control-provisioner" in body, body)
     expect("http://127.0.0.1/status.php" in body, body)
     expect("http://127.0.0.1:8900/api/v1/health" in body and "http://127.0.0.1:3000" in body, body)
+    expect("docker_provision_once()" in body and "arclink_sovereign_worker.py" in body, body)
     expect("qmd-mcp" in body and "qmd --version" in body, body)
     expect('pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' in body, body)
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
@@ -183,7 +191,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_component_upgrade_apply()" in body, body)
     expect("ARCLINK_COMPONENT_UPGRADE_MODE=docker" in body, body)
     expect("deploy.sh docker enrollment-status" in deploy, deploy)
-    expect("deploy.sh control install" in deploy and "control-install" in deploy, deploy)
+    expect("deploy.sh control install" in deploy and "control-install" in deploy and "control-provision-once" in deploy, deploy)
     expect("docker-enrollment-status" in deploy and "docker-rotate-nextcloud-secrets" in deploy, deploy)
     expect("qmd-upgrade-check" in deploy and "node-upgrade" in deploy, deploy)
     expect('ARCLINK_COMPONENT_UPGRADE_MODE:-}" == "docker"' in component_upgrade, component_upgrade)

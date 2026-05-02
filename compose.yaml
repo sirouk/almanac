@@ -48,6 +48,18 @@ x-arclink-app: &arclink-app
     DISCORD_APP_ID: ${DISCORD_APP_ID:-}
     DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
     ARCLINK_API_INTERNAL_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}
+    ARCLINK_CONTROL_PROVISIONER_ENABLED: ${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}
+    ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS: ${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}
+    ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE: ${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}
+    ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS: ${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}
+    ARCLINK_EXECUTOR_ADAPTER: ${ARCLINK_EXECUTOR_ADAPTER:-disabled}
+    ARCLINK_EDGE_TARGET: ${ARCLINK_EDGE_TARGET:-edge.arclink.online}
+    ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+    ARCLINK_SECRET_STORE_DIR: ${ARCLINK_SECRET_STORE_DIR:-/home/arclink/arclink/arclink-priv/state/sovereign-secrets}
+    ARCLINK_REGISTER_LOCAL_FLEET_HOST: ${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}
+    ARCLINK_LOCAL_FLEET_HOSTNAME: ${ARCLINK_LOCAL_FLEET_HOSTNAME:-}
+    ARCLINK_LOCAL_FLEET_REGION: ${ARCLINK_LOCAL_FLEET_REGION:-}
+    ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS: ${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}
     RUNTIME_DIR: /opt/arclink/runtime
     HOME: /home/arclink
     XDG_CONFIG_HOME: /home/arclink/.qmd/config
@@ -194,6 +206,28 @@ services:
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000 >/dev/null"]
+
+  control-provisioner:
+    <<: *arclink-app
+    volumes:
+      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - arclink-qmd:/home/arclink/.qmd
+      - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+      - ./arclink-priv/secrets/ssh:/root/.ssh:ro
+      # Intentional trusted-host boundary: the Sovereign provisioner needs
+      # Docker API access when ARCLINK_EXECUTOR_ADAPTER=local.
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - ./bin/docker-job-loop.sh
+      - control-provisioner
+      - ${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}
+      - python3
+      - python/arclink_sovereign_worker.py
+      - --once
+      - --json
+    depends_on:
+      control-api:
+        condition: service_healthy
 
   vault-watch:
     <<: *arclink-app

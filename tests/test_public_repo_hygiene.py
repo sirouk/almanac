@@ -93,6 +93,7 @@ PROVIDER_CODE_PATHS = {
     Path("python/arclink_model_providers.py"),
     Path("python/arclink_onboarding_flow.py"),
     Path("python/arclink_onboarding_provider_auth.py"),
+    Path("python/arclink_sovereign_worker.py"),
     Path("tests/test_arclink_chutes_and_adapters.py"),
     Path("tests/test_arclink_diagnostics.py"),
     Path("tests/test_arclink_e2e_live.py"),

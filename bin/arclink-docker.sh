@@ -12,6 +12,7 @@ DOCKER_REQUIRED_STATE_DIRS=(
   "$REPO_DIR/arclink-priv/state/nextcloud"
   "$REPO_DIR/arclink-priv/state/pdf-ingest/markdown"
   "$REPO_DIR/arclink-priv/state/notion-index/markdown"
+  "$REPO_DIR/arclink-priv/secrets/ssh"
 )
 DOCKER_REQUIRED_RUNNING_SERVICES=(
   postgres
@@ -22,6 +23,7 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   notion-webhook
   control-api
   control-web
+  control-provisioner
   vault-watch
   agent-supervisor
   health-watch
@@ -45,6 +47,8 @@ Commands:
   ports       Show assigned Docker host ports
   logs        Follow or print Compose logs
   health      Validate Compose config, state directories, control API/web, and running services
+  provision-once
+              Run one Sovereign Control Node provisioner batch now
   record-release
               Record the current Docker checkout as the deployed ArcLink release
   live-smoke  Run the live agent MCP tool smoke inside the Docker supervisor
@@ -185,6 +189,18 @@ bootstrap() {
   ensure_env_file_value ARCLINK_CORS_ORIGIN ""
   ensure_env_file_value ARCLINK_COOKIE_DOMAIN ""
   ensure_env_file_value ARCLINK_DEFAULT_PRICE_ID "price_arclink_starter"
+  ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_ENABLED "0"
+  ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS "30"
+  ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "5"
+  ensure_env_file_value ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS "5"
+  ensure_env_file_value ARCLINK_EXECUTOR_ADAPTER "disabled"
+  ensure_env_file_value ARCLINK_EDGE_TARGET "edge.arclink.online"
+  ensure_env_file_value ARCLINK_STATE_ROOT_BASE "/arcdata/deployments"
+  ensure_env_file_value ARCLINK_SECRET_STORE_DIR "$REPO_DIR/arclink-priv/state/sovereign-secrets"
+  ensure_env_file_value ARCLINK_REGISTER_LOCAL_FLEET_HOST "0"
+  ensure_env_file_value ARCLINK_LOCAL_FLEET_HOSTNAME ""
+  ensure_env_file_value ARCLINK_LOCAL_FLEET_REGION ""
+  ensure_env_file_value ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "4"
   reserve_docker_ports
 }
 
@@ -535,6 +551,11 @@ docker_reconcile() {
   wait_for_docker_agent_reconcile ||
     echo "Docker agent supervisor is still reconciling; docker health will report details if it remains incomplete."
   echo "Docker agent supervisor realigned."
+}
+
+docker_provision_once() {
+  prepare_compose
+  compose run --rm --no-deps control-provisioner python3 python/arclink_sovereign_worker.py --once --json "$@"
 }
 
 wait_for_docker_agent_reconcile() {
@@ -1292,6 +1313,9 @@ main() {
       ;;
     health)
       health "$@"
+      ;;
+    provision-once)
+      docker_provision_once "$@"
       ;;
     record-release)
       docker_record_release_state "$@"

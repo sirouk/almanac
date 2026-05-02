@@ -104,6 +104,18 @@ ARCLINK_WEB_PORT="${ARCLINK_WEB_PORT:-3000}"
 ARCLINK_CORS_ORIGIN="${ARCLINK_CORS_ORIGIN:-}"
 ARCLINK_COOKIE_DOMAIN="${ARCLINK_COOKIE_DOMAIN:-}"
 ARCLINK_DEFAULT_PRICE_ID="${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+ARCLINK_CONTROL_PROVISIONER_ENABLED="${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}"
+ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS="${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}"
+ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE="${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
+ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS="${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}"
+ARCLINK_EXECUTOR_ADAPTER="${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
+ARCLINK_EDGE_TARGET="${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
+ARCLINK_STATE_ROOT_BASE="${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
+ARCLINK_SECRET_STORE_DIR="${ARCLINK_SECRET_STORE_DIR:-}"
+ARCLINK_REGISTER_LOCAL_FLEET_HOST="${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
+ARCLINK_LOCAL_FLEET_HOSTNAME="${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
+ARCLINK_LOCAL_FLEET_REGION="${ARCLINK_LOCAL_FLEET_REGION:-}"
+ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
 STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
 STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
@@ -1118,6 +1130,7 @@ Usage:
   deploy.sh control ports
   deploy.sh control logs [SERVICE]
   deploy.sh control health
+  deploy.sh control provision-once # run one provisioner batch now
 
 Shortcut aliases:
   deploy.sh control-install
@@ -2087,6 +2100,18 @@ emit_runtime_config() {
     write_kv ARCLINK_CORS_ORIGIN "${ARCLINK_CORS_ORIGIN:-}"
     write_kv ARCLINK_COOKIE_DOMAIN "${ARCLINK_COOKIE_DOMAIN:-}"
     write_kv ARCLINK_DEFAULT_PRICE_ID "${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+    write_kv ARCLINK_CONTROL_PROVISIONER_ENABLED "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}"
+    write_kv ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS "${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}"
+    write_kv ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
+    write_kv ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS "${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}"
+    write_kv ARCLINK_EXECUTOR_ADAPTER "${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
+    write_kv ARCLINK_EDGE_TARGET "${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
+    write_kv ARCLINK_STATE_ROOT_BASE "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
+    write_kv ARCLINK_SECRET_STORE_DIR "${ARCLINK_SECRET_STORE_DIR:-$STATE_DIR/sovereign-secrets}"
+    write_kv ARCLINK_REGISTER_LOCAL_FLEET_HOST "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
+    write_kv ARCLINK_LOCAL_FLEET_HOSTNAME "${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
+    write_kv ARCLINK_LOCAL_FLEET_REGION "${ARCLINK_LOCAL_FLEET_REGION:-}"
+    write_kv ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
     write_kv STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
     write_kv STRIPE_WEBHOOK_SECRET "${STRIPE_WEBHOOK_SECRET:-}"
     write_kv CLOUDFLARE_API_TOKEN "${CLOUDFLARE_API_TOKEN:-}"
@@ -8400,6 +8425,33 @@ collect_control_install_answers() {
   if [[ -z "$ARCLINK_DEFAULT_PRICE_ID" ]]; then
     ARCLINK_DEFAULT_PRICE_ID="price_arclink_starter"
   fi
+  ARCLINK_CONTROL_PROVISIONER_ENABLED="$(ask_yes_no "Enable Sovereign pod provisioner now" "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}")"
+  ARCLINK_EXECUTOR_ADAPTER="${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
+  if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" ]]; then
+    echo
+    echo "Sovereign executor adapter:"
+    echo "  fake  - no external changes; useful only for dry validation"
+    echo "  local - apply pods on this machine with Docker Compose"
+    echo "  ssh   - copy pod bundles to fleet hosts and run Docker Compose over SSH"
+    ARCLINK_EXECUTOR_ADAPTER="$(normalize_optional_answer "$(ask "Executor adapter" "${ARCLINK_EXECUTOR_ADAPTER:-ssh}")")"
+    if [[ -z "$ARCLINK_EXECUTOR_ADAPTER" ]]; then
+      ARCLINK_EXECUTOR_ADAPTER="ssh"
+    fi
+  fi
+  ARCLINK_EDGE_TARGET="$(normalize_optional_answer "$(ask "Cloudflare DNS edge target" "${ARCLINK_EDGE_TARGET:-edge.$ARCLINK_BASE_DOMAIN}")")"
+  if [[ -z "$ARCLINK_EDGE_TARGET" ]]; then
+    ARCLINK_EDGE_TARGET="edge.$ARCLINK_BASE_DOMAIN"
+  fi
+  ARCLINK_STATE_ROOT_BASE="$(normalize_optional_answer "$(ask "Worker deployment state root base" "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")")"
+  if [[ -z "$ARCLINK_STATE_ROOT_BASE" ]]; then
+    ARCLINK_STATE_ROOT_BASE="/arcdata/deployments"
+  fi
+  ARCLINK_REGISTER_LOCAL_FLEET_HOST="$(ask_yes_no "Register this machine as a starter Sovereign worker host" "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}")"
+  if [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; then
+    ARCLINK_LOCAL_FLEET_HOSTNAME="$(normalize_optional_answer "$(ask "Local fleet hostname" "${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}")")"
+    ARCLINK_LOCAL_FLEET_REGION="$(normalize_optional_answer "$(ask "Local fleet region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
+    ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="$(ask "Local fleet capacity slots" "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
+  fi
 
   STRIPE_SECRET_KEY="$(ask_secret_with_default "Stripe secret key (ENTER keeps current, type none to clear)" "${STRIPE_SECRET_KEY:-}")"
   STRIPE_WEBHOOK_SECRET="$(ask_secret_with_default "Stripe webhook secret (ENTER keeps current, type none to clear)" "${STRIPE_WEBHOOK_SECRET:-}")"
@@ -8495,6 +8547,7 @@ control_command_from_mode() {
     control-ports) printf '%s\n' "ports" ;;
     control-logs) printf '%s\n' "logs" ;;
     control-health) printf '%s\n' "health" ;;
+    control-provision-once) printf '%s\n' "provision-once" ;;
     control-teardown) printf '%s\n' "teardown" ;;
     control-write-config) printf '%s\n' "write-config" ;;
     control-remove) printf '%s\n' "remove" ;;
@@ -8530,7 +8583,7 @@ run_control_deploy_flow() {
     reconfigure)
       run_control_reconfigure_flow
       ;;
-    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|record-release|teardown|remove)
+    bootstrap|write-config|config|build|up|down|ps|ports|logs|health|record-release|provision-once|teardown|remove)
       run_arclink_docker "$command" ${CONTROL_DEPLOY_ARGS[@]+"${CONTROL_DEPLOY_ARGS[@]}"}
       ;;
     *)

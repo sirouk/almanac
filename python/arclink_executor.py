@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shlex
+import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
@@ -49,6 +55,7 @@ class ArcLinkExecutorConfig:
 class ResolvedSecretFile:
     secret_ref: str
     target_path: str
+    source_path: str = ""
     materialized: bool = True
 
 
@@ -89,7 +96,7 @@ class FileMaterializingSecretResolver:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(str(value), encoding="utf-8")
         output.chmod(0o600)
-        return ResolvedSecretFile(secret_ref=clean_ref, target_path=clean_target)
+        return ResolvedSecretFile(secret_ref=clean_ref, target_path=clean_target, source_path=str(output))
 
 
 @dataclass(frozen=True)
@@ -244,6 +251,92 @@ class FakeDockerRunner:
 
 
 @dataclass(frozen=True)
+class SubprocessDockerComposeRunner:
+    """Run docker compose on the local worker after files are materialized."""
+
+    docker_binary: str = "docker"
+
+    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+        cmd = (
+            self.docker_binary,
+            "compose",
+            "--project-name",
+            project_name,
+            "--env-file",
+            env_file,
+            "-f",
+            compose_file,
+            *args,
+        )
+        proc = subprocess.run(cmd, check=False, text=True, capture_output=True)
+        if proc.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("docker compose", proc.stderr or proc.stdout))
+        return {"status": "ok", "returncode": proc.returncode, "stdout": proc.stdout[-2000:]}
+
+
+@dataclass(frozen=True)
+class SshDockerComposeRunner:
+    """Copy the rendered deployment root to a worker host and run docker compose there."""
+
+    host: str
+    user: str = "root"
+    ssh_binary: str = "ssh"
+    rsync_binary: str = "rsync"
+    docker_binary: str = "docker"
+    ssh_options: tuple[str, ...] = ("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
+
+    def _target(self) -> str:
+        clean_host = str(self.host or "").strip()
+        if not clean_host:
+            raise ArcLinkExecutorError("ArcLink SSH Docker runner requires a worker host")
+        clean_user = str(self.user or "root").strip() or "root"
+        return f"{clean_user}@{clean_host}"
+
+    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+        target = self._target()
+        root = str(Path(compose_file).resolve().parents[1])
+        mkdir = subprocess.run(
+            (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", root),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if mkdir.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("ssh mkdir", mkdir.stderr or mkdir.stdout))
+        sync = subprocess.run(
+            (self.rsync_binary, "-a", "--delete", f"{root}/", f"{target}:{root}/"),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if sync.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("rsync deployment root", sync.stderr or sync.stdout))
+        remote_cmd = " ".join(
+            _shell_quote(part)
+            for part in (
+                self.docker_binary,
+                "compose",
+                "--project-name",
+                project_name,
+                "--env-file",
+                env_file,
+                "-f",
+                compose_file,
+                *args,
+            )
+        )
+        run = subprocess.run(
+            (self.ssh_binary, *self.ssh_options, target, remote_cmd),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if run.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("ssh docker compose", run.stderr or run.stdout))
+        return {"status": "ok", "returncode": run.returncode, "stdout": run.stdout[-2000:], "worker_host": self.host}
+
+
+@dataclass(frozen=True)
 class DryRunStep:
     """A secret-free description of a planned Docker operation."""
     operation: str
@@ -302,6 +395,8 @@ class ArcLinkExecutor:
         if self.docker_runner is None:
             raise ArcLinkExecutorError("ArcLink live Docker execution requires an injectable DockerRunner")
         resolved = self._materialize_compose_secrets(compose_secrets)
+        if not isinstance(self.docker_runner, FakeDockerRunner):
+            _materialize_docker_compose_files(intent=intent, plan=plan, resolved_secrets=resolved)
         self.docker_runner.run(
             ("up", "-d", "--remove-orphans"),
             project_name=str(plan["project_name"]),
@@ -460,6 +555,7 @@ class ArcLinkExecutor:
         records = _plan_cloudflare_dns_records(request.dns)
         if self.config.adapter_name == "fake":
             return self._fake_cloudflare_dns_apply(request=request, records=records)
+        provider_records = _cloudflare_upsert_dns_records(records=records, zone_id=request.zone_id)
         return CloudflareDnsApplyResult(
             deployment_id=request.deployment_id,
             live=True,
@@ -470,6 +566,7 @@ class ArcLinkExecutor:
                 "zone_id": request.zone_id,
                 "idempotency_key": request.idempotency_key,
                 "desired_records": tuple(_dns_record_summary(record) for record in records),
+                "provider_record_ids": tuple(provider_records),
             },
         )
 
@@ -807,6 +904,112 @@ def _plan_docker_compose_apply(
     }
 
 
+def _materialize_docker_compose_files(
+    *,
+    intent: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    resolved_secrets: Mapping[str, ResolvedSecretFile],
+) -> None:
+    compose_file = Path(str(plan["compose_file"]))
+    env_file = Path(str(plan["env_file"]))
+    root = compose_file.parents[1]
+    config_root = compose_file.parent
+    secrets_root = config_root / "secrets"
+    root.mkdir(parents=True, exist_ok=True)
+    config_root.mkdir(parents=True, exist_ok=True)
+    secrets_root.mkdir(parents=True, exist_ok=True)
+
+    services = dict((intent.get("compose") or {}).get("services") or {}) if isinstance(intent.get("compose"), Mapping) else {}
+    _ensure_volume_roots(services)
+    env = {
+        str(k): str(v)
+        for k, v in (intent.get("environment") or {}).items()
+        if str(k).strip()
+    } if isinstance(intent.get("environment"), Mapping) else {}
+    env_file.write_text("".join(f"{key}={_env_quote(value)}\n" for key, value in sorted(env.items())), encoding="utf-8")
+    env_file.chmod(0o600)
+
+    compose_services = {
+        str(name): _compose_service_for_file(dict(service))
+        for name, service in services.items()
+        if isinstance(service, Mapping)
+    }
+    compose_secrets = {
+        name: {"file": _compose_secret_file_path(name=name, resolved=resolved)}
+        for name, resolved in resolved_secrets.items()
+    }
+    compose_doc: dict[str, Any] = {"services": compose_services}
+    if compose_secrets:
+        compose_doc["secrets"] = compose_secrets
+    compose_file.write_text(json.dumps(compose_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    compose_file.chmod(0o600)
+
+
+def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in ("image", "command", "environment", "labels", "depends_on", "deploy", "healthcheck"):
+        value = service.get(key)
+        if value not in (None, {}, []):
+            out[key] = value
+    volumes = []
+    for volume in service.get("volumes", []) or []:
+        if isinstance(volume, Mapping):
+            source = str(volume.get("source") or "").strip()
+            target = str(volume.get("target") or "").strip()
+            if source and target:
+                volumes.append({"type": "bind", "source": source, "target": target})
+        elif str(volume).strip():
+            volumes.append(str(volume))
+    if volumes:
+        out["volumes"] = volumes
+    secrets = []
+    for secret in service.get("secrets", []) or []:
+        if isinstance(secret, Mapping) and secret.get("source"):
+            item = {"source": str(secret["source"])}
+            if secret.get("target"):
+                item["target"] = str(secret["target"])
+            secrets.append(item)
+        elif str(secret).strip():
+            secrets.append(str(secret))
+    if secrets:
+        out["secrets"] = secrets
+    return out
+
+
+def _compose_secret_file_path(*, name: str, resolved: ResolvedSecretFile) -> str:
+    if resolved.source_path:
+        return resolved.source_path
+    raise ArcLinkSecretResolutionError(f"ArcLink live compose secret {name!r} was not materialized to a source file")
+
+
+def _ensure_volume_roots(services: Mapping[str, Any]) -> None:
+    for source in _compose_source_volumes(services):
+        if source.startswith("/"):
+            Path(source).mkdir(parents=True, exist_ok=True)
+
+
+def _env_quote(value: str) -> str:
+    text = str(value)
+    if not text:
+        return "''"
+    if re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", text):
+        return text
+    return shlex.quote(text)
+
+
+def _shell_quote(value: str) -> str:
+    return shlex.quote(str(value))
+
+
+def _safe_command_error(operation: str, output: str) -> str:
+    redacted = re.sub(
+        r"(?i)(\b(?:token|api[_-]?key|password|passwd|secret|authorization|cookie)\b\s*[:=]\s*)([^\s'\";,]+)",
+        r"\1[REDACTED]",
+        str(output or ""),
+    )
+    return f"{operation} failed: {redacted[-2000:]}"
+
+
 def _compose_source_volumes(services: Mapping[str, Any]) -> tuple[str, ...]:
     volumes = {
         str(volume["source"])
@@ -911,6 +1114,71 @@ def _plan_cloudflare_dns_records(dns: Mapping[str, Mapping[str, Any]]) -> tuple[
 def _dns_record_summary(record: Mapping[str, Any]) -> str:
     proxied = " proxied" if bool(record.get("proxied")) else ""
     return f"{record['record_type']} {record['hostname']} -> {record['target']}{proxied}"
+
+
+def _cloudflare_upsert_dns_records(*, records: tuple[dict[str, Any], ...], zone_id: str) -> tuple[str, ...]:
+    clean_zone = str(zone_id or os.environ.get("CLOUDFLARE_ZONE_ID") or "").strip()
+    token = str(os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    if not clean_zone:
+        raise ArcLinkExecutorError("ArcLink Cloudflare DNS apply requires CLOUDFLARE_ZONE_ID")
+    if not token:
+        raise ArcLinkExecutorError("ArcLink Cloudflare DNS apply requires CLOUDFLARE_API_TOKEN")
+    provider_ids: list[str] = []
+    for record in records:
+        existing = _cloudflare_find_dns_record(zone_id=clean_zone, token=token, record=record)
+        body = {
+            "type": str(record["record_type"]).upper(),
+            "name": str(record["hostname"]).lower(),
+            "content": str(record["target"]),
+            "proxied": bool(record.get("proxied", True)),
+            "ttl": 1,
+        }
+        if existing:
+            result = _cloudflare_request(
+                "PUT",
+                f"/zones/{clean_zone}/dns_records/{existing['id']}",
+                token=token,
+                body=body,
+            )
+        else:
+            result = _cloudflare_request("POST", f"/zones/{clean_zone}/dns_records", token=token, body=body)
+        result_id = str((result.get("result") or {}).get("id") or "")
+        provider_ids.append(result_id or str(existing.get("id") or ""))
+    return tuple(provider_ids)
+
+
+def _cloudflare_find_dns_record(*, zone_id: str, token: str, record: Mapping[str, Any]) -> dict[str, Any]:
+    query = urllib.parse.urlencode({
+        "type": str(record["record_type"]).upper(),
+        "name": str(record["hostname"]).lower(),
+        "per_page": "1",
+    })
+    payload = _cloudflare_request("GET", f"/zones/{zone_id}/dns_records?{query}", token=token)
+    results = payload.get("result") or []
+    return dict(results[0]) if isinstance(results, list) and results else {}
+
+
+def _cloudflare_request(method: str, path: str, *, token: str, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    url = f"https://api.cloudflare.com/client/v4{path}"
+    data = None if body is None else json.dumps(dict(body)).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[-1000:]
+        raise ArcLinkExecutorError(f"Cloudflare API request failed with HTTP {exc.code}: {detail}") from exc
+    if not isinstance(payload, dict) or not payload.get("success"):
+        raise ArcLinkExecutorError(f"Cloudflare API request failed: {json.dumps(payload, sort_keys=True)[-1000:]}")
+    return payload
 
 
 def _plan_cloudflare_access(access: Mapping[str, Any]) -> dict[str, Any]:

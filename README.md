@@ -230,6 +230,7 @@ cd /root/arclink
 ./deploy.sh control install
 ./deploy.sh control ports
 ./deploy.sh control health
+./deploy.sh control provision-once
 ```
 
 `./deploy.sh control install` is idempotent. It bootstraps `arclink-priv/`,
@@ -431,10 +432,18 @@ Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
 Sovereign Control Node install asks the public product questions: base domain,
-control API/web ports, Stripe price and webhook settings, Cloudflare zone
-credentials, Chutes owner key, and shared Telegram/Discord bot credentials.
-Missing credentials are allowed during bootstrap, but live E2E remains gated
-until they are present.
+control API/web ports, provisioner enablement, executor adapter (`ssh` for
+fleet hosts, `local` for a starter single-host deployment, `fake` for dry
+validation), Stripe price and webhook settings, Cloudflare zone credentials,
+Chutes owner key, and shared Telegram/Discord bot credentials. Missing
+credentials are allowed during bootstrap, but live E2E remains gated until they
+are present.
+
+When enabled, `control-provisioner` runs
+`python/arclink_sovereign_worker.py`: it claims paid `provisioning_ready`
+deployments, places them onto registered fleet hosts, applies Cloudflare DNS,
+materializes per-pod Docker Compose bundles, starts them locally or over SSH,
+and records health/audit/handoff state.
 
 Control-node details live in
 `docs/arclink/sovereign-control-node.md`.

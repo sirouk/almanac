@@ -1219,6 +1219,140 @@ def test_login_rejects_unknown_email() -> None:
     print("PASS test_login_rejects_unknown_email")
 
 
+def test_openapi_spec_route_serves_valid_contract() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_openapi_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/openapi.json", headers={}, config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}")
+    expect(payload.get("openapi") == "3.1.0", f"missing openapi version: {payload.get('openapi')}")
+    expect("paths" in payload, "missing paths")
+    expect("/api/v1/health" in payload["paths"], f"missing /api/v1/health in paths: {list(payload['paths'].keys())}")
+    expect("/api/v1/openapi.json" in payload["paths"], "missing /api/v1/openapi.json in paths")
+
+    # Every _ROUTES entry must be represented
+    for (method, path_suffix), route_key in hosted._ROUTES.items():
+        full_path = f"/api/v1{path_suffix}"
+        expect(full_path in payload["paths"], f"route {full_path} missing from OpenAPI spec")
+        expect(method.lower() in payload["paths"][full_path], f"{method} {full_path} missing from spec")
+
+    print("PASS test_openapi_spec_route_serves_valid_contract")
+
+
+def test_openapi_spec_matches_static_copy() -> None:
+    import os
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_static_test")
+    spec = hosted.build_arclink_openapi_spec()
+
+    static_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "openapi", "arclink-v1.openapi.json")
+    with open(static_path) as f:
+        static_spec = json.load(f)
+
+    spec_json = json.dumps(spec, sort_keys=True)
+    static_json = json.dumps(static_spec, sort_keys=True)
+    expect(spec_json == static_json, "served OpenAPI spec does not match checked-in static copy")
+
+    print("PASS test_openapi_spec_matches_static_copy")
+
+
+def test_rate_limit_returns_429_with_headers() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_ratelimit_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_ratelimit_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Exhaust the admin login rate limit (5 per 15 min, same subject)
+    for i in range(5):
+        status, _, _ = hosted.route_arclink_hosted_api(
+            conn, method="POST", path="/api/v1/auth/admin/login",
+            headers={}, body=json.dumps({"email": "ratelimit@example.test"}),
+            config=config,
+        )
+        # These will return 401 (unknown email), but rate limit counter increments
+
+    # 6th attempt with same subject should be rate limited -> 429
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/login",
+        headers={}, body=json.dumps({"email": "ratelimit@example.test"}),
+        config=config,
+    )
+    expect(status == 429, f"expected 429 got {status}: {payload}")
+    header_dict = {k.lower(): v for k, v in headers}
+    expect("retry-after" in header_dict, f"missing Retry-After: {header_dict}")
+    expect("x-ratelimit-limit" in header_dict, f"missing X-RateLimit-Limit: {header_dict}")
+    expect("x-ratelimit-remaining" in header_dict, f"missing X-RateLimit-Remaining: {header_dict}")
+    expect("x-ratelimit-reset" in header_dict, f"missing X-RateLimit-Reset: {header_dict}")
+    expect(header_dict["x-ratelimit-remaining"] == "0", f"expected remaining=0: {header_dict}")
+    expect(int(header_dict["retry-after"]) > 0, f"Retry-After must be positive: {header_dict}")
+    # Should not leak subject/email
+    rendered = json.dumps(payload)
+    expect("ratelimit@example.test" not in rendered, "subject leaked in rate limit response")
+
+    print("PASS test_rate_limit_returns_429_with_headers")
+
+
+def test_rate_limit_onboarding_returns_429() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_rl_onb_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_rl_onb_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Exhaust onboarding rate limit (5 per 15 min for same identity)
+    for i in range(5):
+        hosted.route_arclink_hosted_api(
+            conn, method="POST", path="/api/v1/onboarding/start",
+            headers={}, body=json.dumps({"channel": "web", "email": "rl-same@example.test"}),
+            config=config,
+        )
+
+    # 6th should be rate limited
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/start",
+        headers={}, body=json.dumps({"channel": "web", "email": "rl-same@example.test"}),
+        config=config,
+    )
+    expect(status == 429, f"expected 429 got {status}: {payload}")
+    header_dict = {k.lower(): v for k, v in headers}
+    expect("retry-after" in header_dict, f"missing Retry-After: {header_dict}")
+    expect("x-ratelimit-limit" in header_dict, f"missing X-RateLimit-Limit: {header_dict}")
+
+    print("PASS test_rate_limit_onboarding_returns_429")
+
+
+def test_wsgi_503_status_text_for_degraded_health() -> None:
+    from io import BytesIO
+    control = load_module("almanac_control.py", "almanac_control_hosted_503_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_503_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    app = hosted.make_arclink_hosted_api_wsgi(conn, config=config)
+
+    # Close the connection to simulate DB failure
+    conn.close()
+
+    captured: list[tuple[str, list]] = []
+
+    def start_response(status: str, headers: list) -> None:
+        captured.append((status, headers))
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/api/v1/health",
+        "QUERY_STRING": "",
+        "CONTENT_LENGTH": "0",
+        "wsgi.input": BytesIO(b""),
+    }
+    app(environ, start_response)
+    expect(len(captured) == 1, f"expected 1 start_response call, got {len(captured)}")
+    expect(captured[0][0] == "503 Service Unavailable", f"expected '503 Service Unavailable' got '{captured[0][0]}'")
+
+    print("PASS test_wsgi_503_status_text_for_degraded_health")
+
+
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
@@ -1254,7 +1388,12 @@ def main() -> int:
     test_wsgi_adapter_smoke()
     test_read_only_admin_blocked_from_mutations()
     test_login_rejects_unknown_email()
-    print("PASS all 34 ArcLink hosted API tests")
+    test_openapi_spec_route_serves_valid_contract()
+    test_openapi_spec_matches_static_copy()
+    test_rate_limit_returns_429_with_headers()
+    test_rate_limit_onboarding_returns_429()
+    test_wsgi_503_status_text_for_degraded_health()
+    print("PASS all 39 ArcLink hosted API tests")
     return 0
 
 

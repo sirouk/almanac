@@ -84,12 +84,16 @@ The plan is ready for BUILD handoff. All previously identified lint repairs
 safe generic errors, public bot rate limiting) are completed and passing.
 
 Current state:
-- 132 ArcLink test functions across 17 test files (+ 1 hygiene test that flags
-  "Chutes" in docs context; cosmetic, not blocking).
-- 17 ArcLink Python modules (7,303 lines).
-- Hosted API boundary (777 lines) with route dispatch, session transport, CORS,
-  request-ID, safe errors, health endpoint, provider state reads,
-  reconciliation, Stripe webhook skip, and Telegram/Discord webhook routes.
+- 147 ArcLink test functions across 17 test files (+ 4 hygiene tests, 2 web
+  tests).
+- 17 ArcLink Python modules (7,792 lines).
+- Hosted API boundary (1,078 lines) with route dispatch, session transport,
+  CORS, request-ID, safe errors, health endpoint, provider state reads,
+  reconciliation, billing portal, Stripe webhook skip, OpenAPI spec endpoint,
+  rate-limit headers, and Telegram/Discord webhook routes.
+- OpenAPI 3.1 spec generated from canonical route table, served at
+  `GET /api/v1/openapi.json`, and checked in at
+  `docs/openapi/arclink-v1.openapi.json`.
 - Next.js 15 + Tailwind 4 web app foundation with landing page, onboarding,
   login, user dashboard, and admin dashboard views (~1,593 lines across 9
   source files), plus 2 web test files.
@@ -100,21 +104,24 @@ Current state:
   and shared turn handler dispatch.
 - Entitlements module at 435 lines with reconciliation drift detection,
   targeted comp, and profile-only upsert preservation.
-- API/auth module at 862 lines; dashboard module at 937 lines.
+- API/auth module at 879 lines; dashboard module at 937 lines.
 
 BUILD should continue with the Production Grade Steering checklist
 (`research/RALPHIE_PRODUCTION_GRADE_STEERING.md`, Production 1-16) as the
 controlling definition of done:
 
-1. Production 1-2: Complete the hosted API versioned contract with auth/CSRF/
-   audit on every mutating route and negative tests.
-2. Production 3-6: Harden Stripe, Cloudflare, Docker Compose executor, and
-   Chutes boundaries with fake tests and live-gated paths.
-3. Production 7-10: Wire web app to hosted API, prove onboarding parity across
-   web/Telegram/Discord, and build responsive user/admin dashboards.
-4. Production 11-12: Fake and live E2E harnesses for the full journey.
-5. Production 13-16: Deployment assets, observability, data safety, and
-   documentation truth.
+The steering doc's Current Next Objective Queue defines the immediate work:
+
+1. API contract truth: OpenAPI 3.1 spec (landed), route-table coverage tests,
+   served and checked-in contract.
+2. Rate-limit transport: `Retry-After` and `X-RateLimit-*` headers on
+   rate-limited public routes with negative tests.
+3. Hosted API correctness: fix WSGI `503 Service Unavailable` status text for
+   degraded health; add focused test.
+4. Operational docs: concise runbooks for API, ingress/DNS, Docker executor,
+   Chutes, Stripe, and rollback. Keep claims fake/live accurate.
+5. Then Production 7-16: bot parity, dashboards wired to API, fake/live E2E,
+   deployment assets, observability, data safety, documentation truth.
 
 ## Remaining Risks
 

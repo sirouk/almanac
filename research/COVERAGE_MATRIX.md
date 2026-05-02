@@ -20,7 +20,7 @@
 | Admin dashboard | Admin read model, local admin view, and Next.js admin dashboard page | Wire Next.js view to hosted API admin endpoints | Views exist but use mock data; live API integration needed | Admin/dashboard/executor tests, web app build |
 | Active session counts | Admin dashboard security counts enforce active/unrevoked/unexpired filtering | Preserve before broader hosted API work | Future dashboard query changes could overcount expired or revoked sessions | Dashboard regression test |
 | Admin actions | Queued action intents require reason/idempotency and reject secrets | Future worker consumes only audited intent | Executor could bypass audit if not enforced | Admin action and executor tests |
-| API/auth boundary | User/admin sessions, CSRF checks, rate limits, MFA-ready admin factors, scoped reads, queued mutation helpers, provider state reads, reconciliation drift API, and hosted WSGI API (777 lines) with route dispatch, session transport, CORS, request-ID, safe errors, health, and Telegram/Discord webhook routes | Extend hosted API with versioned path prefix and rate-limit headers before frontend/live actions | Hosted layer exists but not yet deployed behind production identity provider | API/auth tests, hosted API tests (30 tests), public hygiene, future browser/API E2E |
+| API/auth boundary | User/admin sessions, CSRF checks, rate limits, MFA-ready admin factors, scoped reads, queued mutation helpers, provider state reads, reconciliation drift API, and hosted WSGI API (1,078 lines) with route dispatch, session transport, CORS, request-ID, safe errors, health, billing portal, and Telegram/Discord webhook routes | Extend hosted API with versioned path prefix and rate-limit headers before frontend/live actions | Hosted layer exists but not yet deployed behind production identity provider | API/auth tests, hosted API tests (39 tests), public hygiene, future browser/API E2E |
 | Public onboarding invalid-input mutation | `start_public_onboarding_api()` validates channel and identity before rate limiting | Preserve this guard before hosted API work | Future transport routes could bypass the shared validator path | API/auth regression plus focused acceptance probe |
 | Session revocation guard | Revocation helper validates `user`/`admin` kinds and rejects missing target sessions before mutation or audit | Preserve before broader hosted API work | Future revocation paths could reintroduce success-shaped missing-session responses | API/auth regression test for missing user and admin sessions |
 | Product-surface generic errors | Domain errors are intentionally user-facing; generic handler uses safe copy | Preserve safe generic responses while keeping domain errors useful | Raw exception text could leak implementation detail if future handlers bypass the guard | Product-surface regression test |
@@ -60,7 +60,7 @@
 
 | Production item | Current state | Gap |
 | --- | --- | --- |
-| P1: Coherent versioned hosted API | Hosted API exists (777 lines), 30 route tests, health/provider-state/reconciliation/billing-portal/telegram/discord webhook routes landed | Remaining: versioned path prefix, OpenAPI spec, rate-limit headers on public routes |
+| P1: Coherent versioned hosted API | Hosted API exists (1,078 lines), 39 route tests, health/provider-state/reconciliation/billing-portal/telegram/discord webhook routes, provider and executor boundaries hardened, OpenAPI 3.1 spec generated and served, rate-limit headers on limited routes | Remaining: WSGI 503 status text fix, route-table-vs-spec coverage test |
 | P2: Auth/CSRF/audit on every mutating route | Admin mutation routes have CSRF/auth gates; negative tests exist | Need systematic negative-test sweep for all mutating routes |
 | P3: Stripe boundary | Fake checkout/webhook/entitlement/drift exists | Billing portal link, refund/admin notes, failed payment state, reconciliation report |
 | P4: Cloudflare boundary | Fake DNS client, drift events, hostname planning | Propagation checks, teardown, retry safety tests |
@@ -94,8 +94,8 @@
 
 ## Coverage Verdict
 
-Coverage is sufficient for BUILD to continue. 132 ArcLink test functions across
-17 test files cover the no-secret foundation. The controlling definition of done
+Coverage is sufficient for BUILD to continue. 147 ArcLink test functions across
+17 test files (plus 4 hygiene and 2 web tests) cover the no-secret foundation. The controlling definition of done
 is `research/RALPHIE_PRODUCTION_GRADE_STEERING.md` (Production 1-16). All 16
 items are unchecked. No item requires live credentials to begin; 6 external
 items are blocked on credentials for live proof only. BUILD should proceed

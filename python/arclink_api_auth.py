@@ -37,6 +37,16 @@ class ArcLinkApiAuthError(ValueError):
     pass
 
 
+class ArcLinkRateLimitError(ArcLinkApiAuthError):
+    """Raised when a rate limit is exceeded, carrying limit metadata."""
+
+    def __init__(self, message: str, *, limit: int, remaining: int, reset_seconds: int) -> None:
+        super().__init__(message)
+        self.limit = limit
+        self.remaining = remaining
+        self.reset_seconds = reset_seconds
+
+
 @dataclass(frozen=True)
 class ArcLinkApiResponse:
     status: int
@@ -180,8 +190,15 @@ def check_arclink_rate_limit(
         """,
         (clean_scope, clean_subject, cutoff),
     ).fetchone()["n"]
-    if int(count) >= max(1, int(limit or 1)):
-        raise ArcLinkApiAuthError("ArcLink rate limit exceeded")
+    effective_limit = max(1, int(limit or 1))
+    current_count = int(count)
+    if current_count >= effective_limit:
+        raise ArcLinkRateLimitError(
+            "ArcLink rate limit exceeded",
+            limit=effective_limit,
+            remaining=0,
+            reset_seconds=max(1, int(window_seconds or 1)),
+        )
     conn.execute(
         "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
         (clean_scope, clean_subject, utc_now_iso()),

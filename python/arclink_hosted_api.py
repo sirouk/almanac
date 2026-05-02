@@ -24,6 +24,7 @@ from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
     GENERIC_ARCLINK_API_ERROR,
     ArcLinkApiAuthError,
+    ArcLinkRateLimitError,
     _header as _api_header,
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
@@ -555,6 +556,277 @@ def _handle_discord_webhook(
     return _json_response(200, response, request_id=request_id)
 
 
+# --- OpenAPI spec builder -----------------------------------------------------
+
+
+def _openapi_json_body(properties: dict[str, Any], *, required: list[str] | None = None) -> dict:
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return {"content": {"application/json": {"schema": schema}}}
+
+
+def _qparam(name: str) -> dict:
+    return {"name": name, "in": "query", "schema": {"type": "string"}}
+
+
+_RESP_OK_UNAUTH = {"200": {"description": "OK"}, "401": {"description": "Unauthorized"}}
+_RESP_CREATED_UNAUTH = {"201": {"description": "Session created with Set-Cookie"}, "401": {"description": "Unknown email or rate limited"}}
+_RESP_OK_INVALID = {"200": {"description": "OK"}, "400": {"description": "Invalid input"}}
+_WEBHOOK_BODY = _openapi_json_body({})
+
+_ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
+    "public_onboarding_start": {
+        "summary": "Begin onboarding flow",
+        "tags": ["onboarding"],
+        "requestBody": _openapi_json_body({
+            "channel": {"type": "string", "enum": ["web", "telegram", "discord"]},
+            "channel_identity": {"type": "string"},
+            "email": {"type": "string", "format": "email"},
+            "display_name": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "model_id": {"type": "string"},
+            "metadata": {"type": "object"},
+        }),
+        "responses": {"201": {"description": "Onboarding session created"}, "400": {"description": "Invalid input"}},
+    },
+    "public_onboarding_answer": {
+        "summary": "Answer onboarding question",
+        "tags": ["onboarding"],
+        "requestBody": _openapi_json_body({
+            "session_id": {"type": "string"},
+            "question_key": {"type": "string"},
+            "answer_summary": {"type": "string"},
+            "email": {"type": "string"},
+            "display_name": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "model_id": {"type": "string"},
+        }),
+        "responses": {"200": {"description": "Answer recorded"}, "400": {"description": "Invalid input"}},
+    },
+    "public_onboarding_checkout": {
+        "summary": "Open Stripe checkout for onboarding session",
+        "tags": ["onboarding"],
+        "requestBody": _openapi_json_body({
+            "session_id": {"type": "string"},
+            "price_id": {"type": "string"},
+            "success_url": {"type": "string", "format": "uri"},
+            "cancel_url": {"type": "string", "format": "uri"},
+        }),
+        "responses": {"200": {"description": "Checkout URL returned"}, "400": {"description": "Invalid input"}},
+    },
+    "stripe_webhook": {
+        "summary": "Stripe webhook receiver",
+        "tags": ["webhooks"],
+        "requestBody": _WEBHOOK_BODY,
+        "responses": {"200": {"description": "Webhook processed"}, "400": {"description": "Invalid signature"}},
+    },
+    "telegram_webhook": {
+        "summary": "Telegram Bot API webhook receiver",
+        "tags": ["webhooks"],
+        "requestBody": _WEBHOOK_BODY,
+        "responses": {"200": {"description": "Update processed"}},
+    },
+    "discord_webhook": {
+        "summary": "Discord interaction webhook receiver",
+        "tags": ["webhooks"],
+        "requestBody": _WEBHOOK_BODY,
+        "responses": {"200": {"description": "Interaction handled"}, "401": {"description": "Invalid signature"}},
+    },
+    "admin_login": {
+        "summary": "Admin login (creates session)",
+        "tags": ["auth"],
+        "requestBody": _openapi_json_body({
+            "email": {"type": "string", "format": "email"},
+            "login_subject": {"type": "string"},
+            "mfa_verified": {"type": "boolean"},
+            "metadata": {"type": "object"},
+        }, required=["email"]),
+        "responses": _RESP_CREATED_UNAUTH,
+    },
+    "user_login": {
+        "summary": "User login (creates session)",
+        "tags": ["auth"],
+        "requestBody": _openapi_json_body({
+            "email": {"type": "string", "format": "email"},
+            "login_subject": {"type": "string"},
+            "metadata": {"type": "object"},
+        }, required=["email"]),
+        "responses": _RESP_CREATED_UNAUTH,
+    },
+    "user_logout": {
+        "summary": "User logout (revokes session)",
+        "tags": ["auth"],
+        "responses": {"200": {"description": "Session revoked"}, "401": {"description": "Missing session or CSRF"}},
+    },
+    "admin_logout": {
+        "summary": "Admin logout (revokes session)",
+        "tags": ["auth"],
+        "responses": {"200": {"description": "Session revoked"}, "401": {"description": "Missing session or CSRF"}},
+    },
+    "user_dashboard": {
+        "summary": "Read user dashboard",
+        "tags": ["user"],
+        "parameters": [_qparam("user_id")],
+        "responses": {"200": {"description": "Dashboard data"}, "401": {"description": "Unauthorized"}},
+    },
+    "user_billing": {
+        "summary": "Read user billing and entitlement state",
+        "tags": ["user"],
+        "responses": {"200": {"description": "Billing data"}, "401": {"description": "Unauthorized"}},
+    },
+    "user_portal_link": {
+        "summary": "Generate Stripe billing portal link",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"return_url": {"type": "string", "format": "uri"}}),
+        "responses": {"200": {"description": "Portal URL returned"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_provisioning_status": {
+        "summary": "Read user provisioning and deployment status",
+        "tags": ["user"],
+        "parameters": [_qparam("deployment_id")],
+        "responses": {"200": {"description": "Provisioning data"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_dashboard": {
+        "summary": "Read admin dashboard (all deployments)",
+        "tags": ["admin"],
+        "parameters": [_qparam("channel"), _qparam("status"), _qparam("deployment_id"), _qparam("user_id"), _qparam("since")],
+        "responses": {"200": {"description": "Admin dashboard data"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_service_health": {
+        "summary": "Read service health across deployments",
+        "tags": ["admin"],
+        "parameters": [_qparam("deployment_id"), _qparam("status"), _qparam("since")],
+        "responses": {"200": {"description": "Service health data"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_provisioning_jobs": {
+        "summary": "Read provisioning job queue",
+        "tags": ["admin"],
+        "parameters": [_qparam("deployment_id"), _qparam("status"), _qparam("since")],
+        "responses": {"200": {"description": "Provisioning jobs"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_dns_drift": {
+        "summary": "Read DNS drift reports",
+        "tags": ["admin"],
+        "parameters": [_qparam("deployment_id"), _qparam("since")],
+        "responses": {"200": {"description": "DNS drift data"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_audit": {
+        "summary": "Read audit trail",
+        "tags": ["admin"],
+        "parameters": [_qparam("deployment_id"), _qparam("since")],
+        "responses": {"200": {"description": "Audit entries"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_events": {
+        "summary": "Read structured events",
+        "tags": ["admin"],
+        "parameters": [_qparam("deployment_id"), _qparam("since")],
+        "responses": {"200": {"description": "Event entries"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_queued_actions": {
+        "summary": "Read queued admin actions",
+        "tags": ["admin"],
+        "parameters": [_qparam("deployment_id"), _qparam("status"), _qparam("since")],
+        "responses": {"200": {"description": "Queued actions"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_action": {
+        "summary": "Queue an admin action (mutation)",
+        "tags": ["admin"],
+        "requestBody": _openapi_json_body({
+            "action_type": {"type": "string"},
+            "target_kind": {"type": "string"},
+            "target_id": {"type": "string"},
+            "reason": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "metadata": {"type": "object"},
+        }, required=["action_type", "target_kind", "target_id"]),
+        "responses": {"202": {"description": "Action queued"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "admin_reconciliation": {
+        "summary": "Read Stripe-vs-local reconciliation report",
+        "tags": ["admin"],
+        "responses": {"200": {"description": "Reconciliation data"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_provider_state": {
+        "summary": "Read provider/model state (admin)",
+        "tags": ["admin"],
+        "responses": {"200": {"description": "Provider state"}, "401": {"description": "Unauthorized"}},
+    },
+    "session_revoke": {
+        "summary": "Revoke a session (admin action)",
+        "tags": ["admin"],
+        "requestBody": _openapi_json_body({
+            "target_session_id": {"type": "string"},
+            "session_kind": {"type": "string", "enum": ["user", "admin"]},
+            "reason": {"type": "string"},
+        }, required=["target_session_id", "session_kind"]),
+        "responses": {"200": {"description": "Session revoked"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_provider_state": {
+        "summary": "Read provider/model state (user)",
+        "tags": ["user"],
+        "responses": {"200": {"description": "Provider state"}, "401": {"description": "Unauthorized"}},
+    },
+    "health": {
+        "summary": "Liveness/readiness health check",
+        "tags": ["health"],
+        "responses": {"200": {"description": "Healthy"}, "503": {"description": "Degraded (DB unreachable)"}},
+    },
+    "openapi_spec": {
+        "summary": "OpenAPI 3.1 specification",
+        "tags": ["meta"],
+        "responses": {"200": {"description": "OpenAPI JSON document"}},
+    },
+}
+
+
+def build_arclink_openapi_spec() -> dict[str, Any]:
+    """Build an OpenAPI 3.1 spec from the canonical _ROUTES table."""
+    paths: dict[str, Any] = {}
+
+    for (method, path_suffix), route_key in sorted(_ROUTES.items(), key=lambda x: x[0][1]):
+        full_path = f"{HOSTED_API_PREFIX}{path_suffix}"
+        op = _ROUTE_DESCRIPTIONS.get(route_key, {
+            "summary": route_key.replace("_", " ").title(),
+            "responses": {"200": {"description": "OK"}},
+        })
+        operation: dict[str, Any] = {
+            "operationId": route_key,
+            "summary": op.get("summary", route_key),
+            "tags": op.get("tags", []),
+            "responses": op.get("responses", {"200": {"description": "OK"}}),
+        }
+        if "requestBody" in op:
+            operation["requestBody"] = op["requestBody"]
+        if "parameters" in op:
+            operation["parameters"] = op["parameters"]
+        if route_key not in _PUBLIC_ROUTES:
+            operation["security"] = [{"sessionAuth": []}]
+
+        paths.setdefault(full_path, {})[method.lower()] = operation
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "ArcLink Hosted API",
+            "version": "1.0.0",
+            "description": "ArcLink self-serve AI deployment platform API.",
+        },
+        "servers": [{"url": "/", "description": "Relative to deployment host"}],
+        "paths": paths,
+        "components": {
+            "securitySchemes": {
+                "sessionAuth": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-ArcLink-Session-Id",
+                    "description": "Session-based auth via cookies or headers.",
+                },
+            },
+        },
+    }
+
+
 # --- Router -------------------------------------------------------------------
 
 # Route table: (method, path_suffix) -> handler_key
@@ -586,6 +858,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/sessions/revoke"): "session_revoke",
     ("GET", "/user/provider-state"): "user_provider_state",
     ("GET", "/health"): "health",
+    ("GET", "/openapi.json"): "openapi_spec",
 }
 
 # Routes that require no session authentication (public endpoints)
@@ -599,6 +872,7 @@ _PUBLIC_ROUTES = frozenset({
     "admin_login",
     "user_login",
     "health",
+    "openapi_spec",
 })
 
 
@@ -686,6 +960,8 @@ def route_arclink_hosted_api(
             result = _handle_provider_state(conn, headers, request_id, cfg, "user")
         elif route_key == "health":
             result = _handle_health(conn, request_id)
+        elif route_key == "openapi_spec":
+            result = _json_response(200, build_arclink_openapi_spec(), request_id=request_id)
         else:
             result = _json_response(404, {"error": "not_found"}, request_id=request_id)
 
@@ -701,6 +977,24 @@ def route_arclink_hosted_api(
             result = (result[0], result[1], [*result[2], *cors])
         return result
 
+    except ArcLinkRateLimitError as exc:
+        elapsed = time.monotonic() - start
+        reset_at = int(time.time()) + exc.reset_seconds
+        logger.warning(
+            "api_rate_limit method=%s path=%s route=%s elapsed=%.3fs request_id=%s",
+            clean_method, route_path, route_key, elapsed, request_id,
+        )
+        rate_headers = [
+            ("Retry-After", str(exc.reset_seconds)),
+            ("X-RateLimit-Limit", str(exc.limit)),
+            ("X-RateLimit-Remaining", str(exc.remaining)),
+            ("X-RateLimit-Reset", str(reset_at)),
+        ]
+        cors = _cors_headers(cfg)
+        return _json_response(
+            429, {"error": str(exc), "request_id": request_id},
+            request_id=request_id, extra_headers=[*rate_headers, *cors],
+        )
     except ArcLinkApiAuthError as exc:
         elapsed = time.monotonic() - start
         logger.warning(
@@ -773,6 +1067,9 @@ def make_arclink_hosted_api_wsgi(
             400: "400 Bad Request",
             401: "401 Unauthorized",
             404: "404 Not Found",
+            429: "429 Too Many Requests",
+            500: "500 Internal Server Error",
+            503: "503 Service Unavailable",
         }.get(status_code, f"{status_code} OK")
         response_body = json.dumps(payload, sort_keys=True).encode("utf-8") if payload else b""
         start_response(status_text, response_headers)

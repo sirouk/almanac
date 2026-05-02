@@ -18,18 +18,40 @@ external credential.
 
 ## Current Status
 
-- 18 ArcLink Python modules (7,478 lines at the last Ralphie snapshot).
-- 17 test files (142 test functions) + 1 hygiene test + 2 web tests.
+- 17 ArcLink Python modules (7,792 lines).
+- 17 test files (147 test functions) + 4 hygiene tests + 2 web tests.
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files).
-- Hosted API boundary (777+ lines) with route dispatch, session/cookie
-  transport, CORS, request-ID, safe errors, Telegram/Discord webhook routes.
-- API/auth module (862 lines), dashboard module (937 lines).
+- Hosted API boundary (1,078 lines) with route dispatch, session/cookie
+  transport, CORS, request-ID, safe errors, health, provider-state,
+  reconciliation, billing portal, OpenAPI spec, rate-limit headers,
+  Telegram/Discord webhook routes.
+- API/auth module (879 lines), dashboard module (937 lines).
 - Telegram/Discord runtime adapters with fake-mode dispatch.
-- Entitlements with drift detection, targeted comp, profile-only preservation.
+- Entitlements (435 lines) with drift detection, targeted comp, profile-only
+  preservation.
 - 18 `arclink_*` tables. Fake adapters default for all providers.
+- All 147 ArcLink tests passing (verified 2026-05-02).
 
 This is not live SaaS yet. The code records intent and proves no-secret
 behavior.
+
+### Landed Checkpoints Ralphie Must Respect
+
+- Production 1-2 are landed on branch `arclink` at commit `019f75d`.
+  The hosted API has `/api/v1` route coverage, OpenAPI 3.1 output,
+  checked-in static OpenAPI JSON, rate-limit headers, WSGI 503 status
+  mapping, and auth/CSRF/audit negative coverage.
+- Do not spend a BUILD cycle reimplementing Production 1-2. A tiny
+  contract/documentation correction is acceptable, for example documenting
+  `429` explicitly in OpenAPI response descriptions, but the next substantive
+  BUILD must move to the first unproven Production 3-16 item.
+- Provider/executor boundaries have substantial landed code from earlier
+  commits. Before editing them, audit the existing tests and only close real
+  gaps. Do not rewrite already-passing fake/live adapter contracts.
+- The immediate product gap is turning the proven backend contracts into a
+  usable ArcLink product surface: API-wired user/admin dashboards, public web
+  onboarding parity with bot onboarding, fake full-journey E2E, deploy
+  assets, observability, data safety, and live-gated proof harnesses.
 
 ## Chosen Architecture
 
@@ -68,6 +90,9 @@ PLAN is complete when:
 ## BUILD Tasks (Production 1-16 Mapping)
 
 ### Phase 1: API Contract Hardening (Production 1-2)
+
+Status: landed at `019f75d`. Treat this section as historical acceptance
+criteria unless a regression or small contract-documentation mismatch is found.
 
 **Production 1: Coherent Versioned Hosted API**
 

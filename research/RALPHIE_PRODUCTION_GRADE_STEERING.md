@@ -42,11 +42,11 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
 
 ## Mandatory Production Checklist
 
-- [ ] Production 1: Hosted API exposes a coherent versioned contract for
+- [x] Production 1: Hosted API exposes a coherent versioned contract for
   onboarding, checkout, entitlement, provisioning, user dashboard, admin
   dashboard, health, audit, DNS drift, provider state, webhooks, and operator
   actions, with fake adapters defaulting safely.
-- [ ] Production 2: Every mutating API route has explicit auth, role checks,
+- [x] Production 2: Every mutating API route has explicit auth, role checks,
   CSRF or webhook signature validation, structured audit logging, and negative
   tests that prove unauthorized users cannot mutate state.
 - [ ] Production 3: Stripe boundary supports checkout, webhook ingestion,
@@ -102,33 +102,38 @@ This queue supersedes broad "Production 1-16 gaps" language for the next Ralphie
 loop. Complete these in order, one coherent slice per build cycle, with tests
 and docs. Do not mark the project done while any non-external item remains.
 
-1. API contract truth:
-   - Add a machine-readable OpenAPI 3.1 contract for `/api/v1`.
-   - Prefer generating it from, or testing it against, the canonical
-     `arclink_hosted_api._ROUTES` table.
-   - Expose `GET /api/v1/openapi.json` without secrets and commit a static copy
-     at `docs/openapi/arclink-v1.openapi.json`.
-   - Add tests proving every `_ROUTES` entry is represented in the spec and the
-     served JSON matches the checked-in contract.
-2. Rate-limit transport:
-   - Add `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
-     `X-RateLimit-Reset` headers on rate-limited public onboarding and login
-     responses.
-   - Add negative route tests that force 429/401 rate-limit behavior and assert
-     the headers are present without leaking subjects or secrets.
-3. Hosted API correctness:
-   - Fix WSGI status text for degraded health so status code 503 maps to
-     `503 Service Unavailable`, not the fallback `503 OK`.
-   - Add a focused WSGI test for degraded health status text.
-4. Operational docs for landed boundaries:
-   - Add concise runbooks for API, ingress/DNS, Docker executor, Chutes, Stripe,
-     and rollback behavior. Keep claims fake/live accurate.
-5. Then proceed to Production 7-16:
-   - Bot parity and live adapter gates.
-   - User/admin dashboards wired to the hosted API.
-   - Fake E2E full journey.
-   - Secret-gated live E2E harness.
-   - Deployment assets, observability, data safety, and documentation truth.
+1. Respect the landed checkpoint:
+   - Production 1-2 are complete at commit `019f75d`.
+   - Do not rebuild the hosted API/OpenAPI/rate-limit/status/auth slice unless
+     a regression is proven by a failing test.
+   - A tiny documentation/spec correction is allowed, especially making `429`
+     explicit anywhere the OpenAPI contract still describes rate limit as
+     `401`.
+2. Close real Provider Boundary gaps (Production 3-6), by audit first:
+   - Inspect existing Stripe, Cloudflare, Docker executor, and Chutes tests.
+   - If a capability is already implemented and tested, record it as done
+     instead of rewriting it.
+   - Fill only missing behavior, missing tests, or missing docs.
+3. Build Product Surface (Production 7-10):
+   - Wire the Next.js user dashboard to `/api/v1` endpoints instead of mock
+     data.
+   - Wire the Next.js admin dashboard to `/api/v1/admin/*` endpoints instead of
+     mock data.
+   - Preserve website, Telegram, and Discord onboarding parity through the
+     shared API/state machine.
+   - Apply the ArcLink brand system and verify desktop/mobile layout behavior.
+4. Prove the Journey (Production 11-12):
+   - Add a no-secret fake E2E harness for web signup, onboarding, checkout
+     simulation, entitlement activation, provisioning request, service-health
+     visibility, admin audit, and user dashboard state.
+   - Add a secret-gated live E2E harness that skips cleanly until Stripe,
+     Cloudflare, Chutes, Telegram, Discord, and Docker live credentials exist.
+5. Finish Operations (Production 13-16):
+   - Deployment assets, env examples, runbooks, backup/restore, health checks,
+     restart/release/rollback procedures.
+   - Observability and admin-facing drift/audit visibility.
+   - Data-safety documentation and destructive-action safeguards.
+   - Documentation truth pass: no live claim without live proof.
 
 Current live blockers remain external: Stripe, Cloudflare, Chutes, Telegram,
 Discord, and final production-host credentials. Fake/live boundaries and tests

@@ -10,72 +10,48 @@ Begin with a fresh PLAN phase and convert the remaining ArcLink work into a
 specific implementation plan. Do not repeat the already-completed foundation
 slice except where a small repair is required to support the next phase.
 
+Important landed checkpoint:
+
+- Commit `019f75d` on branch `arclink` completed Production 1-2: versioned
+  hosted API routes, OpenAPI 3.1 contract, checked-in static spec, rate-limit
+  headers, WSGI 503 status mapping, and auth/CSRF/audit negative coverage.
+- Do not route the next BUILD back to P1/P2 except for a tiny verified
+  correction, such as adding explicit `429` response documentation where the
+  OpenAPI text still implies rate limit belongs under `401`.
+- The next substantive BUILD must begin at the first unproven gap in
+  Production 3-16. Audit before editing; if an item is already implemented and
+  tested, update the checklist/docs and move forward.
+
 The next pass must move ArcLink from local helper/prototype contracts toward a
 real deployable product surface while keeping all live external mutations
 explicitly gated.
 
 ## Active Build Order
 
-### 1. Production API/Auth Boundary
+### 1. Provider Boundary Truth Audit
 
-Build the hosted backend boundary that production dashboards, public onboarding,
-and bot adapters will consume.
-
-Prefer the existing Python control-plane modules. If adding FastAPI, Starlette,
-or another HTTP framework, document why it is the smallest clean fit and add
-repeatable no-secret tests. Do not build a parallel state model when
-`python/almanac_control.py` and the `python/arclink_*.py` helpers already
-express the product contracts.
-
-Required capabilities:
-
-- Public onboarding API shared by website, Telegram, and Discord.
-- User session transport with token hashes only.
-- Admin session transport with role checks, CSRF protection, TOTP-ready schema,
-  and reason-required mutations.
-- Stripe webhook and billing read endpoints using fake/default adapters unless
-  live E2E configuration is explicit.
-- User deployment/dashboard read endpoints backed by current read models.
-- Admin overview/funnel/users/payments/infrastructure/bots/security/releases
-  read endpoints backed by current read models.
-- Queued admin action endpoints that are idempotency-keyed, audited, and
-  secret-safe.
-- Masked secret-reference endpoints only; no plaintext secret reveal unless a
-  future audited reason/reveal flow is explicitly designed and tested.
+Confirm what is already landed for Stripe, Cloudflare, Docker executor, and
+Chutes, then close only real gaps.
 
 Acceptance:
 
-- No unauthenticated admin action route.
-- Invalid public onboarding channels fail before rate-limit writes.
-- Session revoke and admin mutation failures happen before mutation or audit
-  when preconditions are invalid.
-- Safe error shapes do not leak raw exception text.
+- Production 3-6 checklist state reflects real code and tests.
+- Any missing provider behavior gets fake/default tests first.
+- Live calls remain behind explicit secret/operator gates.
+- No existing adapter contract is rewritten without a failing test or a clear
+  production safety reason.
 
 ### 2. Production Web App
 
-After the API boundary is stable, add the production ArcLink web app.
+Required capabilities:
 
-Default to Next.js 15 + Tailwind unless repo constraints make a smaller first
-step clearly better. If adding a frontend package, keep it minimal,
-scriptable, and documented.
-
-Required surfaces:
-
-- First screen is usable onboarding, not a marketing-only landing page.
-- Website onboarding form/workflow uses the shared public onboarding API.
-- User dashboard covers deployment health, launch links, bot setup, files,
-  code, Hermes, qmd/memory freshness, skills, model, billing, security, and
-  support.
-- Admin dashboard covers overview, onboarding funnel, users/deployments,
-  payments, infrastructure, bots, security/abuse, releases/maintenance, logs,
-  audit, and queued actions.
-- Brand tokens come from `docs/arclink/brand-system.md`: jet black/carbon,
-  soft white, signal orange, blue/green for state only, no generic purple AI
-  gloss.
-- Mobile is mandatory. Public onboarding, user dashboard, and admin overview
-  must work without horizontal overflow.
-- Use direct host/deep-link fallbacks for Nextcloud, code-server, and Hermes
-  until iframe embedding is proven reliable.
+- Wire the existing Next.js user dashboard to the hosted `/api/v1` user
+  endpoints.
+- Wire the existing Next.js admin dashboard to `/api/v1/admin/*` endpoints.
+- Keep fake adapter state visibly labeled; do not claim live provisioning.
+- Preserve website, Telegram, and Discord onboarding parity through the shared
+  API/state shape.
+- Apply `docs/arclink/brand-system.md` as an acceptance gate, not decoration.
 
 Acceptance:
 

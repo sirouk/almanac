@@ -8,6 +8,8 @@ and the full customer journey are proven with real credentials.
 
 Latest accepted commits on branch `arclink`:
 
+- `2e6fa98` - live journey model, deployment evidence ledger, evidence
+  template, live E2E harness wiring, and no-secret tests.
 - `a9ea651` - host readiness CLI, provider diagnostics CLI, injectable Docker
   runner, and no-secret tests.
 - `9e50eeb` - operations/deployment documentation assets.
@@ -26,6 +28,7 @@ Landed no-secret foundation:
 - Live E2E scaffold exists and skips cleanly without secrets.
 - Host readiness, provider diagnostics, and injectable Docker runner no-secret
   surfaces exist.
+- Live journey/evidence no-secret scaffolding exists and has focused tests.
 - Deployment, ingress, secret, backup/restore, operations, observability, data
   safety, and documentation-truth assets exist.
 

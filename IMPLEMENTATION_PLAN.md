@@ -117,110 +117,66 @@ PLAN is complete when:
   Live Docker path requires runner. 20 tests (was 17) in
   `tests/test_arclink_executor.py`.
 
-## BUILD Tasks: Next Pass (Gap D/E Scaffolding) -- ACTIVE
+## BUILD Tasks: Next Pass (Operator Integration) -- ACTIVE
 
 Plan refreshed: 2026-05-02. Backlog sources consulted:
 - `research/RALPHIE_PRODUCTION_GRADE_STEERING.md`
 - `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md`
 - `research/RALPHIE_NEXT_PASS_STEERING.md`
 
-The next build has non-external work. Do not treat Gap D/E as fully blocked.
-Only the credentialed live run is blocked. BUILD must produce code, tests, and
-docs for the live journey model and deployment evidence ledger.
+The live journey model and deployment evidence ledger landed in commit
+`2e6fa98`. The next build has non-external operator-integration work. BUILD
+must expose host readiness, provider diagnostics, and live-evidence status to
+admin/operator surfaces without leaking secret values.
 
-### Task 1: Host Readiness and Bootstrap (Gap A)
+### Task 1: Operator Snapshot Model
 
-Add executable, no-secret host readiness tooling.
+Create or extend a read-only snapshot model for operator surfaces.
 
 Required:
-- A command or script that checks Docker, Docker Compose, available ports,
-  writable ArcLink state root, expected env vars, and Traefik/Cloudflare
-  strategy without mutating live providers.
-- A machine-readable readiness result that the admin dashboard or operator can
-  consume later.
-- Tests for missing Docker, missing state root, missing env, and safe redaction.
-- Documentation linking the readiness command from the operations runbook.
+- Include host readiness summary from `arclink_host_readiness.run_readiness()`.
+- Include provider diagnostic summary from `arclink_diagnostics.run_diagnostics()`.
+- Include live journey credential/blocker summary from
+  `arclink_live_journey.build_journey()`.
+- Include evidence status from `arclink_evidence`: template ready,
+  credentialed evidence missing, live proof blocked.
+- Return names of missing credentials only; never return secret values.
 
 Validation:
 ```bash
-PYTHONPATH=python python3 -m pytest tests/test_arclink_host_readiness.py -q
+PYTHONPATH=python python3 tests/test_arclink_dashboard.py
 ```
 
-### Task 2: Live Readiness Diagnostics (Gap C)
+### Task 2: Hosted API/Admin Integration
 
-Add a secret-safe diagnostic layer for external providers.
+Expose the snapshot through the existing hosted API/admin boundary.
 
 Required:
-- Stripe, Cloudflare, Chutes, Telegram, Discord, and host Docker diagnostics.
-- Missing credential names are reported; credential values are never returned.
-- Diagnostics are no-op/read-only unless an explicit live E2E flag is set.
-- Tests prove redaction and missing-credential behavior.
+- Admin-only read route or existing admin dashboard payload field.
+- Safe 401/403 behavior for unauthenticated or non-admin users.
+- JSON shape suitable for the admin dashboard.
+- Focused tests in existing API/dashboard test files or a focused new test.
 
 Validation:
 ```bash
-PYTHONPATH=python python3 -m pytest tests/test_arclink_diagnostics.py -q
+PYTHONPATH=python python3 tests/test_arclink_hosted_api.py
 ```
 
-### Task 3: Live-Gated Docker Executor Path (Gap B)
+### Task 3: Admin UI/Read Model Surface
 
-Improve the executor toward real deployment without enabling mutation by
-default.
+If the current admin read model or Next.js admin page has a natural
+provider/health/evidence panel, surface the new statuses.
 
 Required:
-- Explicit live flags and idempotency key.
-- State root and secret resolver required before any Docker mutation.
-- Dry-run output remains secret-free.
-- Real Docker commands are isolated behind an injectable runner for tests.
-- Rollback/teardown refuses destructive volume deletes without explicit
-  destructive confirmation.
+- Host readiness: ready/not ready/check details.
+- Provider diagnostics: configured/missing by credential name only.
+- Live proof: blocked until credentials; evidence template ready.
+- Keep UI changes small and brand-consistent. Browser claims require
+  Playwright.
 
 Validation:
 ```bash
-PYTHONPATH=python python3 -m pytest tests/test_arclink_executor.py -q
-```
-
-### Task 4: Full Live E2E Expansion (Gap D) -- NO-SECRET SCAFFOLDING ACTIVE
-
-Keep skipped without credentials, but make the harness ready for real proof now.
-
-Required:
-- Add or update a live journey module, preferably
-  `python/arclink_live_journey.py`, with ordered steps, blockers, statuses,
-  safe skip reasons, and secret-redacted evidence fields.
-- One path that can run website onboarding -> checkout -> webhook/entitlement ->
-  provisioning -> DNS/health -> user/admin dashboard verification.
-- Provider checks can remain separate, but the final live proof must be one
-  customer journey.
-- Expand `tests/test_arclink_e2e_live.py` so it uses the ordered journey model
-  and still skips cleanly without credentials.
-- Add focused no-secret tests for the journey model.
-- Clearly documented env names and setup steps in
-  `docs/arclink/live-e2e-secrets-needed.md`.
-
-Validation:
-```bash
-# Only when credentials present:
-# ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
-```
-
-### Task 5: Deployment Evidence Ledger (Gap E) -- NO-SECRET SCAFFOLDING ACTIVE
-
-Create the evidence format before live credentials exist.
-
-Required:
-- Add or update an evidence module, preferably `python/arclink_evidence.py`,
-  with deterministic records for step name, status, timestamps, commit hash,
-  URLs/hostnames, health summaries, and redacted provider identifiers.
-- Add a future-run template under `docs/arclink/`, preferably
-  `docs/arclink/live-e2e-evidence-template.md`.
-- Add tests proving evidence output is deterministic and secret-redacted.
-- Link host readiness and provider diagnostics CLI commands from
-  `docs/arclink/operations-runbook.md`.
-
-Validation:
-```bash
-PYTHONPATH=python python3 tests/test_arclink_evidence.py
-PYTHONPATH=python python3 tests/test_arclink_live_journey.py
+cd web && npm test
 ```
 
 ## Validation Floor
@@ -232,6 +188,8 @@ git diff --check
 PYTHONPATH=python python3 tests/test_public_repo_hygiene.py
 PYTHONPATH=python python3 tests/test_arclink_e2e_fake.py
 PYTHONPATH=python python3 tests/test_arclink_e2e_live.py
+PYTHONPATH=python python3 tests/test_arclink_evidence.py
+PYTHONPATH=python python3 tests/test_arclink_live_journey.py
 ```
 
 Run additional focused tests for touched modules. Browser claims still require

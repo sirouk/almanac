@@ -190,8 +190,10 @@ and docs. Do not mark the project done while any non-external item remains.
    - Gaps A-C are complete for the no-secret foundation in commit `a9ea651`:
      host readiness CLI, provider diagnostics CLI, and injectable Docker
      executor runner.
-   - Next Ralphie work should target Gap D/E scaffolding and operator
-     integration, not rebuilding Gaps A-C.
+   - Gap D/E no-secret scaffolding is landed in commit `2e6fa98`: live journey
+     model, deployment evidence ledger, live E2E wiring, and evidence template.
+   - Next Ralphie work should target operator/admin integration of readiness,
+     diagnostics, and evidence status, not rebuilding Gaps A-E scaffolds.
 
 Current live blockers remain external: Stripe, Cloudflare, Chutes, Telegram,
 Discord, and final production-host credentials. Fake/live boundaries and tests

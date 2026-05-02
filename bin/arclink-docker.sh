@@ -184,6 +184,12 @@ bootstrap() {
   set_env_file_value ARCLINK_DOCKER_HOST_PRIV_DIR "$REPO_DIR/arclink-priv"
   ensure_env_file_value ARCLINK_PRODUCT_NAME "ArcLink"
   ensure_env_file_value ARCLINK_BASE_DOMAIN "arclink.online"
+  ensure_env_file_value ARCLINK_INGRESS_MODE "domain"
+  ensure_env_file_value ARCLINK_TAILSCALE_DNS_NAME ""
+  ensure_env_file_value ARCLINK_TAILSCALE_CONTROL_URL ""
+  ensure_env_file_value ARCLINK_TAILSCALE_HTTPS_PORT "443"
+  ensure_env_file_value ARCLINK_TAILSCALE_NOTION_PATH "/notion/webhook"
+  ensure_env_file_value ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY "path"
   ensure_env_file_value ARCLINK_PRIMARY_PROVIDER "chutes"
   ensure_env_file_value ARCLINK_API_HOST "0.0.0.0"
   ensure_env_file_value ARCLINK_CORS_ORIGIN ""
@@ -199,8 +205,12 @@ bootstrap() {
   ensure_env_file_value ARCLINK_SECRET_STORE_DIR "$REPO_DIR/arclink-priv/state/sovereign-secrets"
   ensure_env_file_value ARCLINK_REGISTER_LOCAL_FLEET_HOST "0"
   ensure_env_file_value ARCLINK_LOCAL_FLEET_HOSTNAME ""
+  ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_HOST ""
+  ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_USER "root"
   ensure_env_file_value ARCLINK_LOCAL_FLEET_REGION ""
   ensure_env_file_value ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "4"
+  ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "$REPO_DIR/arclink-priv/secrets/ssh/id_ed25519"
+  ensure_env_file_value ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "$REPO_DIR/arclink-priv/secrets/ssh/known_hosts"
   reserve_docker_ports
 }
 

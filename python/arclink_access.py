@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 ARCLINK_NEXTCLOUD_ISOLATION_MODEL = "dedicated_per_deployment"
 ARCLINK_SSH_ACCESS_STRATEGY = "cloudflare_access_tcp"
+ARCLINK_TAILSCALE_SSH_ACCESS_STRATEGY = "tailscale_direct_ssh"
 
 
 class ArcLinkAccessError(ValueError):
@@ -37,10 +38,17 @@ def build_arclink_ssh_access_record(
         raise ArcLinkAccessError("ArcLink must not advertise raw SSH over HTTP")
     if clean_hostname.startswith(("http://", "https://")):
         raise ArcLinkAccessError("ArcLink SSH access requires a TCP hostname, not an HTTP URL")
-    if clean_strategy != ARCLINK_SSH_ACCESS_STRATEGY:
+    if clean_strategy not in {ARCLINK_SSH_ACCESS_STRATEGY, ARCLINK_TAILSCALE_SSH_ACCESS_STRATEGY}:
         raise ArcLinkAccessError(f"unsupported ArcLink SSH access strategy: {clean_strategy}")
     if not clean_username or not clean_hostname:
         raise ArcLinkAccessError("ArcLink SSH access requires username and hostname")
+    if clean_strategy == ARCLINK_TAILSCALE_SSH_ACCESS_STRATEGY:
+        return SshAccessRecord(
+            strategy=clean_strategy,
+            username=clean_username,
+            hostname=clean_hostname,
+            command_hint=f"ssh {clean_username}@{clean_hostname}",
+        )
     return SshAccessRecord(
         strategy=clean_strategy,
         username=clean_username,

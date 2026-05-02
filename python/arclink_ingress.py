@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from arclink_control import append_arclink_event, utc_now_iso
-from arclink_adapters import DnsRecord, arclink_hostnames, render_traefik_http_labels
+from arclink_adapters import (
+    DnsRecord,
+    arclink_hostnames,
+    arclink_role_path_prefixes,
+    arclink_tailscale_hostnames,
+    render_traefik_http_labels,
+    render_traefik_http_path_labels,
+)
 
 
 ARCLINK_HOST_ROLES = ("dashboard", "files", "code", "hermes")
@@ -33,6 +40,23 @@ def desired_arclink_dns_records(*, prefix: str, base_domain: str, target: str) -
         role: DnsRecord(hostname=hostname, record_type="CNAME", target=clean_target, proxied=True)
         for role, hostname in arclink_hostnames(prefix, base_domain).items()
     }
+
+
+def desired_arclink_ingress_records(
+    *,
+    prefix: str,
+    base_domain: str,
+    target: str,
+    ingress_mode: str = "domain",
+    tailscale_dns_name: str = "",
+    tailscale_host_strategy: str = "path",
+) -> dict[str, DnsRecord]:
+    mode = str(ingress_mode or "domain").strip().lower()
+    if mode == "domain":
+        return desired_arclink_dns_records(prefix=prefix, base_domain=base_domain, target=target)
+    if mode == "tailscale":
+        return {}
+    raise ValueError("ArcLink ingress mode must be domain or tailscale")
 
 
 def persist_arclink_dns_records(
@@ -172,16 +196,35 @@ def render_traefik_dynamic_labels(
     *,
     prefix: str,
     base_domain: str,
+    ingress_mode: str = "domain",
+    tailscale_dns_name: str = "",
+    tailscale_host_strategy: str = "path",
     service_ports: Mapping[str, int] | None = None,
 ) -> dict[str, dict[str, str]]:
     ports = dict(ARCLINK_DEFAULT_SERVICE_PORTS)
     ports.update(dict(service_ports or {}))
-    hostnames = arclink_hostnames(prefix, base_domain)
+    mode = str(ingress_mode or "domain").strip().lower()
+    strategy = str(tailscale_host_strategy or "path").strip().lower()
+    if mode == "tailscale":
+        hostnames = arclink_tailscale_hostnames(prefix, tailscale_dns_name or base_domain, strategy=strategy)
+    elif mode == "domain":
+        hostnames = arclink_hostnames(prefix, base_domain)
+    else:
+        raise ValueError("ArcLink ingress mode must be domain or tailscale")
+    path_prefixes = arclink_role_path_prefixes(prefix) if mode == "tailscale" and strategy == "path" else {}
     labels: dict[str, dict[str, str]] = {}
     for role in ARCLINK_HOST_ROLES:
-        labels[role] = render_traefik_http_labels(
-            service_name=f"{prefix}-{role}",
-            hostname=hostnames[role],
-            port=int(ports[role]),
-        )
+        if path_prefixes:
+            labels[role] = render_traefik_http_path_labels(
+                service_name=f"{prefix}-{role}",
+                hostname=hostnames[role],
+                path_prefix=path_prefixes[role],
+                port=int(ports[role]),
+            )
+        else:
+            labels[role] = render_traefik_http_labels(
+                service_name=f"{prefix}-{role}",
+                hostname=hostnames[role],
+                port=int(ports[role]),
+            )
     return labels

@@ -377,6 +377,37 @@ def test_rendered_services_include_resource_limits_and_healthchecks() -> None:
     print("PASS test_rendered_services_include_resource_limits_and_healthchecks")
 
 
+def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_tailscale_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_tailscale_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker.example.test",
+        tailscale_host_strategy="path",
+        tailscale_notion_path="/notion/webhook",
+    )
+    expect(intent["deployment"]["ingress_mode"] == "tailscale", str(intent["deployment"]))
+    expect(intent["dns"] == {}, str(intent["dns"]))
+    expect(intent["execution"]["dns_provider"] == "tailscale", str(intent["execution"]))
+    expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
+    expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/files", str(intent["access"]))
+    expect(intent["access"]["ssh"]["strategy"] == "tailscale_direct_ssh", str(intent["access"]))
+    expect(intent["access"]["ssh"]["command_hint"] == "ssh arc-amber-vault-1a2b@worker.example.test", str(intent["access"]))
+    labels = intent["compose"]["services"]["nextcloud"]["labels"]
+    expect(
+        labels["traefik.http.routers.arclink-amber-vault-1a2b-files.rule"]
+        == "Host(`worker.example.test`) && PathPrefix(`/u/amber-vault-1a2b/files`)",
+        str(labels),
+    )
+    expect("stripprefix.prefixes" in ".".join(labels), str(labels))
+    expect(intent["environment"]["ARCLINK_TAILSCALE_NOTION_PATH"] == "/notion/webhook", str(intent["environment"]))
+    print("PASS test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible()
@@ -386,7 +417,8 @@ def main() -> int:
     test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit()
     test_failed_execution_job_gets_idempotent_rollback_plan_event()
     test_rendered_services_include_resource_limits_and_healthchecks()
-    print("PASS all 8 ArcLink provisioning tests")
+    test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
+    print("PASS all 9 ArcLink provisioning tests")
     return 0
 
 

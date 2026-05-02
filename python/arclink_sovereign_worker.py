@@ -35,6 +35,7 @@ from arclink_executor import (
     ArcLinkExecutorConfig,
     ArcLinkSecretResolutionError,
     CloudflareDnsApplyRequest,
+    CloudflareDnsApplyResult,
     DockerComposeApplyRequest,
     FakeSecretResolver,
     FileMaterializingSecretResolver,
@@ -62,8 +63,13 @@ TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
 @dataclass(frozen=True)
 class SovereignWorkerConfig:
     enabled: bool
+    ingress_mode: str
     base_domain: str
     edge_target: str
+    tailscale_dns_name: str
+    tailscale_host_strategy: str
+    tailscale_https_port: str
+    tailscale_notion_path: str
     state_root_base: str
     cloudflare_zone_id: str
     executor_adapter: str
@@ -71,6 +77,8 @@ class SovereignWorkerConfig:
     max_attempts: int
     register_local_host: bool
     local_hostname: str
+    local_ssh_host: str
+    local_ssh_user: str
     local_region: str
     local_capacity_slots: int
     secret_store_dir: Path
@@ -127,13 +135,24 @@ def _provider_env_for_ref(secret_ref: str) -> str:
 
 def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> SovereignWorkerConfig:
     source = dict(env or os.environ)
-    base_domain = str(source.get("ARCLINK_BASE_DOMAIN") or "arclink.online").strip().lower()
-    edge_target = str(source.get("ARCLINK_EDGE_TARGET") or f"edge.{base_domain}").strip().lower()
+    ingress_mode = str(source.get("ARCLINK_INGRESS_MODE") or "domain").strip().lower()
+    if ingress_mode not in {"domain", "tailscale"}:
+        ingress_mode = "domain"
+    tailscale_dns_name = str(source.get("ARCLINK_TAILSCALE_DNS_NAME") or "").strip().lower().strip(".")
+    base_domain = str(source.get("ARCLINK_BASE_DOMAIN") or tailscale_dns_name or "arclink.online").strip().lower().strip(".")
+    if ingress_mode == "tailscale" and tailscale_dns_name:
+        base_domain = tailscale_dns_name
+    edge_target = str(source.get("ARCLINK_EDGE_TARGET") or (tailscale_dns_name if ingress_mode == "tailscale" else f"edge.{base_domain}")).strip().lower()
     local_hostname = str(source.get("ARCLINK_LOCAL_FLEET_HOSTNAME") or socket.getfqdn() or socket.gethostname()).strip().lower()
     return SovereignWorkerConfig(
         enabled=_truthy(source.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "0")),
+        ingress_mode=ingress_mode,
         base_domain=base_domain,
         edge_target=edge_target,
+        tailscale_dns_name=tailscale_dns_name,
+        tailscale_host_strategy=str(source.get("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY") or "path").strip().lower(),
+        tailscale_https_port=str(source.get("ARCLINK_TAILSCALE_HTTPS_PORT") or "443").strip(),
+        tailscale_notion_path=str(source.get("ARCLINK_TAILSCALE_NOTION_PATH") or source.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH") or "/notion/webhook").strip(),
         state_root_base=str(source.get("ARCLINK_STATE_ROOT_BASE") or "/arcdata/deployments").strip(),
         cloudflare_zone_id=str(source.get("CLOUDFLARE_ZONE_ID") or "").strip(),
         executor_adapter=str(source.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower(),
@@ -141,6 +160,8 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
         max_attempts=max(1, int(source.get("ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS", "5"))),
         register_local_host=_truthy(source.get("ARCLINK_REGISTER_LOCAL_FLEET_HOST", "0")),
         local_hostname=local_hostname,
+        local_ssh_host=str(source.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip().lower(),
+        local_ssh_user=str(source.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "root").strip(),
         local_region=str(source.get("ARCLINK_LOCAL_FLEET_REGION") or "").strip().lower(),
         local_capacity_slots=max(1, int(source.get("ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS", "4"))),
         secret_store_dir=Path(source.get("ARCLINK_SECRET_STORE_DIR") or cfg.state_dir / "sovereign-secrets").resolve(),
@@ -157,12 +178,22 @@ def process_sovereign_batch(
     if not worker.enabled:
         return [{"status": "disabled", "reason": "ARCLINK_CONTROL_PROVISIONER_ENABLED is not set"}]
     if worker.register_local_host:
+        local_metadata: dict[str, Any] = {
+            "executor": worker.executor_adapter,
+            "ingress_mode": worker.ingress_mode,
+            "edge_target": worker.edge_target,
+            "state_root_base": worker.state_root_base,
+        }
+        if worker.local_ssh_host:
+            local_metadata["ssh_host"] = worker.local_ssh_host
+        if worker.local_ssh_user:
+            local_metadata["ssh_user"] = worker.local_ssh_user
         register_fleet_host(
             conn,
             hostname=worker.local_hostname,
             region=worker.local_region,
             capacity_slots=worker.local_capacity_slots,
-            metadata={"executor": "local"},
+            metadata=local_metadata,
         )
     rows = conn.execute(
         """
@@ -278,19 +309,36 @@ def _apply_deployment(
         base_domain=worker.base_domain,
         edge_target=edge_target,
         state_root_base=state_root_base,
+        ingress_mode=worker.ingress_mode,
+        tailscale_dns_name=worker.tailscale_dns_name,
+        tailscale_host_strategy=worker.tailscale_host_strategy,
+        tailscale_notion_path=worker.tailscale_notion_path,
         env=worker.env,
     )
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
     selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
-    dns_result = selected_executor.cloudflare_dns_apply(
-        CloudflareDnsApplyRequest(
-            deployment_id=deployment_id,
-            dns=intent["dns"],
-            zone_id=worker.cloudflare_zone_id,
-            idempotency_key=f"arclink:sovereign:dns:{deployment_id}",
+    if worker.ingress_mode == "domain" and intent["dns"]:
+        dns_result = selected_executor.cloudflare_dns_apply(
+            CloudflareDnsApplyRequest(
+                deployment_id=deployment_id,
+                dns=intent["dns"],
+                zone_id=worker.cloudflare_zone_id,
+                idempotency_key=f"arclink:sovereign:dns:{deployment_id}",
+            )
         )
-    )
-    _mark_dns_provisioned(conn, deployment_id=deployment_id)
+        _mark_dns_provisioned(conn, deployment_id=deployment_id)
+    else:
+        dns_result = CloudflareDnsApplyResult(
+            deployment_id=deployment_id,
+            live=selected_executor.config.live_enabled,
+            status="skipped",
+            records=(),
+            metadata={
+                "adapter": selected_executor.config.adapter_name,
+                "ingress_mode": worker.ingress_mode,
+                "reason": "cloudflare_dns_not_used_for_tailscale_ingress",
+            },
+        )
     docker_result = selected_executor.docker_compose_apply(
         DockerComposeApplyRequest(
             deployment_id=deployment_id,
@@ -315,6 +363,7 @@ def _apply_deployment(
             "host_id": str(placement["host_id"]),
             "docker_status": docker_result.status,
             "dns_status": dns_result.status,
+            "ingress_mode": worker.ingress_mode,
             "service_count": len(docker_result.services),
         },
     )
@@ -348,12 +397,20 @@ def _executor_for_host(
     if adapter == "local":
         runner = SubprocessDockerComposeRunner(docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"))
     elif adapter == "ssh":
+        ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+        key_path = str(worker.env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
+        known_hosts = str(worker.env.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
+        if key_path:
+            ssh_options.extend(("-i", key_path))
+        if known_hosts:
+            ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
         runner = SshDockerComposeRunner(
             host=str(host_meta.get("ssh_host") or host["hostname"]),
             user=str(host_meta.get("ssh_user") or "root"),
             ssh_binary=str(worker.env.get("ARCLINK_SSH_BINARY") or "ssh"),
             rsync_binary=str(worker.env.get("ARCLINK_RSYNC_BINARY") or "rsync"),
             docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"),
+            ssh_options=tuple(ssh_options),
         )
     else:
         raise ArcLinkSovereignWorkerError(

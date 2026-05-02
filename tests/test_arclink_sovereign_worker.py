@@ -37,8 +37,13 @@ def seed_ready_deployment(control, conn):
 def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
     return worker_mod.SovereignWorkerConfig(
         enabled=enabled,
+        ingress_mode="domain",
         base_domain="example.test",
         edge_target="edge.example.test",
+        tailscale_dns_name="",
+        tailscale_host_strategy="path",
+        tailscale_https_port="443",
+        tailscale_notion_path="/notion/webhook",
         state_root_base=f"{tmpdir}/deployments",
         cloudflare_zone_id="zone_fake",
         executor_adapter="fake",
@@ -46,6 +51,8 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
         max_attempts=3,
         register_local_host=register_local,
         local_hostname="worker-1.example.test",
+        local_ssh_host="",
+        local_ssh_user="root",
         local_region="us-east",
         local_capacity_slots=2,
         secret_store_dir=Path(tmpdir) / "secrets",
@@ -85,6 +92,41 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     print("PASS test_fake_sovereign_worker_applies_ready_deployment")
 
 
+def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailscale")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailscale")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                },
+            }
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg)
+
+    expect(results[0]["status"] == "applied", str(results))
+    expect(results[0]["dns_records"] == [], str(results))
+    expect(results[0]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1234", str(results))
+    dns_count = conn.execute("SELECT COUNT(*) AS c FROM arclink_dns_records").fetchone()["c"]
+    expect(dns_count == 0, str(dns_count))
+    event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'sovereign_pod_applied'").fetchone()
+    expect('"ingress_mode": "tailscale"' in event["metadata_json"], event["metadata_json"])
+    print("PASS test_tailscale_sovereign_worker_skips_cloudflare_dns")
+
+
 def test_sovereign_worker_is_disabled_until_explicitly_enabled() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_disabled")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_disabled")
@@ -117,6 +159,7 @@ def test_sovereign_worker_fails_closed_without_fleet_capacity() -> None:
 
 if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
+    test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
-    print("\nAll 3 Sovereign worker tests passed.")
+    print("\nAll 4 Sovereign worker tests passed.")

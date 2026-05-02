@@ -97,6 +97,12 @@ ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
 ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
 ARCLINK_PRODUCT_NAME="${ARCLINK_PRODUCT_NAME:-ArcLink}"
 ARCLINK_BASE_DOMAIN="${ARCLINK_BASE_DOMAIN:-arclink.online}"
+ARCLINK_INGRESS_MODE="${ARCLINK_INGRESS_MODE:-domain}"
+ARCLINK_TAILSCALE_DNS_NAME="${ARCLINK_TAILSCALE_DNS_NAME:-}"
+ARCLINK_TAILSCALE_CONTROL_URL="${ARCLINK_TAILSCALE_CONTROL_URL:-}"
+ARCLINK_TAILSCALE_HTTPS_PORT="${ARCLINK_TAILSCALE_HTTPS_PORT:-443}"
+ARCLINK_TAILSCALE_NOTION_PATH="${ARCLINK_TAILSCALE_NOTION_PATH:-/notion/webhook}"
+ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}"
 ARCLINK_PRIMARY_PROVIDER="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
 ARCLINK_API_HOST="${ARCLINK_API_HOST:-127.0.0.1}"
 ARCLINK_API_PORT="${ARCLINK_API_PORT:-8900}"
@@ -114,8 +120,12 @@ ARCLINK_STATE_ROOT_BASE="${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
 ARCLINK_SECRET_STORE_DIR="${ARCLINK_SECRET_STORE_DIR:-}"
 ARCLINK_REGISTER_LOCAL_FLEET_HOST="${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
 ARCLINK_LOCAL_FLEET_HOSTNAME="${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
+ARCLINK_LOCAL_FLEET_SSH_HOST="${ARCLINK_LOCAL_FLEET_SSH_HOST:-}"
+ARCLINK_LOCAL_FLEET_SSH_USER="${ARCLINK_LOCAL_FLEET_SSH_USER:-root}"
 ARCLINK_LOCAL_FLEET_REGION="${ARCLINK_LOCAL_FLEET_REGION:-}"
 ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
+ARCLINK_FLEET_SSH_KEY_PATH="${ARCLINK_FLEET_SSH_KEY_PATH:-}"
+ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
 STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
 STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
@@ -2060,6 +2070,12 @@ emit_runtime_config() {
     write_kv ARCLINK_NAME "$ARCLINK_NAME"
     write_kv ARCLINK_PRODUCT_NAME "${ARCLINK_PRODUCT_NAME:-ArcLink}"
     write_kv ARCLINK_BASE_DOMAIN "${ARCLINK_BASE_DOMAIN:-arclink.online}"
+    write_kv ARCLINK_INGRESS_MODE "${ARCLINK_INGRESS_MODE:-domain}"
+    write_kv ARCLINK_TAILSCALE_DNS_NAME "${ARCLINK_TAILSCALE_DNS_NAME:-}"
+    write_kv ARCLINK_TAILSCALE_CONTROL_URL "${ARCLINK_TAILSCALE_CONTROL_URL:-}"
+    write_kv ARCLINK_TAILSCALE_HTTPS_PORT "${ARCLINK_TAILSCALE_HTTPS_PORT:-443}"
+    write_kv ARCLINK_TAILSCALE_NOTION_PATH "${ARCLINK_TAILSCALE_NOTION_PATH:-/notion/webhook}"
+    write_kv ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}"
     write_kv ARCLINK_PRIMARY_PROVIDER "${ARCLINK_PRIMARY_PROVIDER:-chutes}"
     write_kv ARCLINK_USER "$ARCLINK_USER"
     write_kv ARCLINK_HOME "$ARCLINK_HOME"
@@ -2110,8 +2126,12 @@ emit_runtime_config() {
     write_kv ARCLINK_SECRET_STORE_DIR "${ARCLINK_SECRET_STORE_DIR:-$STATE_DIR/sovereign-secrets}"
     write_kv ARCLINK_REGISTER_LOCAL_FLEET_HOST "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
     write_kv ARCLINK_LOCAL_FLEET_HOSTNAME "${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
+    write_kv ARCLINK_LOCAL_FLEET_SSH_HOST "${ARCLINK_LOCAL_FLEET_SSH_HOST:-}"
+    write_kv ARCLINK_LOCAL_FLEET_SSH_USER "${ARCLINK_LOCAL_FLEET_SSH_USER:-root}"
     write_kv ARCLINK_LOCAL_FLEET_REGION "${ARCLINK_LOCAL_FLEET_REGION:-}"
     write_kv ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
+    write_kv ARCLINK_FLEET_SSH_KEY_PATH "${ARCLINK_FLEET_SSH_KEY_PATH:-}"
+    write_kv ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
     write_kv STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
     write_kv STRIPE_WEBHOOK_SECRET "${STRIPE_WEBHOOK_SECRET:-}"
     write_kv CLOUDFLARE_API_TOKEN "${CLOUDFLARE_API_TOKEN:-}"
@@ -8385,9 +8405,86 @@ EOF
   echo "Wrote Docker config to: $docker_env"
 }
 
+normalize_control_ingress_mode() {
+  local value="${1:-domain}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    domain|tailscale) printf '%s\n' "$value" ;;
+    *) printf '%s\n' "domain" ;;
+  esac
+}
+
+normalize_tailscale_host_strategy() {
+  local value="${1:-path}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    path|subdomain) printf '%s\n' "$value" ;;
+    *) printf '%s\n' "path" ;;
+  esac
+}
+
+ensure_control_fleet_ssh_key() {
+  local key_path="${ARCLINK_FLEET_SSH_KEY_PATH:-$BOOTSTRAP_DIR/arclink-priv/secrets/ssh/id_ed25519}"
+  local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-$BOOTSTRAP_DIR/arclink-priv/secrets/ssh/known_hosts}"
+
+  mkdir -p "$(dirname "$key_path")"
+  chmod 700 "$(dirname "$key_path")"
+  if [[ ! -f "$key_path" ]]; then
+    ssh-keygen -t ed25519 -N "" -C "arclink-control-fleet@$(hostname 2>/dev/null || printf arclink)" -f "$key_path" >/dev/null
+  fi
+  touch "$known_hosts"
+  chmod 600 "$key_path" "$known_hosts"
+  [[ -f "$key_path.pub" ]] && chmod 644 "$key_path.pub"
+  ARCLINK_FLEET_SSH_KEY_PATH="$key_path"
+  ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="$known_hosts"
+}
+
+print_control_fleet_ssh_key_guidance() {
+  if [[ -z "${ARCLINK_FLEET_SSH_KEY_PATH:-}" || ! -r "${ARCLINK_FLEET_SSH_KEY_PATH:-}.pub" ]]; then
+    return 0
+  fi
+  cat <<EOF
+ArcLink fleet SSH control key
+  Add this public key to the starter/fleet node account that ArcLink will use
+  for SSH provisioning. This is idempotent; rerunning deploy.sh reuses it.
+
+$(cat "$ARCLINK_FLEET_SSH_KEY_PATH.pub")
+
+EOF
+}
+
+publish_control_tailscale_ingress() {
+  local port="${ARCLINK_TAILSCALE_HTTPS_PORT:-443}"
+  local notion_path="${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}"
+  local web_port="${ARCLINK_WEB_PORT:-3000}"
+  local api_port="${ARCLINK_API_PORT:-8900}"
+  local notion_port="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
+
+  if [[ "${ARCLINK_INGRESS_MODE:-domain}" != "tailscale" ]]; then
+    return 0
+  fi
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "Tailscale ingress selected, but tailscale CLI is not installed on the control host." >&2
+    echo "Docker services are up; install/login Tailscale and rerun ./deploy.sh control reconfigure." >&2
+    return 0
+  fi
+  if ! tailscale status --json >/dev/null 2>&1; then
+    echo "Tailscale ingress selected, but tailscale is not logged in or running on this host." >&2
+    echo "Docker services are up; run tailscale up and rerun ./deploy.sh control reconfigure." >&2
+    return 0
+  fi
+  notion_path="$(normalize_http_path "$notion_path")"
+  echo "Publishing Dockerized Sovereign Control Node over Tailscale Funnel on HTTPS :$port ..."
+  tailscale funnel --bg --yes --https="$port" "http://127.0.0.1:$web_port" >/dev/null
+  tailscale funnel --bg --yes --https="$port" --set-path="/api" "http://127.0.0.1:$api_port" >/dev/null
+  tailscale funnel --bg --yes --https="$port" --set-path="$notion_path" "http://127.0.0.1:$notion_port" >/dev/null
+}
+
 collect_control_install_answers() {
   local docker_env="" default_base_domain="" default_api_port="" default_web_port=""
   local default_cors_origin="" default_cookie_domain="" default_price_id=""
+  local detected_tailscale_dns="" ingress_answer="" default_tailscale_dns=""
+  local ssh_key_confirmed=""
 
   docker_env="$(docker_env_file_path)"
   load_docker_runtime_config
@@ -8405,6 +8502,10 @@ collect_control_install_answers() {
 
   ARCLINK_PRODUCT_NAME="${ARCLINK_PRODUCT_NAME:-ArcLink}"
   ARCLINK_PRIMARY_PROVIDER="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
+  detect_tailscale
+  detected_tailscale_dns="${TAILSCALE_DNS_NAME:-}"
+  default_tailscale_dns="${ARCLINK_TAILSCALE_DNS_NAME:-$detected_tailscale_dns}"
+  ARCLINK_INGRESS_MODE="$(normalize_control_ingress_mode "${ARCLINK_INGRESS_MODE:-domain}")"
   default_base_domain="${ARCLINK_BASE_DOMAIN:-arclink.online}"
   default_api_port="${ARCLINK_API_PORT:-8900}"
   default_web_port="${ARCLINK_WEB_PORT:-3000}"
@@ -8412,9 +8513,55 @@ collect_control_install_answers() {
   default_cookie_domain="${ARCLINK_COOKIE_DOMAIN:-.$default_base_domain}"
   default_price_id="${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
 
-  ARCLINK_BASE_DOMAIN="$(normalize_optional_answer "$(ask "ArcLink public base domain" "$default_base_domain")")"
-  if [[ -z "$ARCLINK_BASE_DOMAIN" ]]; then
-    ARCLINK_BASE_DOMAIN="arclink.online"
+  if [[ -n "$detected_tailscale_dns" ]]; then
+    echo "Detected Tailscale DNS name: $detected_tailscale_dns"
+    echo
+  fi
+  ingress_answer="$(normalize_optional_answer "$(ask "ArcLink ingress mode (domain/tailscale)" "$ARCLINK_INGRESS_MODE")")"
+  ARCLINK_INGRESS_MODE="$(normalize_control_ingress_mode "${ingress_answer:-$ARCLINK_INGRESS_MODE}")"
+  if [[ "$ARCLINK_INGRESS_MODE" == "tailscale" ]]; then
+    ARCLINK_TAILSCALE_DNS_NAME="$(normalize_optional_answer "$(ask "Tailscale DNS name for this control node" "${default_tailscale_dns:-$default_base_domain}")")"
+    if [[ -z "$ARCLINK_TAILSCALE_DNS_NAME" ]]; then
+      ARCLINK_TAILSCALE_DNS_NAME="$default_base_domain"
+    fi
+    ARCLINK_TAILSCALE_HTTPS_PORT="$(ask "Tailscale HTTPS/Funnel port for public control and Notion" "${ARCLINK_TAILSCALE_HTTPS_PORT:-443}")"
+    if [[ -z "$ARCLINK_TAILSCALE_HTTPS_PORT" ]]; then
+      ARCLINK_TAILSCALE_HTTPS_PORT="443"
+    fi
+    case "$ARCLINK_TAILSCALE_HTTPS_PORT" in
+      443|8443|10000) ;;
+      *)
+        echo "Tailscale Funnel supports HTTPS ports 443, 8443, and 10000. Using 443." >&2
+        ARCLINK_TAILSCALE_HTTPS_PORT="443"
+        ;;
+    esac
+    ARCLINK_TAILSCALE_NOTION_PATH="$(normalize_http_path "$(ask "Tailscale public Notion webhook path" "${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}")")"
+    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="$(normalize_tailscale_host_strategy "$(ask "Tailscale deployment URL strategy (path/subdomain)" "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}")")"
+    ARCLINK_BASE_DOMAIN="$ARCLINK_TAILSCALE_DNS_NAME"
+    ARCLINK_EDGE_TARGET="$ARCLINK_TAILSCALE_DNS_NAME"
+    ARCLINK_TAILSCALE_CONTROL_URL="https://$ARCLINK_TAILSCALE_DNS_NAME"
+    if [[ "$ARCLINK_TAILSCALE_HTTPS_PORT" != "443" ]]; then
+      ARCLINK_TAILSCALE_CONTROL_URL="https://$ARCLINK_TAILSCALE_DNS_NAME:$ARCLINK_TAILSCALE_HTTPS_PORT"
+    fi
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="1"
+    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$ARCLINK_TAILSCALE_HTTPS_PORT"
+    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$ARCLINK_TAILSCALE_NOTION_PATH"
+    ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="$ARCLINK_TAILSCALE_CONTROL_URL$ARCLINK_TAILSCALE_NOTION_PATH"
+    default_cors_origin="$ARCLINK_TAILSCALE_CONTROL_URL"
+    default_cookie_domain=""
+  else
+    ARCLINK_BASE_DOMAIN="$(normalize_optional_answer "$(ask "ArcLink public root domain" "$default_base_domain")")"
+    if [[ -z "$ARCLINK_BASE_DOMAIN" ]]; then
+      ARCLINK_BASE_DOMAIN="arclink.online"
+    fi
+    ARCLINK_EDGE_TARGET="$(normalize_optional_answer "$(ask "Cloudflare DNS edge target" "${ARCLINK_EDGE_TARGET:-edge.$ARCLINK_BASE_DOMAIN}")")"
+    if [[ -z "$ARCLINK_EDGE_TARGET" ]]; then
+      ARCLINK_EDGE_TARGET="edge.$ARCLINK_BASE_DOMAIN"
+    fi
+    ARCLINK_TAILSCALE_CONTROL_URL="${ARCLINK_TAILSCALE_CONTROL_URL:-}"
+    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="$(normalize_tailscale_host_strategy "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}")"
+    default_cors_origin="${ARCLINK_CORS_ORIGIN:-https://$ARCLINK_BASE_DOMAIN}"
+    default_cookie_domain="${ARCLINK_COOKIE_DOMAIN:-.$ARCLINK_BASE_DOMAIN}"
   fi
   ARCLINK_API_HOST="0.0.0.0"
   ARCLINK_API_PORT="$(ask "Control API local port" "$default_api_port")"
@@ -8438,10 +8585,6 @@ collect_control_install_answers() {
       ARCLINK_EXECUTOR_ADAPTER="ssh"
     fi
   fi
-  ARCLINK_EDGE_TARGET="$(normalize_optional_answer "$(ask "Cloudflare DNS edge target" "${ARCLINK_EDGE_TARGET:-edge.$ARCLINK_BASE_DOMAIN}")")"
-  if [[ -z "$ARCLINK_EDGE_TARGET" ]]; then
-    ARCLINK_EDGE_TARGET="edge.$ARCLINK_BASE_DOMAIN"
-  fi
   ARCLINK_STATE_ROOT_BASE="$(normalize_optional_answer "$(ask "Worker deployment state root base" "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")")"
   if [[ -z "$ARCLINK_STATE_ROOT_BASE" ]]; then
     ARCLINK_STATE_ROOT_BASE="/arcdata/deployments"
@@ -8449,14 +8592,35 @@ collect_control_install_answers() {
   ARCLINK_REGISTER_LOCAL_FLEET_HOST="$(ask_yes_no "Register this machine as a starter Sovereign worker host" "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}")"
   if [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; then
     ARCLINK_LOCAL_FLEET_HOSTNAME="$(normalize_optional_answer "$(ask "Local fleet hostname" "${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}")")"
+    if [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" ]]; then
+      ARCLINK_LOCAL_FLEET_SSH_HOST="$(normalize_optional_answer "$(ask "Local/starter fleet SSH host" "${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}")")"
+      ARCLINK_LOCAL_FLEET_SSH_USER="$(normalize_optional_answer "$(ask "Local/starter fleet SSH user" "${ARCLINK_LOCAL_FLEET_SSH_USER:-root}")")"
+      if [[ -z "$ARCLINK_LOCAL_FLEET_SSH_USER" ]]; then
+        ARCLINK_LOCAL_FLEET_SSH_USER="root"
+      fi
+    fi
     ARCLINK_LOCAL_FLEET_REGION="$(normalize_optional_answer "$(ask "Local fleet region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
     ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="$(ask "Local fleet capacity slots" "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
+  fi
+  if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" ]]; then
+    ensure_control_fleet_ssh_key
+    print_control_fleet_ssh_key_guidance
+    if [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" || "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; then
+      ssh_key_confirmed="$(ask_yes_no "I have added this public key to the starter/fleet node authorized_keys" "0")"
+      if [[ "$ssh_key_confirmed" != "1" ]]; then
+        echo "Continuing. SSH fleet applies will remain blocked until that key is trusted by the target node." >&2
+      fi
+    fi
   fi
 
   STRIPE_SECRET_KEY="$(ask_secret_with_default "Stripe secret key (ENTER keeps current, type none to clear)" "${STRIPE_SECRET_KEY:-}")"
   STRIPE_WEBHOOK_SECRET="$(ask_secret_with_default "Stripe webhook secret (ENTER keeps current, type none to clear)" "${STRIPE_WEBHOOK_SECRET:-}")"
-  CLOUDFLARE_API_TOKEN="$(ask_secret_with_default "Cloudflare DNS API token (ENTER keeps current, type none to clear)" "${CLOUDFLARE_API_TOKEN:-}")"
-  CLOUDFLARE_ZONE_ID="$(normalize_optional_answer "$(ask "Cloudflare zone ID (type none to clear)" "${CLOUDFLARE_ZONE_ID:-}")")"
+  if [[ "$ARCLINK_INGRESS_MODE" == "domain" ]]; then
+    CLOUDFLARE_API_TOKEN="$(ask_secret_with_default "Cloudflare DNS API token (ENTER keeps current, type none to clear)" "${CLOUDFLARE_API_TOKEN:-}")"
+    CLOUDFLARE_ZONE_ID="$(normalize_optional_answer "$(ask "Cloudflare zone ID (type none to clear)" "${CLOUDFLARE_ZONE_ID:-}")")"
+  else
+    echo "Tailscale ingress selected: Cloudflare DNS credentials are not required for Sovereign pod routing."
+  fi
   CHUTES_API_KEY="$(ask_secret_with_default "Chutes owner API key (ENTER keeps current, type none to clear)" "${CHUTES_API_KEY:-}")"
   TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Public Telegram bot token (ENTER keeps current, type none to clear)" "${TELEGRAM_BOT_TOKEN:-}")"
   TELEGRAM_BOT_USERNAME="$(normalize_optional_answer "$(ask "Public Telegram bot username (type none to clear)" "${TELEGRAM_BOT_USERNAME:-}")")"
@@ -8516,6 +8680,8 @@ run_control_install_flow() {
   fi
   run_arclink_docker build
   run_arclink_docker up
+  load_docker_runtime_config
+  publish_control_tailscale_ingress
   run_arclink_docker record-release
   run_arclink_docker ports
   run_arclink_docker health
@@ -8530,6 +8696,8 @@ run_control_reconfigure_flow() {
     collect_control_install_answers
   fi
   run_arclink_docker config -q
+  load_docker_runtime_config
+  publish_control_tailscale_ingress
   run_arclink_docker ports
 }
 

@@ -16,8 +16,8 @@ from arclink_control import (
     upsert_arclink_service_health,
 )
 from arclink_access import build_arclink_ssh_access_record
-from arclink_adapters import arclink_hostnames
-from arclink_ingress import desired_arclink_dns_records, render_traefik_dynamic_labels
+from arclink_adapters import arclink_access_urls, arclink_hostnames, arclink_tailscale_hostnames
+from arclink_ingress import desired_arclink_ingress_records, render_traefik_dynamic_labels
 from arclink_product import chutes_base_url, chutes_default_model, model_reasoning_default, primary_provider
 
 
@@ -212,6 +212,20 @@ def _render_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict
 
 def _host_urls(hostnames: Mapping[str, str]) -> dict[str, str]:
     return {role: f"https://{hostname}" for role, hostname in hostnames.items()}
+
+
+def _clean_ingress_mode(value: str | None) -> str:
+    mode = str(value or "domain").strip().lower()
+    if mode not in {"domain", "tailscale"}:
+        raise ArcLinkProvisioningError("ArcLink ingress mode must be domain or tailscale")
+    return mode
+
+
+def _clean_tailscale_strategy(value: str | None) -> str:
+    strategy = str(value or "path").strip().lower()
+    if strategy not in {"path", "subdomain"}:
+        raise ArcLinkProvisioningError("ArcLink Tailscale host strategy must be path or subdomain")
+    return strategy
 
 
 def _compose_secret_name(key: str) -> str:
@@ -476,18 +490,58 @@ def render_arclink_provisioning_intent(
     base_domain: str = "",
     edge_target: str = "",
     state_root_base: str = "/arcdata/deployments",
+    ingress_mode: str = "",
+    tailscale_dns_name: str = "",
+    tailscale_host_strategy: str = "",
+    tailscale_notion_path: str = "",
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     deployment = _load_deployment(conn, deployment_id)
     metadata = _json_loads(str(deployment.get("metadata_json") or "{}"))
     user = _load_user(conn, str(deployment["user_id"]))
+    source_env = dict(env or {})
+    clean_ingress_mode = _clean_ingress_mode(
+        ingress_mode or str(source_env.get("ARCLINK_INGRESS_MODE") or "") or str(metadata.get("ingress_mode") or "") or "domain"
+    )
+    clean_tailscale_dns_name = str(
+        tailscale_dns_name
+        or source_env.get("ARCLINK_TAILSCALE_DNS_NAME")
+        or metadata.get("tailscale_dns_name")
+        or ""
+    ).strip().lower().strip(".")
+    clean_tailscale_strategy = _clean_tailscale_strategy(
+        tailscale_host_strategy
+        or str(source_env.get("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY") or "")
+        or str(metadata.get("tailscale_host_strategy") or "")
+        or "path"
+    )
     clean_base_domain = str(base_domain or deployment.get("base_domain") or metadata.get("base_domain") or "localhost").strip()
+    if clean_ingress_mode == "tailscale":
+        clean_base_domain = clean_tailscale_dns_name or clean_base_domain
+        if not clean_tailscale_dns_name:
+            clean_tailscale_dns_name = clean_base_domain
     clean_edge_target = str(edge_target or metadata.get("edge_target") or f"edge.{clean_base_domain}").strip()
     prefix = str(deployment["prefix"])
     roots = render_arclink_state_roots(deployment_id=deployment_id, prefix=prefix, state_root_base=state_root_base)
-    hostnames = arclink_hostnames(prefix, clean_base_domain)
-    dns_records = desired_arclink_dns_records(prefix=prefix, base_domain=clean_base_domain, target=clean_edge_target)
-    labels = render_traefik_dynamic_labels(prefix=prefix, base_domain=clean_base_domain)
+    if clean_ingress_mode == "tailscale":
+        hostnames = arclink_tailscale_hostnames(prefix, clean_tailscale_dns_name, strategy=clean_tailscale_strategy)
+    else:
+        hostnames = arclink_hostnames(prefix, clean_base_domain)
+    dns_records = desired_arclink_ingress_records(
+        prefix=prefix,
+        base_domain=clean_base_domain,
+        target=clean_edge_target,
+        ingress_mode=clean_ingress_mode,
+        tailscale_dns_name=clean_tailscale_dns_name,
+        tailscale_host_strategy=clean_tailscale_strategy,
+    )
+    labels = render_traefik_dynamic_labels(
+        prefix=prefix,
+        base_domain=clean_base_domain,
+        ingress_mode=clean_ingress_mode,
+        tailscale_dns_name=clean_tailscale_dns_name,
+        tailscale_host_strategy=clean_tailscale_strategy,
+    )
     secret_refs = _render_secret_refs(deployment_id, metadata)
     compose_secrets = _render_compose_secrets(secret_refs)
     deployment_env = {
@@ -495,6 +549,15 @@ def render_arclink_provisioning_intent(
         "ARCLINK_USER_ID": str(deployment["user_id"]),
         "ARCLINK_PREFIX": prefix,
         "ARCLINK_BASE_DOMAIN": clean_base_domain,
+        "ARCLINK_INGRESS_MODE": clean_ingress_mode,
+        "ARCLINK_TAILSCALE_DNS_NAME": clean_tailscale_dns_name,
+        "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": clean_tailscale_strategy,
+        "ARCLINK_TAILSCALE_NOTION_PATH": str(
+            tailscale_notion_path
+            or source_env.get("ARCLINK_TAILSCALE_NOTION_PATH")
+            or source_env.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH")
+            or "/notion/webhook"
+        ),
         "ARCLINK_DASHBOARD_HOST": hostnames["dashboard"],
         "ARCLINK_FILES_HOST": hostnames["files"],
         "ARCLINK_CODE_HOST": hostnames["code"],
@@ -529,7 +592,8 @@ def render_arclink_provisioning_intent(
     executable = arclink_deployment_can_provision(conn, deployment_id=deployment_id)
     ssh = build_arclink_ssh_access_record(
         username=f"arc-{prefix}",
-        hostname=f"ssh-{prefix}.{clean_base_domain}",
+        hostname=clean_tailscale_dns_name if clean_ingress_mode == "tailscale" else f"ssh-{prefix}.{clean_base_domain}",
+        strategy="tailscale_direct_ssh" if clean_ingress_mode == "tailscale" else "cloudflare_access_tcp",
     )
     intent = {
         "deployment": {
@@ -538,6 +602,7 @@ def render_arclink_provisioning_intent(
             "user_email": str(user.get("email") or ""),
             "prefix": prefix,
             "base_domain": clean_base_domain,
+            "ingress_mode": clean_ingress_mode,
             "status": str(deployment["status"]),
         },
         "state_roots": roots,
@@ -577,7 +642,13 @@ def render_arclink_provisioning_intent(
         },
         "traefik": {"labels": {role: dict(role_labels) for role, role_labels in labels.items()}},
         "access": {
-            "urls": _host_urls(hostnames),
+            "urls": arclink_access_urls(
+                prefix=prefix,
+                base_domain=clean_base_domain,
+                ingress_mode=clean_ingress_mode,
+                tailscale_dns_name=clean_tailscale_dns_name,
+                tailscale_host_strategy=clean_tailscale_strategy,
+            ),
             "ssh": {
                 "strategy": ssh.strategy,
                 "username": ssh.username,
@@ -589,6 +660,8 @@ def render_arclink_provisioning_intent(
             "ready": executable,
             "blocked_reason": "" if executable else "entitlement_required",
             "entitlement_state": entitlement_state,
+            "ingress_mode": clean_ingress_mode,
+            "dns_provider": "cloudflare" if clean_ingress_mode == "domain" else "tailscale",
         },
     }
     validate_no_plaintext_secrets(intent)
@@ -625,6 +698,10 @@ def render_arclink_provisioning_dry_run(
     base_domain: str = "",
     edge_target: str = "",
     state_root_base: str = "/arcdata/deployments",
+    ingress_mode: str = "",
+    tailscale_dns_name: str = "",
+    tailscale_host_strategy: str = "",
+    tailscale_notion_path: str = "",
     idempotency_key: str = "",
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -648,6 +725,10 @@ def render_arclink_provisioning_dry_run(
                 base_domain=base_domain,
                 edge_target=edge_target,
                 state_root_base=state_root_base,
+                ingress_mode=ingress_mode,
+                tailscale_dns_name=tailscale_dns_name,
+                tailscale_host_strategy=tailscale_host_strategy,
+                tailscale_notion_path=tailscale_notion_path,
                 env=env,
             )
             return {"job_id": job_id, "intent": intent}
@@ -662,6 +743,10 @@ def render_arclink_provisioning_dry_run(
             base_domain=base_domain,
             edge_target=edge_target,
             state_root_base=state_root_base,
+            ingress_mode=ingress_mode,
+            tailscale_dns_name=tailscale_dns_name,
+            tailscale_host_strategy=tailscale_host_strategy,
+            tailscale_notion_path=tailscale_notion_path,
             env=env,
         )
         _record_health_placeholders(conn, deployment_id=deployment_id)

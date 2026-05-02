@@ -17,6 +17,12 @@ x-arclink-app: &arclink-app
     ARCLINK_DOCKER_MODE: "1"
     ARCLINK_PRODUCT_NAME: ${ARCLINK_PRODUCT_NAME:-ArcLink}
     ARCLINK_BASE_DOMAIN: ${ARCLINK_BASE_DOMAIN:-arclink.online}
+    ARCLINK_INGRESS_MODE: ${ARCLINK_INGRESS_MODE:-domain}
+    ARCLINK_TAILSCALE_DNS_NAME: ${ARCLINK_TAILSCALE_DNS_NAME:-}
+    ARCLINK_TAILSCALE_CONTROL_URL: ${ARCLINK_TAILSCALE_CONTROL_URL:-}
+    ARCLINK_TAILSCALE_HTTPS_PORT: ${ARCLINK_TAILSCALE_HTTPS_PORT:-443}
+    ARCLINK_TAILSCALE_NOTION_PATH: ${ARCLINK_TAILSCALE_NOTION_PATH:-/notion/webhook}
+    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY: ${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}
     ARCLINK_PRIMARY_PROVIDER: ${ARCLINK_PRIMARY_PROVIDER:-chutes}
     ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}
     ARCLINK_BACKEND_ALLOWED_CIDRS: ${ARCLINK_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}
@@ -58,8 +64,12 @@ x-arclink-app: &arclink-app
     ARCLINK_SECRET_STORE_DIR: ${ARCLINK_SECRET_STORE_DIR:-/home/arclink/arclink/arclink-priv/state/sovereign-secrets}
     ARCLINK_REGISTER_LOCAL_FLEET_HOST: ${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}
     ARCLINK_LOCAL_FLEET_HOSTNAME: ${ARCLINK_LOCAL_FLEET_HOSTNAME:-}
+    ARCLINK_LOCAL_FLEET_SSH_HOST: ${ARCLINK_LOCAL_FLEET_SSH_HOST:-}
+    ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-root}
     ARCLINK_LOCAL_FLEET_REGION: ${ARCLINK_LOCAL_FLEET_REGION:-}
     ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS: ${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}
+    ARCLINK_FLEET_SSH_KEY_PATH: ${ARCLINK_FLEET_SSH_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519}
+    ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE: ${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-/home/arclink/arclink/arclink-priv/secrets/ssh/known_hosts}
     RUNTIME_DIR: /opt/arclink/runtime
     HOME: /home/arclink
     XDG_CONFIG_HOME: /home/arclink/.qmd/config
@@ -213,7 +223,7 @@ services:
       - ./arclink-priv:/home/arclink/arclink/arclink-priv
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
-      - ./arclink-priv/secrets/ssh:/root/.ssh:ro
+      - ./arclink-priv/secrets/ssh:/root/.ssh
       # Intentional trusted-host boundary: the Sovereign provisioner needs
       # Docker API access when ARCLINK_EXECUTOR_ADAPTER=local.
       - /var/run/docker.sock:/var/run/docker.sock

@@ -28,6 +28,10 @@ The control path delegates to the Docker substrate, but it does not mean
 - `arclink-mcp`, `qmd-mcp`, `notion-webhook`, job loops, Redis/Postgres, and
   Nextcloud as the local control-node substrate.
 
+The app runtime stays Dockerized in this mode. Host-level work is limited to
+bootstrap and ingress duties such as Docker Compose, optional Tailscale
+Funnel/Serve publication, and SSH key handoff for fleet workers.
+
 The inherited containerized Shared Host path remains available at:
 
 ```bash
@@ -74,19 +78,28 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      materialized files.
 
 6. **Ingress**
-   - `python/arclink_ingress.py` computes the Cloudflare DNS records and
-     Traefik labels for:
+   - `./deploy.sh control install` asks for `domain` or `tailscale`.
+   - In `domain` mode, `python/arclink_ingress.py` computes Cloudflare DNS
+     records and Traefik labels for:
      - `u-<prefix>.<base-domain>`
      - `files-<prefix>.<base-domain>`
      - `code-<prefix>.<base-domain>`
      - `hermes-<prefix>.<base-domain>`
+   - In `tailscale` mode, Cloudflare DNS is skipped. The control host is
+     published with Tailscale Funnel on `ARCLINK_TAILSCALE_HTTPS_PORT`, default
+     `443`, and Notion uses `ARCLINK_TAILSCALE_NOTION_PATH`, default
+     `/notion/webhook`. Per-pod URLs default to path-based routes under the
+     worker Tailscale FQDN, for example
+     `https://worker.tailnet.ts.net/u/<prefix>/code`. `subdomain` can be
+     selected only for environments that really provide resolvable/certified
+     sub-subdomains under the Tailscale name.
 
 7. **Execution and health**
    - `python/arclink_sovereign_worker.py` is the control-node worker. It:
      claims paid deployments, registers an optional starter local host, places
      the deployment onto a fleet host, renders the pod intent, applies
-     Cloudflare DNS, applies Docker Compose locally or over SSH, records service
-     health, and writes audited timeline events.
+     Cloudflare DNS only in domain mode, applies Docker Compose locally or over
+     SSH, records service health, and writes audited timeline events.
    - `python/arclink_executor.py` is the executor boundary for Docker Compose,
      Cloudflare DNS/access, Chutes key lifecycle, Stripe actions, and rollback.
      In live mode it materializes compose/env/secret files under the deployment
@@ -111,8 +124,7 @@ are present in `arclink-priv/config/docker.env`:
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `ARCLINK_DEFAULT_PRICE_ID`
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ZONE_ID`
+- `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID` for `domain` ingress mode.
 - `CHUTES_API_KEY`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_BOT_USERNAME`
@@ -122,17 +134,22 @@ are present in `arclink-priv/config/docker.env`:
 - `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`
 - `ARCLINK_EXECUTOR_ADAPTER=ssh` for remote fleet hosts, or `local` for a
   starter single-host deployment.
+- `ARCLINK_INGRESS_MODE=domain` or `tailscale`.
 - `ARCLINK_EDGE_TARGET`, usually a load-balancer or ingress hostname that every
-  per-user subdomain CNAME points at.
+  per-user subdomain CNAME points at in `domain` mode.
+- `ARCLINK_TAILSCALE_DNS_NAME` for `tailscale` mode.
 - For SSH fleet execution, put the worker-host SSH key material and
-  `known_hosts` entries under `arclink-priv/secrets/ssh/`; that directory is
-  mounted read-only into `control-provisioner`.
+  `known_hosts` entries under `arclink-priv/secrets/ssh/`. `deploy.sh control
+  install` generates/reuses `id_ed25519`, prints `id_ed25519.pub`, and asks the
+  operator to confirm it was added to the starter/fleet node. The directory is
+  mounted into `control-provisioner` so SSH can persist `known_hosts`.
 
 ## Current Boundary
 
 The control node starts the hosted API, web control center, and provisioner loop
 from `deploy.sh control`. The worker-host path now exists for local and SSH
-Docker Compose execution, with Cloudflare DNS upserts and secret-file
-materialization. Live proof is still gated by real provider credentials,
-registered fleet capacity, SSH reachability to worker hosts, and service health
-checks against the deployed pods.
+Docker Compose execution, with Cloudflare DNS upserts in domain mode,
+Tailscale-safe DNS skipping in Tailscale mode, and secret-file materialization.
+Live proof is still gated by real provider credentials, registered fleet
+capacity, SSH reachability to worker hosts, ingress publication, and service
+health checks against the deployed pods.

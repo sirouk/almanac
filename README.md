@@ -409,10 +409,10 @@ from the same control-plane state.
 Sovereign Control Node Mode is the product control-plane path backed by Docker
 Compose. The host becomes the coordinator for self-serve users: web/API,
 Telegram, and Discord onboarding; Stripe checkout/webhooks; fleet placement;
-per-user pod intent; Cloudflare ingress intent; health; and user/admin
-dashboards. Individual deployments are treated as Sovereign pods with their own
-runtime state, secrets, health, and product configuration. This is also the
-future collaboration model described in `FUTURE_SHARED_ARCLINK.md`.
+per-user pod intent; Tailscale or Cloudflare/domain ingress intent; health; and
+user/admin dashboards. Individual deployments are treated as Sovereign pods
+with their own runtime state, secrets, health, and product configuration. This
+is also the future collaboration model described in `FUTURE_SHARED_ARCLINK.md`.
 
 ### Sovereign Control Node Quick Start
 
@@ -431,19 +431,34 @@ The selected ports are persisted in `arclink-priv/state/docker/ports.json`.
 Use the wrapper commands for normal operation; raw Compose intentionally refuses
 to start until the generated secret env values exist.
 
-Sovereign Control Node install asks the public product questions: base domain,
-control API/web ports, provisioner enablement, executor adapter (`ssh` for
-fleet hosts, `local` for a starter single-host deployment, `fake` for dry
-validation), Stripe price and webhook settings, Cloudflare zone credentials,
-Chutes owner key, and shared Telegram/Discord bot credentials. Missing
-credentials are allowed during bootstrap, but live E2E remains gated until they
-are present.
+Sovereign Control Node install asks the public product questions: ingress mode
+(`tailscale` or `domain`), control API/web ports, provisioner enablement,
+executor adapter (`ssh` for fleet hosts, `local` for a starter single-host
+deployment, `fake` for dry validation), Stripe price and webhook settings,
+Chutes owner key, and shared Telegram/Discord bot credentials. In `domain`
+mode it also asks for the root domain, Cloudflare DNS edge target, API token,
+and zone ID. In `tailscale` mode it asks for the node's Tailscale DNS name,
+uses `:443` by default for the public control/Notion path, and does not require
+Cloudflare DNS credentials. Missing provider credentials are allowed during
+bootstrap, but live E2E remains gated until they are present.
+
+Tailscale mode keeps the control node application Dockerized. `deploy.sh`
+brings up the Docker stack, then uses the host Tailscale CLI only as the
+network edge to publish the Dockerized web, API, and Notion webhook services.
+Per-user pod URLs default to path-based routes under the worker's Tailscale
+FQDN, for example `https://worker.tailnet.ts.net/u/<prefix>/files`. A
+`subdomain` strategy exists for environments that can really resolve and
+certificate sub-subdomains under a Tailscale name, but `path` is the safe
+default.
 
 When enabled, `control-provisioner` runs
 `python/arclink_sovereign_worker.py`: it claims paid `provisioning_ready`
-deployments, places them onto registered fleet hosts, applies Cloudflare DNS,
-materializes per-pod Docker Compose bundles, starts them locally or over SSH,
-and records health/audit/handoff state.
+deployments, places them onto registered fleet hosts, applies Cloudflare DNS in
+domain mode or skips DNS in Tailscale mode, materializes per-pod Docker Compose
+bundles, starts them locally or over SSH, and records health/audit/handoff
+state. For SSH fleet execution, `deploy.sh control install` generates or reuses
+`arclink-priv/secrets/ssh/id_ed25519`, prints the public key, and asks you to
+confirm it has been added to the target node's `authorized_keys`.
 
 Control-node details live in
 `docs/arclink/sovereign-control-node.md`.

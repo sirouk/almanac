@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -208,6 +209,62 @@ def arclink_hostnames(prefix: str, base_domain: str) -> dict[str, str]:
     }
 
 
+def arclink_tailscale_hostnames(prefix: str, tailscale_dns_name: str, *, strategy: str = "path") -> dict[str, str]:
+    clean_prefix = str(prefix or "").strip().lower()
+    clean_host = str(tailscale_dns_name or "").strip().lower().strip(".")
+    clean_strategy = str(strategy or "path").strip().lower()
+    if not clean_prefix or not clean_host:
+        raise ValueError("prefix and tailscale_dns_name are required")
+    if clean_strategy == "path":
+        return {role: clean_host for role in ("dashboard", "files", "code", "hermes")}
+    if clean_strategy == "subdomain":
+        return {
+            "dashboard": f"u-{clean_prefix}.{clean_host}",
+            "files": f"files-{clean_prefix}.{clean_host}",
+            "code": f"code-{clean_prefix}.{clean_host}",
+            "hermes": f"hermes-{clean_prefix}.{clean_host}",
+        }
+    raise ValueError("ArcLink Tailscale host strategy must be path or subdomain")
+
+
+def arclink_role_path_prefixes(prefix: str) -> dict[str, str]:
+    clean_prefix = re.sub(r"[^a-z0-9-]+", "-", str(prefix or "").strip().lower()).strip("-")
+    if not clean_prefix:
+        raise ValueError("prefix is required")
+    root = f"/u/{clean_prefix}"
+    return {
+        "dashboard": root,
+        "files": f"{root}/files",
+        "code": f"{root}/code",
+        "hermes": f"{root}/hermes",
+    }
+
+
+def arclink_access_urls(
+    *,
+    prefix: str,
+    base_domain: str,
+    ingress_mode: str = "domain",
+    tailscale_dns_name: str = "",
+    tailscale_host_strategy: str = "path",
+) -> dict[str, str]:
+    mode = str(ingress_mode or "domain").strip().lower()
+    strategy = str(tailscale_host_strategy or "path").strip().lower()
+    if mode == "tailscale":
+        hostnames = arclink_tailscale_hostnames(
+            prefix,
+            tailscale_dns_name or base_domain,
+            strategy=strategy,
+        )
+        if strategy == "path":
+            prefixes = arclink_role_path_prefixes(prefix)
+            return {role: f"https://{hostnames[role]}{prefixes[role]}" for role in hostnames}
+        return {role: f"https://{hostname}" for role, hostname in hostnames.items()}
+    if mode != "domain":
+        raise ValueError("ArcLink ingress mode must be domain or tailscale")
+    return {role: f"https://{hostname}" for role, hostname in arclink_hostnames(prefix, base_domain).items()}
+
+
 def render_traefik_http_labels(*, service_name: str, hostname: str, port: int) -> dict[str, str]:
     router = f"arclink-{service_name}"
     return {
@@ -215,5 +272,22 @@ def render_traefik_http_labels(*, service_name: str, hostname: str, port: int) -
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`)",
         f"traefik.http.routers.{router}.entrypoints": "websecure",
         f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
+    }
+
+
+def render_traefik_http_path_labels(*, service_name: str, hostname: str, path_prefix: str, port: int) -> dict[str, str]:
+    router = f"arclink-{service_name}"
+    middleware = f"{router}-strip"
+    clean_path = str(path_prefix or "").strip()
+    if not clean_path.startswith("/"):
+        clean_path = f"/{clean_path}"
+    return {
+        "traefik.enable": "true",
+        f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`) && PathPrefix(`{clean_path}`)",
+        f"traefik.http.routers.{router}.entrypoints": "websecure",
+        f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.routers.{router}.middlewares": middleware,
+        f"traefik.http.middlewares.{middleware}.stripprefix.prefixes": clean_path,
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
     }

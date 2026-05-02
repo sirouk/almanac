@@ -159,6 +159,51 @@ def _stripe_user_id(obj: Mapping[str, Any]) -> str:
     return result
 
 
+def _stripe_user_id_or_empty(obj: Mapping[str, Any]) -> str:
+    try:
+        return _stripe_user_id(obj)
+    except ArcLinkEntitlementError:
+        return ""
+
+
+def _stripe_user_id_from_local_state(
+    conn: sqlite3.Connection,
+    *,
+    subscription_id: str,
+    stripe_customer_id: str,
+) -> str:
+    clean_subscription_id = str(subscription_id or "").strip()
+    if clean_subscription_id:
+        row = conn.execute(
+            """
+            SELECT user_id
+            FROM arclink_subscriptions
+            WHERE stripe_subscription_id = ?
+               OR subscription_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (clean_subscription_id, f"stripe:{clean_subscription_id}"),
+        ).fetchone()
+        if row is not None:
+            return str(row["user_id"] or "").strip()
+    clean_customer_id = str(stripe_customer_id or "").strip()
+    if clean_customer_id:
+        row = conn.execute(
+            """
+            SELECT user_id
+            FROM arclink_users
+            WHERE stripe_customer_id = ?
+            ORDER BY entitlement_updated_at DESC
+            LIMIT 1
+            """,
+            (clean_customer_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row["user_id"] or "").strip()
+    return ""
+
+
 def _stripe_subscription_id(obj: Mapping[str, Any]) -> str:
     for key in ("subscription", "id"):
         value = str(obj.get(key) or "").strip()
@@ -352,9 +397,18 @@ def process_stripe_webhook(
             )
 
         obj = _event_object(event)
-        user_id = _stripe_user_id(obj)
         subscription_id = _stripe_subscription_id(obj)
         stripe_customer_id = str(obj.get("customer") or "").strip()
+        user_id = _first_nonempty((
+            _stripe_user_id_or_empty(obj),
+            _stripe_user_id_from_local_state(
+                conn,
+                subscription_id=subscription_id,
+                stripe_customer_id=stripe_customer_id,
+            ),
+        ))
+        if not user_id:
+            raise ArcLinkEntitlementError("Stripe webhook did not include an ArcLink user id")
         entitlement_state = _entitlement_for_stripe_event(event_type, obj)
 
         if subscription_id:

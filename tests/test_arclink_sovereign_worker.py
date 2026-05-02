@@ -157,9 +157,28 @@ def test_sovereign_worker_fails_closed_without_fleet_capacity() -> None:
     print("PASS test_sovereign_worker_fails_closed_without_fleet_capacity")
 
 
+def test_notion_webhook_secret_is_generated_without_notion_token() -> None:
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_notion_secret")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        resolver = worker_mod.SovereignSecretResolver(
+            env={},
+            secret_store_dir=Path(tmpdir) / "store",
+            materialization_root=Path(tmpdir) / "materialized",
+        )
+        resolved = resolver.materialize(
+            "secret://arclink/notion/dep_1/webhook-secret",
+            "/run/secrets/notion_webhook_secret",
+        )
+        secret_file = Path(resolved.source_path)
+        expect(secret_file.exists(), "expected generated Notion webhook secret file")
+        expect(secret_file.read_text(encoding="utf-8").strip().startswith("arc_"), "expected generated ArcLink secret")
+    print("PASS test_notion_webhook_secret_is_generated_without_notion_token")
+
+
 if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
-    print("\nAll 4 Sovereign worker tests passed.")
+    test_notion_webhook_secret_is_generated_without_notion_token()
+    print("\nAll 5 Sovereign worker tests passed.")

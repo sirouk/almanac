@@ -125,6 +125,8 @@ def _provider_env_for_ref(secret_ref: str) -> str:
     if secret_ref.startswith("secret://arclink/discord/"):
         return "DISCORD_BOT_TOKEN"
     if secret_ref.startswith("secret://arclink/notion/"):
+        if secret_ref.rstrip("/").endswith("/webhook-secret"):
+            return ""
         return "NOTION_TOKEN"
     if secret_ref.startswith("secret://arclink/stripe/"):
         return "STRIPE_SECRET_KEY"

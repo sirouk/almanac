@@ -290,6 +290,41 @@ def test_prepare_onboarding_preserves_existing_entitlement() -> None:
     print("PASS test_prepare_onboarding_preserves_existing_entitlement")
 
 
+def test_prepare_onboarding_reuses_existing_user_by_email() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_reuse_email_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_reuse_email_test")
+    conn = memory_db(control)
+    existing = control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_existing_email",
+        email="repeat@example.test",
+        display_name="Existing Customer",
+        entitlement_state="paid",
+    )
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="repeat-session",
+        session_id="onb_repeat_email",
+        email_hint="repeat@example.test",
+        display_name_hint="Repeat Customer",
+        selected_plan_id="starter",
+    )
+
+    prepared = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=session["session_id"],
+        base_domain="example.test",
+    )
+
+    expect(prepared["user_id"] == existing["user_id"], str(prepared))
+    user_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM arclink_users WHERE LOWER(email) = LOWER('repeat@example.test')"
+    ).fetchone()["count"]
+    expect(int(user_count) == 1, f"expected one reused user, got {user_count}")
+    print("PASS test_prepare_onboarding_reuses_existing_user_by_email")
+
+
 def test_web_telegram_discord_onboarding_parity() -> None:
     """Prove all three channels create identical session shapes through the shared contract."""
     control = load_module("arclink_control.py", "arclink_control_parity_test")
@@ -339,8 +374,9 @@ def main() -> int:
     test_successful_checkout_uses_entitlement_gate_before_provisioning_ready()
     test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens()
     test_prepare_onboarding_preserves_existing_entitlement()
+    test_prepare_onboarding_reuses_existing_user_by_email()
     test_web_telegram_discord_onboarding_parity()
-    print("PASS all 6 ArcLink onboarding tests")
+    print("PASS all 7 ArcLink onboarding tests")
     return 0
 
 

@@ -695,6 +695,56 @@ def test_public_onboarding_checkout_route() -> None:
     print("PASS test_public_onboarding_checkout_route")
 
 
+def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_checkout_live_resolve_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_checkout_live_resolve_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_SECRET_KEY": "sk_test_configured_secret",
+        "ARCLINK_DEFAULT_PRICE_ID": "price_live_resolve",
+    })
+    calls: list[dict] = []
+
+    class RecordingStripe:
+        def create_checkout_session(self, **kwargs):
+            calls.append(kwargs)
+            return {"id": "cs_live_resolved", "url": "https://checkout.stripe.com/c/cs_live_resolved"}
+
+    def fake_resolve(env):
+        expect(env["STRIPE_SECRET_KEY"] == "sk_test_configured_secret", str(env))
+        return RecordingStripe()
+
+    hosted.resolve_stripe_client = fake_resolve
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps({"channel": "web", "email": "live-resolve@example.test", "plan_id": "starter"}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}: {payload}")
+    session_id = payload["session"]["session_id"]
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/checkout",
+        headers={},
+        body=json.dumps({
+            "session_id": session_id,
+            "success_url": "https://app.arclink.online/success",
+            "cancel_url": "https://app.arclink.online/cancel",
+        }),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["session"]["checkout_url"].startswith("https://checkout.stripe.com/"), str(payload))
+    expect(calls and calls[0]["price_id"] == "price_live_resolve", str(calls))
+    print("PASS test_public_onboarding_checkout_resolves_live_stripe_from_config")
+
+
 def test_web_telegram_discord_onboarding_parity() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_parity_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_parity_test")
@@ -873,6 +923,34 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
     )
     expect(status == 200, f"replay expected 200 got {status}")
     expect(payload["replayed"] is True, f"expected replayed=True: {payload}")
+
+    invoice_payload = json.dumps({
+        "id": "evt_invoice_1",
+        "type": "invoice.payment_succeeded",
+        "data": {
+            "object": {
+                "id": "in_test_1",
+                "customer": "cus_test_1",
+                "subscription": "sub_test_1",
+                "status": "paid",
+                "metadata": {},
+            }
+        },
+    })
+    invoice_signature = adapters.sign_stripe_webhook(invoice_payload, secret, timestamp=int(_time.time()))
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": invoice_signature},
+        body=invoice_payload, config=config,
+    )
+    expect(status == 200, f"invoice expected 200 got {status}: {payload}")
+    expect(payload["event_type"] == "invoice.payment_succeeded", str(payload))
+    subscription = conn.execute(
+        "SELECT user_id, status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_test_1'"
+    ).fetchone()
+    expect(subscription is not None, "expected Stripe subscription mirror")
+    expect(subscription["user_id"] == prepared["user_id"], str(dict(subscription)))
+    expect(subscription["status"] == "paid", str(dict(subscription)))
 
     print("PASS test_stripe_webhook_processes_entitlement_transition")
 
@@ -1571,6 +1649,7 @@ def main() -> int:
     test_user_portal_link_route()
     test_user_login_sets_session_cookies_and_logout_clears_them()
     test_public_onboarding_checkout_route()
+    test_public_onboarding_checkout_resolves_live_stripe_from_config()
     test_web_telegram_discord_onboarding_parity()
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()
@@ -1596,7 +1675,7 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
     test_admin_scale_operations_requires_auth_and_returns_snapshot()
-    print("PASS all 44 ArcLink hosted API tests")
+    print("PASS all 45 ArcLink hosted API tests")
     return 0
 
 

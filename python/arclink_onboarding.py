@@ -347,12 +347,23 @@ def prepare_arclink_onboarding_deployment(
     prefix: str = "",
 ) -> dict[str, Any]:
     session = dict(_session_row(conn, session_id))
-    user_id = str(session.get("user_id") or "") or _stable_id("arcusr", session_id, length=18)
+    email_hint = str(session.get("email_hint") or "")
+    existing_user = None
+    if email_hint:
+        existing_user = conn.execute(
+            "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?)",
+            (email_hint,),
+        ).fetchone()
+    user_id = (
+        str(session.get("user_id") or "")
+        or (str(existing_user["user_id"] or "") if existing_user is not None else "")
+        or _stable_id("arcusr", session_id, length=18)
+    )
     deployment_id = str(session.get("deployment_id") or "") or _stable_id("arcdep", session_id, length=18)
     upsert_arclink_user(
         conn,
         user_id=user_id,
-        email=str(session.get("email_hint") or ""),
+        email=email_hint,
         display_name=str(session.get("display_name_hint") or ""),
     )
     existing = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()

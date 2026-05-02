@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
-from arclink_adapters import FakeStripeClient, StripeWebhookError
+from arclink_adapters import StripeWebhookError, resolve_stripe_client
 from arclink_control import Config, connect_db
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
@@ -955,7 +955,7 @@ def route_arclink_hosted_api(
     start = time.monotonic()
     try:
         parsed_body = _json_body(body) if body else {}
-        stripe = stripe_client or FakeStripeClient()
+        stripe = stripe_client or resolve_stripe_client(cfg.env)
 
         if route_key == "public_onboarding_start":
             result = _handle_public_onboarding_start(conn, parsed_body, request_id, cfg)

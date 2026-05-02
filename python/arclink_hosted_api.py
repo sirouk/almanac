@@ -40,7 +40,9 @@ from arclink_api_auth import (
     read_admin_events_api,
     read_admin_provisioning_jobs_api,
     read_admin_queued_actions_api,
+    read_admin_reconciliation_api,
     read_admin_service_health_api,
+    read_provider_state_api,
     read_user_billing_api,
     read_user_dashboard_api,
     read_user_provisioning_status_api,
@@ -48,7 +50,13 @@ from arclink_api_auth import (
     revoke_arclink_session,
     start_public_onboarding_api,
 )
+from arclink_discord import (
+    ArcLinkDiscordError,
+    DiscordConfig,
+    handle_discord_webhook_request,
+)
 from arclink_product import base_domain as default_base_domain
+from arclink_telegram import TelegramConfig, handle_telegram_update
 
 logger = logging.getLogger("arclink.hosted_api")
 
@@ -417,6 +425,7 @@ _ADMIN_READ_HANDLERS: dict[str, tuple[Any, tuple[str, ...]]] = {
     "admin_events": (read_admin_events_api, ("deployment_id", "since")),
     "admin_queued_actions": (read_admin_queued_actions_api, ("deployment_id", "status", "since")),
     "admin_dns_drift": (read_admin_dns_drift_api, ("deployment_id", "since")),
+    "admin_reconciliation": (read_admin_reconciliation_api, ()),
 }
 
 
@@ -460,6 +469,88 @@ def _handle_session_revoke(
     return _json_response(200, {"session": result}, request_id=request_id, extra_headers=extra)
 
 
+def _handle_provider_state(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    session_kind: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind=session_kind)
+    result = read_provider_state_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        session_kind=session_kind,
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+
+def _handle_health(
+    conn: sqlite3.Connection,
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    """Simple liveness check — verifies DB is reachable."""
+    try:
+        conn.execute("SELECT 1").fetchone()
+        db_ok = True
+    except Exception:
+        db_ok = False
+    status = 200 if db_ok else 503
+    return _json_response(status, {"status": "ok" if db_ok else "degraded", "db": db_ok}, request_id=request_id)
+
+
+def _handle_telegram_webhook(
+    conn: sqlite3.Connection,
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    stripe_client: Any,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    """Handle an incoming Telegram Bot API update (webhook mode)."""
+    result = handle_telegram_update(
+        conn, body,
+        stripe_client=stripe_client,
+        price_id=config.default_price_id,
+        base_domain=config.base_domain,
+    )
+    if result is None:
+        return _json_response(200, {"ok": True, "action": "ignored"}, request_id=request_id)
+    return _json_response(200, {"ok": True, "action": result.get("action", "reply")}, request_id=request_id)
+
+
+def _handle_discord_webhook(
+    conn: sqlite3.Connection,
+    raw_body: str,
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    discord_config: DiscordConfig | None,
+    stripe_client: Any,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    """Handle an incoming Discord interaction webhook."""
+    dc = discord_config or DiscordConfig.from_env()
+    if not dc.public_key:
+        return _json_response(500, {"error": "discord_not_configured"}, request_id=request_id)
+    sig = _api_header(headers, "x-signature-ed25519")
+    ts = _api_header(headers, "x-signature-timestamp")
+    try:
+        response = handle_discord_webhook_request(
+            conn,
+            body=raw_body,
+            signature=sig,
+            timestamp=ts,
+            config=dc,
+            stripe_client=stripe_client,
+            price_id=config.default_price_id,
+            base_domain=config.base_domain,
+        )
+    except ArcLinkDiscordError as exc:
+        return _json_response(401, {"error": str(exc)}, request_id=request_id)
+    return _json_response(200, response, request_id=request_id)
+
+
 # --- Router -------------------------------------------------------------------
 
 # Route table: (method, path_suffix) -> handler_key
@@ -468,6 +559,8 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/onboarding/answer"): "public_onboarding_answer",
     ("POST", "/onboarding/checkout"): "public_onboarding_checkout",
     ("POST", "/webhooks/stripe"): "stripe_webhook",
+    ("POST", "/webhooks/telegram"): "telegram_webhook",
+    ("POST", "/webhooks/discord"): "discord_webhook",
     ("POST", "/auth/admin/login"): "admin_login",
     ("POST", "/auth/user/login"): "user_login",
     ("POST", "/auth/user/logout"): "user_logout",
@@ -484,7 +577,11 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/events"): "admin_events",
     ("GET", "/admin/actions"): "admin_queued_actions",
     ("POST", "/admin/actions"): "admin_action",
+    ("GET", "/admin/reconciliation"): "admin_reconciliation",
+    ("GET", "/admin/provider-state"): "admin_provider_state",
     ("POST", "/admin/sessions/revoke"): "session_revoke",
+    ("GET", "/user/provider-state"): "user_provider_state",
+    ("GET", "/health"): "health",
 }
 
 # Routes that require no session authentication (public endpoints)
@@ -493,8 +590,11 @@ _PUBLIC_ROUTES = frozenset({
     "public_onboarding_answer",
     "public_onboarding_checkout",
     "stripe_webhook",
+    "telegram_webhook",
+    "discord_webhook",
     "admin_login",
     "user_login",
+    "health",
 })
 
 
@@ -548,6 +648,10 @@ def route_arclink_hosted_api(
             result = _handle_public_onboarding_checkout(conn, parsed_body, request_id, cfg, stripe)
         elif route_key == "stripe_webhook":
             result = _handle_stripe_webhook(conn, body, headers, request_id, cfg)
+        elif route_key == "telegram_webhook":
+            result = _handle_telegram_webhook(conn, parsed_body, request_id, cfg, stripe)
+        elif route_key == "discord_webhook":
+            result = _handle_discord_webhook(conn, body, headers, request_id, cfg, None, stripe)
         elif route_key == "admin_login":
             result = _handle_admin_login(conn, parsed_body, request_id, cfg)
         elif route_key == "user_login":
@@ -572,6 +676,12 @@ def route_arclink_hosted_api(
             result = _handle_admin_action(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "session_revoke":
             result = _handle_session_revoke(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "admin_provider_state":
+            result = _handle_provider_state(conn, headers, request_id, cfg, "admin")
+        elif route_key == "user_provider_state":
+            result = _handle_provider_state(conn, headers, request_id, cfg, "user")
+        elif route_key == "health":
+            result = _handle_health(conn, request_id)
         else:
             result = _json_response(404, {"error": "not_found"}, request_id=request_id)
 

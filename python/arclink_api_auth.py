@@ -20,7 +20,8 @@ from arclink_onboarding import (
     normalize_arclink_public_onboarding_contact,
     open_arclink_onboarding_checkout,
 )
-from arclink_product import chutes_default_model
+from arclink_entitlements import ReconciliationDrift, detect_stripe_reconciliation_drift
+from arclink_product import chutes_default_model, primary_provider
 
 
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
@@ -140,10 +141,6 @@ def _new_token(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
 
 
-def _rowdict(row: sqlite3.Row | None) -> dict[str, Any]:
-    return rowdict(row)
-
-
 def _require_active_time(row: Mapping[str, Any], *, kind: str) -> None:
     if str(row.get("status") or "") != "active" or str(row.get("revoked_at") or ""):
         raise ArcLinkApiAuthError(f"ArcLink {kind} session is not active")
@@ -236,7 +233,7 @@ def upsert_arclink_admin(
     )
     if commit:
         conn.commit()
-    return _rowdict(conn.execute("SELECT * FROM arclink_admins WHERE admin_id = ?", (clean_admin,)).fetchone())
+    return rowdict(conn.execute("SELECT * FROM arclink_admins WHERE admin_id = ?", (clean_admin,)).fetchone())
 
 
 def grant_arclink_admin_role(
@@ -266,7 +263,7 @@ def grant_arclink_admin_role(
     )
     if commit:
         conn.commit()
-    return _rowdict(
+    return rowdict(
         conn.execute("SELECT * FROM arclink_admin_roles WHERE admin_id = ? AND role = ?", (clean_admin, clean_role)).fetchone()
     )
 
@@ -377,7 +374,7 @@ def create_arclink_user_session(
         (clean_session, user_id, _hash_token(token), _hash_token(csrf), _json(metadata), now, now, utc_after_seconds_iso(ttl_seconds)),
     )
     conn.commit()
-    record = _rowdict(conn.execute("SELECT * FROM arclink_user_sessions WHERE session_id = ?", (clean_session,)).fetchone())
+    record = rowdict(conn.execute("SELECT * FROM arclink_user_sessions WHERE session_id = ?", (clean_session,)).fetchone())
     return {**_public_session(record), "session_token": token, "csrf_token": csrf}
 
 
@@ -420,7 +417,7 @@ def create_arclink_admin_session(
         ),
     )
     conn.commit()
-    record = _rowdict(conn.execute("SELECT * FROM arclink_admin_sessions WHERE session_id = ?", (clean_session,)).fetchone())
+    record = rowdict(conn.execute("SELECT * FROM arclink_admin_sessions WHERE session_id = ?", (clean_session,)).fetchone())
     return {**_public_session(record), "session_token": token, "csrf_token": csrf}
 
 
@@ -754,6 +751,54 @@ def read_admin_queued_actions_api(
     return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="actions", dashboard_key="action_intents", **filters)
 
 
+def read_provider_state_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    session_kind: str = "user",
+) -> ArcLinkApiResponse:
+    """Read current provider/model configuration state."""
+    if session_kind == "admin":
+        authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    else:
+        authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    provider = primary_provider()
+    default_model = chutes_default_model()
+    # Gather per-deployment model assignments from arclink_deployments
+    deployments = conn.execute(
+        "SELECT deployment_id, user_id, metadata_json FROM arclink_deployments WHERE status NOT IN ('teardown_complete', 'cancelled')"
+    ).fetchall()
+    deployment_models = []
+    for row in deployments:
+        meta = json_loads_safe(row["metadata_json"] or "{}")
+        model_id = str(meta.get("selected_model_id") or meta.get("model_id") or default_model)
+        deployment_models.append({"deployment_id": row["deployment_id"], "user_id": row["user_id"], "model_id": model_id})
+    return ArcLinkApiResponse(status=200, payload={
+        "provider": provider,
+        "default_model": default_model,
+        "deployment_models": deployment_models,
+    })
+
+
+def read_admin_reconciliation_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+) -> ArcLinkApiResponse:
+    """Read Stripe-vs-local reconciliation drift summary."""
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    drift_items = detect_stripe_reconciliation_drift(conn)
+    return ArcLinkApiResponse(status=200, payload={
+        "reconciliation": [
+            {"kind": d.kind, "user_id": d.user_id, "detail": d.detail}
+            for d in drift_items
+        ],
+        "drift_count": len(drift_items),
+    })
+
+
 def queue_admin_action_api(
     conn: sqlite3.Connection,
     *,
@@ -814,4 +859,4 @@ def revoke_arclink_session(
     )
     if commit:
         conn.commit()
-    return _public_session(_rowdict(conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (clean_session,)).fetchone()))
+    return _public_session(rowdict(conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (clean_session,)).fetchone()))

@@ -82,10 +82,6 @@ def _limit(value: int) -> int:
     return min(100, max(1, int(value or 25)))
 
 
-def _rowdict(row: sqlite3.Row) -> dict[str, Any]:
-    return rowdict(row)
-
-
 def _deployment_urls(prefix: str, base_domain: str) -> dict[str, str]:
     if not str(prefix or "").strip() or not str(base_domain or "").strip():
         return {}
@@ -307,7 +303,7 @@ def read_arclink_user_dashboard(
         tuple(deployment_args),
     ).fetchall()
     subscriptions = [
-        _rowdict(row)
+        rowdict(row)
         for row in conn.execute(
             """
             SELECT subscription_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at
@@ -407,7 +403,7 @@ def read_arclink_admin_dashboard(
         onboarding_args.append(filters["status"])
     onboarding_where += _time_filter("created_at", filters["since"], onboarding_args)
     session_counts = [
-        _rowdict(row)
+        rowdict(row)
         for row in conn.execute(
             f"""
             SELECT channel, status, COUNT(*) AS count
@@ -427,7 +423,7 @@ def read_arclink_admin_dashboard(
         event_args.append(filters["channel"])
     event_where += _time_filter("created_at", filters["since"], event_args)
     event_counts = [
-        _rowdict(row)
+        rowdict(row)
         for row in conn.execute(
             f"""
             SELECT event_type, COUNT(*) AS count
@@ -484,7 +480,7 @@ def read_arclink_admin_dashboard(
         subscription_args.append(filters["status"])
     subscription_where += _time_filter("updated_at", filters["since"], subscription_args)
     subscriptions = [
-        _rowdict(row)
+        rowdict(row)
         for row in conn.execute(
             f"""
             SELECT subscription_id, user_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at
@@ -539,7 +535,7 @@ def read_arclink_admin_dashboard(
         jobs_args.append(filters["status"])
     jobs_where += _time_filter("requested_at", filters["since"], jobs_args)
     provisioning_jobs = [
-        _rowdict(row)
+        rowdict(row)
         for row in conn.execute(
             f"""
             SELECT job_id, deployment_id, job_kind, status, attempt_count, requested_at, started_at, finished_at, error
@@ -672,7 +668,7 @@ def read_arclink_admin_dashboard(
         failure_job_args.append(filters["deployment_id"])
     failure_job_where += _time_filter("COALESCE(finished_at, requested_at)", filters["since"], failure_job_args)
     recent_failures = [
-        {"kind": "provisioning_job", **_rowdict(row)}
+        {"kind": "provisioning_job", **rowdict(row)}
         for row in conn.execute(
             f"""
             SELECT job_id, deployment_id, job_kind, status, error, finished_at AS occurred_at

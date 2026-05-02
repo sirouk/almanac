@@ -850,6 +850,195 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
     print("PASS test_stripe_webhook_processes_entitlement_transition")
 
 
+def test_telegram_webhook_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_tg_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Valid update
+    update = json.dumps({
+        "update_id": 1,
+        "message": {
+            "message_id": 1,
+            "chat": {"id": 12345},
+            "from": {"id": 67890},
+            "text": "/start",
+        },
+    })
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/telegram",
+        headers={}, body=update, config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload.get("ok") is True, str(payload))
+    expect(payload.get("action") != "ignored", f"expected handled action: {payload}")
+
+    # Non-text update (no message) should be ignored
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/telegram",
+        headers={}, body=json.dumps({"update_id": 2}), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}")
+    expect(payload.get("action") == "ignored", str(payload))
+
+    print("PASS test_telegram_webhook_route")
+
+
+def test_discord_webhook_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_dc_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dc_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Ping interaction (with test_public_key sentinel)
+    import os
+    os.environ["DISCORD_PUBLIC_KEY"] = "test_public_key"
+    os.environ["DISCORD_BOT_TOKEN"] = "fake"
+    os.environ["DISCORD_APP_ID"] = "app123"
+    try:
+        ping_body = json.dumps({"type": 1})
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn, method="POST", path="/api/v1/webhooks/discord",
+            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": "123"},
+            body=ping_body, config=config,
+        )
+        expect(status == 200, f"expected 200 got {status}: {payload}")
+        expect(payload.get("type") == 1, f"expected PONG: {payload}")
+
+        # Slash command
+        interaction = json.dumps({
+            "type": 2,
+            "channel_id": "chan1",
+            "member": {"user": {"id": "user1"}},
+            "data": {"name": "arclink", "options": [{"name": "message", "value": "hello"}]},
+        })
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn, method="POST", path="/api/v1/webhooks/discord",
+            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": "123"},
+            body=interaction, config=config,
+        )
+        expect(status == 200, f"expected 200 got {status}: {payload}")
+        expect(payload.get("type") == 4, f"expected CHANNEL_MESSAGE: {payload}")
+        expect("content" in payload.get("data", {}), str(payload))
+    finally:
+        os.environ.pop("DISCORD_PUBLIC_KEY", None)
+        os.environ.pop("DISCORD_BOT_TOKEN", None)
+        os.environ.pop("DISCORD_APP_ID", None)
+
+    # No public key configured → 500
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/discord",
+        headers={}, body=json.dumps({"type": 1}), config=config,
+    )
+    expect(status == 500, f"expected 500 without config got {status}")
+    expect(payload.get("error") == "discord_not_configured", str(payload))
+
+    print("PASS test_discord_webhook_route")
+
+
+def test_health_endpoint_requires_no_auth() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_healthep_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_healthep_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/health", headers={}, config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["status"] == "ok", str(payload))
+    expect(payload["db"] is True, str(payload))
+
+    print("PASS test_health_endpoint_requires_no_auth")
+
+
+def test_user_provider_state_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_uprov_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_uprov_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_uprov_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_uprov_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_uprov")
+
+    # No auth -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/provider-state", headers={}, config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}")
+
+    # With auth -> 200
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/provider-state",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect("provider" in payload, str(payload))
+    expect("default_model" in payload, str(payload))
+    expect("deployment_models" in payload, str(payload))
+
+    print("PASS test_user_provider_state_route")
+
+
+def test_admin_provider_state_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_aprov_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_aprov_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_aprov_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    api.upsert_arclink_admin(conn, admin_id="admin_aprov", email="aprov@example.test", role="ops")
+    session = api.create_arclink_admin_session(conn, admin_id="admin_aprov", session_id="asess_aprov")
+
+    # No auth -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/provider-state", headers={}, config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}")
+
+    # With auth -> 200
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/provider-state",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["provider"] == "chutes", str(payload))
+    expect("default_model" in payload, str(payload))
+
+    print("PASS test_admin_provider_state_route")
+
+
+def test_admin_reconciliation_route() -> None:
+    control = load_module("almanac_control.py", "almanac_control_hosted_recon_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_recon_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_recon_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_recon_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    seed_paid_deployment(control, onboarding, conn)
+    api.upsert_arclink_admin(conn, admin_id="admin_recon", email="recon@example.test", role="ops")
+    session = api.create_arclink_admin_session(conn, admin_id="admin_recon", session_id="asess_recon")
+
+    # No auth -> 401
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/reconciliation", headers={}, config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}")
+
+    # With auth -> 200
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/reconciliation",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect("reconciliation" in payload, str(payload))
+    expect("drift_count" in payload, str(payload))
+    expect(isinstance(payload["reconciliation"], list), str(payload))
+
+    print("PASS test_admin_reconciliation_route")
+
+
 def test_wsgi_adapter_smoke() -> None:
     from io import BytesIO
     control = load_module("almanac_control.py", "almanac_control_hosted_wsgi_test")
@@ -905,8 +1094,14 @@ def main() -> int:
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()
     test_stripe_webhook_processes_entitlement_transition()
+    test_telegram_webhook_route()
+    test_discord_webhook_route()
+    test_health_endpoint_requires_no_auth()
+    test_user_provider_state_route()
+    test_admin_provider_state_route()
+    test_admin_reconciliation_route()
     test_wsgi_adapter_smoke()
-    print("PASS all 24 ArcLink hosted API tests")
+    print("PASS all 30 ArcLink hosted API tests")
     return 0
 
 

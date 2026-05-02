@@ -76,6 +76,11 @@ Executor adapter credential checklist:
 - Docker Compose apply: deployment host shell access, Docker context access,
   writable per-deployment state root, and a secret resolver that writes only
   `/run/secrets/*` files.
+- Local starter fleet apply: an idempotent ArcLink fleet SSH key, a target
+  Unix user such as `arclink`, the public key installed in that user's
+  `authorized_keys`, Docker access for that user, a writable state root such as
+  `/arcdata/deployments`, and a passing `ssh -i <fleet-key> arclink@localhost
+  true` smoke test when localhost is registered as the first worker.
 - Domain ingress apply: Cloudflare zone id or discoverable zone name plus a
   scoped API token that can read and edit DNS records for the test domain.
 - Domain SSH apply: Cloudflare Access/Tunnel account id, tunnel credentials,

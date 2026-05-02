@@ -206,11 +206,11 @@ bootstrap() {
   ensure_env_file_value ARCLINK_REGISTER_LOCAL_FLEET_HOST "0"
   ensure_env_file_value ARCLINK_LOCAL_FLEET_HOSTNAME ""
   ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_HOST ""
-  ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_USER "root"
+  ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_USER "arclink"
   ensure_env_file_value ARCLINK_LOCAL_FLEET_REGION ""
   ensure_env_file_value ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "4"
-  ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "$REPO_DIR/arclink-priv/secrets/ssh/id_ed25519"
-  ensure_env_file_value ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "$REPO_DIR/arclink-priv/secrets/ssh/known_hosts"
+  ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"
+  ensure_env_file_value ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "/home/arclink/arclink/arclink-priv/secrets/ssh/known_hosts"
   reserve_docker_ports
 }
 

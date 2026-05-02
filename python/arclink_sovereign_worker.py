@@ -161,7 +161,7 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
         register_local_host=_truthy(source.get("ARCLINK_REGISTER_LOCAL_FLEET_HOST", "0")),
         local_hostname=local_hostname,
         local_ssh_host=str(source.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip().lower(),
-        local_ssh_user=str(source.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "root").strip(),
+        local_ssh_user=str(source.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink").strip(),
         local_region=str(source.get("ARCLINK_LOCAL_FLEET_REGION") or "").strip().lower(),
         local_capacity_slots=max(1, int(source.get("ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS", "4"))),
         secret_store_dir=Path(source.get("ARCLINK_SECRET_STORE_DIR") or cfg.state_dir / "sovereign-secrets").resolve(),
@@ -406,7 +406,7 @@ def _executor_for_host(
             ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
         runner = SshDockerComposeRunner(
             host=str(host_meta.get("ssh_host") or host["hostname"]),
-            user=str(host_meta.get("ssh_user") or "root"),
+            user=str(host_meta.get("ssh_user") or "arclink"),
             ssh_binary=str(worker.env.get("ARCLINK_SSH_BINARY") or "ssh"),
             rsync_binary=str(worker.env.get("ARCLINK_RSYNC_BINARY") or "rsync"),
             docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"),

@@ -144,8 +144,14 @@ are present in `arclink-priv/config/docker.env`:
 - For SSH fleet execution, put the worker-host SSH key material and
   `known_hosts` entries under `arclink-priv/secrets/ssh/`. `deploy.sh control
   install` generates/reuses `id_ed25519`, prints `id_ed25519.pub`, and asks the
-  operator to confirm it was added to the starter/fleet node. The directory is
-  mounted into `control-provisioner` so SSH can persist `known_hosts`.
+  operator to confirm it was added to the starter/fleet node. When the current
+  machine is registered as the starter worker, deploy can create/repair the
+  `arclink` Unix user, install the key into `authorized_keys`, prepare the
+  deployment state root, add Docker group access if available, and smoke-test
+  `ssh -i ... arclink@localhost true`. The directory is mounted into
+  `control-provisioner` through the container-visible
+  `/home/arclink/arclink/arclink-priv/secrets/ssh/` path so SSH can persist
+  `known_hosts`.
 
 ## Current Boundary
 

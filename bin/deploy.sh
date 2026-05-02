@@ -121,7 +121,7 @@ ARCLINK_SECRET_STORE_DIR="${ARCLINK_SECRET_STORE_DIR:-}"
 ARCLINK_REGISTER_LOCAL_FLEET_HOST="${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
 ARCLINK_LOCAL_FLEET_HOSTNAME="${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
 ARCLINK_LOCAL_FLEET_SSH_HOST="${ARCLINK_LOCAL_FLEET_SSH_HOST:-}"
-ARCLINK_LOCAL_FLEET_SSH_USER="${ARCLINK_LOCAL_FLEET_SSH_USER:-root}"
+ARCLINK_LOCAL_FLEET_SSH_USER="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
 ARCLINK_LOCAL_FLEET_REGION="${ARCLINK_LOCAL_FLEET_REGION:-}"
 ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
 ARCLINK_FLEET_SSH_KEY_PATH="${ARCLINK_FLEET_SSH_KEY_PATH:-}"
@@ -2129,7 +2129,7 @@ emit_runtime_config() {
     write_kv ARCLINK_REGISTER_LOCAL_FLEET_HOST "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
     write_kv ARCLINK_LOCAL_FLEET_HOSTNAME "${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
     write_kv ARCLINK_LOCAL_FLEET_SSH_HOST "${ARCLINK_LOCAL_FLEET_SSH_HOST:-}"
-    write_kv ARCLINK_LOCAL_FLEET_SSH_USER "${ARCLINK_LOCAL_FLEET_SSH_USER:-root}"
+    write_kv ARCLINK_LOCAL_FLEET_SSH_USER "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
     write_kv ARCLINK_LOCAL_FLEET_REGION "${ARCLINK_LOCAL_FLEET_REGION:-}"
     write_kv ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
     write_kv ARCLINK_FLEET_SSH_KEY_PATH "${ARCLINK_FLEET_SSH_KEY_PATH:-}"
@@ -8430,8 +8430,22 @@ normalize_tailscale_host_strategy() {
 }
 
 ensure_control_fleet_ssh_key() {
-  local key_path="${ARCLINK_FLEET_SSH_KEY_PATH:-$BOOTSTRAP_DIR/arclink-priv/secrets/ssh/id_ed25519}"
-  local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-$BOOTSTRAP_DIR/arclink-priv/secrets/ssh/known_hosts}"
+  local runtime_priv_dir="/home/arclink/arclink/arclink-priv"
+  local default_host_key_path="$BOOTSTRAP_DIR/arclink-priv/secrets/ssh/id_ed25519"
+  local default_host_known_hosts="$BOOTSTRAP_DIR/arclink-priv/secrets/ssh/known_hosts"
+  local key_path="${ARCLINK_FLEET_SSH_KEY_PATH:-$default_host_key_path}"
+  local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-$default_host_known_hosts}"
+
+  case "$key_path" in
+    "$runtime_priv_dir"/*)
+      key_path="$BOOTSTRAP_DIR/arclink-priv/${key_path#"$runtime_priv_dir"/}"
+      ;;
+  esac
+  case "$known_hosts" in
+    "$runtime_priv_dir"/*)
+      known_hosts="$BOOTSTRAP_DIR/arclink-priv/${known_hosts#"$runtime_priv_dir"/}"
+      ;;
+  esac
 
   mkdir -p "$(dirname "$key_path")"
   chmod 700 "$(dirname "$key_path")"
@@ -8441,12 +8455,23 @@ ensure_control_fleet_ssh_key() {
   touch "$known_hosts"
   chmod 600 "$key_path" "$known_hosts"
   [[ -f "$key_path.pub" ]] && chmod 644 "$key_path.pub"
-  ARCLINK_FLEET_SSH_KEY_PATH="$key_path"
-  ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="$known_hosts"
+  ARCLINK_FLEET_SSH_KEY_HOST_PATH="$key_path"
+  ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE="$known_hosts"
+  if [[ "$key_path" == "$default_host_key_path" ]]; then
+    ARCLINK_FLEET_SSH_KEY_PATH="$runtime_priv_dir/secrets/ssh/id_ed25519"
+  else
+    ARCLINK_FLEET_SSH_KEY_PATH="$key_path"
+  fi
+  if [[ "$known_hosts" == "$default_host_known_hosts" ]]; then
+    ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="$runtime_priv_dir/secrets/ssh/known_hosts"
+  else
+    ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="$known_hosts"
+  fi
 }
 
 print_control_fleet_ssh_key_guidance() {
-  if [[ -z "${ARCLINK_FLEET_SSH_KEY_PATH:-}" || ! -r "${ARCLINK_FLEET_SSH_KEY_PATH:-}.pub" ]]; then
+  local key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
+  if [[ -z "$key_path" || ! -r "$key_path.pub" ]]; then
     return 0
   fi
   cat <<EOF
@@ -8454,9 +8479,136 @@ ArcLink fleet SSH control key
   Add this public key to the starter/fleet node account that ArcLink will use
   for SSH provisioning. This is idempotent; rerunning deploy.sh reuses it.
 
-$(cat "$ARCLINK_FLEET_SSH_KEY_PATH.pub")
+$(cat "$key_path.pub")
 
 EOF
+}
+
+is_safe_local_fleet_user() {
+  local user="${1:-}"
+  [[ "$user" =~ ^[a-z_][a-z0-9_-]*$ ]]
+}
+
+is_local_fleet_ssh_host() {
+  local host="${1:-}" candidate=""
+
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  host="${host%.}"
+  case "$host" in
+    ""|localhost|127.0.0.1|::1)
+      return 0
+      ;;
+  esac
+  for candidate in \
+    "$(hostname 2>/dev/null || true)" \
+    "$(hostname -f 2>/dev/null || true)" \
+    "${TAILSCALE_DNS_NAME:-}" \
+    "${ARCLINK_TAILSCALE_DNS_NAME:-}"; do
+    candidate="$(printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]')"
+    candidate="${candidate%.}"
+    if [[ -n "$candidate" && "$host" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_local_fleet_ssh_access() {
+  local user="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
+  local host="${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}"
+  local pub_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}.pub"
+  local pub_key="" user_home="" user_group="" ssh_dir="" authorized_keys=""
+
+  if ! is_local_fleet_ssh_host "$host"; then
+    echo "Local fleet SSH bootstrap only manages this machine; '$host' looks remote." >&2
+    return 1
+  fi
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    echo "Local fleet SSH bootstrap needs root so it can create/repair the target Unix user." >&2
+    return 1
+  fi
+  if ! is_safe_local_fleet_user "$user"; then
+    echo "Refusing unsafe local fleet Unix user: $user" >&2
+    return 1
+  fi
+  if [[ ! -r "$pub_path" ]]; then
+    echo "Missing ArcLink fleet public key: $pub_path" >&2
+    return 1
+  fi
+
+  pub_key="$(cat "$pub_path")"
+  if ! id -u "$user" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash "$user"
+    echo "Created local fleet Unix user: $user"
+  fi
+  user_home="$(resolve_user_home "$user" 2>/dev/null || getent passwd "$user" | awk -F: '{print $6}')"
+  user_group="$(id -gn "$user" 2>/dev/null || printf '%s' "$user")"
+  if [[ -z "$user_home" || ! -d "$user_home" ]]; then
+    echo "Could not resolve home directory for local fleet Unix user: $user" >&2
+    return 1
+  fi
+
+  ssh_dir="$user_home/.ssh"
+  authorized_keys="$ssh_dir/authorized_keys"
+  install -d -m 0700 -o "$user" -g "$user_group" "$ssh_dir"
+  touch "$authorized_keys"
+  if ! grep -Fxq "$pub_key" "$authorized_keys" 2>/dev/null; then
+    printf '%s\n' "$pub_key" >>"$authorized_keys"
+  fi
+  chown "$user:$user_group" "$authorized_keys"
+  chmod 0600 "$authorized_keys"
+
+  if getent group docker >/dev/null 2>&1; then
+    usermod -aG docker "$user" || true
+  fi
+  if [[ -n "${ARCLINK_STATE_ROOT_BASE:-}" ]]; then
+    mkdir -p "$ARCLINK_STATE_ROOT_BASE"
+    chown "$user:$user_group" "$ARCLINK_STATE_ROOT_BASE" || true
+  fi
+  echo "Prepared local fleet SSH access for $user@$host."
+}
+
+test_local_fleet_ssh_access() {
+  local user="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
+  local host="${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}"
+  local key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
+  local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE:-${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}}"
+  local -a ssh_opts=()
+
+  if [[ -z "$key_path" || ! -r "$key_path" ]]; then
+    echo "Skipping local fleet SSH smoke test: missing private key." >&2
+    return 1
+  fi
+  if ! command -v ssh >/dev/null 2>&1; then
+    echo "Skipping local fleet SSH smoke test: ssh client is not installed." >&2
+    return 1
+  fi
+  if [[ -n "$known_hosts" ]]; then
+    mkdir -p "$(dirname "$known_hosts")"
+    touch "$known_hosts"
+    chmod 0600 "$known_hosts" 2>/dev/null || true
+    if command -v ssh-keyscan >/dev/null 2>&1; then
+      ssh-keyscan -H "$host" >>"$known_hosts" 2>/dev/null || true
+      sort -u -o "$known_hosts" "$known_hosts" 2>/dev/null || true
+    fi
+  fi
+  ssh_opts=(
+    -i "$key_path"
+    -o BatchMode=yes
+    -o ConnectTimeout=5
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=accept-new
+  )
+  if [[ -n "$known_hosts" ]]; then
+    ssh_opts+=(-o "UserKnownHostsFile=$known_hosts")
+  fi
+  if ssh "${ssh_opts[@]}" "$user@$host" true >/dev/null 2>&1; then
+    echo "Verified local fleet SSH connectivity: $user@$host"
+    return 0
+  fi
+  echo "Could not verify local fleet SSH connectivity for $user@$host." >&2
+  echo "Install/enable OpenSSH server on this host, then rerun ./deploy.sh control install or reconfigure." >&2
+  return 1
 }
 
 publish_control_tailscale_ingress() {
@@ -8490,7 +8642,7 @@ collect_control_install_answers() {
   local docker_env="" default_base_domain="" default_api_port="" default_web_port=""
   local default_cors_origin="" default_cookie_domain="" default_price_id=""
   local detected_tailscale_dns="" ingress_answer="" default_tailscale_dns=""
-  local ssh_key_confirmed=""
+  local ssh_key_confirmed="" setup_local_fleet_ssh="" local_fleet_access_prepared="0"
 
   docker_env="$(docker_env_file_path)"
   load_docker_runtime_config
@@ -8598,11 +8750,14 @@ collect_control_install_answers() {
   ARCLINK_REGISTER_LOCAL_FLEET_HOST="$(ask_yes_no "Register this machine as a starter Sovereign worker host" "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}")"
   if [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; then
     ARCLINK_LOCAL_FLEET_HOSTNAME="$(normalize_optional_answer "$(ask "Local fleet hostname" "${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}")")"
-    if [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" ]]; then
+    if [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" || "${ARCLINK_EXECUTOR_ADAPTER:-}" == "local" ]]; then
       ARCLINK_LOCAL_FLEET_SSH_HOST="$(normalize_optional_answer "$(ask "Local/starter fleet SSH host" "${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}")")"
-      ARCLINK_LOCAL_FLEET_SSH_USER="$(normalize_optional_answer "$(ask "Local/starter fleet SSH user" "${ARCLINK_LOCAL_FLEET_SSH_USER:-root}")")"
+      if [[ -z "$ARCLINK_LOCAL_FLEET_SSH_HOST" ]]; then
+        ARCLINK_LOCAL_FLEET_SSH_HOST="localhost"
+      fi
+      ARCLINK_LOCAL_FLEET_SSH_USER="$(normalize_optional_answer "$(ask "Local/starter fleet SSH user" "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}")")"
       if [[ -z "$ARCLINK_LOCAL_FLEET_SSH_USER" ]]; then
-        ARCLINK_LOCAL_FLEET_SSH_USER="root"
+        ARCLINK_LOCAL_FLEET_SSH_USER="arclink"
       fi
     fi
     ARCLINK_LOCAL_FLEET_REGION="$(normalize_optional_answer "$(ask "Local fleet region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
@@ -8611,7 +8766,21 @@ collect_control_install_answers() {
   if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" ]]; then
     ensure_control_fleet_ssh_key
     print_control_fleet_ssh_key_guidance
-    if [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" || "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; then
+    if [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]] && \
+      [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "local" || "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" ]] && \
+      is_local_fleet_ssh_host "${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}"; then
+      if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+        setup_local_fleet_ssh="$(ask_yes_no "Create/repair local fleet Unix user and authorize this key now" "1")"
+        if [[ "$setup_local_fleet_ssh" == "1" ]] && ensure_local_fleet_ssh_access; then
+          local_fleet_access_prepared="1"
+          test_local_fleet_ssh_access || true
+        fi
+      else
+        echo "Run deploy.sh as root to create/repair the local fleet Unix user automatically." >&2
+      fi
+    fi
+    if [[ "$local_fleet_access_prepared" != "1" ]] && \
+      { [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" ]] || [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; }; then
       ssh_key_confirmed="$(ask_yes_no "I have added this public key to the starter/fleet node authorized_keys" "0")"
       if [[ "$ssh_key_confirmed" != "1" ]]; then
         echo "Continuing. SSH fleet applies will remain blocked until that key is trusted by the target node." >&2

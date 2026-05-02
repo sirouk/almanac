@@ -470,7 +470,13 @@ domain mode or skips DNS in Tailscale mode, materializes per-pod Docker Compose
 bundles, starts them locally or over SSH, and records health/audit/handoff
 state. For SSH fleet execution, `deploy.sh control install` generates or reuses
 `arclink-priv/secrets/ssh/id_ed25519`, prints the public key, and asks you to
-confirm it has been added to the target node's `authorized_keys`.
+confirm it has been added to the target node's `authorized_keys`. When you
+register the current machine as the first local worker, deploy can also create
+or repair an `arclink` Unix user, install that same key into
+`~arclink/.ssh/authorized_keys`, prepare `/arcdata/deployments`, grant Docker
+group access when available, and run an `ssh -i ... arclink@localhost true`
+smoke test. That keeps localhost and later Hetzner workers on the same fleet
+contract instead of having a special one-off local path.
 
 Control-node details live in
 `docs/arclink/sovereign-control-node.md`.

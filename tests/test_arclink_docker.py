@@ -86,6 +86,12 @@ def test_compose_defines_full_stack_services() -> None:
     expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
     expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)
     expect("./arclink-priv/secrets/ssh:/root/.ssh" in body, body)
+    expect("ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}" in body, body)
+    expect(
+        "ARCLINK_FLEET_SSH_KEY_PATH: ${ARCLINK_FLEET_SSH_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519}"
+        in body,
+        body,
+    )
     expect("${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}" in body, body)
     expect("ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor" in body, body)
     expect("ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}" in body, body)
@@ -160,6 +166,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect("http://127.0.0.1/status.php" in body, body)
     expect("http://127.0.0.1:8900/api/v1/health" in body and "http://127.0.0.1:3000" in body, body)
     expect("docker_provision_once()" in body and "arclink_sovereign_worker.py" in body, body)
+    expect('ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_USER "arclink"' in body, body)
+    expect(
+        'ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"'
+        in body,
+        body,
+    )
     expect("qmd-mcp" in body and "qmd --version" in body, body)
     expect('pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' in body, body)
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)

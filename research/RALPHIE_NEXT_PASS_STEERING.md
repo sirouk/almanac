@@ -24,6 +24,29 @@ Do not rebuild these slices unless a focused test fails:
 
 ## Next Build Order
 
+## Non-Negotiable BUILD Output
+
+The next BUILD phase must produce product code and tests. A docs-only or
+test-only build is not acceptable.
+
+Expected file-level outputs unless an existing file clearly owns the concern:
+
+- New or updated live journey module, preferably `python/arclink_live_journey.py`,
+  with secret-redacted step/evidence dataclasses and skip/blocker modeling.
+- New or updated evidence module, preferably `python/arclink_evidence.py`, for
+  deterministic deployment evidence recording.
+- Focused tests, preferably `tests/test_arclink_live_journey.py` and
+  `tests/test_arclink_evidence.py`.
+- An expanded `tests/test_arclink_e2e_live.py` that uses the ordered journey
+  model while still skipping cleanly without credentials.
+- A live evidence template under `docs/arclink/`, such as
+  `docs/arclink/live-e2e-evidence-template.md`.
+- Operations-runbook links for the readiness and diagnostics CLIs added in
+  `a9ea651`.
+
+Do not let BUILD pass with only `IMPLEMENTATION_PLAN.md` or `research/*.md`
+changes.
+
 ### 1. Full Live E2E Journey Expansion (Gap D)
 
 Expand the live E2E harness from separate provider smoke checks into one

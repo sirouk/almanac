@@ -21,7 +21,10 @@ Additional backlog sources:
   executable host readiness, live-gated executor, provider diagnostics, live
   E2E expansion, and real deployment evidence.
 - `research/RALPHIE_NEXT_PASS_STEERING.md` defines the concrete next build
-  order for Gap D/E no-secret scaffolding and operator integration.
+  order for Gap D/E no-secret scaffolding, operator integration, and live-proof
+  orchestration.
+- `research/RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md` defines the current
+  next Ralphie objective after commit `007b6cb`.
 
 ## Current Status
 
@@ -146,6 +149,25 @@ and payload shape (`host_readiness`, `provider_diagnostics` keys).
 Next.js admin page (`web/src/app/admin/page.tsx`) renders Host Readiness and
 Provider Diagnostics operator sections from the snapshot payload.
 
+## BUILD Tasks: Next Pass (Live Proof Orchestration)
+
+Plan refreshed: 2026-05-02 after commit `007b6cb`.
+
+The next build must not rebuild completed dashboards or fake-provider
+boundaries. It must add a professional live-proof orchestration layer that is
+useful before credentials exist and ready to execute when credentials arrive.
+
+Required outputs:
+
+- Secret-safe credential/env validation for the full live journey.
+- Dry-run live-proof plan that reports blocked steps by env var name only.
+- Credential-gated execution path using injected runners/adapters for tests.
+- Redacted evidence ledger artifact written to a predictable path.
+- Operator CLI wrapper, focused tests, and docs updates after code lands.
+
+Controlling steering:
+`research/RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md`.
+
 ## Validation Floor
 
 Every pass must run:
@@ -221,10 +243,11 @@ These require real accounts/credentials. Build fake/live boundaries first.
 
 P1-11 and P13-P16 are complete for the no-secret foundation. Gaps A-C are
 landed for no-secret readiness: host readiness, provider diagnostics, and an
-injectable Docker executor runner. The remaining non-external work is Gap D/E
-scaffolding: ordered live journey modeling, secret-redacted evidence recording,
-E2E harness expansion, and operator-runbook links. The credentialed live proof
-itself remains externally blocked.
+injectable Docker executor runner. Gap D/E no-secret scaffolding and operator
+snapshot are landed. The remaining non-external work is live-proof
+orchestration: a one-command dry-run/live runner, redacted evidence artifact
+output, and credential handoff that can execute as soon as external accounts
+exist. The credentialed live proof itself remains externally blocked.
 
 P12 live proof and final Gap D/E evidence remain externally blocked until
 credentials are supplied. The remaining blockers are documented in

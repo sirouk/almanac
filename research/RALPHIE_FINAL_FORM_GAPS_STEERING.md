@@ -8,6 +8,8 @@ and the full customer journey are proven with real credentials.
 
 Latest accepted commits on branch `arclink`:
 
+- `007b6cb` - operator snapshot API/UI for host readiness, provider
+  diagnostics, live journey blockers, and evidence status.
 - `2e6fa98` - live journey model, deployment evidence ledger, evidence
   template, live E2E harness wiring, and no-secret tests.
 - `a9ea651` - host readiness CLI, provider diagnostics CLI, injectable Docker
@@ -29,6 +31,7 @@ Landed no-secret foundation:
 - Host readiness, provider diagnostics, and injectable Docker runner no-secret
   surfaces exist.
 - Live journey/evidence no-secret scaffolding exists and has focused tests.
+- Operator/admin readiness snapshot exists and has focused API/UI tests.
 - Deployment, ingress, secret, backup/restore, operations, observability, data
   safety, and documentation-truth assets exist.
 
@@ -70,8 +73,11 @@ These are blocked until the operator supplies credentials or account setup:
 
 ## Next Ralphie Objective
 
-Start with Gap D/E scaffolding because Gaps A-C are now landed. The scaffolding
-is not externally blocked; only the credentialed live run is blocked. Do not
-rebuild P1-11, P13-P16, or Gaps A-C unless a failing test proves a regression.
-Do not mark P12 or final form complete until credential-backed E2E evidence
-exists.
+Start with live-proof orchestration because Gaps A-C, Gap D/E no-secret
+scaffolding, and the operator snapshot are now landed. The orchestration layer
+is not externally blocked: it should validate credentials, produce a dry-run
+plan, execute through injected/fake runners in tests, and write redacted
+evidence artifacts. Only the real credentialed live run is blocked. Do not
+rebuild P1-11, P13-P16, or landed Gaps A-E scaffolds unless a failing test
+proves a regression. Do not mark P12 or final form complete until
+credential-backed E2E evidence exists.

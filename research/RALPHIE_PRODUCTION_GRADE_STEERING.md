@@ -192,8 +192,11 @@ and docs. Do not mark the project done while any non-external item remains.
      executor runner.
    - Gap D/E no-secret scaffolding is landed in commit `2e6fa98`: live journey
      model, deployment evidence ledger, live E2E wiring, and evidence template.
-   - Next Ralphie work should target operator/admin integration of readiness,
-     diagnostics, and evidence status, not rebuilding Gaps A-E scaffolds.
+   - Operator/admin snapshot is landed in commit `007b6cb`: host readiness,
+     provider diagnostics, live journey blockers, and evidence status.
+   - Next Ralphie work should target live-proof orchestration: credential
+     validation, dry-run/live runner, and redacted evidence artifacts, not
+     rebuilding Gaps A-E scaffolds.
 
 Current live blockers remain external: Stripe, Cloudflare, Chutes, Telegram,
 Discord, and final production-host credentials. Fake/live boundaries and tests

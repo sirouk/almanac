@@ -8,6 +8,10 @@ gracefully when absent. Never leaks secrets or makes destructive calls.
 Gate: ARCLINK_E2E_LIVE=1 plus provider-specific credentials. Docker proof has
 an additional ARCLINK_E2E_DOCKER=1 opt-in because even read-only Docker access
 should be deliberate on shared hosts.
+
+The ordered journey model from arclink_live_journey is used to define step
+ordering and credential gates. Individual provider tests below map to journey
+steps and can feed evidence into the arclink_evidence ledger.
 """
 from __future__ import annotations
 
@@ -26,6 +30,10 @@ from arclink_test_helpers import load_module, memory_db
 # ---------------------------------------------------------------------------
 
 LIVE = os.environ.get("ARCLINK_E2E_LIVE", "") == "1"
+
+# Load journey model (always available, no secrets needed)
+journey_mod = load_module("arclink_live_journey.py", "journey_e2e_live")
+evidence_mod = load_module("arclink_evidence.py", "evidence_e2e_live")
 
 
 def _env(key: str) -> str:
@@ -217,6 +225,38 @@ class TestDockerE2ELive(LiveE2EBase):
         )
         self.assertEqual(result.returncode, 0, result.stderr.strip() or result.stdout.strip())
         self.assertIn("Docker Compose", result.stdout)
+
+
+class TestJourneyModelSkipsCleanly(unittest.TestCase):
+    """Verify the ordered journey model skips cleanly without credentials."""
+
+    def test_journey_skips_without_live_flag(self):
+        old = os.environ.pop("ARCLINK_E2E_LIVE", None)
+        try:
+            steps = journey_mod.build_journey()
+            journey_mod.evaluate_journey(steps)
+            self.assertTrue(journey_mod.all_skipped_or_passed(steps))
+            for step in steps:
+                self.assertEqual(step.status, "skipped")
+        finally:
+            if old is not None:
+                os.environ["ARCLINK_E2E_LIVE"] = old
+
+    def test_evidence_ledger_from_skipped_journey(self):
+        old = os.environ.pop("ARCLINK_E2E_LIVE", None)
+        try:
+            steps = journey_mod.build_journey()
+            journey_mod.evaluate_journey(steps)
+            ledger = evidence_mod.ledger_from_journey(steps, run_id="test_skip")
+            self.assertEqual(len(ledger.records), len(steps))
+            for r in ledger.records:
+                self.assertEqual(r.status, "skipped")
+            j = ledger.to_json()
+            self.assertNotIn("sk_test_", j)
+            self.assertNotIn("sk_live_", j)
+        finally:
+            if old is not None:
+                os.environ["ARCLINK_E2E_LIVE"] = old
 
 
 if __name__ == "__main__":

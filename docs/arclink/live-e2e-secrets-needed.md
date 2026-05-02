@@ -1,9 +1,33 @@
 # ArcLink Live E2E Secrets Needed
 
-**Status:** All items below are externally blocked. No live E2E journey has been
-proven. The fake E2E harness (`tests/test_arclink_e2e_fake.py`) passes without
-credentials. The live scaffold (`tests/test_arclink_e2e_live.py`) skips cleanly
-when credentials are absent.
+**Status:** The credentialed live run is externally blocked. No live E2E journey
+has been proven. The fake E2E harness (`tests/test_arclink_e2e_fake.py`) passes
+without credentials. Provider live checks in `tests/test_arclink_e2e_live.py`
+skip cleanly when credentials are absent, while no-secret journey/evidence tests
+still run. The ordered journey model
+(`python/arclink_live_journey.py`) and evidence ledger
+(`python/arclink_evidence.py`) are scaffolded and tested without secrets.
+
+## Journey Env Vars
+
+| Var | Required For | Purpose |
+|-----|-------------|---------|
+| `ARCLINK_E2E_LIVE` | All steps | Master gate for live E2E |
+| `STRIPE_SECRET_KEY` | Checkout, webhook | Stripe test-mode key (sk_test_*) |
+| `STRIPE_WEBHOOK_SECRET` | Webhook delivery | Stripe webhook signature |
+| `CLOUDFLARE_API_TOKEN` | DNS health | Scoped zone DNS token |
+| `CLOUDFLARE_ZONE_ID` | DNS health | Target zone ID |
+| `ARCLINK_E2E_DOCKER` | Docker check | Opt-in for Docker access |
+| `CHUTES_API_KEY` | Key provisioning | Chutes owner key |
+| `TELEGRAM_BOT_TOKEN` | Bot check | Telegram bot token |
+| `DISCORD_BOT_TOKEN` | Bot check | Discord bot token |
+
+## Evidence
+
+After a live run, the evidence ledger JSON can be saved using the template at
+`docs/arclink/live-e2e-evidence-template.md`.
+
+## Credential Details
 
 Initial development can proceed without live secrets. Real end-to-end deployment testing will need:
 

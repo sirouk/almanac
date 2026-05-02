@@ -25,9 +25,9 @@ Additional backlog sources:
 
 ## Current Status
 
-- 19 ArcLink Python modules (~8,200 lines).
-- 21 test files + 4 hygiene + 2 web tests + 1 browser suite
-  (190 ArcLink tests plus 41 browser product checks passing).
+- 21 ArcLink Python modules (~8,745 lines).
+- 23 test files + 4 hygiene + 2 web tests + 1 browser suite
+  (233 ArcLink Python tests plus 41 browser product checks passing).
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
 - Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
@@ -60,10 +60,10 @@ Additional backlog sources:
   health, user dashboard, admin audit, and admin actions. 6 tests in
   `tests/test_arclink_e2e_fake.py`.
 - **Production 12** (Live E2E): Secret-gated scaffold with Stripe,
-  Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks. It skips
-  cleanly when credentials or explicit live flags are absent; full live journey
-  proof remains blocked on external accounts and credentials.
-  `tests/test_arclink_e2e_live.py`.
+  Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks. Provider
+  live checks skip cleanly when credentials or explicit live flags are absent;
+  the no-secret journey/evidence tests still run. Full live journey proof
+  remains blocked on external accounts and credentials. `tests/test_arclink_e2e_live.py`.
 - **Production 13** (Deployment assets): `config/env.example`,
   `docs/arclink/secret-checklist.md`, `docs/arclink/ingress-plan.md`,
   `docs/arclink/backup-restore.md`, operations runbook updated with
@@ -118,6 +118,11 @@ PLAN is complete when:
   `tests/test_arclink_executor.py`.
 
 ## BUILD Tasks: Next Pass (Gap D/E Scaffolding) -- ACTIVE
+
+Plan refreshed: 2026-05-02. Backlog sources consulted:
+- `research/RALPHIE_PRODUCTION_GRADE_STEERING.md`
+- `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md`
+- `research/RALPHIE_NEXT_PASS_STEERING.md`
 
 The next build has non-external work. Do not treat Gap D/E as fully blocked.
 Only the credentialed live run is blocked. BUILD must produce code, tests, and

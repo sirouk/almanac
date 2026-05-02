@@ -286,6 +286,57 @@ docker compose -p arclink-{deployment_id} down
 docker compose -p arclink-{deployment_id} up -d
 ```
 
+## 10. Host Readiness
+
+**Module:** `python/arclink_host_readiness.py`
+
+Run pre-deployment checks without mutating providers:
+
+```bash
+PYTHONPATH=python python3 -c "
+import json
+from arclink_host_readiness import run_readiness
+result = run_readiness()
+print(json.dumps(result.to_dict(), indent=2))
+"
+```
+
+Checks Docker, Docker Compose, ports, writable state root, required env vars,
+secret presence (names only), and ingress strategy. Returns machine-readable
+JSON with pass/fail per check.
+
+## 11. Provider Diagnostics
+
+**Module:** `python/arclink_diagnostics.py`
+
+Run secret-safe provider credential checks:
+
+```bash
+PYTHONPATH=python python3 -c "
+import json
+from arclink_diagnostics import run_diagnostics
+result = run_diagnostics()
+print(json.dumps(result.to_dict(), indent=2))
+"
+```
+
+Reports which provider credentials (Stripe, Cloudflare, Chutes, Telegram,
+Discord, Docker) are present or missing. Credential values are never returned.
+Live connectivity checks require `ARCLINK_E2E_LIVE=1`.
+
+## 12. Live Journey and Evidence
+
+**Modules:** `python/arclink_live_journey.py`, `python/arclink_evidence.py`
+
+Run the ordered live journey (requires credentials):
+
+```bash
+ARCLINK_E2E_LIVE=1 PYTHONPATH=python python3 -m pytest tests/test_arclink_e2e_live.py -v
+```
+
+Without credentials, all steps skip cleanly. Evidence template at
+`docs/arclink/live-e2e-evidence-template.md`.
+
 ---
 
 ## General Operational Notes

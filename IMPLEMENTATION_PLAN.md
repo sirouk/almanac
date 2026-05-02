@@ -29,6 +29,10 @@ Additional backlog sources (all consulted 2026-05-02T2):
   next Ralphie objective after commit `007b6cb`: live-proof orchestration layer
   with credential validation, dry-run plan, credential-gated execution,
   redacted evidence ledger, and CLI wrapper.
+- `research/RALPHIE_SCALE_OPERATIONS_STEERING.md` defines the current next
+  Ralphie objective after commit `6c70a68`: fleet registry, placement,
+  action-worker executor bridge, rollout waves, rollback records,
+  stale-queue recovery, and admin/API visibility.
 
 ## Current Status
 
@@ -186,6 +190,44 @@ deduplication.
 
 `docs/arclink/live-e2e-secrets-needed.md` and
 `docs/arclink/live-e2e-evidence-template.md` updated after code/tests landed.
+
+## BUILD Tasks: Next Pass (Scale Operations Spine) -- REQUIRED
+
+Plan refreshed: 2026-05-02 after the live-proof orchestration build. Backlog
+source:
+- `research/RALPHIE_SCALE_OPERATIONS_STEERING.md`
+
+This is the next non-external gap. The product has queued admin action intents,
+fake/live-gated executor primitives, provisioning intent, dashboards, and live
+proof orchestration, but it still needs the durable operations spine that lets
+ArcLink run as a scaling service instead of a manually watched single host.
+
+### Task 1: Fleet Registry And Placement -- REQUIRED
+
+Add a SQLite-first host registry and placement policy for ArcLink deployment
+hosts: status, drain flag, region/tags, capacity, observed load, and
+deterministic placement decisions. Healthy hosts with enough headroom should
+win; unhealthy, draining, or saturated hosts must be rejected with useful
+errors.
+
+### Task 2: Admin Action Worker -- REQUIRED
+
+Add a bounded worker entrypoint that consumes queued `arclink_action_intents`
+and maps supported actions to fake/live-gated executor or safe local state
+operations. It must persist attempts/results, update statuses, write audit and
+event rows, remain idempotent on retry, and reject plaintext secret material.
+
+### Task 3: Rollout/Rollback Model -- REQUIRED
+
+Add durable release/rollout records or an equivalent tested model that supports
+canary waves, pause/failure state, version drift visibility, and rollback plans
+that preserve all customer state roots.
+
+### Task 4: Operator Visibility -- REQUIRED
+
+Extend admin read models/API enough to show fleet capacity, placement, action
+execution attempts, stale queued actions, rollout state, and last executor
+result. Keep all live provider claims credential-gated.
 
 ## Validation Floor
 

@@ -1,16 +1,17 @@
 # Ralphie Steering: Next ArcLink Delivery Pass
 
-Use this file as the controlling backlog after commit `007b6cb`.
+Use this file as the controlling backlog after commit `6c70a68`.
 
 The current next objective is controlled by
-`research/RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md`.
+`research/RALPHIE_SCALE_OPERATIONS_STEERING.md`.
 
 Gaps A-C are landed. Gap D/E no-secret scaffolding is landed: ordered live
 journey model, deployment evidence ledger, live E2E harness wiring, evidence
-template, runbook links, and the operator/admin snapshot are landed. The
-credentialed live run remains externally blocked. The next non-external work is
-the live-proof orchestration layer: secret-safe env validation, dry-run plan,
-credential-gated execution, and redacted evidence artifact output.
+template, runbook links, the operator/admin snapshot, and the live-proof
+orchestration runner are landed. The credentialed live run remains externally
+blocked. The next non-external work is the scale operations spine: fleet
+registry, placement policy, queued admin action worker/executor bridge, rollout
+waves, rollback records, stale-queue recovery, and admin/API visibility.
 
 ## Do Not Rebuild
 
@@ -26,6 +27,7 @@ Do not rebuild these slices unless a focused test fails:
 - Live journey/evidence modules, focused tests, and evidence template from
   `2e6fa98`.
 - Operator snapshot route/UI from `007b6cb`.
+- Live proof runner/CLI from `6c70a68`.
 
 ## Non-Negotiable BUILD Output
 
@@ -35,10 +37,12 @@ test-only build is not acceptable. Follow
 
 Expected file-level outputs unless existing files clearly own the concern:
 
-- `python/arclink_live_runner.py` or equivalent orchestration module.
-- `bin/arclink-live-proof` or equivalent CLI wrapper.
-- Focused tests proving no-secret dry-run, redaction, credential-gated live
-  execution, injected fake runners, evidence artifact output, and exit codes.
+- `python/arclink_fleet.py` or equivalent fleet/placement module.
+- `python/arclink_action_worker.py` or equivalent action-intent executor bridge.
+- Additive schema helpers for fleet hosts, placement, action attempts, and
+  rollout/release records if needed.
+- Focused tests proving placement, action execution, retries, redaction,
+  rollout/rollback safety, and admin/API visibility.
 - Update docs only after the code/tests exist.
 
 Do not let BUILD pass with only `IMPLEMENTATION_PLAN.md` or `research/*.md`
@@ -46,41 +50,42 @@ changes.
 
 ## Next Build Order
 
-### 1. Live-Proof Runner Model
+### 1. Fleet And Placement Model
 
-Add a small orchestration layer that combines:
+Add host registry and placement helpers that can scale ArcLink beyond one
+hand-managed machine:
 
-- `arclink_host_readiness.run_readiness()`.
-- `arclink_diagnostics.run_diagnostics()`.
-- `arclink_live_journey.build_journey()` and `evaluate_journey()`.
-- `arclink_evidence.EvidenceLedger`.
+- host identity, region/tags, status, drain flag, capacity, and observed load;
+- deterministic placement policy that prefers healthy non-draining hosts with
+  enough CPU/RAM/disk headroom;
+- admin read-model summary of capacity, saturation, and deployment placement.
 
-The runner must never include secret values. Missing credential names are OK.
+### 2. Action Worker/Executor Bridge
 
-### 2. CLI And Artifact Output
+Consume queued admin actions and execute them through fake/live-gated adapters:
 
-Expose the runner through an operator CLI that can:
+- restart/reprovision/dns_repair use Docker/Cloudflare/provisioning intents;
+- rotate_chutes_key uses only `secret://` references;
+- refund/cancel/comp route through Stripe fake action or safe entitlement state;
+- rollout creates durable canary wave records and links rollback plans.
 
-- run no-secret dry-run validation by default;
-- write a redacted JSON evidence artifact to a predictable path;
-- require `ARCLINK_E2E_LIVE=1` plus credentials for live execution;
-- return clear exit codes.
+Every action must require idempotency, persist attempts/results, update status,
+write audit/events, and avoid plaintext secret material.
 
-### 3. Focused Tests
+### 3. Stale Queue And Rollout Safety
 
 Add focused tests proving:
 
-- dry-run blocked summaries are useful;
-- all artifacts redact secret-looking values;
-- credential-present dry-run does not claim live proof;
-- injected fake step runners can produce a passing ledger;
-- invalid input or failed live execution returns non-zero.
+- stale running actions can be retried or failed deterministically;
+- rollouts advance in waves and can pause/rollback;
+- rollback plans preserve vault, Nextcloud, qmd, memory, Hermes, and workspace
+  state roots.
 
-### 4. Live Credential Handoff
+### 4. Admin/API Visibility
 
-When a credential-blocked operation is reached, pause only that live operation
-and name the exact missing key/account. Do not mark final form complete until a
-credential-backed live run exists.
+Expose enough read-model data for operators to see fleet hosts, placement,
+action attempts, stale queued actions, rollout waves, and last executor result.
+Do not claim live provider proof until a credential-backed run exists.
 
 External blockers:
 

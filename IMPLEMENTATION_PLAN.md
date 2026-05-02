@@ -16,15 +16,18 @@ Quality Gate. ArcLink is complete when the product can be deployed, operated,
 observed, recovered, sold, and used end to end with confidence. All 16 items
 must be checked or explicitly blocked by a named external credential.
 
-The foundation-runbook (`docs/arclink/foundation-runbook.md`) documents the
-current boundary behavior, ownership, assumptions, repair procedures, and open
-risks for operator and agent reference.
+Additional backlog sources:
+- `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md` defines Gaps A-E for
+  executable host readiness, live-gated executor, provider diagnostics, live
+  E2E expansion, and real deployment evidence.
+- `research/RALPHIE_NEXT_PASS_STEERING.md` defines the concrete next build
+  order for Gaps A-C.
 
 ## Current Status
 
-- 17 ArcLink Python modules (7,877 lines).
-- 19 test files + 4 hygiene + 2 web tests + 1 browser suite
-  (166 ArcLink tests plus 41 browser product checks passing).
+- 19 ArcLink Python modules (~8,200 lines).
+- 21 test files + 4 hygiene + 2 web tests + 1 browser suite
+  (190 ArcLink tests plus 41 browser product checks passing).
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
 - Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
@@ -52,7 +55,6 @@ risks for operator and agent reference.
   loading/empty/error states, mobile overflow checks, dashboard tab checks,
   and fake onboarding flow. Proof: `npm run test:browser` -> 41 passed,
   3 desktop-only skips on 2026-05-02.
-
 - **Production 11** (Fake E2E): Full journey harness covering web signup,
   onboarding, checkout, Stripe webhook, entitlement, provisioning, service
   health, user dashboard, admin audit, and admin actions. 6 tests in
@@ -62,7 +64,6 @@ risks for operator and agent reference.
   cleanly when credentials or explicit live flags are absent; full live journey
   proof remains blocked on external accounts and credentials.
   `tests/test_arclink_e2e_live.py`.
-
 - **Production 13** (Deployment assets): `config/env.example`,
   `docs/arclink/secret-checklist.md`, `docs/arclink/ingress-plan.md`,
   `docs/arclink/backup-restore.md`, operations runbook updated with
@@ -101,118 +102,105 @@ PLAN is complete when:
 - Live blockers are documented as E2E prerequisites.
 - The next tasks are actionable and testable.
 
-## BUILD Tasks (P1-11 and P13-16 complete; P12 external)
+### Gap A-C Delivery (Host Readiness, Diagnostics, Executor Runner)
 
-### Phase 3: Brand and UI Polish (Production 10) -- COMPLETE
+- **Gap A** (Host readiness): `python/arclink_host_readiness.py` with Docker,
+  Compose subcommand, port, state root, env var, secret presence, ingress
+  strategy, and CLI checks. Machine-readable JSON output. 14 tests in
+  `tests/test_arclink_host_readiness.py`.
+- **Gap C** (Live readiness diagnostics): `python/arclink_diagnostics.py` with
+  Stripe, Cloudflare, Chutes, Telegram, Discord, and Docker credential
+  presence checks. Credential values are never returned. No-op without live
+  flag. 11 tests in `tests/test_arclink_diagnostics.py`.
+- **Gap B** (Live-gated executor): Injectable `DockerRunner` protocol and
+  `FakeDockerRunner` for tests. `DryRunStep` for secret-free planning.
+  Live Docker path requires runner. 20 tests (was 17) in
+  `tests/test_arclink_executor.py`.
 
-**Production 10: Web UI Product Checks -- COMPLETE**
+## BUILD Tasks: Next Pass (Gaps A-C) -- LANDED
 
-- Apply ArcLink brand system fully: Jet Black `#080808`, Carbon `#0F0F0E`,
-  Soft White `#E7E6E6`, Signal Orange `#FB5005`.
-- Space Grotesk headlines, Satoshi/Inter body text.
-- No overlapping text at narrow mobile widths (verify with browser checks).
-- No placeholder claims of live services when fake adapters are active.
-- Clear empty/error/loading states on every view.
-- Accessible forms (labels, focus states, keyboard navigation).
-- Route-level smoke tests for `/`, `/login`, `/onboarding`, `/dashboard`,
-  `/admin`.
-- Repeatable browser checks for desktop and narrow mobile viewports using
-  deterministic mocked API responses.
-- Screenshot or equivalent browser artifacts written to an ignored directory
-  with regeneration instructions.
+### Task 1: Host Readiness and Bootstrap (Gap A)
+
+Add executable, no-secret host readiness tooling.
+
+Required:
+- A command or script that checks Docker, Docker Compose, available ports,
+  writable ArcLink state root, expected env vars, and Traefik/Cloudflare
+  strategy without mutating live providers.
+- A machine-readable readiness result that the admin dashboard or operator can
+  consume later.
+- Tests for missing Docker, missing state root, missing env, and safe redaction.
+- Documentation linking the readiness command from the operations runbook.
 
 Validation:
-
 ```bash
-python3 tests/test_arclink_dashboard.py
-python3 tests/test_arclink_hosted_api.py
-cd web && npx tsc --noEmit && node --test tests/test_page_smoke.mjs
-# add and run a browser proof script in this phase, for example:
-# npm run test:browser
+PYTHONPATH=python python3 -m pytest tests/test_arclink_host_readiness.py -q
 ```
 
-### Phase 4: E2E Journey (Production 11 complete, Production 12 scaffolded)
+### Task 2: Live Readiness Diagnostics (Gap C)
 
-**Production 11: Fake E2E Harness**
+Add a secret-safe diagnostic layer for external providers.
 
-- Build unified fake E2E test that proves the full journey: web signup,
-  onboarding answers, checkout simulation, entitlement activation,
-  provisioning request, service health visibility, admin audit, and user
-  dashboard state.
-- All using fake adapters, no live credentials required.
-- Test file: `tests/test_arclink_e2e_fake.py`.
-
-**Production 12: Live E2E Harness**
-
-- Build secret-gated live E2E harness: `tests/test_arclink_e2e_live.py`.
-- Include read-only or non-destructive live checks for Stripe, Cloudflare,
-  Chutes, Telegram, Discord, and Docker readiness.
-- Expand to the same journey against real providers once the external
-  credentials and account fixtures exist.
-- Gate on presence of each credential; skip gracefully when absent.
-- Never leak secrets or make destructive calls accidentally.
-- Blocked: all external credentials (see External Live Proof Checklist).
+Required:
+- Stripe, Cloudflare, Chutes, Telegram, Discord, and host Docker diagnostics.
+- Missing credential names are reported; credential values are never returned.
+- Diagnostics are no-op/read-only unless an explicit live E2E flag is set.
+- Tests prove redaction and missing-credential behavior.
 
 Validation:
-
 ```bash
-python3 tests/test_arclink_e2e_fake.py
-# Live E2E only when credentials present:
+PYTHONPATH=python python3 -m pytest tests/test_arclink_diagnostics.py -q
+```
+
+### Task 3: Live-Gated Docker Executor Path (Gap B)
+
+Improve the executor toward real deployment without enabling mutation by
+default.
+
+Required:
+- Explicit live flags and idempotency key.
+- State root and secret resolver required before any Docker mutation.
+- Dry-run output remains secret-free.
+- Real Docker commands are isolated behind an injectable runner for tests.
+- Rollback/teardown refuses destructive volume deletes without explicit
+  destructive confirmation.
+
+Validation:
+```bash
+PYTHONPATH=python python3 -m pytest tests/test_arclink_executor.py -q
+```
+
+### Task 4: Full Live E2E Expansion (Gap D) -- Externally Blocked
+
+Keep skipped without credentials, but make the harness ready for real proof.
+
+Required:
+- One path that can run website onboarding -> checkout -> webhook/entitlement ->
+  provisioning -> DNS/health -> user/admin dashboard verification.
+- Provider checks can remain separate, but the final live proof must be one
+  customer journey.
+- Clearly documented env names and setup steps in
+  `docs/arclink/live-e2e-secrets-needed.md`.
+
+Validation:
+```bash
+# Only when credentials present:
 # ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
 ```
 
-### Phase 5: Operations and Documentation (Production 13-16) -- COMPLETE
+## Validation Floor
 
-**Production 13: Deployment Assets -- COMPLETE**
-
-- `config/env.example` with all ArcLink-specific required/optional variables.
-- `docs/arclink/secret-checklist.md` with secret inventory, handling rules, and
-  verification commands.
-- `docs/arclink/ingress-plan.md` with DNS layout, Cloudflare management,
-  Traefik topology, SSH access strategy, drift detection, and teardown.
-- `docs/arclink/backup-restore.md` with backup targets, schedule, procedures,
-  disaster recovery, retention, and testing guidance.
-- `docs/arclink/operations-runbook.md` updated with health check polling,
-  restart/recovery procedures, and release/rollback flow.
-
-**Production 14: Observability -- COMPLETE**
-
-- Structured events verified: audit log, timeline events, service health,
-  webhook processing status, provisioning job state all cover key transitions.
-- Admin dashboard already wires health snapshots (P9 "infrastructure" tab),
-  queue status ("queued_actions" tab), deployment status ("deployments" tab),
-  DNS drift, and failed job visibility ("logs_events" tab).
-- `docs/arclink/alert-candidates.md` documents critical, warning, and
-  informational alert signals with sources and conditions.
-
-**Production 15: Data Safety -- COMPLETE**
-
-- `docs/arclink/data-safety.md` documents per-user isolation model, volume
-  layout, secret storage rules, backup plan, teardown safeguards, and secret
-  leak prevention.
-- Teardown safeguards already implemented: admin confirmation, audit logging,
-  state root preservation, volume preservation by default, separate DNS
-  teardown, destructive state delete gating in executor.
-- `reject_secret_material()` applied across dashboard, API auth, onboarding,
-  and admin action boundaries.
-- No secret values found in tracked files via pattern scan.
-
-**Production 16: Documentation Truth -- COMPLETE**
-
-- All documentation audited against live code modules and test coverage.
-- No claims of live customer provisioning in shipped docs.
-- Every live blocker named with exact credential/account in
-  `docs/arclink/live-e2e-secrets-needed.md` (status header added).
-- Foundation runbook, operations runbook, and architecture docs aligned with
-  current module map and boundary behavior.
-
-Validation:
+Every pass must run:
 
 ```bash
-python3 -m pytest tests/test_arclink_*.py tests/test_public_repo_hygiene.py -q
-cd web && npm test && npm run build
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
+git diff --check
+PYTHONPATH=python python3 tests/test_public_repo_hygiene.py
+PYTHONPATH=python python3 tests/test_arclink_e2e_fake.py
+PYTHONPATH=python python3 tests/test_arclink_e2e_live.py
 ```
+
+Run additional focused tests for touched modules. Browser claims still require
+Playwright evidence.
 
 ## Historical Phases (Landed)
 
@@ -233,6 +221,21 @@ with responsive hosted-API layout for billing, provisioning, services, vault,
 bots, model/provider state, memory/qmd freshness, security, support, and empty
 states.
 
+### Phase 3: Admin Dashboard and Browser Proof (Production 9-10) -- COMPLETE
+
+18-tab admin dashboard wired to hosted API. Playwright browser product proof
+with 41 tests passing across desktop/mobile viewports.
+
+### Phase 4: E2E Journey (Production 11-12) -- P11 COMPLETE, P12 SCAFFOLDED
+
+Fake E2E journey harness (6 tests). Live E2E scaffold (secret-gated, skips
+cleanly). Full live proof externally blocked.
+
+### Phase 5: Operations and Documentation (Production 13-16) -- COMPLETE
+
+Deployment assets, observability, data safety, and documentation truth all
+landed and audited.
+
 ## External Live Proof Checklist (Blocked)
 
 These require real accounts/credentials. Build fake/live boundaries first.
@@ -250,12 +253,18 @@ These require real accounts/credentials. Build fake/live boundaries first.
 - API/auth boundary not yet deployed behind production identity provider.
 - Live provider proof requires real credentials and a deliberate live run (P12).
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
+- Host readiness tooling landed (Gap A); ops runbook link pending.
+- Provider diagnostics landed (Gap C); live connectivity checks deferred.
 
 ## BUILD Handoff
 
-Completed non-live slices are P1-11 and P13-P16. Production 12 remains the
-external live proof item: the scaffold is present, but live customer deployment
-proof requires supplying the named credentials and running the live E2E harness.
-The remaining blockers are documented in
+P1-11 and P13-P16 are complete for the no-secret foundation. Gaps A-C are
+landed for no-secret readiness: host readiness, provider diagnostics, and an
+injectable Docker executor runner. The remaining work is Gap D (full live E2E
+expansion) and Gap E (real deployment evidence), both externally blocked on
+credentials and deliberate live runs.
+
+P12 live proof and Gaps D-E remain externally blocked until credentials are
+supplied. The remaining blockers are documented in
 `docs/arclink/live-e2e-secrets-needed.md` and the External Live Proof Checklist
 above.

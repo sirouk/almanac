@@ -667,6 +667,71 @@ def test_fake_docker_compose_rejects_missing_depends_on_service() -> None:
     print("PASS test_fake_docker_compose_rejects_missing_depends_on_service")
 
 
+def test_dry_run_output_is_secret_free() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_dry_run_test")
+    intent = sample_intent()
+    executor = mod.ArcLinkExecutor()
+    step = executor.docker_compose_dry_run(
+        mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent)
+    )
+    rendered = json.dumps({
+        "operation": step.operation,
+        "project_name": step.project_name,
+        "services": step.services,
+        "compose_file": step.compose_file,
+        "env_file": step.env_file,
+    })
+    expect("sk_" not in rendered, f"secret leaked in dry run: {rendered}")
+    expect("secret://" not in rendered, f"secret ref leaked in dry run: {rendered}")
+    expect(step.project_name == "arclink-dep_1", str(step))
+    expect(step.services == ("dashboard", "nextcloud-db"), str(step))
+    print("PASS test_dry_run_output_is_secret_free")
+
+
+def test_injectable_docker_runner_receives_commands() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_runner_test")
+    intent = sample_intent()
+    secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
+    runner = mod.FakeDockerRunner()
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+        secret_resolver=mod.FakeSecretResolver({secret_ref: "sk_test_secret"}),
+        docker_runner=runner,
+    )
+    result = executor.docker_compose_apply(
+        mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="runner-1")
+    )
+    expect(result.status == "applied", str(result))
+    expect(result.live, str(result))
+    expect(len(runner.runs) == 1, f"expected 1 runner call, got {len(runner.runs)}")
+    expect(runner.runs[0]["args"] == ("up", "-d", "--remove-orphans"), str(runner.runs[0]))
+    expect(runner.runs[0]["project_name"] == "arclink-dep_1", str(runner.runs[0]))
+    # Secret value must not appear in runner record
+    rendered = json.dumps(runner.runs)
+    expect("sk_test_secret" not in rendered, f"secret leaked to runner: {rendered}")
+    print("PASS test_injectable_docker_runner_receives_commands")
+
+
+def test_live_executor_requires_docker_runner() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_runner_required_test")
+    intent = sample_intent()
+    secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+        secret_resolver=mod.FakeSecretResolver({secret_ref: "sk_test_secret"}),
+        # No docker_runner provided
+    )
+    try:
+        executor.docker_compose_apply(
+            mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent)
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("DockerRunner" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected live execution without runner to fail")
+    print("PASS test_live_executor_requires_docker_runner")
+
+
 def test_fake_docker_compose_lifecycle_operations() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_lifecycle_test")
     executor = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(adapter_name="fake", live_enabled=True))
@@ -724,8 +789,11 @@ def main() -> int:
     test_fake_rollback_executor_is_idempotent_and_preserves_state_roots()
     test_fake_rollback_rejects_idempotency_key_reuse_with_changed_plan()
     test_fake_docker_compose_rejects_missing_depends_on_service()
+    test_dry_run_output_is_secret_free()
+    test_injectable_docker_runner_receives_commands()
+    test_live_executor_requires_docker_runner()
     test_fake_docker_compose_lifecycle_operations()
-    print("PASS all 17 ArcLink executor tests")
+    print("PASS all 20 ArcLink executor tests")
     return 0
 
 

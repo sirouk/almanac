@@ -13,11 +13,11 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 ## Finding
 
 ArcLink is a staged evolution of the Almanac Docker/Python/Bash control plane.
-The repository contains 17 ArcLink Python modules (7,877 lines), 17 test files
-(160 tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
+The repository contains 19 ArcLink Python modules (8,222 lines), 21 test files
+(193 tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
 comprehensive fake/live adapter boundaries for all external providers.
 
-The non-live checklist is landed for P1-11 and P13-P16. Production 12 is
+The no-live checklist is landed for P1-11 and P13-P16. Production 12 is
 scaffolded but externally blocked on live credentials:
 - P1-2: Hosted API contract with versioned routes, OpenAPI, auth/CSRF/audit.
 - P3-6: Stripe, Cloudflare, Docker executor, and Chutes fake boundaries.
@@ -36,6 +36,24 @@ scaffolded but externally blocked on live credentials:
 - P14: Observability (structured events, alert candidates, admin dashboard).
 - P15: Data safety (volume layout, backup plan, teardown safeguards, secret guards).
 - P16: Documentation truth pass (all docs audited, no overclaims).
+
+## Next Pass: Final Form Gaps
+
+Three steering documents define the next work beyond P1-16:
+
+1. **RALPHIE_PRODUCTION_GRADE_STEERING.md**: Professional Finish Gate and
+   Current Next Objective Queue. P1-11 and P13-16 are checked complete.
+2. **RALPHIE_FINAL_FORM_GAPS_STEERING.md**: Gaps A-E for executable host
+   readiness, live-gated executor deepening, provider diagnostics, live E2E
+   expansion, and real deployment evidence.
+3. **RALPHIE_NEXT_PASS_STEERING.md**: Concrete build order: (1) host readiness
+   and bootstrap, (2) live readiness diagnostics, (3) live-gated Docker
+   executor path, (4) full live E2E expansion.
+
+Gaps A-C are landed for the no-secret foundation: host readiness
+(`arclink_host_readiness.py`), provider diagnostics
+(`arclink_diagnostics.py`), and an injectable Docker executor runner. Gaps D-E
+remain externally blocked on live credentials and deliberate deployment runs.
 
 ## Implementation Path Comparison
 
@@ -59,14 +77,13 @@ Path C: Kubernetes/Nomad rewrite. Premature for MVP.
 
 ## Build Readiness
 
-P1-11 and P13-P16 are complete for the no-secret ArcLink foundation. The
-remaining work is P12 live proof, which is externally blocked until real
-Stripe, Cloudflare, Chutes, Telegram, Discord, and host credentials are supplied.
+P1-11, P13-P16, and Gaps A-C are complete for the no-secret ArcLink
+foundation. The next BUILD pass should target Gap D/E scaffolding that can be
+advanced without credentials, while P12 live proof remains externally blocked
+until real credentials are supplied.
 
-168 ArcLink test functions + 41 browser product checks passing. No live secrets
-required for any non-live landed item. The foundation-runbook
-(`docs/arclink/foundation-runbook.md`) and professional finish gate in the
-steering doc are aligned with the current state.
+190 ArcLink Python test functions + 41 browser product checks passing. No live secrets
+required for any non-live landed item.
 
 ## Remaining Risks
 
@@ -75,6 +92,8 @@ steering doc are aligned with the current state.
 - Telegram/Discord live HTTP transport not yet implemented.
 - API/auth boundary is not yet deployed behind production identity provider.
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
+- Host readiness tooling landed (Gap A); ops runbook link pending.
+- Provider diagnostics landed (Gap C); live connectivity checks deferred.
 
 ## Reference Topics For Live Work
 

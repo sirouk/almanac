@@ -19,7 +19,7 @@
 | Directory | Role |
 | --- | --- |
 | `bin/` | 78 executables: deploy, Docker, health, onboarding, qmd, PDF, Nextcloud, code-server, backup, vault, CI, and runtime scripts. |
-| `python/` | 47 modules: control plane, 17 ArcLink modules (~7,849 lines), onboarding, MCP server, Notion SSOT, memory synthesis, health, notification delivery, Docker supervisor, provider logic, and CLI. |
+| `python/` | 47+ modules: control plane, 19 ArcLink modules (~8,222 lines), onboarding, MCP server, Notion SSOT, memory synthesis, health, notification delivery, Docker supervisor, provider logic, and CLI. |
 | `config/` | Env examples, component pins, model providers, schemas (org-profile, pins), and example manifests. |
 | `compose/` | Supplemental Compose assets (nextcloud-compose.yml). |
 | `systemd/user/` | Baremetal service-user units retained for existing Almanac installs. |
@@ -29,7 +29,7 @@
 | `docs/` | Operator docs, Docker docs, ArcLink foundation docs (`docs/arclink/foundation-runbook.md`), brand system, brand kit PDF, live E2E prerequisites, and OpenAPI spec (`docs/openapi/arclink-v1.openapi.json`). |
 | `research/` | Planning, steering, completion, and discovery artifacts. |
 | `web/` | Next.js 15 + Tailwind 4 production web app: landing page, login, onboarding, user dashboard, admin dashboard, API client, UI components, 2 web tests (~1,593 lines across 9 source files). |
-| `tests/` | 86+ test files: no-secret regression tests for Almanac and ArcLink surfaces (152 ArcLink test functions across 17 test files). |
+| `tests/` | 86+ test files: no-secret regression tests for Almanac and ArcLink surfaces (190 ArcLink Python test functions across 21 test files). |
 | `consensus/` | Gate outputs for plan, build, lint, test, and document blockers. |
 | `specs/` | Project contract definitions for research and implementation artifacts. |
 | `templates/` | Configuration templates. |
@@ -73,7 +73,7 @@ shared runtime and jobs:
 | `web/tests/test_api_client.mjs` | API client unit tests. |
 | `web/tests/test_page_smoke.mjs` | Page route smoke tests. |
 
-## ArcLink Modules (17 files, 7,877 lines)
+## ArcLink Modules (19 files, 8,222 lines)
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
@@ -89,8 +89,10 @@ shared runtime and jobs:
 | `python/arclink_access.py` | 49 | Dedicated Nextcloud isolation decision and Cloudflare Access TCP SSH guard. |
 | `python/arclink_provisioning.py` | 752 | Dry-run provisioning intent, state roots, Compose service plan, DNS/Traefik/access intent, health placeholders, job events, and rollback planning. |
 | `python/arclink_dashboard.py` | 937 | User/admin read models and queued, audited admin action intent contracts. |
-| `python/arclink_api_auth.py` | 887 | No-secret API/auth boundary with user/admin sessions, CSRF, rate limits, MFA-ready admin factors, scoped reads, queued admin mutations, provider state reads, and reconciliation drift API. |
-| `python/arclink_executor.py` | 935 | Fail-closed executor request/result types, secret resolver contracts, fake provider behavior, replay guards, DNS validation, and Compose dependency validation. |
+| `python/arclink_api_auth.py` | 889 | No-secret API/auth boundary with user/admin sessions, CSRF, rate limits, MFA-ready admin factors, scoped reads, queued admin mutations, provider state reads, and reconciliation drift API. |
+| `python/arclink_executor.py` | 996 | Fail-closed executor request/result types, secret resolver contracts, injectable DockerRunner protocol, FakeDockerRunner, DryRunStep planning, fake provider behavior, replay guards, DNS validation, and Compose dependency validation. |
+| `python/arclink_diagnostics.py` | 140 | Secret-safe provider diagnostic layer and CLI. Reports missing credential names for Stripe, Cloudflare, Chutes, Telegram, Discord, and Docker without returning credential values. No-op without live flag. |
+| `python/arclink_host_readiness.py` | 213 | Executable host readiness checks and CLI: Docker, Docker Compose subcommand, port availability, writable state root, required/optional env vars, secret presence (redacted), and ingress strategy detection. Machine-readable JSON output. |
 | `python/arclink_hosted_api.py` | 1078 | Production hosted WSGI API boundary with route dispatch, cookie/header session transport, CORS, request-ID propagation, structured logging, safe error shaping, health endpoint, provider state reads, reconciliation, billing portal, OpenAPI spec endpoint, rate-limit headers, and Telegram/Discord webhook routes over existing ArcLink contracts. |
 | `python/arclink_telegram.py` | 228 | Telegram runtime adapter: long-polling bot runner connecting Telegram messages to the shared public bot turn handler. Fake mode when TELEGRAM_BOT_TOKEN is absent. |
 | `python/arclink_discord.py` | 266 | Discord runtime adapter: interaction handler for slash commands and messages connecting to the shared public bot turn handler. Fake mode when DISCORD_BOT_TOKEN is absent. |
@@ -156,7 +158,7 @@ surfaces before expanding hosted API, frontend, or live-adapter scope:
 | Notion guardrails | `python/almanac_notion_ssot.py`, `python/almanac_notion_webhook.py`, `python/almanac_ssot_batcher.py` |
 | Notifications/health | `python/almanac_notification_delivery.py`, `python/almanac_health_watch.py`, `bin/health.sh`, `bin/docker-health.sh` |
 
-## ArcLink Test Coverage (17 ArcLink test files, 168 functions + 4 hygiene + 2 web tests)
+## ArcLink Test Coverage (21 ArcLink test files, 193 functions + 4 hygiene + 2 web tests)
 
 | Test file | Covered surface |
 | --- | --- |
@@ -171,12 +173,16 @@ surfaces before expanding hosted API, frontend, or live-adapter scope:
 | `tests/test_arclink_admin_actions.py` | Reason-required queued actions, idempotency, audit rows, secret-safe metadata, no live side effects. |
 | `tests/test_arclink_dashboard.py` | User dashboard summary and admin dashboard operational/failure projections. |
 | `tests/test_arclink_api_auth.py` | User/admin sessions, token hashing, scoped reads, public onboarding APIs, rate limits, CSRF checks, MFA-ready admin mutations, and secret masking. |
-| `tests/test_arclink_executor.py` | Live-gate refusal, secret resolver contracts, fake apply result shape, digest mismatch rejection, provider idempotency, secret-material guards, Compose dependency validation. |
+| `tests/test_arclink_executor.py` | Live-gate refusal, secret resolver contracts, injectable DockerRunner, FakeDockerRunner, DryRunStep planning, fake apply result shape, digest mismatch rejection, provider idempotency, secret-material guards, Compose dependency validation. |
+| `tests/test_arclink_diagnostics.py` | Stripe/Cloudflare/Chutes/Telegram/Discord/Docker credential presence checks, secret value redaction, machine-readable output, no-op without live flag. |
+| `tests/test_arclink_host_readiness.py` | Docker and Docker Compose subcommand detection, state root existence/writability, env var presence, secret env redaction, ingress strategy detection, machine-readable output, readiness failure without Docker or available ports. |
 | `tests/test_arclink_product_surface.py` | Local WSGI first screen, fake checkout flow, user/admin dashboard rendering, queued admin actions, no DNS mutation, mobile overflow guards, favicon route. |
 | `tests/test_arclink_public_bots.py` | Telegram/Discord public bot conversation-state contract, fake checkout, unsupported channel rejection, metadata secret rejection. |
 | `tests/test_arclink_hosted_api.py` | Hosted API route dispatch (39 tests), public onboarding without session auth, user/admin dashboard auth gates, admin action CSRF enforcement, safe error shapes, request-ID propagation, CORS, session cookies, session revocation, Stripe webhook skip without secret, Telegram/Discord webhook routing, health endpoint, provider state reads, reconciliation reads, billing portal redirect, and hardened provider/executor boundary probes. |
 | `tests/test_arclink_telegram.py` | Telegram runtime adapter fake-mode turns, message dispatch, long-poll stub, token-absent fallback. |
 | `tests/test_arclink_discord.py` | Discord runtime adapter fake-mode interactions, slash command dispatch, signature verification stub, token-absent fallback. |
+| `tests/test_arclink_e2e_fake.py` | Full fake journey: signup, onboarding, checkout, webhook, entitlement, provisioning, health, dashboard, audit, admin actions. |
+| `tests/test_arclink_e2e_live.py` | Secret-gated live E2E scaffold: Stripe, Cloudflare, Chutes, Telegram, Discord, Docker checks (skips without credentials). |
 | `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary skip behavior, provider-name context. |
 | `web/tests/test_api_client.mjs` | API client module unit tests. |
 

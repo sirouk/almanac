@@ -221,10 +221,49 @@ class DockerComposeLifecycleResult:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+class DockerRunner(Protocol):
+    """Injectable interface for real Docker command execution."""
+    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+        ...
+
+
+@dataclass
+class FakeDockerRunner:
+    """Records commands instead of executing them."""
+    runs: list[dict[str, Any]] = field(default_factory=list)
+
+    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+        record = {
+            "args": args,
+            "project_name": project_name,
+            "env_file": env_file,
+            "compose_file": compose_file,
+        }
+        self.runs.append(record)
+        return {"status": "ok", "args": args}
+
+
+@dataclass(frozen=True)
+class DryRunStep:
+    """A secret-free description of a planned Docker operation."""
+    operation: str
+    project_name: str
+    services: tuple[str, ...]
+    compose_file: str
+    env_file: str
+
+
 class ArcLinkExecutor:
-    def __init__(self, *, config: ArcLinkExecutorConfig | None = None, secret_resolver: SecretResolver | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        config: ArcLinkExecutorConfig | None = None,
+        secret_resolver: SecretResolver | None = None,
+        docker_runner: DockerRunner | None = None,
+    ) -> None:
         self.config = config or ArcLinkExecutorConfig()
         self.secret_resolver = secret_resolver
+        self.docker_runner = docker_runner
         self._fake_docker_runs: dict[str, dict[str, Any]] = {}
         self._fake_dns_runs: dict[str, dict[str, Any]] = {}
         self._fake_access_runs: dict[str, dict[str, Any]] = {}
@@ -237,6 +276,20 @@ class ArcLinkExecutor:
         if not self.config.live_enabled:
             raise ArcLinkLiveExecutionRequired(f"{operation} requires ARCLINK live/E2E execution to be explicitly enabled")
 
+    def docker_compose_dry_run(self, request: DockerComposeApplyRequest) -> DryRunStep:
+        """Plan a Docker Compose apply without executing or revealing secrets."""
+        intent = dict(request.intent)
+        compose = dict(intent.get("compose") or {})
+        services = dict(compose.get("services") or {})
+        plan = _plan_docker_compose_apply(request=request, intent=intent, services=services)
+        return DryRunStep(
+            operation="docker_compose_apply",
+            project_name=str(plan["project_name"]),
+            services=tuple(plan["services"]),
+            compose_file=str(plan["compose_file"]),
+            env_file=str(plan["env_file"]),
+        )
+
     def docker_compose_apply(self, request: DockerComposeApplyRequest) -> DockerComposeApplyResult:
         self._require_live_enabled("docker_compose_apply")
         intent = dict(request.intent)
@@ -246,7 +299,15 @@ class ArcLinkExecutor:
         plan = _plan_docker_compose_apply(request=request, intent=intent, services=services)
         if self.config.adapter_name == "fake":
             return self._fake_docker_compose_apply(request=request, plan=plan, compose_secrets=compose_secrets)
+        if self.docker_runner is None:
+            raise ArcLinkExecutorError("ArcLink live Docker execution requires an injectable DockerRunner")
         resolved = self._materialize_compose_secrets(compose_secrets)
+        self.docker_runner.run(
+            ("up", "-d", "--remove-orphans"),
+            project_name=str(plan["project_name"]),
+            env_file=str(plan["env_file"]),
+            compose_file=str(plan["compose_file"]),
+        )
         return DockerComposeApplyResult(
             deployment_id=request.deployment_id,
             project_name=str(plan["project_name"]),

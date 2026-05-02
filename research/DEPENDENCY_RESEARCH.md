@@ -23,13 +23,13 @@
 | Python WSGI stdlib surface | `python/arclink_product_surface.py` | Local no-secret onboarding/dashboard/API prototype | Keep as contract probe; not production UI. |
 | Python API/auth helpers | `python/arclink_api_auth.py` (887 lines) | User/admin session, CSRF, rate-limit, MFA-ready, scoped read, queued mutation boundary | Landed (P1-2). Extend as needed. |
 | Hosted WSGI API | `python/arclink_hosted_api.py` (1,078 lines) | Production API boundary with route dispatch, session transport, CORS, OpenAPI | Landed (P1-2). |
-| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,593 lines), 2 web tests | Production web app: landing, login, onboarding, user/admin dashboards | Wire to hosted API (P8-10). |
+| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,593 lines), 2 web tests | Production web app: landing, login, onboarding, user/admin dashboards | Landed (P8-10). |
 
 ## Repository Signals
 
 | Signal | Finding | Interpretation |
 | --- | ---: | --- |
-| Python files | 142 | Primary implementation and regression-test surface. |
+| Python files | 144+ | Primary implementation and regression-test surface. |
 | Shell scripts | 79 | Operational/deploy substrate remains significant. |
 | Markdown files | 63+ | Planning, docs, skills, and operating guides are extensive. |
 | Compose files | 2 | Docker-first path exists and should be evolved. |
@@ -76,5 +76,7 @@
 - Product-surface acceptance should include desktop and narrow mobile browser smoke.
 - Executor tests must prove live mutation is disabled by default.
 - Live credentials belong in E2E documentation and local secrets only.
-- The next BUILD phase targets Production 13-16 (deploy assets, observability, data safety, docs truth).
-- The foundation-runbook (`docs/arclink/foundation-runbook.md`) documents current boundary behavior, ownership, and repair procedures.
+- Gaps A-C are landed: host readiness tooling, provider diagnostics, and
+  live-gated executor deepening.
+- The foundation-runbook (`docs/arclink/foundation-runbook.md`) documents
+  current boundary behavior, ownership, and repair procedures.

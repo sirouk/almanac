@@ -107,6 +107,17 @@ def test_live_transport_requires_token() -> None:
     print("PASS test_live_transport_requires_token")
 
 
+def test_telegram_validate_live_readiness() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_readiness_test")
+    full = tg.TelegramConfig.from_env({"TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_BOT_USERNAME": "testbot"})
+    expect(full.validate_live_readiness() == [], f"expected empty, got {full.validate_live_readiness()}")
+    missing_token = tg.TelegramConfig.from_env({})
+    missing = missing_token.validate_live_readiness()
+    expect("TELEGRAM_BOT_TOKEN" in missing, str(missing))
+    expect("TELEGRAM_BOT_USERNAME" in missing, str(missing))
+    print("PASS test_telegram_validate_live_readiness")
+
+
 def main() -> int:
     test_telegram_config_from_env()
     test_telegram_parse_update()
@@ -114,7 +125,8 @@ def main() -> int:
     test_telegram_fake_transport_polling()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
-    print("PASS all 6 ArcLink Telegram adapter tests")
+    test_telegram_validate_live_readiness()
+    print("PASS all 7 ArcLink Telegram adapter tests")
     return 0
 
 

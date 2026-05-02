@@ -50,6 +50,15 @@ class TelegramConfig:
     def is_live(self) -> bool:
         return bool(self.bot_token)
 
+    def validate_live_readiness(self) -> list[str]:
+        """Return a list of missing config fields required for live operation."""
+        missing: list[str] = []
+        if not self.bot_token:
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not self.bot_username:
+            missing.append("TELEGRAM_BOT_USERNAME")
+        return missing
+
 
 def _telegram_api_url(config: TelegramConfig, method: str) -> str:
     return f"{config.api_base}/bot{config.bot_token}/{method}"

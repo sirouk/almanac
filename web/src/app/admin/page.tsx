@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, ErrorAlert } from "@/components/ui";
 
-type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "security" | "releases" | "audit" | "events" | "actions" | "sessions";
+type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation";
 
 interface AdminData {
   deployments?: Record<string, string>[];
@@ -34,6 +34,8 @@ export default function AdminPage() {
   const [audit, setAudit] = useState<{ audit?: Record<string, string>[] } | null>(null);
   const [actions, setActions] = useState<{ actions?: Record<string, string>[] } | null>(null);
   const [events, setEvents] = useState<{ events?: Record<string, string>[] } | null>(null);
+  const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ drift?: Record<string, string>[]; summary?: Record<string, unknown> } | null>(null);
   const [error, setError] = useState("");
   const router = useRouter();
 
@@ -57,9 +59,11 @@ export default function AdminPage() {
     if (tab === "audit") api.adminAudit().then((r) => { if (r.status === 200) setAudit(r.data as typeof audit); });
     if (tab === "actions") api.adminActions().then((r) => { if (r.status === 200) setActions(r.data as typeof actions); });
     if (tab === "events") api.adminEvents().then((r) => { if (r.status === 200) setEvents(r.data as typeof events); });
+    if (tab === "provider") api.adminProviderState().then((r) => { if (r.status === 200) setProviderState(r.data as typeof providerState); });
+    if (tab === "reconciliation") api.adminReconciliation().then((r) => { if (r.status === 200) setReconciliation(r.data as typeof reconciliation); });
   }, [tab]);
 
-  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions"];
+  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation"];
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -468,6 +472,63 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* Provider State */}
+          {tab === "provider" && (
+            <div className="space-y-6">
+              <h1 className="font-display text-2xl font-bold">Provider State</h1>
+              {providerState ? (
+                <div className="rounded-lg border border-border bg-surface p-4">
+                  <pre className="overflow-x-auto text-xs text-soft-white/60">
+                    {JSON.stringify(providerState, null, 2)}
+                  </pre>
+                </div>
+              ) : (
+                <p className="text-soft-white/40">No provider state data.</p>
+              )}
+            </div>
+          )}
+
+          {/* Reconciliation */}
+          {tab === "reconciliation" && (
+            <div className="space-y-6">
+              <h1 className="font-display text-2xl font-bold">Reconciliation</h1>
+              {reconciliation?.drift?.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-soft-white/40">
+                        <th className="px-3 py-2">User</th>
+                        <th className="px-3 py-2">Field</th>
+                        <th className="px-3 py-2">Local</th>
+                        <th className="px-3 py-2">Stripe</th>
+                        <th className="px-3 py-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reconciliation.drift.map((d, i) => (
+                        <tr key={i} className="border-b border-border/50">
+                          <td className="px-3 py-2 font-mono text-xs">{d.user_id || d.customer_id || "—"}</td>
+                          <td className="px-3 py-2">{d.field || "—"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{d.local_value || "—"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{d.stripe_value || "—"}</td>
+                          <td className="px-3 py-2"><StatusBadge status={d.status || "drift"} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : reconciliation?.summary ? (
+                <div className="rounded-lg border border-border bg-surface p-4">
+                  <pre className="overflow-x-auto text-xs text-soft-white/60">
+                    {JSON.stringify(reconciliation.summary, null, 2)}
+                  </pre>
+                </div>
+              ) : (
+                <p className="text-neon-green text-sm">No reconciliation drift detected.</p>
+              )}
+            </div>
+          )}
+
           {/* Sessions */}
           {tab === "sessions" && (
             <div className="space-y-6">
@@ -637,7 +698,9 @@ function QueueActionForm({ onQueued }: { onQueued: () => void }) {
         >
           <option value="deployment">deployment</option>
           <option value="user">user</option>
-          <option value="service">service</option>
+          <option value="subscription">subscription</option>
+          <option value="dns_record">dns_record</option>
+          <option value="system">system</option>
         </select>
         <input
           required

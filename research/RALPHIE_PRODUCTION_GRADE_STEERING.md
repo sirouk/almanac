@@ -102,17 +102,19 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
 - [x] Production 6: Chutes default provider flow includes owner-side key
   lifecycle, per-deployment key state, model catalog/default selection,
   inference smoke path, failure reporting, and fake tests.
-- [ ] Production 7: Telegram and Discord onboarding flows share the same state
+- [x] Production 7: Telegram and Discord onboarding flows share the same state
   machine as web onboarding, preserve parity, validate payloads, and have live
   adapters behind explicit secret gates.
-- [ ] Production 8: User dashboard is responsive and production-useful:
+- [x] Production 8: User dashboard is responsive and production-useful:
   billing, deployment state, service links, health, model/provider state, vault
   status, memory/qmd freshness, bot status, support, and security/session
   controls.
-- [ ] Production 9: Admin dashboard is responsive and operator-useful:
-  onboarding funnel, users, payments, provisioning queue, service health, host
-  health, Cloudflare/DNS drift, bot state, provider state, audit trail, logs or
-  log links, and guarded admin actions.
+- [x] Production 9: Admin dashboard is responsive and operator-useful:
+  18-tab layout (overview, users, deployments, onboarding, health, provisioning,
+  dns, payments, infrastructure, bots, security, releases, audit, events,
+  actions, sessions, provider, reconciliation) wired to all hosted API admin
+  endpoints via api.ts. Queue-action and revoke-session forms with CSRF.
+  Sidebar + mobile tab layout. StatusBadge and ErrorAlert shared components.
 - [ ] Production 10: Web UI passes professional product checks: ArcLink brand
   system, mobile layouts, no overlapping text, no placeholder claims of live
   services, accessible forms, clear empty/error/loading states, and route-level

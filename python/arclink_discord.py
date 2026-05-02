@@ -49,6 +49,17 @@ class DiscordConfig:
     def is_live(self) -> bool:
         return bool(self.bot_token and self.app_id and self.public_key)
 
+    def validate_live_readiness(self) -> list[str]:
+        """Return a list of missing config fields required for live operation."""
+        missing: list[str] = []
+        if not self.bot_token:
+            missing.append("DISCORD_BOT_TOKEN")
+        if not self.app_id:
+            missing.append("DISCORD_APP_ID")
+        if not self.public_key:
+            missing.append("DISCORD_PUBLIC_KEY")
+        return missing
+
 
 def verify_discord_signature(
     body: str, signature: str, timestamp: str, public_key: str

@@ -161,6 +161,20 @@ def test_discord_live_transport_requires_config() -> None:
     print("PASS test_discord_live_transport_requires_config")
 
 
+def test_discord_validate_live_readiness() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_readiness_test")
+    full = dc.DiscordConfig.from_env({
+        "DISCORD_BOT_TOKEN": "tok", "DISCORD_APP_ID": "app1", "DISCORD_PUBLIC_KEY": "pk",
+    })
+    expect(full.validate_live_readiness() == [], f"expected empty, got {full.validate_live_readiness()}")
+    empty = dc.DiscordConfig.from_env({})
+    missing = empty.validate_live_readiness()
+    expect("DISCORD_BOT_TOKEN" in missing, str(missing))
+    expect("DISCORD_APP_ID" in missing, str(missing))
+    expect("DISCORD_PUBLIC_KEY" in missing, str(missing))
+    print("PASS test_discord_validate_live_readiness")
+
+
 def main() -> int:
     test_discord_config_from_env()
     test_discord_ping_pong()
@@ -170,7 +184,8 @@ def main() -> int:
     test_discord_verify_signature_test_mode()
     test_discord_webhook_handler()
     test_discord_live_transport_requires_config()
-    print("PASS all 8 ArcLink Discord adapter tests")
+    test_discord_validate_live_readiness()
+    print("PASS all 9 ArcLink Discord adapter tests")
     return 0
 
 

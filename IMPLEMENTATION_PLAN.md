@@ -18,64 +18,39 @@ external credential.
 
 ## Current Status
 
-- 17 ArcLink Python modules (7,849 lines).
-- 17 test files (152 test functions) + 4 hygiene tests + 2 web tests.
+- 17 ArcLink Python modules (7,877 lines).
+- 17 test files + 4 hygiene + 2 web tests = 160 ArcLink tests passing.
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files).
-- Hosted API boundary (1,078 lines) with route dispatch, session/cookie
-  transport, CORS, request-ID, safe errors, health, provider-state,
-  reconciliation, billing portal, OpenAPI spec, rate-limit headers,
-  Telegram/Discord webhook routes.
-- API/auth module (879 lines), dashboard module (937 lines).
+- Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
+  session transport, CORS, rate-limit headers, safe errors.
+- API/auth module (887 lines), dashboard module (937 lines).
 - Telegram/Discord runtime adapters with fake-mode dispatch.
-- Entitlements (435 lines) with drift detection, targeted comp, profile-only
-  preservation.
+- Entitlements (435 lines) with drift detection, targeted comp.
 - 18 `arclink_*` tables. Fake adapters default for all providers.
-- All 156 tests passing (152 ArcLink + 4 hygiene, verified 2026-05-02).
 
-This is not live SaaS yet. The code records intent and proves no-secret
-behavior.
+### Landed Checkpoints
 
-### Landed Checkpoints Ralphie Must Respect
+- **Production 1-2** (API contract): Landed at commit `019f75d`.
+- **Production 3-6** (Provider boundaries): Stripe, Cloudflare, Docker executor,
+  Chutes fake boundaries landed. Live proof deferred to P12.
+- **Production 7** (Bot parity): Telegram/Discord shared state machine, runtime
+  adapters with fake mode, payload validation.
+- **Production 8** (User dashboard): Responsive layout with mock data panels.
+- **Production 9** (Admin dashboard): All 18 tabs wired to hosted API, admin
+  actions form with all target kinds, session revocation, provider state,
+  reconciliation drift, responsive layout. Landed at this commit.
 
-- Production 1-2 are landed on branch `arclink` at commit `019f75d`.
-  The hosted API has `/api/v1` route coverage, OpenAPI 3.1 output,
-  checked-in static OpenAPI JSON, rate-limit headers, WSGI 503 status
-  mapping, and auth/CSRF/audit negative coverage.
-- Do not spend a BUILD cycle reimplementing Production 1-2. A tiny
-  contract/documentation correction is acceptable, for example documenting
-  `429` explicitly in OpenAPI response descriptions, but the next substantive
-  BUILD must move to the first unproven Production 3-16 item.
-- Provider/executor boundaries have substantial landed code from earlier
-  commits. Before editing them, audit the existing tests and only close real
-  gaps. Do not rewrite already-passing fake/live adapter contracts.
-- The immediate product gap is turning the proven backend contracts into a
-  usable ArcLink product surface: API-wired user/admin dashboards, public web
-  onboarding parity with bot onboarding, fake full-journey E2E, deploy
-  assets, observability, data safety, and live-gated proof harnesses.
+Do not rebuild P1-9 unless a regression is proven by a failing test.
 
 ## Chosen Architecture
 
 Staged evolution of the existing Docker/Python/Bash Almanac control plane.
 
-Selected path:
-
 - Docker Compose first for MVP customer deployment units.
-- Python first for control-plane, API/auth, billing, provisioning, dashboard
-  read models, and executor boundaries.
-- Bash retained for host operations and canonical deploy/health flows.
+- Python first for control-plane, API, billing, provisioning, executor.
+- Next.js 15 + Tailwind 4 for production dashboards consuming hosted API.
 - SQLite first with Postgres-compatible schema choices.
-- Chutes first through central config and per-deployment secret references.
-- Stripe, Cloudflare, Traefik, Chutes, Telegram, Discord, Notion, and OAuth
-  live paths behind fakeable adapters and explicit E2E gates.
-- Next.js 15 + Tailwind 4 for the production dashboard consuming the hosted
-  Python API boundary.
-
-Rejected for MVP:
-
-- Scheduler-first Kubernetes/Nomad rewrite.
-- Raw SSH-over-HTTP or fragile path-prefix routing for Nextcloud/code-server.
-- A standalone SaaS shell that duplicates Almanac state before contracts
-  stabilize.
+- Fake adapters default; live paths behind explicit E2E gates.
 
 ## Validation Criteria
 
@@ -87,132 +62,19 @@ PLAN is complete when:
 - Live blockers are documented as E2E prerequisites.
 - The next tasks are actionable and testable.
 
-## BUILD Tasks (Production 1-16 Mapping)
+## BUILD Tasks (Remaining: Production 10-16)
 
-### Phase 1: API Contract Hardening (Production 1-2)
-
-Status: landed at `019f75d`. Treat this section as historical acceptance
-criteria unless a regression or small contract-documentation mismatch is found.
-
-**Production 1: Coherent Versioned Hosted API**
-
-- Extend `arclink_hosted_api.py` with remaining contract routes: user
-  billing/subscription reads, provisioning job status, service health reads,
-  provider/model state, billing portal link generation, reconciliation
-  summary, and admin DNS drift/provider state reads.
-- Version all routes under `/api/v1`.
-- Add a machine-readable OpenAPI 3.1 contract generated from or tested against
-  the canonical route table, expose it as `GET /api/v1/openapi.json`, and store
-  a checked-in copy at `docs/openapi/arclink-v1.openapi.json`.
-- Add rate-limit response headers for limited public surfaces:
-  `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
-  `X-RateLimit-Reset`.
-- Fix the WSGI status mapping so `/api/v1/health` degraded responses return
-  `503 Service Unavailable`, not a fallback `503 OK` reason phrase.
-- Ensure fake adapters default safely for every route.
-- Add route-level tests for each new endpoint.
-
-**Production 2: Auth/CSRF/Audit on Every Mutating Route**
-
-- Systematic audit: enumerate all mutating routes and verify each has auth,
-  role check, CSRF validation (or webhook signature for webhooks), structured
-  audit log entry, and at least one negative test proving unauthorized access
-  fails.
-- Add missing negative tests for any gaps found.
-- Verify Stripe webhook signature validation path.
-
-Validation:
-
-```bash
-python3 tests/test_arclink_hosted_api.py
-python3 tests/test_arclink_api_auth.py
-python3 tests/test_arclink_admin_actions.py
-python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
-git diff --check
-```
-
-### Phase 2: Provider Boundaries (Production 3-6)
-
-Status: no-secret/fake boundaries are landed in the current provider-boundary
-slice. Treat this section as historical acceptance criteria unless a regression
-or missing live-gated E2E hook is proven. Live account-backed proof remains
-blocked until Production 12 credentials exist.
-
-**Production 3: Stripe Boundary**
-
-- Add billing portal link generation (fake default, live when configured).
-- Add failed payment state tracking and admin notes on refund/cancel.
-- Add Stripe-vs-local subscription reconciliation report.
-- Keep fake tests no-secret; live E2E gated on `STRIPE_SECRET_KEY`.
-
-**Production 4: Cloudflare Boundary**
-
-- Add hostname reservation, DNS record creation, propagation/drift checks,
-  teardown, and retry safety to the fake Cloudflare adapter.
-- Add fake tests for each operation.
-- Live E2E gated on `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID`.
-
-**Production 5: Docker Compose Executor**
-
-- Extend executor to render, validate, start, stop, restart, inspect, and
-  teardown per-user stacks.
-- Add resource limits, health checks, volume isolation to rendered Compose.
-- Keep dry-run/fake coverage as default; live execution behind operator flag.
-
-**Production 6: Chutes Provider Flow**
-
-- Add owner-side key lifecycle contract (create, rotate, revoke).
-- Add per-deployment key state tracking.
-- Add inference smoke path (fake default).
-- Add failure reporting and model catalog refresh.
-- Live E2E gated on `CHUTES_API_KEY`.
-
-Validation:
-
-```bash
-python3 tests/test_arclink_entitlements.py
-python3 tests/test_arclink_chutes_and_adapters.py
-python3 tests/test_arclink_executor.py
-python3 tests/test_arclink_ingress.py
-python3 tests/test_arclink_provisioning.py
-python3 tests/test_public_repo_hygiene.py
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
-git diff --check
-```
-
-### Phase 3: Bot Parity and Dashboards (Production 7-10)
-
-**Production 7: Telegram/Discord Onboarding Parity**
-
-- Verify web/Telegram/Discord onboarding creates identical session shapes.
-- Add payload validation tests for each channel.
-- Add live HTTP transport to adapters behind explicit token gates.
-- Document webhook/polling mode for production domain.
-
-**Production 8: User Dashboard**
-
-- Wire Next.js user dashboard to hosted API user endpoints.
-- Add panels: billing, deployment state, service links, health,
-  model/provider state, vault status, memory/qmd freshness, bot status,
-  support, and security/session controls.
-- Responsive layout passing brand system checks.
-
-**Production 9: Admin Dashboard**
-
-- Wire Next.js admin dashboard to hosted API admin endpoints.
-- Add panels: onboarding funnel, users, payments, provisioning queue,
-  service health, host health, Cloudflare/DNS drift, bot state, provider
-  state, audit trail, logs/log links, and guarded admin actions.
-- Responsive layout passing brand system checks.
+### Phase 3: Brand and UI Polish (Production 10)
 
 **Production 10: Web UI Product Checks**
 
-- Apply ArcLink brand system (jet black, carbon, soft white, signal orange).
-- Space Grotesk headlines, Satoshi/Inter body.
-- No overlapping text at narrow mobile widths.
+- Apply ArcLink brand system fully: Jet Black `#080808`, Carbon `#0F0F0E`,
+  Soft White `#E7E6E6`, Signal Orange `#FB5005`.
+- Space Grotesk headlines, Satoshi/Inter body text.
+- No overlapping text at narrow mobile widths (verify with browser checks).
 - No placeholder claims of live services when fake adapters are active.
 - Clear empty/error/loading states on every view.
+- Accessible forms (labels, focus states, keyboard navigation).
 - Route-level smoke tests for `/`, `/login`, `/onboarding`, `/dashboard`,
   `/admin`.
 
@@ -220,17 +82,11 @@ Validation:
 
 ```bash
 python3 tests/test_arclink_dashboard.py
-python3 tests/test_arclink_onboarding.py
-python3 tests/test_arclink_public_bots.py
-python3 tests/test_arclink_telegram.py
-python3 tests/test_arclink_discord.py
 python3 tests/test_arclink_hosted_api.py
 cd web && npm test && npm run build
-python3 -m py_compile python/almanac_control.py python/arclink_*.py
-git diff --check
 ```
 
-### Phase 4: E2E, Deploy, and Operations (Production 11-16)
+### Phase 4: E2E Journey (Production 11-12)
 
 **Production 11: Fake E2E Harness**
 
@@ -239,35 +95,47 @@ git diff --check
   provisioning request, service health visibility, admin audit, and user
   dashboard state.
 - All using fake adapters, no live credentials required.
+- Test file: `tests/test_arclink_e2e_fake.py`.
 
 **Production 12: Live E2E Harness**
 
-- Build secret-gated live E2E harness that runs the same journey against
-  real Stripe, Cloudflare, Chutes, Telegram, Discord, and Docker.
+- Build secret-gated live E2E harness: `tests/test_arclink_e2e_live.py`.
+- Run the same journey against real Stripe, Cloudflare, Chutes, Telegram,
+  Discord, and Docker.
 - Gate on presence of each credential; skip gracefully when absent.
 - Never leak secrets or make destructive calls accidentally.
 - Blocked: all external credentials (see External Live Proof Checklist).
 
+Validation:
+
+```bash
+python3 tests/test_arclink_e2e_fake.py
+# Live E2E only when credentials present:
+# ARCLINK_E2E_LIVE=1 python3 tests/test_arclink_e2e_live.py
+```
+
+### Phase 5: Operations and Documentation (Production 13-16)
+
 **Production 13: Deployment Assets**
 
-- Create env example file with all required/optional variables.
-- Create secret checklist document.
-- Document Docker/Traefik ingress plan for production host.
-- Document backup and restore procedures.
-- Document health checks, restart procedure, and release/rollback steps.
-- Blocked partially: Hetzner/host credentials for live verification.
+- Create `config/env.example` with all required/optional variables.
+- Create `docs/arclink/secret-checklist.md`.
+- Document Docker/Traefik ingress plan in `docs/arclink/ingress-plan.md`.
+- Document backup/restore in `docs/arclink/backup-restore.md`.
+- Document health checks, restart, release/rollback in
+  `docs/arclink/operations-runbook.md`.
 
 **Production 14: Observability**
 
 - Verify structured events cover all key state transitions.
-- Wire health snapshots into admin dashboard reads.
-- Add queue/deployment status visibility.
-- Document alert candidates (unhealthy deployment, failed payment, DNS drift,
-  provisioning failure, high error rate).
+- Wire health snapshots into admin dashboard reads (if not done in P9).
+- Add queue/deployment status visibility to admin dashboard.
+- Document alert candidates in `docs/arclink/alert-candidates.md`.
 
 **Production 15: Data Safety**
 
-- Document per-user isolation and volume layout.
+- Document per-user isolation and volume layout in
+  `docs/arclink/data-safety.md`.
 - Document backup plan and schedule.
 - Add teardown safeguards (confirmation required, audit logged).
 - Add destructive-action confirmations for admin operations.
@@ -276,19 +144,34 @@ git diff --check
 **Production 16: Documentation Truth**
 
 - Audit all documentation against live code.
-- Remove or qualify any claims of live functionality that are not yet proven.
+- Remove or qualify any claims of live functionality not yet proven.
 - Name every remaining live blocker with the exact credential/account required.
 - Update `docs/arclink/live-e2e-secrets-needed.md`.
 
 Validation:
 
 ```bash
-python3 tests/test_arclink_*.py
-python3 tests/test_public_repo_hygiene.py
+python3 -m pytest tests/test_arclink_*.py tests/test_public_repo_hygiene.py -q
 cd web && npm test && npm run build
 python3 -m py_compile python/almanac_control.py python/arclink_*.py
-git diff --check
 ```
+
+## Historical Phases (Landed)
+
+### Phase 1: API Contract Hardening (Production 1-2) -- COMPLETE
+
+Hosted API with versioned `/api/v1` routes, OpenAPI 3.1, rate-limit headers,
+auth/CSRF/audit on all mutating routes with negative tests.
+
+### Phase 2: Provider Boundaries (Production 3-6) -- COMPLETE
+
+Stripe, Cloudflare, Docker executor, Chutes fake boundaries with full
+no-secret test coverage. Live proof deferred to P12.
+
+### Phase 2.5: Bot Parity and User Dashboard (Production 7-8) -- COMPLETE
+
+Telegram/Discord shared state machine and runtime adapters. User dashboard
+with responsive layout and mock data.
 
 ## External Live Proof Checklist (Blocked)
 
@@ -303,20 +186,15 @@ These require real accounts/credentials. Build fake/live boundaries first.
 
 ## Blockers And Risks
 
-- The hosted API/auth boundary is not yet deployed behind a production identity
-  provider or reverse proxy.
-- Next.js web app views use mock data; API wiring is the immediate next step.
-- Telegram/Discord adapters have fake-mode dispatch; live HTTP transport
-  depends on bot tokens.
-- All hygiene tests passing as of 2026-05-02.
-- Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, OAuth, and host
-  execution require real credentials and E2E verification.
+- Admin dashboard is wired to API; user dashboard live data wiring deferred.
+- API/auth boundary not yet deployed behind production identity provider.
+- Live provider integration requires real credentials (P12).
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
 
 ## BUILD Handoff
 
-BUILD may begin with no live secrets. Work through Production 1-16 in phase
-order. Each phase should end with passing tests before proceeding. Keep fake
-adapters as defaults. Keep live mutation behind explicit E2E gates. Do not
-call ArcLink complete while any Production item remains unchecked without a
-named external blocker.
+BUILD may begin with no live secrets. Work through Production 10-16 in order.
+Each phase should end with passing tests before proceeding. Keep fake adapters
+as defaults. Keep live mutation behind explicit E2E gates. Do not call ArcLink
+complete while any Production item remains unchecked without a named external
+blocker.

@@ -73,7 +73,7 @@ shared runtime and jobs:
 | `web/tests/test_api_client.mjs` | API client unit tests. |
 | `web/tests/test_page_smoke.mjs` | Page route smoke tests. |
 
-## ArcLink Modules (17 files, 7,849 lines)
+## ArcLink Modules (17 files, 7,877 lines)
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
@@ -87,13 +87,13 @@ shared runtime and jobs:
 | `python/arclink_product_surface.py` | 730 | Local stdlib WSGI onboarding, fake checkout, user dashboard, admin dashboard, API, and queued-action prototype. |
 | `python/arclink_ingress.py` | 187 | Desired DNS records, drift events, and Traefik role label rendering. |
 | `python/arclink_access.py` | 49 | Dedicated Nextcloud isolation decision and Cloudflare Access TCP SSH guard. |
-| `python/arclink_provisioning.py` | 695 | Dry-run provisioning intent, state roots, Compose service plan, DNS/Traefik/access intent, health placeholders, job events, and rollback planning. |
+| `python/arclink_provisioning.py` | 752 | Dry-run provisioning intent, state roots, Compose service plan, DNS/Traefik/access intent, health placeholders, job events, and rollback planning. |
 | `python/arclink_dashboard.py` | 937 | User/admin read models and queued, audited admin action intent contracts. |
-| `python/arclink_api_auth.py` | 879 | No-secret API/auth boundary with user/admin sessions, CSRF, rate limits, MFA-ready admin factors, scoped reads, queued admin mutations, provider state reads, and reconciliation drift API. |
+| `python/arclink_api_auth.py` | 887 | No-secret API/auth boundary with user/admin sessions, CSRF, rate limits, MFA-ready admin factors, scoped reads, queued admin mutations, provider state reads, and reconciliation drift API. |
 | `python/arclink_executor.py` | 935 | Fail-closed executor request/result types, secret resolver contracts, fake provider behavior, replay guards, DNS validation, and Compose dependency validation. |
 | `python/arclink_hosted_api.py` | 1078 | Production hosted WSGI API boundary with route dispatch, cookie/header session transport, CORS, request-ID propagation, structured logging, safe error shaping, health endpoint, provider state reads, reconciliation, billing portal, OpenAPI spec endpoint, rate-limit headers, and Telegram/Discord webhook routes over existing ArcLink contracts. |
-| `python/arclink_telegram.py` | 219 | Telegram runtime adapter: long-polling bot runner connecting Telegram messages to the shared public bot turn handler. Fake mode when TELEGRAM_BOT_TOKEN is absent. |
-| `python/arclink_discord.py` | 255 | Discord runtime adapter: interaction handler for slash commands and messages connecting to the shared public bot turn handler. Fake mode when DISCORD_BOT_TOKEN is absent. |
+| `python/arclink_telegram.py` | 228 | Telegram runtime adapter: long-polling bot runner connecting Telegram messages to the shared public bot turn handler. Fake mode when TELEGRAM_BOT_TOKEN is absent. |
+| `python/arclink_discord.py` | 266 | Discord runtime adapter: interaction handler for slash commands and messages connecting to the shared public bot turn handler. Fake mode when DISCORD_BOT_TOKEN is absent. |
 
 ## Core Control Plane
 
@@ -156,7 +156,7 @@ surfaces before expanding hosted API, frontend, or live-adapter scope:
 | Notion guardrails | `python/almanac_notion_ssot.py`, `python/almanac_notion_webhook.py`, `python/almanac_ssot_batcher.py` |
 | Notifications/health | `python/almanac_notification_delivery.py`, `python/almanac_health_watch.py`, `bin/health.sh`, `bin/docker-health.sh` |
 
-## ArcLink Test Coverage (17 ArcLink test files, 147 functions + 4 hygiene + 2 web tests)
+## ArcLink Test Coverage (17 ArcLink test files, 156 functions + 4 hygiene + 2 web tests)
 
 | Test file | Covered surface |
 | --- | --- |

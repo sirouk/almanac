@@ -85,4 +85,10 @@ export const api = {
 
   revokeSession: (body: Record<string, string>) =>
     request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }),
+
+  userProviderState: () => request("/user/provider-state"),
+
+  adminProviderState: () => request("/admin/provider-state"),
+
+  adminReconciliation: () => request("/admin/reconciliation"),
 };

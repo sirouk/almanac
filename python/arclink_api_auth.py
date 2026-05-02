@@ -575,6 +575,12 @@ def start_public_onboarding_api(
     return ArcLinkApiResponse(status=201, payload={"session": session})
 
 
+def _require_nonempty(value: str, field: str) -> None:
+    """Raise ArcLinkApiAuthError if *value* is blank or missing."""
+    if not str(value or "").strip():
+        raise ArcLinkApiAuthError(f"{field} is required")
+
+
 def answer_public_onboarding_api(
     conn: sqlite3.Connection,
     *,
@@ -586,6 +592,8 @@ def answer_public_onboarding_api(
     selected_plan_id: str = "",
     selected_model_id: str = "",
 ) -> ArcLinkApiResponse:
+    _require_nonempty(session_id, "session_id")
+    _require_nonempty(question_key, "question_key")
     session = answer_arclink_onboarding_question(
         conn,
         session_id=session_id,
@@ -609,6 +617,8 @@ def open_public_onboarding_checkout_api(
     cancel_url: str,
     base_domain: str = "",
 ) -> ArcLinkApiResponse:
+    _require_nonempty(session_id, "session_id")
+    _require_nonempty(price_id, "price_id")
     session = open_arclink_onboarding_checkout(
         conn,
         session_id=session_id,

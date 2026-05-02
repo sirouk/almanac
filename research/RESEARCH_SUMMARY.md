@@ -1,6 +1,6 @@
 # Research Summary
 
-<confidence>98</confidence>
+<confidence>96</confidence>
 
 ## Goal
 
@@ -12,131 +12,65 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 
 ## Finding
 
-ArcLink should continue as a staged evolution of the existing Almanac
-control plane, not as a rewrite. The repository already contains the substrate
-needed for the foundation: Docker Compose, Python control-plane modules, Bash
-deploy and health scripts, Hermes/qmd/vault/memory rails, Nextcloud,
-code-server, Telegram and Discord onboarding foundations, Notion SSOT, service
-health, and focused no-secret tests.
+ArcLink is a staged evolution of the Almanac Docker/Python/Bash control plane.
+The repository contains 17 ArcLink Python modules (7,877 lines), 17 test files
+(160 tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
+comprehensive fake/live adapter boundaries for all external providers.
 
-ArcLink-specific foundation code is present in additive modules:
+Production 1-9 of the 16-item steering checklist are landed and checked:
+- P1-2: Hosted API contract with versioned routes, OpenAPI, auth/CSRF/audit.
+- P3-6: Stripe, Cloudflare, Docker executor, and Chutes fake boundaries.
+- P7: Telegram/Discord onboarding parity with shared state machine.
+- P8: User dashboard with responsive layout and mock data.
+- P9: Admin dashboard wired to all hosted API admin endpoints (18 tabs).
 
-- Product identity and config helpers.
-- SaaS schema and helper rows in the existing control-plane database.
-- Chutes catalog validation and fake key references.
-- Fakeable Stripe, Cloudflare, Traefik, and Chutes adapter contracts.
-- Stripe entitlement processing.
-- Public web/Telegram/Discord onboarding sessions.
-- DNS, ingress, access, provisioning, dashboard, admin-action, executor,
-  API/auth, product-surface, and public-bot contracts.
-
-The code is not a live SaaS yet. It records and validates intent, exposes
-secret-free read/action contracts, and proves behavior through fake adapters.
-It does not yet execute live customer Docker deployments, create live DNS or
-Cloudflare Access records, mint live Chutes keys, operate live Stripe checkout
-or refunds, host production dashboard sessions, or run production public bot
-clients.
+Production 10-16 remain:
+- P10: Web UI brand system, mobile layouts, empty/error/loading states.
+- P11: Unified fake E2E journey harness.
+- P12: Secret-gated live E2E harness (blocked on credentials).
+- P13-15: Deployment assets, observability, data safety.
+- P16: Documentation truth pass.
 
 ## Implementation Path Comparison
 
-Path A: evolve the Docker/Python Almanac control plane into ArcLink.
+Path A (selected): Evolve Docker/Python Almanac control plane into ArcLink.
+Preserves all working surfaces. Keeps tests deterministic and no-secret.
 
-This is the selected path. It preserves Hermes, qmd, memory, vault, Notion,
-Nextcloud, code-server, health, bot, and deployment behavior while keeping unit
-tests deterministic and no-secret.
+Path B: Separate SaaS shell around Almanac. Viable later but duplicates state
+semantics prematurely.
 
-Path B: build a separate SaaS shell and treat Almanac as a black-box
-provisioner.
-
-This remains viable later, but it would duplicate billing, audit, health,
-provisioning, and state semantics before the backend contract is stable.
-
-Path C: rewrite around Kubernetes or Nomad now.
-
-This is premature for the MVP. Docker Compose plus a clear executor boundary is
-the safer path until multi-host scheduling pressure is real.
-
-Path D: build the production dashboard first.
-
-This should wait. The repository needs a production API/auth/RBAC boundary
-before a Next.js/Tailwind dashboard can safely own user and admin workflows.
+Path C: Kubernetes/Nomad rewrite. Premature for MVP.
 
 ## Key Assumptions
 
-- Docker mode is the first ArcLink provisioning target.
-- Baremetal/systemd remains a compatibility and operator lane.
-- New commercial state belongs in `arclink_*` tables with stable text IDs.
-- `ARCLINK_*` values take precedence over non-empty legacy aliases where both
-  exist; blank ArcLink values are treated as unset.
-- Unit tests must not require live Stripe, Cloudflare, Chutes, Telegram,
-  Discord, Notion, OAuth, or host credentials.
-- Public website, Telegram, and Discord onboarding should share one durable
-  backend session contract.
-- Dashboard and admin surfaces should consume backend read/action contracts,
-  not duplicate billing/provisioning logic.
-- The local Python WSGI product surface is a prototype and contract probe, not
-  the final production dashboard architecture.
+- Docker Compose is the first ArcLink provisioning target.
+- New commercial state in `arclink_*` tables with stable text IDs.
+- `ARCLINK_*` env vars take precedence; blank values treated as unset.
+- Unit tests never require live credentials.
+- Web, Telegram, and Discord onboarding share one backend session contract.
+- Dashboard surfaces consume backend read/action contracts via hosted API.
+- Next.js app consumes the hosted Python API; no external Python web framework.
 
 ## Build Readiness
 
-The plan is ready for BUILD handoff. All previously identified lint repairs
-(invalid public onboarding channel, session revocation, active session counts,
-safe generic errors, public bot rate limiting) are completed and passing.
+BUILD should proceed with Production 10-16. The immediate priority is:
+1. P10: Brand system, mobile/responsive checks, empty/error/loading states.
+2. P11: Fake E2E full journey harness.
+3. P12-16: Live E2E, deploy assets, observability, data safety, docs truth.
 
-Current state:
-- 152 ArcLink test functions across 17 test files (+ 4 hygiene tests, 2 web
-  tests). All 156 tests passing (2026-05-02).
-- 17 ArcLink Python modules (7,849 lines).
-- Hosted API boundary (1,078 lines) with route dispatch, session transport,
-  CORS, request-ID, safe errors, health endpoint, provider state reads,
-  reconciliation, billing portal, Stripe webhook skip, OpenAPI spec endpoint,
-  rate-limit headers, and Telegram/Discord webhook routes.
-- OpenAPI 3.1 spec generated from canonical route table, served at
-  `GET /api/v1/openapi.json`, and checked in at
-  `docs/openapi/arclink-v1.openapi.json`.
-- Next.js 15 + Tailwind 4 web app foundation with landing page, onboarding,
-  login, user dashboard, and admin dashboard views (~1,593 lines across 9
-  source files), plus 2 web test files.
-- Telegram runtime adapter landed (`arclink_telegram.py`, 219 lines) with
-  fake-mode long-polling, update parsing, and shared turn handler dispatch.
-- Discord runtime adapter landed (`arclink_discord.py`, 255 lines) with
-  fake-mode interaction handling, slash commands, signature verification stub,
-  and shared turn handler dispatch.
-- Entitlements module at 435 lines with reconciliation drift detection,
-  targeted comp, and profile-only upsert preservation.
-- API/auth module at 879 lines; dashboard module at 937 lines.
-
-BUILD should continue with the Production Grade Steering checklist
-(`research/RALPHIE_PRODUCTION_GRADE_STEERING.md`, Production 1-16) as the
-controlling definition of done.
-
-Production 1-2 (API contract hardening) are landed at commit `019f75d`.
-Production 3-6 (provider boundaries) are landed for the no-secret/fake layer in
-the current provider-boundary slice. The immediate BUILD priority is
-Production 7-10: bot parity plus user/admin dashboards wired to the hosted API,
-followed by Production 11-16 (E2E, deploy, ops, docs).
-The product gap is turning proven backend contracts into a usable ArcLink
-product surface: API-wired dashboards, public web onboarding parity, fake
-full-journey E2E, deploy assets, observability, data safety, and live-gated
-proof harnesses.
+All 160 ArcLink tests passing. No live secrets required to continue.
 
 ## Remaining Risks
 
-- Live Chutes key lifecycle is unverified until account-backed behavior is
-  tested.
-- Stripe and Cloudflare live paths require real credentials and E2E evidence.
-- Telegram/Discord runtime adapters exist with fake-mode dispatch but live
-  HTTP transport is not yet implemented.
-- The API/auth slice is a no-secret backend contract, not a hosted production
-  identity system.
-- Dedicated Nextcloud per deployment is safer for isolation but may become
-  resource-heavy.
-- A broad Almanac-to-ArcLink rename could destabilize mature paths if attempted
-  before execution and API boundaries settle.
+- Live Chutes key lifecycle unverified until account-backed testing.
+- Stripe/Cloudflare live paths require real credentials and E2E evidence.
+- Telegram/Discord live HTTP transport not yet implemented.
+- API/auth boundary is not yet deployed behind production identity provider.
+- Dedicated Nextcloud per deployment may become resource-heavy at scale.
+- Admin dashboard is wired to API; user dashboard mock data wiring remains.
 
 ## Reference Topics For Live Work
 
-Live adapter implementation should verify current behavior against official
-provider documentation for Chutes, Stripe webhooks, Cloudflare Tunnel/Access,
-Docker Compose secrets, Traefik Docker labels, Next.js App Router, and Tailwind
-responsive design before enabling production mutations.
+Live adapter implementation should verify against official provider docs for
+Chutes, Stripe webhooks, Cloudflare Tunnel/Access, Docker Compose secrets,
+Traefik Docker labels, Next.js App Router, and Tailwind responsive design.

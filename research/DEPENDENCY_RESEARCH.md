@@ -14,15 +14,16 @@
 | qmd 2.1.0 | `config/pins.json`, qmd scripts | Retrieval/indexing MCP | Preserve. |
 | Nextcloud 31 Apache | `compose.yaml`, pins | File/vault UI | Keep; MVP should use dedicated per-deployment instances. |
 | code-server 4.116.0 | Pins, access tests | Browser IDE | Keep and route by host. |
-| Telegram/Discord SDK lanes | Onboarding modules, runtime adapters (`arclink_telegram.py`, `arclink_discord.py`), and adapter tests | Bot onboarding and agent chat with fake-mode dispatch | Adapters landed; add live HTTP transport when tokens present. |
+| Telegram/Discord SDK lanes | Runtime adapters (`arclink_telegram.py`, `arclink_discord.py`), adapter tests | Bot onboarding and agent chat with fake-mode dispatch | Adapters landed; add live HTTP transport when tokens present. |
 | Notion API | SSOT modules/tests | Optional shared Notion rails | Preserve as guarded optional integration. |
-| Node 22 | `Dockerfile`, pins | qmd install, Hermes web build, future dashboard runtime | Keep; add dashboard app later. |
+| Node 22 | `Dockerfile`, pins | qmd install, Hermes web build, Next.js dashboard runtime | Keep. |
 | Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py` | Primary OpenAI-compatible inference lane | Keep Chutes-first; fake key manager until live lifecycle is verified. |
-| Stripe | `python/arclink_adapters.py`, `python/arclink_entitlements.py` | Payment, checkout, entitlement gate | Keep fake/no-secret unit surface; add live adapter behind E2E config. |
-| Cloudflare + Traefik | `python/arclink_ingress.py`, `python/arclink_access.py`, `python/arclink_executor.py` | DNS, tunnel/access strategy, host routing | Keep host-per-service plan; defer live mutation to executor/E2E slice. |
-| Python WSGI stdlib surface | `python/arclink_product_surface.py` | Local no-secret onboarding/dashboard/API prototype | Keep short-term as a contract probe; do not treat as production UI. |
-| Python API/auth helpers | `python/arclink_api_auth.py` (879 lines) | Initial no-secret user/admin session, CSRF, rate-limit, MFA-ready, scoped read, and queued mutation boundary | Keep and harden before production frontend or live actions. |
-| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,550 lines), 1 web test | Production web app: landing, login, onboarding, user/admin dashboards | Foundation landed; wire to hosted API and extend views. |
+| Stripe | `python/arclink_adapters.py`, `python/arclink_entitlements.py` | Payment, checkout, entitlement gate | Fake boundary landed (P3); live adapter behind E2E config. |
+| Cloudflare + Traefik | `python/arclink_ingress.py`, `python/arclink_access.py`, `python/arclink_executor.py` | DNS, tunnel/access strategy, host routing | Fake boundary landed (P4); defer live mutation to E2E slice. |
+| Python WSGI stdlib surface | `python/arclink_product_surface.py` | Local no-secret onboarding/dashboard/API prototype | Keep as contract probe; not production UI. |
+| Python API/auth helpers | `python/arclink_api_auth.py` (887 lines) | User/admin session, CSRF, rate-limit, MFA-ready, scoped read, queued mutation boundary | Landed (P1-2). Extend as needed. |
+| Hosted WSGI API | `python/arclink_hosted_api.py` (1,078 lines) | Production API boundary with route dispatch, session transport, CORS, OpenAPI | Landed (P1-2). |
+| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,593 lines), 2 web tests | Production web app: landing, login, onboarding, user/admin dashboards | Wire to hosted API (P8-10). |
 
 ## Repository Signals
 
@@ -30,7 +31,7 @@
 | --- | ---: | --- |
 | Python files | 142 | Primary implementation and regression-test surface. |
 | Shell scripts | 79 | Operational/deploy substrate remains significant. |
-| Markdown files | 63 | Planning, docs, skills, and operating guides are extensive. |
+| Markdown files | 63+ | Planning, docs, skills, and operating guides are extensive. |
 | Compose files | 2 | Docker-first path exists and should be evolved. |
 | `requirements-dev.txt` | Present | Python test/dev dependencies are explicit. |
 | `web/package.json` | Present | Next.js 15 + Tailwind 4 production web app foundation. |
@@ -40,26 +41,24 @@
 
 | Path | Benefits | Costs/Risks | Verdict |
 | --- | --- | --- | --- |
-| Evolve Docker/Python control plane | Preserves working Hermes/qmd/memory/health/onboarding; keeps no-secret tests practical. | Requires careful compatibility and staged rebrand. | Choose. |
-| Python API boundary next | Keeps business logic in the existing tested language and can serve web/bot/dashboard clients. | Initial no-secret helpers exist; hosted production auth, routing, CSRF, rate-limit storage, and RBAC hardening remain. | Continue. |
-| Next.js/Tailwind app (landed) | Matches dashboard goal, foundation exists with views for all surfaces. | Must wire to hosted API for real data; avoid duplicating business logic. | Continue. |
-| Separate SaaS shell around Almanac | Cleaner product boundary later. | Duplicates state, audit, billing, health, and provisioning semantics too early. | Defer. |
-| Scheduler-first rewrite | Better long-term scheduling semantics. | Premature complexity; weaker no-secret local loop. | Reject for MVP. |
+| Evolve Docker/Python control plane | Preserves all working surfaces; keeps no-secret tests practical. | Requires careful compatibility and staged rebrand. | Chosen. |
+| Python API boundary next | Keeps business logic tested; serves web/bot/dashboard clients. | Hosted production auth/RBAC hardening continues. | Continuing. |
+| Next.js/Tailwind app (landed) | Dashboard foundation exists for all views. | Must wire to hosted API; avoid duplicating business logic. | Continuing. |
+| Separate SaaS shell | Cleaner product boundary later. | Duplicates semantics prematurely. | Defer. |
+| Scheduler-first rewrite | Better scheduling semantics. | Premature complexity. | Reject for MVP. |
 
 ## Dependency Alternatives
 
 | Decision area | Preferred | Alternative | Reasoning |
 | --- | --- | --- | --- |
-| ArcLink state DB | SQLite-first helpers with Postgres-compatible shape | Immediate Postgres migration | Existing tests and helpers are SQLite-based; migrate after contracts stabilize. |
-| Provisioning jobs | DB-backed state machine first | Redis queue first | Payments/DNS/provisioning need durable idempotency before async scaling. |
-| Ingress | Traefik host-per-service routing | Path prefixes through one host | Nextcloud/code-server are safer behind dedicated hosts. |
-| Files UI | Dedicated Nextcloud per deployment | Shared Nextcloud | Dedicated instances are heavier but stronger for single-user SaaS isolation. |
-| SSH/TUI | Cloudflare Access/Tunnel TCP | Raw SSH over HTTP | HTTP routing cannot honestly provide per-subdomain SSH without a TCP tunnel/access design. |
-| Product surface now | Python WSGI prototype over read models | Immediate production frontend | Current priority is no-secret contract proving. |
-| Production API/auth | Python API boundary, likely ASGI | Put business logic in frontend route handlers | Keeping contracts in Python avoids duplicating entitlement, provisioning, audit, and executor semantics. The current helper module proves the no-secret contract but is not a hosted service yet. |
-| Dashboard frontend | Next.js 15 + Tailwind 4 (landed) | Server-rendered Python templates | Web app foundation exists; wire to hosted API and extend. |
-| Chutes key isolation | Per-deployment secret references and eventual live keys | Shared global Chutes key | Per-deployment references align with control/security goals. |
-| Live provider execution | Fake adapters plus E2E/live flag | Always-on live SDK calls | Unit tests and local development must remain no-secret and deterministic. |
+| ArcLink state DB | SQLite-first with Postgres-compatible shape | Immediate Postgres migration | Existing tests are SQLite-based; migrate after contracts stabilize. |
+| Provisioning jobs | DB-backed state machine first | Redis queue first | Durable idempotency before async scaling. |
+| Ingress | Traefik host-per-service routing | Path prefixes | Dedicated hosts safer for Nextcloud/code-server. |
+| Files UI | Dedicated Nextcloud per deployment | Shared Nextcloud | Stronger single-user SaaS isolation. |
+| SSH/TUI | Cloudflare Access/Tunnel TCP | Raw SSH over HTTP | HTTP cannot provide per-subdomain SSH. |
+| Dashboard frontend | Next.js 15 + Tailwind 4 | Python templates | Web app foundation landed; wire to API. |
+| Chutes key isolation | Per-deployment secret references | Shared global key | Per-deployment aligns with control/security goals. |
+| Live provider execution | Fake adapters plus E2E/live flag | Always-on live SDK calls | Tests must remain no-secret and deterministic. |
 
 ## Compatibility Rules
 
@@ -67,30 +66,14 @@
 - Preserve `ALMANAC_*` aliases where migration safety requires them.
 - Treat blank ArcLink values as unset.
 - Never include secret values in diagnostics, docs, test fixtures, or logs.
-- Store JSON payloads as text and validate behavior in helpers rather than
-  depending on SQLite JSON1.
+- Store JSON payloads as text and validate in helpers rather than depending on SQLite JSON1.
 - Use stable string IDs and explicit unique indexes for commercial records.
-- Keep public onboarding state separate from private deployment bot-token and
-  provider-token state.
+- Keep public onboarding state separate from private deployment credentials.
 
 ## Validation Requirements
 
-- The immediate BUILD gate must first repair unsupported public onboarding
-  channels so they raise before writing `rate_limits` rows.
-- The immediate BUILD gate must rerun the focused dashboard, API/auth, product
-  surface, public bot, public hygiene, compile, ruff, and diff checks before
-  broader hosted API work resumes.
-- The gate must preserve the current session-revocation, active-session-count,
-  safe generic error, and public-bot rate-limit contracts.
-- No-secret tests must cover product config, schema idempotency, Chutes catalog
-  parsing, Stripe webhook idempotency/retry/allowlists/transaction ownership,
-  onboarding sessions/checkout, DNS drift, Traefik labels, access strategy,
-  provisioning dry-runs, dashboard projections, admin action intents, product
-  surface routes, public bot turns, executor replay guards, and public hygiene.
-- Product-surface acceptance should include desktop and narrow mobile browser
-  smoke for the home, onboarding, user dashboard, and admin dashboard.
-- Executor tests must prove live mutation is disabled by default and secrets
-  materialize only through resolver contracts.
+- No-secret tests must cover all contract surfaces.
+- Product-surface acceptance should include desktop and narrow mobile browser smoke.
+- Executor tests must prove live mutation is disabled by default.
 - Live credentials belong in E2E documentation and local secrets only.
-- Chutes, Stripe, Cloudflare, Telegram, Discord, Notion, OAuth, and host
-  provisioning behavior must not be marked complete until tested live.
+- The next BUILD phase targets Production 9-10 (admin dashboard, brand/UI) followed by 11-16.

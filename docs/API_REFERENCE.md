@@ -109,6 +109,26 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_LOG_LEVEL` | `INFO` | Logging verbosity |
 | `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_starter` | Default Stripe price for onboarding |
 
+## Web Client Integration
+
+The Next.js admin dashboard (`web/src/app/admin/page.tsx`) is wired to the hosted API via `web/src/lib/api.ts`. All admin endpoints are consumed:
+
+| Admin Tab | API Endpoint | Method |
+|-----------|-------------|--------|
+| overview, users, deployments, onboarding, payments, infrastructure, bots, security, releases, sessions | `/admin/dashboard` | GET |
+| health | `/admin/service-health` | GET |
+| provisioning | `/admin/provisioning-jobs` | GET |
+| dns | `/admin/dns-drift` | GET |
+| audit | `/admin/audit` | GET |
+| events | `/admin/events` | GET |
+| actions (read) | `/admin/actions` | GET |
+| actions (queue) | `/admin/actions` | POST |
+| provider | `/admin/provider-state` | GET |
+| reconciliation | `/admin/reconciliation` | GET |
+| sessions (revoke) | `/admin/sessions/revoke` | POST |
+
+The user dashboard (`web/src/app/dashboard/page.tsx`) consumes `/user/dashboard`, `/user/billing`, `/user/provisioning`, and `/user/provider-state`.
+
 ## Assumptions and Ownership
 
 - **Owner**: ArcLink control-plane team

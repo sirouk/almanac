@@ -1353,6 +1353,60 @@ def test_wsgi_503_status_text_for_degraded_health() -> None:
     print("PASS test_wsgi_503_status_text_for_degraded_health")
 
 
+def test_onboarding_payload_validation_rejects_missing_fields() -> None:
+    control = load_module("almanac_control.py", "almanac_control_onb_validation_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onb_validation_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # answer without session_id -> error
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/answer",
+        headers={}, body=json.dumps({"question_key": "name"}), config=config,
+    )
+    expect(status in (400, 401), f"expected 400/401 got {status}: {payload}")
+
+    # answer without question_key -> error
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/answer",
+        headers={}, body=json.dumps({"session_id": "onb_fake"}), config=config,
+    )
+    expect(status in (400, 401), f"expected 400/401 got {status}: {payload}")
+
+    # checkout without session_id -> error
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/checkout",
+        headers={}, body=json.dumps({"price_id": "price_starter"}), config=config,
+    )
+    expect(status in (400, 401), f"expected 400/401 got {status}: {payload}")
+
+    # start without channel_identity -> error (blank identity)
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/start",
+        headers={}, body=json.dumps({"channel": "web"}), config=config,
+    )
+    expect(status == 400, f"expected 400 got {status}: {payload}")
+
+    print("PASS test_onboarding_payload_validation_rejects_missing_fields")
+
+
+def test_onboarding_payload_validation_rejects_invalid_channel() -> None:
+    control = load_module("almanac_control.py", "almanac_control_onb_channel_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onb_channel_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps({"channel": "sms", "channel_identity": "user@test.test"}),
+        config=config,
+    )
+    expect(status == 400, f"expected 400 for invalid channel, got {status}: {payload}")
+
+    print("PASS test_onboarding_payload_validation_rejects_invalid_channel")
+
+
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
@@ -1393,7 +1447,9 @@ def main() -> int:
     test_rate_limit_returns_429_with_headers()
     test_rate_limit_onboarding_returns_429()
     test_wsgi_503_status_text_for_degraded_health()
-    print("PASS all 39 ArcLink hosted API tests")
+    test_onboarding_payload_validation_rejects_missing_fields()
+    test_onboarding_payload_validation_rejects_invalid_channel()
+    print("PASS all 41 ArcLink hosted API tests")
     return 0
 
 

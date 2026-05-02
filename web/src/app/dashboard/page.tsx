@@ -4,15 +4,36 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { StatusBadge, ErrorAlert } from "@/components/ui";
+import { StatusBadge, ErrorAlert, LoadingSpinner } from "@/components/ui";
+
+interface ServiceHealth {
+  service_name: string;
+  status: string;
+  checked_at?: string;
+}
+
+interface BotContact {
+  channel?: string;
+  status?: string;
+  first_contacted?: boolean;
+  handoff_recorded?: boolean;
+}
+
+interface AccessUrls {
+  urls?: Record<string, string>;
+}
 
 interface Deployment {
   deployment_id: string;
-  hostname: string;
+  hostname?: string;
+  prefix?: string;
+  base_domain?: string;
   status: string;
-  service_health?: Record<string, string>[];
+  service_health?: ServiceHealth[];
   model?: { provider: string; model_id: string; credential_state: string };
   freshness?: { qmd: { status: string; checked_at: string }; memory: { status: string; checked_at: string } };
+  bot_contact?: BotContact;
+  access?: AccessUrls;
 }
 
 interface UserData {
@@ -25,7 +46,7 @@ interface ProvisioningDeployment {
   deployment_id: string;
   hostname: string;
   status: string;
-  service_health?: Record<string, string>[];
+  service_health?: ServiceHealth[];
   provisioning_jobs?: Record<string, string>[];
 }
 
@@ -34,12 +55,16 @@ interface BillingData {
   subscriptions?: Record<string, string>[];
 }
 
+type Tab = "overview" | "billing" | "provisioning" | "services" | "vault" | "bots" | "model" | "memory" | "security" | "support";
+const ALL_TABS: Tab[] = ["overview", "billing", "provisioning", "services", "vault", "bots", "model", "memory", "security", "support"];
+
 export default function DashboardPage() {
   const [data, setData] = useState<UserData | null>(null);
   const [billing, setBilling] = useState<BillingData | null>(null);
   const [provisioning, setProvisioning] = useState<{ deployments?: ProvisioningDeployment[] } | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"overview" | "billing" | "provisioning" | "services" | "model" | "memory" | "security" | "support">("overview");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
   const router = useRouter();
 
   async function handleLogout() {
@@ -48,20 +73,35 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    api.userDashboard().then((r) => {
-      if (r.status === 200) setData(r.data as UserData);
-      else if (r.status === 401) router.push("/login");
-      else setError("Failed to load dashboard.");
-    }).catch(() => setError("Failed to load dashboard."));
-
-    api.userBilling().then((r) => {
-      if (r.status === 200) setBilling(r.data as BillingData);
-    }).catch(() => {});
-
-    api.userProvisioning().then((r) => {
-      if (r.status === 200) setProvisioning(r.data as { deployments?: ProvisioningDeployment[] });
-    }).catch(() => {});
+    let mounted = true;
+    Promise.all([
+      api.userDashboard().then((r) => {
+        if (!mounted) return;
+        if (r.status === 200) setData(r.data as UserData);
+        else if (r.status === 401) router.push("/login");
+        else setError("Failed to load dashboard.");
+      }),
+      api.userBilling().then((r) => {
+        if (mounted && r.status === 200) setBilling(r.data as BillingData);
+      }),
+      api.userProvisioning().then((r) => {
+        if (mounted && r.status === 200) setProvisioning(r.data as { deployments?: ProvisioningDeployment[] });
+      }),
+    ]).catch(() => {
+      if (mounted) setError("Failed to load dashboard.");
+    }).finally(() => {
+      if (mounted) setLoading(false);
+    });
+    return () => { mounted = false; };
   }, []);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoadingSpinner label="Loading dashboard..." />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -81,7 +121,7 @@ export default function DashboardPage() {
         {/* Sidebar */}
         <aside className="hidden w-56 shrink-0 border-r border-border p-4 md:block">
           <nav className="space-y-1">
-            {(["overview", "billing", "provisioning", "services", "model", "memory", "security", "support"] as const).map((tab) => (
+            {ALL_TABS.map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -101,13 +141,13 @@ export default function DashboardPage() {
             <ErrorAlert message={error} className="mb-6 py-3" />
           )}
 
-          {/* Mobile tab bar */}
-          <div className="mb-6 flex gap-2 md:hidden">
-            {(["overview", "billing", "services", "model", "memory"] as const).map((tab) => (
+          {/* Mobile tab bar — scrollable to fit all tabs */}
+          <div className="mb-6 flex gap-2 overflow-x-auto md:hidden">
+            {ALL_TABS.map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`rounded px-3 py-1 text-xs capitalize ${
+                className={`shrink-0 rounded px-3 py-1 text-xs capitalize ${
                   activeTab === tab ? "bg-signal-orange text-jet" : "bg-surface text-soft-white/60"
                 }`}
               >
@@ -239,8 +279,7 @@ export default function DashboardPage() {
                   { name: "Health", path: "/health" },
                 ];
                 return (
-                  <div key={dep.deployment_id} className="rounded-lg border border-border bg-surface p-4">
-                    <h3 className="font-display font-semibold mb-3">{host || dep.deployment_id}</h3>
+                  <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {services.map((svc) =>
                         provisioned && host ? (
@@ -263,19 +302,108 @@ export default function DashboardPage() {
                         ),
                       )}
                     </div>
-                  </div>
+                  </DeploymentCard>
                 );
               })}
+              {(!data.deployments || data.deployments.length === 0) && (
+                <NoDeployments message="No deployments. Service links available after provisioning." />
+              )}
             </div>
           )}
+
+          {activeTab === "vault" && data && (
+            <div className="space-y-6">
+              <h1 className="font-display text-2xl font-bold">Vault &amp; Files</h1>
+              <p className="text-sm text-soft-white/60">
+                Per-deployment Nextcloud file vault for documents, configs, and persistent storage.
+              </p>
+              {data.deployments?.map((dep) => {
+                const host = dep.hostname || "";
+                const provisioned = dep.status === "active" || dep.status === "running";
+                const vaultHealth = dep.service_health?.find((s) => s.service_name === "nextcloud");
+                const vaultUrl = dep.access?.urls?.files || (provisioned && host ? `https://${host}:8443` : "");
+                return (
+                  <DeploymentCard key={dep.deployment_id} dep={dep}>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded bg-carbon px-3 py-2">
+                        <p className="text-xs text-soft-white/60">Vault Status</p>
+                        <StatusBadge status={vaultHealth?.status || (provisioned ? "pending" : "not provisioned")} />
+                        {vaultHealth?.checked_at && (
+                          <p className="mt-1 text-xs text-soft-white/30">Last check: {vaultHealth.checked_at}</p>
+                        )}
+                      </div>
+                      <div className="rounded bg-carbon px-3 py-2">
+                        <p className="text-xs text-soft-white/60">Access</p>
+                        {vaultUrl ? (
+                          <a href={vaultUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-signal-orange hover:underline">
+                            Open Files →
+                          </a>
+                        ) : (
+                          <p className="text-sm text-soft-white/30">Available after provisioning</p>
+                        )}
+                      </div>
+                    </div>
+                  </DeploymentCard>
+                );
+              })}
+              {(!data.deployments || data.deployments.length === 0) && (
+                <NoDeployments message="No deployments. Vault access available after provisioning." />
+              )}
+            </div>
+          )}
+
+          {activeTab === "bots" && data && (
+            <div className="space-y-6">
+              <h1 className="font-display text-2xl font-bold">Bot Status</h1>
+              <p className="text-sm text-soft-white/60">
+                Telegram and Discord bot onboarding and connection state per deployment.
+              </p>
+              {data.deployments?.map((dep) => {
+                const bot = dep.bot_contact;
+                const botHealth = dep.service_health?.filter((s) =>
+                  s.service_name === "telegram-bot" || s.service_name === "discord-bot"
+                );
+                return (
+                  <DeploymentCard key={dep.deployment_id} dep={dep}>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded bg-carbon px-3 py-2">
+                        <p className="text-xs text-soft-white/60">Onboarding Channel</p>
+                        <p className="text-sm text-soft-white">{bot?.channel || "—"}</p>
+                      </div>
+                      <div className="rounded bg-carbon px-3 py-2">
+                        <p className="text-xs text-soft-white/60">Contact Status</p>
+                        <StatusBadge status={bot?.first_contacted ? "contacted" : "pending"} />
+                      </div>
+                      <div className="rounded bg-carbon px-3 py-2">
+                        <p className="text-xs text-soft-white/60">Handoff</p>
+                        <StatusBadge status={bot?.handoff_recorded ? "recorded" : "pending"} />
+                      </div>
+                      {botHealth && botHealth.length > 0 && botHealth.map((bh, i) => (
+                        <div key={i} className="rounded bg-carbon px-3 py-2">
+                          <p className="text-xs text-soft-white/60">{bh.service_name}</p>
+                          <StatusBadge status={bh.status || "unknown"} />
+                          {bh.checked_at && (
+                            <p className="mt-1 text-xs text-soft-white/30">Last: {bh.checked_at}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </DeploymentCard>
+                );
+              })}
+              {(!data.deployments || data.deployments.length === 0) && (
+                <NoDeployments message="No deployments. Bot status available after onboarding." />
+              )}
+            </div>
+          )}
+
           {activeTab === "model" && data && (
             <div className="space-y-6">
               <h1 className="font-display text-2xl font-bold">Model &amp; Skills</h1>
               {data.deployments?.map((dep) => {
                 const model = dep.model;
                 return (
-                  <div key={dep.deployment_id} className="rounded-lg border border-border bg-surface p-4">
-                    <h3 className="font-display font-semibold mb-3">{dep.hostname || dep.deployment_id}</h3>
+                  <DeploymentCard key={dep.deployment_id} dep={dep}>
                     {model ? (
                       <div className="space-y-2 text-sm">
                         <p><span className="text-soft-white/60">Provider:</span> {model.provider || "—"}</p>
@@ -286,11 +414,11 @@ export default function DashboardPage() {
                       <p className="text-soft-white/40">Model configuration available after provisioning.</p>
                     )}
                     <p className="mt-3 text-xs text-soft-white/30">Skills, BYOK, and provider catalog managed through deployment config.</p>
-                  </div>
+                  </DeploymentCard>
                 );
               })}
               {(!data.deployments || data.deployments.length === 0) && (
-                <p className="text-soft-white/40">No deployments. Model settings available after provisioning.</p>
+                <NoDeployments message="No deployments. Model settings available after provisioning." />
               )}
             </div>
           )}
@@ -301,8 +429,7 @@ export default function DashboardPage() {
               {data.deployments?.map((dep) => {
                 const freshness = dep.freshness;
                 return (
-                  <div key={dep.deployment_id} className="rounded-lg border border-border bg-surface p-4">
-                    <h3 className="font-display font-semibold mb-3">{dep.hostname || dep.deployment_id}</h3>
+                  <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded bg-carbon px-3 py-2">
                         <p className="text-xs text-soft-white/60">QMD (Retrieval)</p>
@@ -319,11 +446,11 @@ export default function DashboardPage() {
                         )}
                       </div>
                     </div>
-                  </div>
+                  </DeploymentCard>
                 );
               })}
               {(!data.deployments || data.deployments.length === 0) && (
-                <p className="text-soft-white/40">No deployments. Memory data available after provisioning.</p>
+                <NoDeployments message="No deployments. Memory data available after provisioning." />
               )}
             </div>
           )}
@@ -335,6 +462,18 @@ export default function DashboardPage() {
                 <p>Session authentication uses hashed tokens with HttpOnly cookie transport.</p>
                 <p className="mt-2">CSRF protection is enforced on all mutation endpoints.</p>
                 <p className="mt-2">Secret references are never exposed in dashboard responses.</p>
+              </div>
+              <div className="rounded-lg border border-border bg-surface p-4">
+                <h3 className="font-display font-semibold mb-3">Session Controls</h3>
+                <p className="text-sm text-soft-white/60 mb-3">
+                  You are currently signed in. Use the button below to end this session.
+                </p>
+                <button
+                  onClick={handleLogout}
+                  className="rounded border border-red-500/40 bg-red-900/20 px-4 py-2 text-sm text-red-300 transition hover:bg-red-900/40"
+                >
+                  Sign Out
+                </button>
               </div>
               <p className="text-xs text-soft-white/30">
                 Password change, MFA setup, and API key management available when live auth provider is connected.
@@ -348,6 +487,7 @@ export default function DashboardPage() {
               <div className="rounded-lg border border-border bg-surface p-4 text-sm text-soft-white/60">
                 <p>For deployment issues, contact the ArcLink admin team.</p>
                 <p className="mt-2">System status is visible in the Service Health and Provisioning tabs.</p>
+                <p className="mt-2">Admin actions (restart, reprovision, DNS repair) are queued with reason tracking and audit logs.</p>
               </div>
             </div>
           )}
@@ -355,6 +495,19 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+}
+
+function DeploymentCard({ dep, children }: { dep: { deployment_id: string; hostname?: string }; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <h3 className="font-display font-semibold mb-3">{dep.hostname || dep.deployment_id}</h3>
+      {children}
+    </div>
+  );
+}
+
+function NoDeployments({ message }: { message?: string }) {
+  return <p className="text-soft-white/40">{message || "No deployments."}</p>;
 }
 
 function PortalLinkButton() {

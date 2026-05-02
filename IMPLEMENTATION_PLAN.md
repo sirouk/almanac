@@ -11,16 +11,20 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 ## Controlling Definition of Done
 
 `research/RALPHIE_PRODUCTION_GRADE_STEERING.md` defines Production 1-16 as the
-mandatory completion checklist. ArcLink is complete when the product can be
-deployed, operated, observed, recovered, sold, and used end to end with
-confidence. All 16 items must be checked or explicitly blocked by a named
-external credential.
+mandatory completion checklist plus the Professional Finish Gate and Brand
+Quality Gate. ArcLink is complete when the product can be deployed, operated,
+observed, recovered, sold, and used end to end with confidence. All 16 items
+must be checked or explicitly blocked by a named external credential.
+
+The foundation-runbook (`docs/arclink/foundation-runbook.md`) documents the
+current boundary behavior, ownership, assumptions, repair procedures, and open
+risks for operator and agent reference.
 
 ## Current Status
 
 - 17 ArcLink Python modules (7,877 lines).
-- 19 test files + 4 hygiene + 2 web tests + 1 browser suite =
-  166 ArcLink tests plus 41 browser product checks passing.
+- 19 test files + 4 hygiene + 2 web tests + 1 browser suite
+  (166 ArcLink tests plus 41 browser product checks passing).
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
 - Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
@@ -59,9 +63,23 @@ external credential.
   proof remains blocked on external accounts and credentials.
   `tests/test_arclink_e2e_live.py`.
 
-Do not rebuild P1-11 unless a regression is proven by a failing test. Treat P12
-as scaffolded but externally blocked until real credentials are supplied and a
-credentialed run proves the live path.
+- **Production 13** (Deployment assets): `config/env.example`,
+  `docs/arclink/secret-checklist.md`, `docs/arclink/ingress-plan.md`,
+  `docs/arclink/backup-restore.md`, operations runbook updated with
+  health/restart/rollback sections.
+- **Production 14** (Observability): Structured events verified, admin
+  dashboard already wires all observability surfaces,
+  `docs/arclink/alert-candidates.md` created.
+- **Production 15** (Data safety): `docs/arclink/data-safety.md` created.
+  Teardown safeguards and secret rejection already implemented across all
+  boundaries. No secrets found in tracked files.
+- **Production 16** (Documentation truth): All docs audited against code.
+  `docs/arclink/live-e2e-secrets-needed.md` updated with status header.
+  No unproven live claims in shipped documentation.
+
+Do not rebuild completed non-live slices (P1-11 and P13-P16) unless a regression
+is proven by a failing test. Treat P12 as scaffolded but externally blocked
+until real credentials are supplied and a credentialed run proves the live path.
 
 ## Chosen Architecture
 
@@ -83,7 +101,7 @@ PLAN is complete when:
 - Live blockers are documented as E2E prerequisites.
 - The next tasks are actionable and testable.
 
-## BUILD Tasks (Remaining: Production 13-16)
+## BUILD Tasks (P1-11 and P13-16 complete; P12 external)
 
 ### Phase 3: Brand and UI Polish (Production 10) -- COMPLETE
 
@@ -143,39 +161,50 @@ python3 tests/test_arclink_e2e_fake.py
 # ARCLINK_E2E_LIVE=1 ARCLINK_E2E_DOCKER=1 python3 tests/test_arclink_e2e_live.py
 ```
 
-### Phase 5: Operations and Documentation (Production 13-16)
+### Phase 5: Operations and Documentation (Production 13-16) -- COMPLETE
 
-**Production 13: Deployment Assets**
+**Production 13: Deployment Assets -- COMPLETE**
 
-- Create `config/env.example` with all required/optional variables.
-- Create `docs/arclink/secret-checklist.md`.
-- Document Docker/Traefik ingress plan in `docs/arclink/ingress-plan.md`.
-- Document backup/restore in `docs/arclink/backup-restore.md`.
-- Document health checks, restart, release/rollback in
-  `docs/arclink/operations-runbook.md`.
+- `config/env.example` with all ArcLink-specific required/optional variables.
+- `docs/arclink/secret-checklist.md` with secret inventory, handling rules, and
+  verification commands.
+- `docs/arclink/ingress-plan.md` with DNS layout, Cloudflare management,
+  Traefik topology, SSH access strategy, drift detection, and teardown.
+- `docs/arclink/backup-restore.md` with backup targets, schedule, procedures,
+  disaster recovery, retention, and testing guidance.
+- `docs/arclink/operations-runbook.md` updated with health check polling,
+  restart/recovery procedures, and release/rollback flow.
 
-**Production 14: Observability**
+**Production 14: Observability -- COMPLETE**
 
-- Verify structured events cover all key state transitions.
-- Wire health snapshots into admin dashboard reads (if not done in P9).
-- Add queue/deployment status visibility to admin dashboard.
-- Document alert candidates in `docs/arclink/alert-candidates.md`.
+- Structured events verified: audit log, timeline events, service health,
+  webhook processing status, provisioning job state all cover key transitions.
+- Admin dashboard already wires health snapshots (P9 "infrastructure" tab),
+  queue status ("queued_actions" tab), deployment status ("deployments" tab),
+  DNS drift, and failed job visibility ("logs_events" tab).
+- `docs/arclink/alert-candidates.md` documents critical, warning, and
+  informational alert signals with sources and conditions.
 
-**Production 15: Data Safety**
+**Production 15: Data Safety -- COMPLETE**
 
-- Document per-user isolation and volume layout in
-  `docs/arclink/data-safety.md`.
-- Document backup plan and schedule.
-- Add teardown safeguards (confirmation required, audit logged).
-- Add destructive-action confirmations for admin operations.
-- Verify no secret values in logs, docs, tests, or generated artifacts.
+- `docs/arclink/data-safety.md` documents per-user isolation model, volume
+  layout, secret storage rules, backup plan, teardown safeguards, and secret
+  leak prevention.
+- Teardown safeguards already implemented: admin confirmation, audit logging,
+  state root preservation, volume preservation by default, separate DNS
+  teardown, destructive state delete gating in executor.
+- `reject_secret_material()` applied across dashboard, API auth, onboarding,
+  and admin action boundaries.
+- No secret values found in tracked files via pattern scan.
 
-**Production 16: Documentation Truth**
+**Production 16: Documentation Truth -- COMPLETE**
 
-- Audit all documentation against live code.
-- Remove or qualify any claims of live functionality not yet proven.
-- Name every remaining live blocker with the exact credential/account required.
-- Update `docs/arclink/live-e2e-secrets-needed.md`.
+- All documentation audited against live code modules and test coverage.
+- No claims of live customer provisioning in shipped docs.
+- Every live blocker named with exact credential/account in
+  `docs/arclink/live-e2e-secrets-needed.md` (status header added).
+- Foundation runbook, operations runbook, and architecture docs aligned with
+  current module map and boundary behavior.
 
 Validation:
 
@@ -224,8 +253,9 @@ These require real accounts/credentials. Build fake/live boundaries first.
 
 ## BUILD Handoff
 
-BUILD may begin with no live secrets. Work through Production 10-16 in order.
-Each phase should end with passing tests before proceeding. Keep fake adapters
-as defaults. Keep live mutation behind explicit E2E gates. Do not call ArcLink
-complete while any Production item remains unchecked without a named external
-blocker.
+Completed non-live slices are P1-11 and P13-P16. Production 12 remains the
+external live proof item: the scaffold is present, but live customer deployment
+proof requires supplying the named credentials and running the live E2E harness.
+The remaining blockers are documented in
+`docs/arclink/live-e2e-secrets-needed.md` and the External Live Proof Checklist
+above.

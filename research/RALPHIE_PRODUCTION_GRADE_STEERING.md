@@ -132,18 +132,29 @@ kit in `docs/arclink/brand/ArcLink Brandkit.pdf`.
   `python3 tests/test_arclink_e2e_live.py` skips cleanly when
   `ARCLINK_E2E_LIVE` is unset. Blocked: all external credentials and a
   deliberate credentialed live run.
-- [ ] Production 13: Deployment assets exist for the selected host: env
+- [x] Production 13: Deployment assets exist for the selected host: env
   example, secret checklist, Docker/Traefik or chosen ingress plan, backup and
   restore notes, health checks, restart procedure, and release/rollback steps.
-- [ ] Production 14: Observability is real enough to operate: structured
+  Proof: `config/env.example`, `docs/arclink/secret-checklist.md`,
+  `docs/arclink/ingress-plan.md`, `docs/arclink/backup-restore.md`,
+  `docs/arclink/operations-runbook.md` (sections 7-9: health, restart, release).
+- [x] Production 14: Observability is real enough to operate: structured
   events, health snapshots, queue/deployment status, admin-facing audit, drift
-  detectors, and documented alert candidates.
-- [ ] Production 15: Data safety is explicit: per-user isolation, volume
+  detectors, and documented alert candidates. Proof:
+  `docs/arclink/alert-candidates.md` (critical/warning/info signals), admin
+  dashboard infrastructure/events/audit/reconciliation tabs (P9), structured
+  JSON logs via `ARCLINK_LOG_LEVEL`.
+- [x] Production 15: Data safety is explicit: per-user isolation, volume
   layout, backup plan, teardown safeguards, destructive-action confirmations,
-  and no secret values in logs, docs, tests, or generated artifacts.
-- [ ] Production 16: Documentation matches the live code and does not overclaim
+  and no secret values in logs, docs, tests, or generated artifacts. Proof:
+  `docs/arclink/data-safety.md` (isolation, volumes, teardown safeguards,
+  secret leak prevention), `_reject_secret_material()` across boundaries,
+  `tests/test_public_repo_hygiene.py` secret scan.
+- [x] Production 16: Documentation matches the live code and does not overclaim
   live functionality; every remaining live blocker is named with the exact
-  credential/account required.
+  credential/account required. Proof: all docs audited against code on
+  2026-05-02, `docs/arclink/live-e2e-secrets-needed.md` names every blocker,
+  no live claims without live proof in shipped docs.
 
 ## Current Next Objective Queue
 
@@ -152,7 +163,7 @@ loop. Complete these in order, one coherent slice per build cycle, with tests
 and docs. Do not mark the project done while any non-external item remains.
 
 1. Respect the landed checkpoint:
-   - Production 1-10 are complete through the P10 browser proof commit.
+   - Production 1-11 and 13-16 are complete for the no-secret foundation.
    - Do not rebuild hosted API, auth, Stripe, Cloudflare, Docker executor,
      Chutes, Telegram, Discord, user dashboard, admin dashboard, or browser
      product-proof slices unless a regression is proven by a failing test.
@@ -166,12 +177,12 @@ and docs. Do not mark the project done while any non-external item remains.
      Stripe, Cloudflare, Chutes, Telegram, Discord, and Docker live credentials
      exist, and it must not be marked live-proven until a credentialed run
      succeeds.
-3. Finish Operations (Production 13-16):
+3. Operations foundation (Production 13-16) is complete:
    - Deployment assets, env examples, runbooks, backup/restore, health checks,
-     restart/release/rollback procedures.
-   - Observability and admin-facing drift/audit visibility.
-   - Data-safety documentation and destructive-action safeguards.
-   - Documentation truth pass: no live claim without live proof.
+     restart/release/rollback procedures are documented.
+   - Observability and admin-facing drift/audit visibility are documented.
+   - Data-safety documentation and destructive-action safeguards are documented.
+   - Documentation truth pass must stay honest: no live claim without live proof.
 4. Keep the proof ledger current:
    - Each completed production item must update this checklist and name the
      proof command, commit, and remaining external blockers.

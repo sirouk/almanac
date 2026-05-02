@@ -26,7 +26,7 @@
 | `plugins/hermes-agent/` | Hermes plugins including managed context and bootstrap-token injection. |
 | `hooks/hermes-agent/` | Hermes hooks including Telegram `/start` behavior. |
 | `skills/` | 11 Almanac skills: qmd, Notion, SSOT, resources, vaults, first contact, upgrades, vault reconciler, PDF export. |
-| `docs/` | Operator docs, Docker docs, ArcLink foundation docs, brand system, brand kit PDF, live E2E prerequisites, and OpenAPI spec (`docs/openapi/arclink-v1.openapi.json`). |
+| `docs/` | Operator docs, Docker docs, ArcLink foundation docs (`docs/arclink/foundation-runbook.md`), brand system, brand kit PDF, live E2E prerequisites, and OpenAPI spec (`docs/openapi/arclink-v1.openapi.json`). |
 | `research/` | Planning, steering, completion, and discovery artifacts. |
 | `web/` | Next.js 15 + Tailwind 4 production web app: landing page, login, onboarding, user dashboard, admin dashboard, API client, UI components, 2 web tests (~1,593 lines across 9 source files). |
 | `tests/` | 86+ test files: no-secret regression tests for Almanac and ArcLink surfaces (152 ArcLink test functions across 17 test files). |
@@ -156,7 +156,7 @@ surfaces before expanding hosted API, frontend, or live-adapter scope:
 | Notion guardrails | `python/almanac_notion_ssot.py`, `python/almanac_notion_webhook.py`, `python/almanac_ssot_batcher.py` |
 | Notifications/health | `python/almanac_notification_delivery.py`, `python/almanac_health_watch.py`, `bin/health.sh`, `bin/docker-health.sh` |
 
-## ArcLink Test Coverage (17 ArcLink test files, 156 functions + 4 hygiene + 2 web tests)
+## ArcLink Test Coverage (17 ArcLink test files, 168 functions + 4 hygiene + 2 web tests)
 
 | Test file | Covered surface |
 | --- | --- |

@@ -76,4 +76,5 @@
 - Product-surface acceptance should include desktop and narrow mobile browser smoke.
 - Executor tests must prove live mutation is disabled by default.
 - Live credentials belong in E2E documentation and local secrets only.
-- The next BUILD phase targets Production 9-10 (admin dashboard, brand/UI) followed by 11-16.
+- The next BUILD phase targets Production 13-16 (deploy assets, observability, data safety, docs truth).
+- The foundation-runbook (`docs/arclink/foundation-runbook.md`) documents current boundary behavior, ownership, and repair procedures.

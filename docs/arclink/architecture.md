@@ -134,5 +134,5 @@ explicit `live_enabled=True` and injected credentials.
   Stripe, Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks,
   but full live proof skips until credentials and explicit live flags are
   available. See `docs/arclink/live-e2e-secrets-needed.md`.
-- Deployment assets, observability, data safety, and documentation truth pass
-  remain (Production 13-16).
+- All 6 external credential sets remain absent (Stripe, Cloudflare, Chutes,
+  Telegram, Discord, host). Production 12 live journey is blocked on these.

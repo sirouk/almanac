@@ -210,6 +210,82 @@ Requires admin session with mutation role.
 - All rollback intents are audit-logged with operator, reason, and timestamp.
 - Failed rollback is idempotent: retry with same key resumes, not restarts.
 
+## 7. Health Checks
+
+**API health:** `GET /api/v1/health` returns `200` when healthy, `503` when
+degraded (DB unreachable or background service unhealthy).
+
+```bash
+curl -sf http://localhost:8900/api/v1/health || echo "UNHEALTHY"
+```
+
+**Per-deployment service health:** Provisioned Compose stacks include Docker
+health checks for each service. Health status is recorded in
+`arclink_service_health` rows and surfaced in the admin dashboard.
+
+```bash
+# Check all containers in a deployment stack
+docker compose -p arclink-{deployment_id} ps --format json | python3 -m json.tool
+```
+
+**Monitoring pattern:**
+1. Poll `/api/v1/health` from an external monitor (e.g., UptimeRobot, Healthchecks.io).
+2. Admin dashboard shows per-deployment service health under the "service_health" tab.
+3. Structured events log health transitions for alerting pipelines.
+
+## 8. Restart and Recovery
+
+**API restart:**
+```bash
+# If running directly
+pkill -f arclink_hosted_api.py && python3 python/arclink_hosted_api.py &
+
+# If running via systemd
+systemctl restart arclink-api
+```
+
+**Per-deployment stack restart:**
+```bash
+docker compose -p arclink-{deployment_id} restart
+```
+
+**Single service restart:**
+```bash
+docker compose -p arclink-{deployment_id} restart {service_name}
+```
+
+**Admin-initiated restart:** `POST /api/v1/admin/actions` with
+`action: "restart"` and a target deployment. This queues an intent; the
+executor acts on it when live execution is enabled.
+
+## 9. Release and Rollback
+
+**Release flow:**
+1. Build and tag new images.
+2. Update Compose intent for target deployments.
+3. Roll out one deployment at a time.
+4. Verify health after each rollout.
+5. If healthy, proceed to next deployment.
+
+**Rollback flow:**
+1. Admin submits rollback via `POST /api/v1/admin/actions` with
+   `action: "rollback"` and a target deployment.
+2. Executor generates rollback plan identifying unhealthy services.
+3. Non-destructive steps (stop, restart) execute immediately.
+4. Destructive steps (volume delete, DNS teardown) require explicit admin
+   confirmation and are audit-logged.
+5. Rollback preserves state roots and vault data by default.
+
+**Manual rollback:**
+```bash
+# Stop current stack
+docker compose -p arclink-{deployment_id} down
+
+# Restore previous image tags in the Compose file
+# Restart
+docker compose -p arclink-{deployment_id} up -d
+```
+
 ---
 
 ## General Operational Notes

@@ -124,6 +124,37 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
   read-only Docker checks. All skip cleanly when live flags/credentials are
   absent. Full live journey proof remains blocked on external credentials.
 
+## Operations, Safety, and Documentation (2026-05-02)
+
+- **Production 13**: Deployment assets landed: `config/env.example` (all
+  ArcLink env vars with comments), `docs/arclink/secret-checklist.md` (secret
+  inventory and handling rules), `docs/arclink/ingress-plan.md` (DNS layout,
+  Cloudflare, Traefik, SSH, drift, teardown), `docs/arclink/backup-restore.md`
+  (backup targets, schedule, restore procedures, disaster recovery, retention).
+  Operations runbook updated with health check polling, restart/recovery, and
+  release/rollback sections.
+
+- **Production 14**: Observability documented in
+  `docs/arclink/alert-candidates.md` with critical (API health, webhook
+  failure, provisioning failure, service unhealthy), warning (DNS drift,
+  reconciliation drift, rate limits, stale queues), and informational
+  (onboarding funnel, deployment growth, audit volume) alert signals. Admin
+  dashboard already wires health snapshots, queue status, deployment status,
+  DNS drift, and event visibility from P9.
+
+- **Production 15**: Data safety documented in `docs/arclink/data-safety.md`
+  covering per-user isolation model, volume layout, secret storage rules,
+  backup plan references, teardown safeguards (admin confirmation, audit
+  logging, state root preservation, volume preservation, separate DNS
+  teardown, destructive delete gating), and secret leak prevention
+  (`_reject_secret_material()` across boundaries, hygiene test scans).
+
+- **Production 16**: Documentation truth pass completed. All docs audited
+  against live code modules and test coverage. No claims of live customer
+  provisioning. Every live blocker named with exact credential/account in
+  `docs/arclink/live-e2e-secrets-needed.md`. Foundation runbook, operations
+  runbook, and architecture docs aligned with current module map.
+
 ## Provider Boundary Progress (2026-05-02)
 
 Incremental Production 3-6 work: resource limits, healthchecks, and expanded

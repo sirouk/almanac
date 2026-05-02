@@ -1,5 +1,10 @@
 # ArcLink Live E2E Secrets Needed
 
+**Status:** All items below are externally blocked. No live E2E journey has been
+proven. The fake E2E harness (`tests/test_arclink_e2e_fake.py`) passes without
+credentials. The live scaffold (`tests/test_arclink_e2e_live.py`) skips cleanly
+when credentials are absent.
+
 Initial development can proceed without live secrets. Real end-to-end deployment testing will need:
 
 - Cloudflare API token scoped to DNS edit/read for the test customer domain and

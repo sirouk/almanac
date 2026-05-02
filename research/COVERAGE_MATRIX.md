@@ -75,15 +75,19 @@
 
 ## Active Gaps
 
-- P1-11 landed and checked; P12 scaffold landed but live proof remains external.
-- Deploy assets, observability, data safety, docs truth remain (P13-16).
+- P1-11 and P13-P16 landed and checked; P12 scaffold landed but live proof remains external.
+- Deployment assets, observability, data safety, and docs truth are documented
+  for the no-secret foundation.
 - Live external credentials remain external blockers for P12 live proof.
 
 ## Coverage Verdict
 
-Coverage is sufficient for BUILD to continue. 166 ArcLink tests across 19 test
-files (plus 4 hygiene, 2 web tests, and 41 browser product checks) cover the
-no-secret foundation. Production 1-12 are landed and checked. Production 13-16
-remain. No item requires live credentials to begin; 6 external items are blocked
-on credentials for live proof only. BUILD should proceed with Production 13-16
-(deploy assets, observability, data safety, docs truth).
+Coverage is sufficient for the no-secret foundation. 166 ArcLink tests across
+19 test files (plus 4 hygiene, 2 web tests, and 41 browser product checks)
+cover the foundation. Production 1-11 and P13-P16 are landed and checked. P12
+remains externally blocked until live credentials are provided and the live E2E
+harness is run.
+
+The professional finish gate and current next objective queue in the steering doc
+are aligned. The foundation-runbook (`docs/arclink/foundation-runbook.md`)
+documents current boundary behavior and repair procedures for operator reference.

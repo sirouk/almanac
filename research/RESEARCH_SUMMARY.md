@@ -1,6 +1,6 @@
 # Research Summary
 
-<confidence>96</confidence>
+<confidence>97</confidence>
 
 ## Goal
 
@@ -17,7 +17,8 @@ The repository contains 17 ArcLink Python modules (7,877 lines), 17 test files
 (160 tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
 comprehensive fake/live adapter boundaries for all external providers.
 
-Production 1-10 of the 16-item steering checklist are landed and checked:
+The non-live checklist is landed for P1-11 and P13-P16. Production 12 is
+scaffolded but externally blocked on live credentials:
 - P1-2: Hosted API contract with versioned routes, OpenAPI, auth/CSRF/audit.
 - P3-6: Stripe, Cloudflare, Docker executor, and Chutes fake boundaries.
 - P7: Telegram/Discord onboarding parity with shared state machine.
@@ -28,13 +29,13 @@ Production 1-10 of the 16-item steering checklist are landed and checked:
 - P10: Browser product proof with Playwright suite (41 tests passing),
   brand system applied, mobile/desktop viewport checks, accessible forms,
   loading/empty/error states, fake-adapter labeling, deterministic API mocks.
-
-Production 11-16 remain:
-- P11: Unified fake E2E journey harness.
-- P12: Secret-gated live E2E scaffold (blocked on credentials and a deliberate
-  credentialed live run).
-- P13-15: Deployment assets, observability, data safety.
-- P16: Documentation truth pass.
+- P11: Fake E2E journey harness (6 tests covering full signup-to-admin flow).
+- P12: Live E2E scaffold (secret-gated, skips cleanly without credentials).
+  Externally blocked until real credentials are supplied.
+- P13: Deployment assets (env example, secret checklist, ingress plan, runbook).
+- P14: Observability (structured events, alert candidates, admin dashboard).
+- P15: Data safety (volume layout, backup plan, teardown safeguards, secret guards).
+- P16: Documentation truth pass (all docs audited, no overclaims).
 
 ## Implementation Path Comparison
 
@@ -58,16 +59,14 @@ Path C: Kubernetes/Nomad rewrite. Premature for MVP.
 
 ## Build Readiness
 
-BUILD should proceed with Production 13-16 while keeping the P12 live scaffold
-honest. The immediate priority is:
-1. P13: Deployment assets.
-2. P14: Observability.
-3. P15: Data safety.
-4. P16: Documentation truth.
+P1-11 and P13-P16 are complete for the no-secret ArcLink foundation. The
+remaining work is P12 live proof, which is externally blocked until real
+Stripe, Cloudflare, Chutes, Telegram, Discord, and host credentials are supplied.
 
-P12 remains an external live-proof item until credentials exist.
-
-160 ArcLink tests + 41 browser product checks passing. No live secrets required to continue.
+168 ArcLink test functions + 41 browser product checks passing. No live secrets
+required for any non-live landed item. The foundation-runbook
+(`docs/arclink/foundation-runbook.md`) and professional finish gate in the
+steering doc are aligned with the current state.
 
 ## Remaining Risks
 

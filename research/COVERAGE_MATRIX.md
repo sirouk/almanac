@@ -1,4 +1,5 @@
 # Coverage Matrix
+<!-- refreshed: 2026-05-02 plan-gate sync -->
 
 | Goal / success criterion | Existing coverage | Plan coverage | Remaining gap / risk | Validation |
 | --- | --- | --- | --- | --- |
@@ -19,7 +20,7 @@
 | User dashboard | Dashboard read model, Next.js user dashboard page | Landed (P8). Wire to hosted API for live data. | Views use mock data | Dashboard/product surface tests, web app build |
 | Admin dashboard | Admin read model, Next.js admin page wired to all hosted API admin endpoints (18 tabs, queue-action, revoke-session forms) | LANDED (P9). | Complete for no-secret foundation | Admin/dashboard/executor tests, web app build |
 | Docker Compose executor | Render, validate, start/stop/restart/inspect/teardown with resource limits, health checks, volume isolation | Landed (P5). Live execution behind operator flag. | No real Docker mutation enabled | Executor tests; live E2E later |
-| API/auth boundary | Hosted WSGI API (1,078 lines), sessions, CSRF, rate limits, OpenAPI, 39 route tests | Landed (P1-2). Extend as dashboard integration requires. | Not yet deployed behind production identity provider | API/auth tests, hosted API tests |
+| API/auth boundary | Hosted WSGI API (1,099 lines), sessions, CSRF, rate limits, OpenAPI, operator snapshot, 42 route tests | Landed (P1-2). Extend as dashboard integration requires. | Not yet deployed behind production identity provider | API/auth tests, hosted API tests |
 | Live executor boundary | Fail-closed executor types, fake resolver/adapters, replay guards | Landed (P5-6). Add live adapters behind E2E gates. | No real Docker/provider mutation enabled | Executor tests; live E2E later |
 | Health/fleet operations | Health scripts, health-watch, service health table | Dashboard reads service snapshots and failures | Fleet observability stack deferred | Health and dashboard tests |
 | Per-tenant isolation | Docker user homes and dedicated Nextcloud decision | Dedicated state roots in provisioning plan | Quota/backup/resource policy not complete | Access/provisioning/rollback tests |
@@ -53,7 +54,7 @@
 | `tests/test_arclink_public_bots.py` | Telegram/Discord public bot conversation-state contract, fake checkout, unsupported channel rejection, metadata secret rejection. |
 | `tests/test_arclink_telegram.py` | Telegram runtime adapter fake-mode turns, message dispatch, long-poll stub, token-absent fallback. |
 | `tests/test_arclink_discord.py` | Discord runtime adapter fake-mode interactions, slash command dispatch, signature verification stub, token-absent fallback. |
-| `tests/test_arclink_hosted_api.py` | Hosted API route dispatch (39 tests), session auth, CSRF, safe errors, request-ID, CORS, webhooks, health, provider state, reconciliation, billing portal. |
+| `tests/test_arclink_hosted_api.py` | Hosted API route dispatch (42 tests), session auth, CSRF, safe errors, request-ID, CORS, webhooks, health, provider state, reconciliation, billing portal, operator snapshot auth/shape. |
 | `tests/test_arclink_e2e_fake.py` | Full fake journey: signup, onboarding, checkout, webhook, entitlement, provisioning, health, dashboard, audit, admin actions. |
 | `tests/test_arclink_e2e_live.py` | Secret-gated live E2E scaffold: Stripe, Cloudflare, Chutes, Telegram, Discord, Docker checks skip without credentials; no-secret journey/evidence checks run. |
 | `tests/test_arclink_live_journey.py` | Ordered live journey steps, live-gate requirements, missing-credential names, skip behavior, runner success/failure behavior, summary helpers. |
@@ -95,7 +96,7 @@
 
 ## Coverage Verdict
 
-Coverage is sufficient for the no-secret foundation. 233 ArcLink Python test functions
+Coverage is sufficient for the no-secret foundation. 234 ArcLink Python test functions
 across 23 test files (plus 4 hygiene, 2 web tests, and 41 browser product checks)
 cover P1-11, P13-P16, and Gaps A-E no-secret scaffolding. P12 credentialed proof
 remains externally blocked.

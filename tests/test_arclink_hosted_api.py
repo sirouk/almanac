@@ -1407,6 +1407,63 @@ def test_onboarding_payload_validation_rejects_invalid_channel() -> None:
     print("PASS test_onboarding_payload_validation_rejects_invalid_channel")
 
 
+def test_admin_operator_snapshot_requires_auth_and_returns_snapshot() -> None:
+    control = load_module("almanac_control.py", "almanac_control_op_snap_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_op_snap_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_op_snap_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_PRODUCT_NAME": "ArcLink",
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_PRIMARY_PROVIDER": "chutes",
+        "ARCLINK_E2E_LIVE": "1",
+        "ARCLINK_E2E_DOCKER": "1",
+        "STRIPE_SECRET_KEY": "sk_test_operator_snapshot_secret",
+        "STRIPE_WEBHOOK_SECRET": "whsec_operator_snapshot_secret",
+        "CLOUDFLARE_API_TOKEN": "cf_operator_snapshot_secret",
+        "CLOUDFLARE_ZONE_ID": "zone_operator_snapshot",
+        "CHUTES_API_KEY": "chutes_operator_snapshot_secret",
+        "TELEGRAM_BOT_TOKEN": "telegram_operator_snapshot_secret",
+        "DISCORD_BOT_TOKEN": "discord_operator_snapshot_secret",
+        "DISCORD_APP_ID": "discord_app_operator_snapshot",
+    })
+    api.upsert_arclink_admin(conn, admin_id="admin_op", email="op@example.test", role="ops")
+
+    # No auth -> 401
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/operator-snapshot",
+        headers={}, config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}")
+
+    # With auth -> 200 with expected keys
+    session = api.create_arclink_admin_session(conn, admin_id="admin_op", session_id="asess_op")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/operator-snapshot",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect("host_readiness" in payload, f"missing host_readiness: {list(payload.keys())}")
+    expect("provider_diagnostics" in payload, f"missing provider_diagnostics: {list(payload.keys())}")
+    expect("live_journey" in payload, f"missing live_journey: {list(payload.keys())}")
+    expect("evidence" in payload, f"missing evidence: {list(payload.keys())}")
+    expect(payload["live_journey"]["all_credentials_present"] is True, f"expected config env to satisfy journey: {payload['live_journey']}")
+    expect(payload["evidence"]["live_proof"] == "pending_credentialed_run", f"live proof should wait for evidence: {payload['evidence']}")
+    # Verify no secret values leak
+    snapshot_str = json.dumps(payload)
+    for secret_value in (
+        "sk_test_operator_snapshot_secret",
+        "whsec_operator_snapshot_secret",
+        "cf_operator_snapshot_secret",
+        "chutes_operator_snapshot_secret",
+        "telegram_operator_snapshot_secret",
+        "discord_operator_snapshot_secret",
+    ):
+        expect(secret_value not in snapshot_str, f"secret value leaked in snapshot: {secret_value}")
+
+    print("PASS test_admin_operator_snapshot_requires_auth_and_returns_snapshot")
+
+
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
@@ -1449,7 +1506,8 @@ def main() -> int:
     test_wsgi_503_status_text_for_degraded_health()
     test_onboarding_payload_validation_rejects_missing_fields()
     test_onboarding_payload_validation_rejects_invalid_channel()
-    print("PASS all 41 ArcLink hosted API tests")
+    test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
+    print("PASS all 42 ArcLink hosted API tests")
     return 0
 
 

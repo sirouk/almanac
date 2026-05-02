@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, ErrorAlert } from "@/components/ui";
 
-type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation";
+type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation" | "operator";
 
 interface AdminData {
   deployments?: Record<string, string>[];
@@ -36,6 +36,7 @@ export default function AdminPage() {
   const [events, setEvents] = useState<{ events?: Record<string, string>[] } | null>(null);
   const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
   const [reconciliation, setReconciliation] = useState<{ drift?: Record<string, string>[]; summary?: Record<string, unknown> } | null>(null);
+  const [operatorSnapshot, setOperatorSnapshot] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const router = useRouter();
 
@@ -61,9 +62,10 @@ export default function AdminPage() {
     if (tab === "events") api.adminEvents().then((r) => { if (r.status === 200) setEvents(r.data as typeof events); });
     if (tab === "provider") api.adminProviderState().then((r) => { if (r.status === 200) setProviderState(r.data as typeof providerState); });
     if (tab === "reconciliation") api.adminReconciliation().then((r) => { if (r.status === 200) setReconciliation(r.data as typeof reconciliation); });
+    if (tab === "operator") api.adminOperatorSnapshot().then((r) => { if (r.status === 200) setOperatorSnapshot(r.data as typeof operatorSnapshot); });
   }, [tab]);
 
-  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation"];
+  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -529,6 +531,39 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* Operator Snapshot */}
+          {tab === "operator" && (
+            <div className="space-y-6">
+              <h1 className="font-display text-2xl font-bold">Operator Snapshot</h1>
+              {operatorSnapshot ? (
+                <>
+                  <OperatorSection title="Host Readiness" ready={(operatorSnapshot.host_readiness as Record<string, unknown>)?.ready as boolean} checks={((operatorSnapshot.host_readiness as Record<string, unknown>)?.checks as Record<string, unknown>[]) || []} />
+                  <OperatorSection title="Provider Diagnostics" ready={(operatorSnapshot.provider_diagnostics as Record<string, unknown>)?.all_ok as boolean} checks={((operatorSnapshot.provider_diagnostics as Record<string, unknown>)?.checks as Record<string, unknown>[]) || []} />
+                  <div className="rounded-lg border border-border bg-surface p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-display font-semibold">Live Journey</h3>
+                      <StatusBadge status={(operatorSnapshot.live_journey as Record<string, unknown>)?.all_credentials_present ? "ready" : "blocked"} />
+                    </div>
+                    <p className="mt-2 text-sm text-soft-white/60">
+                      {((operatorSnapshot.live_journey as Record<string, unknown>)?.blocked_steps as number) || 0} of {((operatorSnapshot.live_journey as Record<string, unknown>)?.total_steps as number) || 0} steps blocked by missing credentials
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-surface p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-display font-semibold">Evidence</h3>
+                      <StatusBadge status={(operatorSnapshot.evidence as Record<string, string>)?.live_proof || "unknown"} />
+                    </div>
+                    <p className="mt-2 text-sm text-soft-white/60">
+                      Template: {(operatorSnapshot.evidence as Record<string, unknown>)?.template_ready ? "ready" : "missing"} · Credentialed: {(operatorSnapshot.evidence as Record<string, string>)?.credentialed_evidence || "unknown"}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-soft-white/40">Loading operator snapshot...</p>
+              )}
+            </div>
+          )}
+
           {/* Sessions */}
           {tab === "sessions" && (
             <div className="space-y-6">
@@ -642,6 +677,28 @@ function StatCard({ label, value }: { label: string; value: number }) {
     <div className="rounded-lg border border-border bg-surface p-4">
       <p className="text-sm text-soft-white/60">{label}</p>
       <p className="mt-1 font-display text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function OperatorSection({ title, ready, checks }: { title: string; ready: boolean; checks: Record<string, unknown>[] }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-display font-semibold">{title}</h3>
+        <StatusBadge status={ready ? "ready" : "not_ready"} />
+      </div>
+      {checks.length > 0 && (
+        <div className="mt-3 space-y-1">
+          {checks.map((c, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <span className={c.ok ? "text-neon-green" : "text-red-400"}>{c.ok ? "✓" : "✗"}</span>
+              <span className="text-soft-white/80">{(c.name || c.provider || "") as string}</span>
+              <span className="text-soft-white/40 text-xs">{(c.detail || "") as string}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

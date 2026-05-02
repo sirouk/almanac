@@ -51,6 +51,7 @@ from arclink_api_auth import (
     revoke_arclink_session,
     start_public_onboarding_api,
 )
+from arclink_dashboard import build_operator_snapshot
 from arclink_discord import (
     ArcLinkDiscordError,
     DiscordConfig,
@@ -82,6 +83,7 @@ class HostedApiConfig:
 
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
         e = dict(env or os.environ)
+        self.env: dict[str, str] = e
         self.base_domain: str = default_base_domain(e)
         self.cors_origin: str = str(e.get("ARCLINK_CORS_ORIGIN", "")).strip()
         self.cookie_domain: str = str(e.get("ARCLINK_COOKIE_DOMAIN", "")).strip()
@@ -492,6 +494,18 @@ def _handle_provider_state(
 
 
 
+def _handle_admin_operator_snapshot(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="admin")
+    authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+    snapshot = build_operator_snapshot(env=config.env, skip_ports=True)
+    return _json_response(200, snapshot, request_id=request_id)
+
+
 def _handle_health(
     conn: sqlite3.Connection,
     request_id: str,
@@ -747,6 +761,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["admin"],
         "responses": {"200": {"description": "Reconciliation data"}, "401": {"description": "Unauthorized"}},
     },
+    "admin_operator_snapshot": {
+        "summary": "Read operator snapshot (host readiness, diagnostics, journey, evidence)",
+        "tags": ["admin"],
+        "responses": {"200": {"description": "Operator snapshot"}, "401": {"description": "Unauthorized"}},
+    },
     "admin_provider_state": {
         "summary": "Read provider/model state (admin)",
         "tags": ["admin"],
@@ -856,6 +875,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/reconciliation"): "admin_reconciliation",
     ("GET", "/admin/provider-state"): "admin_provider_state",
     ("POST", "/admin/sessions/revoke"): "session_revoke",
+    ("GET", "/admin/operator-snapshot"): "admin_operator_snapshot",
     ("GET", "/user/provider-state"): "user_provider_state",
     ("GET", "/health"): "health",
     ("GET", "/openapi.json"): "openapi_spec",
@@ -954,6 +974,8 @@ def route_arclink_hosted_api(
             result = _handle_admin_action(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "session_revoke":
             result = _handle_session_revoke(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "admin_operator_snapshot":
+            result = _handle_admin_operator_snapshot(conn, headers, request_id, cfg)
         elif route_key == "admin_provider_state":
             result = _handle_provider_state(conn, headers, request_id, cfg, "admin")
         elif route_key == "user_provider_state":

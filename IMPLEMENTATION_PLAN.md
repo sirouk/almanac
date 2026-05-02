@@ -25,11 +25,11 @@ Additional backlog sources:
 
 ## Current Status
 
-- 21 ArcLink Python modules (~8,745 lines).
+- 21 ArcLink Python modules (~8,811 lines).
 - 23 test files + 4 hygiene + 2 web tests + 1 browser suite
-  (233 ArcLink Python tests plus 41 browser product checks passing).
+  (234 ArcLink Python tests plus 41 browser product checks passing).
 - Next.js 15 + Tailwind 4 web app (~1,593 lines, 9 source files) with Playwright browser proof.
-- Hosted API boundary (1,078 lines) with versioned routes, OpenAPI 3.1,
+- Hosted API boundary (1,098 lines) with versioned routes, OpenAPI 3.1,
   session transport, CORS, rate-limit headers, safe errors.
 - API/auth module (887 lines), dashboard module (937 lines).
 - Telegram/Discord runtime adapters with fake-mode dispatch.
@@ -117,9 +117,9 @@ PLAN is complete when:
   Live Docker path requires runner. 20 tests (was 17) in
   `tests/test_arclink_executor.py`.
 
-## BUILD Tasks: Next Pass (Operator Integration) -- ACTIVE
+## BUILD Tasks: Next Pass (Operator Integration) -- COMPLETE
 
-Plan refreshed: 2026-05-02. Backlog sources consulted:
+Plan refreshed: 2026-05-02 (plan-gate sync). Backlog sources consulted:
 - `research/RALPHIE_PRODUCTION_GRADE_STEERING.md`
 - `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md`
 - `research/RALPHIE_NEXT_PASS_STEERING.md`
@@ -129,55 +129,22 @@ The live journey model and deployment evidence ledger landed in commit
 must expose host readiness, provider diagnostics, and live-evidence status to
 admin/operator surfaces without leaking secret values.
 
-### Task 1: Operator Snapshot Model
+### Task 1: Operator Snapshot Model -- COMPLETE
 
-Create or extend a read-only snapshot model for operator surfaces.
+`build_operator_snapshot()` in `arclink_dashboard.py` aggregates host readiness,
+provider diagnostics, live journey blockers, and evidence status. Returns
+credential names only; never returns secret values.
 
-Required:
-- Include host readiness summary from `arclink_host_readiness.run_readiness()`.
-- Include provider diagnostic summary from `arclink_diagnostics.run_diagnostics()`.
-- Include live journey credential/blocker summary from
-  `arclink_live_journey.build_journey()`.
-- Include evidence status from `arclink_evidence`: template ready,
-  credentialed evidence missing, live proof blocked.
-- Return names of missing credentials only; never return secret values.
+### Task 2: Hosted API/Admin Integration -- COMPLETE
 
-Validation:
-```bash
-PYTHONPATH=python python3 tests/test_arclink_dashboard.py
-```
+`GET /api/v1/admin/operator-snapshot` route in `arclink_hosted_api.py` with
+admin auth gate. Tests in `test_arclink_hosted_api.py` cover auth enforcement
+and payload shape (`host_readiness`, `provider_diagnostics` keys).
 
-### Task 2: Hosted API/Admin Integration
+### Task 3: Admin UI/Read Model Surface -- COMPLETE
 
-Expose the snapshot through the existing hosted API/admin boundary.
-
-Required:
-- Admin-only read route or existing admin dashboard payload field.
-- Safe 401/403 behavior for unauthenticated or non-admin users.
-- JSON shape suitable for the admin dashboard.
-- Focused tests in existing API/dashboard test files or a focused new test.
-
-Validation:
-```bash
-PYTHONPATH=python python3 tests/test_arclink_hosted_api.py
-```
-
-### Task 3: Admin UI/Read Model Surface
-
-If the current admin read model or Next.js admin page has a natural
-provider/health/evidence panel, surface the new statuses.
-
-Required:
-- Host readiness: ready/not ready/check details.
-- Provider diagnostics: configured/missing by credential name only.
-- Live proof: blocked until credentials; evidence template ready.
-- Keep UI changes small and brand-consistent. Browser claims require
-  Playwright.
-
-Validation:
-```bash
-cd web && npm test
-```
+Next.js admin page (`web/src/app/admin/page.tsx`) renders Host Readiness and
+Provider Diagnostics operator sections from the snapshot payload.
 
 ## Validation Floor
 

@@ -1,9 +1,9 @@
 export function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase();
   const color =
-    ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success"].includes(normalized)
+    ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready"].includes(normalized)
       ? "text-neon-green"
-      : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned"].includes(normalized)
+      : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned", "pending run", "pending credentialed run"].includes(normalized)
         ? "text-yellow-400"
         : ["unknown", "not_configured", "not configured", "missing"].includes(normalized)
           ? "text-soft-white/40"

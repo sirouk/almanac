@@ -79,6 +79,7 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | GET | `/admin/actions` | Queued actions (filters: deployment_id, status, since) |
 | POST | `/admin/actions` | Queue admin action (CSRF) |
 | GET | `/admin/reconciliation` | Reconciliation drift summary |
+| GET | `/admin/operator-snapshot` | Operator snapshot (host readiness, diagnostics, journey blockers, evidence status) |
 | GET | `/admin/provider-state` | Provider adapter state |
 | POST | `/admin/sessions/revoke` | Revoke any session (CSRF) |
 
@@ -125,6 +126,7 @@ The Next.js admin dashboard (`web/src/app/admin/page.tsx`) is wired to the hoste
 | actions (queue) | `/admin/actions` | POST |
 | provider | `/admin/provider-state` | GET |
 | reconciliation | `/admin/reconciliation` | GET |
+| operator | `/admin/operator-snapshot` | GET |
 | sessions (revoke) | `/admin/sessions/revoke` | POST |
 
 The user dashboard (`web/src/app/dashboard/page.tsx`) consumes `/user/dashboard`, `/user/billing`, `/user/provisioning`, and `/user/provider-state`.

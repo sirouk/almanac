@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 from typing import Any, Mapping
 
@@ -59,6 +60,51 @@ ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
 
 class ArcLinkDashboardError(ValueError):
     pass
+
+
+def build_operator_snapshot(
+    *,
+    env: dict[str, str] | None = None,
+    skip_ports: bool = True,
+    docker_binary: str = "docker",
+) -> dict[str, Any]:
+    """Build a read-only operator snapshot aggregating host readiness,
+    provider diagnostics, live journey blockers, and evidence status.
+
+    Never returns secret values — only credential names and presence.
+    """
+    from arclink_host_readiness import run_readiness
+    from arclink_diagnostics import run_diagnostics
+    from arclink_live_journey import build_journey
+
+    readiness = run_readiness(env=env, skip_ports=skip_ports, docker_binary=docker_binary)
+    diagnostics = run_diagnostics(env=env, docker_binary=docker_binary)
+
+    env_source = env if env is not None else os.environ
+    journey_steps = build_journey()
+    journey_blockers: list[dict[str, Any]] = []
+    for step in journey_steps:
+        missing = [key for key in step.required_env if not str(env_source.get(key, "")).strip()]
+        if missing:
+            journey_blockers.append({"step": step.name, "missing_env": missing})
+
+    all_journey_creds_present = len(journey_blockers) == 0
+
+    return {
+        "host_readiness": readiness.to_dict(),
+        "provider_diagnostics": diagnostics.to_dict(),
+        "live_journey": {
+            "total_steps": len(journey_steps),
+            "blocked_steps": len(journey_blockers),
+            "all_credentials_present": all_journey_creds_present,
+            "blockers": journey_blockers,
+        },
+        "evidence": {
+            "template_ready": True,
+            "credentialed_evidence": "missing" if not all_journey_creds_present else "pending_run",
+            "live_proof": "blocked" if not all_journey_creds_present else "pending_credentialed_run",
+        },
+    }
 
 
 def _json_loads(value: str | None) -> dict[str, Any]:

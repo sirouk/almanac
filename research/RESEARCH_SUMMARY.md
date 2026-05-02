@@ -1,6 +1,7 @@
 # Research Summary
 
 <confidence>97</confidence>
+<!-- refreshed: 2026-05-02 plan-gate sync -->
 
 ## Goal
 
@@ -13,8 +14,8 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 ## Finding
 
 ArcLink is a staged evolution of the Almanac Docker/Python/Bash control plane.
-The repository contains 21 ArcLink Python modules (8,745 lines), 23 test files
-(233 ArcLink Python tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
+The repository contains 21 ArcLink Python modules (8,811 lines), 23 test files
+(234 ArcLink Python tests passing), a Next.js 15 + Tailwind 4 web app (~1,593 lines), and
 comprehensive fake/live adapter boundaries for all external providers.
 
 The no-live checklist is landed for P1-11 and P13-P16. Production 12 is
@@ -89,7 +90,7 @@ recorder), expanded `test_arclink_e2e_live.py`, focused unit tests, evidence
 template doc, and ops-runbook links for readiness/diagnostics CLIs. P12 live
 proof remains externally blocked until real credentials are supplied.
 
-233 ArcLink Python test functions + 41 browser product checks passing. No live secrets
+234 ArcLink Python test functions + 41 browser product checks passing. No live secrets
 required for any non-live landed item.
 
 ## Remaining Risks

@@ -91,4 +91,6 @@ export const api = {
   adminProviderState: () => request("/admin/provider-state"),
 
   adminReconciliation: () => request("/admin/reconciliation"),
+
+  adminOperatorSnapshot: () => request("/admin/operator-snapshot"),
 };

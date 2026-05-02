@@ -1,4 +1,5 @@
 # Dependency Research
+<!-- refreshed: 2026-05-02 plan-gate sync -->
 
 ## Current Stack Components
 

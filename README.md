@@ -915,6 +915,49 @@ After install:
 10. Clone a docs repo anywhere under the vault if you want it mirrored locally;
     `vault/Repos/` is the default convention, not a requirement.
 
+## ArcLink: Self-Serve AI Deployment SaaS
+
+ArcLink is the Chutes-first self-serve AI deployment product built on top of
+Almanac's shared-host substrate. It adds commercial SaaS primitives while
+preserving the existing Almanac deploy, onboarding, Hermes, qmd, vault, memory,
+Notion, and service-health paths.
+
+ArcLink owns:
+
+- Product identity and `ARCLINK_*` configuration (`python/arclink_product.py`).
+- 18 `arclink_*` database tables in `python/almanac_control.py`.
+- Stripe entitlement interpretation (`python/arclink_entitlements.py`).
+- Hostname, DNS drift, and Traefik intent (`python/arclink_ingress.py`).
+- Nextcloud isolation and SSH access strategy (`python/arclink_access.py`).
+- No-secret provisioning dry-run intent (`python/arclink_provisioning.py`).
+- Guarded mutating executor boundary (`python/arclink_executor.py`).
+- Public onboarding session contracts (`python/arclink_onboarding.py`).
+- User/admin dashboard read models (`python/arclink_dashboard.py`).
+- API/auth boundary with hashed sessions and CSRF (`python/arclink_api_auth.py`).
+- Hosted WSGI API under `/api/v1` (`python/arclink_hosted_api.py`).
+- Local no-secret product surface prototype (`python/arclink_product_surface.py`).
+- Public Telegram/Discord bot skeletons (`python/arclink_public_bots.py`).
+- Chutes catalog and adapter contracts (`python/arclink_chutes.py`,
+  `python/arclink_adapters.py`).
+
+### ArcLink Current Status
+
+The foundation is additive and no-secret testable. All 14 ArcLink modules
+compile and all ArcLink tests pass without live provider credentials. The
+executor boundary fails closed by default; fake adapters prove contract
+behavior. Production live execution, frontend dashboard (Next.js/Tailwind),
+live public bots, and real E2E with credentials remain follow-up work.
+
+Detailed ArcLink documentation:
+
+```text
+docs/arclink/foundation.md           # behavior notes and config
+docs/arclink/foundation-runbook.md   # assumptions, ownership, runbook, repair
+docs/arclink/architecture.md         # module map and data flow
+docs/arclink/brand-system.md         # visual identity and voice
+docs/arclink/live-e2e-secrets-needed.md  # credential checklist for live testing
+```
+
 ## Project Posture
 
 Almanac is meant to supercharge a team, not bury it in ceremony.

@@ -49,6 +49,9 @@ Initial development can proceed without live secrets. Real end-to-end deployment
 - OpenAI Codex OAuth/device-flow configuration if live BYOK verification is required.
 - Anthropic/Claude OAuth/PKCE configuration if live BYOK verification is required.
 - Notion integration token and webhook verification secret if shared Notion remains enabled.
+- For Sovereign customer Notion, a per-deployment Notion integration token,
+  webhook secret/verification flow, and a live callback route for the selected
+  deployment ingress mode.
 
 Never paste these into tracked files. Provide them through local `.env`, secret manager, or an interactive deploy prompt.
 

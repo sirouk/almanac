@@ -15,7 +15,7 @@ Use:
 ./deploy.sh control health
 ```
 
-The control path delegates to the Docker substrate, but it does not mean
+The control path delegates to Docker Compose, but it does not mean
 "Shared Host Docker." It starts the hosted product boundary:
 
 - `control-web`: the Next.js ArcLink website, onboarding, user dashboard, and
@@ -87,12 +87,15 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      - `hermes-<prefix>.<base-domain>`
    - In `tailscale` mode, Cloudflare DNS is skipped. The control host is
      published with Tailscale Funnel on `ARCLINK_TAILSCALE_HTTPS_PORT`, default
-     `443`, and Notion uses `ARCLINK_TAILSCALE_NOTION_PATH`, default
-     `/notion/webhook`. Per-pod URLs default to path-based routes under the
-     worker Tailscale FQDN, for example
+     `443`. Per-pod URLs default to path-based routes under the worker
+     Tailscale FQDN, for example
      `https://worker.tailnet.ts.net/u/<prefix>/code`. `subdomain` can be
      selected only for environments that really provide resolvable/certified
      sub-subdomains under the Tailscale name.
+   - Each pod reserves a per-deployment Notion callback URL and webhook secret
+     reference. Domain mode renders
+     `https://u-<prefix>.<base-domain>/notion/webhook`. Tailscale path mode
+     renders `https://<worker-tailnet-name>/u/<prefix>/notion/webhook`.
 
 7. **Execution and health**
    - `python/arclink_sovereign_worker.py` is the control-node worker. It:
@@ -149,7 +152,8 @@ are present in `arclink-priv/config/docker.env`:
 The control node starts the hosted API, web control center, and provisioner loop
 from `deploy.sh control`. The worker-host path now exists for local and SSH
 Docker Compose execution, with Cloudflare DNS upserts in domain mode,
-Tailscale-safe DNS skipping in Tailscale mode, and secret-file materialization.
-Live proof is still gated by real provider credentials, registered fleet
-capacity, SSH reachability to worker hosts, ingress publication, and service
-health checks against the deployed pods.
+Tailscale-safe DNS skipping in Tailscale mode, per-deployment Notion callback
+intent, and secret-file materialization. Live proof is still gated by real
+provider credentials, registered fleet capacity, SSH reachability to worker
+hosts, ingress publication, customer Notion connection proof, and service health
+checks against the deployed pods.

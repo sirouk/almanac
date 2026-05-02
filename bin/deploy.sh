@@ -1092,9 +1092,9 @@ choose_mode() {
     cat <<'EOF'
 ArcLink deploy menu
 
-  1) Sovereign Control Node control center (billing, bots, fleet, provisioning)
+  1) Sovereign Control Node control center (Dockerized billing, bots, fleet, provisioning)
   2) Shared Host mode control center (operator-led)
-  3) Shared Host Docker control center (containerized operator substrate)
+  3) Shared Host Docker control center (operator-led shared services, not Sovereign pods)
   4) Exit
 EOF
 
@@ -1201,6 +1201,8 @@ choose_docker_mode() {
 
   cat <<'EOF'
 ArcLink Shared Host Docker control center
+  Operator-led shared services only; for Dockerized paid customer pods use
+  Sovereign Control Node mode.
 
   1) Install / repair Docker stack from current checkout
   2) Upgrade / rebuild Docker stack from current checkout
@@ -4493,7 +4495,7 @@ Tailscale Serve/Funnel prerequisite
   Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
   consent URL or fail before ArcLink can publish the routes.
   If the installer prints a Tailscale approval URL later:
-    https://login.tailscale.com/f/funnel?...  for the public Notion webhook
+    https://login.tailscale.com/f/funnel?...  for the shared-host Notion webhook
     https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
   open it as a tailnet admin, approve the feature for this node, then return
   to this terminal and press ENTER so ArcLink can retry the route.
@@ -4572,10 +4574,10 @@ EOF
     ENABLE_TAILSCALE_SERVE="0"
   fi
   if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
-    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the shared-host Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
     if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the shared-host Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the shared-host Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
     else
       TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
       TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
@@ -4594,7 +4596,7 @@ EOF
     TAILSCALE_SERVE_PORT="$default_tailscale_serve_port"
   fi
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" && "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_SERVE_PORT:-443}" == "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" ]]; then
-    echo "Tailscale Serve and the public Notion webhook Funnel cannot share the same HTTPS port." >&2
+    echo "Tailscale Serve and the shared-host Notion webhook Funnel cannot share the same HTTPS port." >&2
     echo "Choose different values for the private tailnet port and the public webhook port." >&2
     return 1
   fi
@@ -8233,6 +8235,10 @@ collect_docker_install_answers() {
 
   echo "ArcLink deploy: Shared Host Docker install / repair from current checkout"
   echo
+  echo "This is the operator-led Shared Host substrate in Docker. It does not"
+  echo "configure Sovereign customer pod ingress or ask Cloudflare vs Tailscale."
+  echo "For the Dockerized paid control node, run: ./deploy.sh control install"
+  echo
   echo "Shared Host Docker mode uses fixed container paths and the current checkout as the host bind mount:"
   echo "  host repo:    $BOOTSTRAP_DIR"
   echo "  host private: $BOOTSTRAP_DIR/arclink-priv"
@@ -8266,7 +8272,7 @@ Tailscale Serve/Funnel prerequisite
   Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
   consent URL or fail before ArcLink can publish the routes.
   If the installer prints a Tailscale approval URL later:
-    https://login.tailscale.com/f/funnel?...  for the public Notion webhook
+    https://login.tailscale.com/f/funnel?...  for the shared-host Notion webhook
     https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
   open it as a tailnet admin, approve the feature for this node, then return
   to this terminal and press ENTER so ArcLink can retry the route.
@@ -8333,10 +8339,10 @@ EOF
     ENABLE_TAILSCALE_SERVE="0"
   fi
   if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
-    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
+    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the shared-host Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
     if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the shared-host Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
+      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the shared-host Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
     else
       TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
       TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
@@ -8355,7 +8361,7 @@ EOF
     TAILSCALE_SERVE_PORT="$default_tailscale_serve_port"
   fi
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" && "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_SERVE_PORT:-443}" == "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" ]]; then
-    echo "Tailscale Serve and the public Notion webhook Funnel cannot share the same HTTPS port." >&2
+    echo "Tailscale Serve and the shared-host Notion webhook Funnel cannot share the same HTTPS port." >&2
     echo "Choose different values for the private tailnet port and the public webhook port." >&2
     return 1
   fi
@@ -8535,7 +8541,7 @@ collect_control_install_answers() {
         ARCLINK_TAILSCALE_HTTPS_PORT="443"
         ;;
     esac
-    ARCLINK_TAILSCALE_NOTION_PATH="$(normalize_http_path "$(ask "Tailscale public Notion webhook path" "${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}")")"
+    ARCLINK_TAILSCALE_NOTION_PATH="$(normalize_http_path "$(ask "Tailscale public control-node Notion webhook path (customer pod callbacks are per deployment)" "${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}")")"
     ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="$(normalize_tailscale_host_strategy "$(ask "Tailscale deployment URL strategy (path/subdomain)" "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}")")"
     ARCLINK_BASE_DOMAIN="$ARCLINK_TAILSCALE_DNS_NAME"
     ARCLINK_EDGE_TARGET="$ARCLINK_TAILSCALE_DNS_NAME"

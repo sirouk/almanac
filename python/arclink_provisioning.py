@@ -32,6 +32,7 @@ ARCLINK_PROVISIONING_SERVICE_NAMES = (
     "nextcloud-redis",
     "nextcloud",
     "code-server",
+    "notion-webhook",
     "notification-delivery",
     "health-watch",
     "managed-context-install",
@@ -42,7 +43,7 @@ CONTAINER_QMD_STATE_DIR = "/home/arclink/.qmd"
 CONTAINER_VAULT_DIR = "/srv/vault"
 CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
 
-_SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
+_SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
     r"(?i)("
     r"sk_(live|test)_[a-z0-9]|"
@@ -205,6 +206,11 @@ def _render_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict
         "telegram_bot_token": str(metadata.get("telegram_bot_token_ref") or "").strip(),
         "discord_bot_token": str(metadata.get("discord_bot_token_ref") or "").strip(),
         "notion_token": str(metadata.get("notion_token_ref") or "").strip(),
+        "notion_webhook_secret": _secret_ref(
+            metadata,
+            "notion_webhook_secret_ref",
+            f"secret://arclink/notion/{deployment_id}/webhook-secret",
+        ),
         "stripe_customer": str(metadata.get("stripe_customer_ref") or "").strip(),
         "cloudflare_tunnel": str(metadata.get("cloudflare_tunnel_token_ref") or "").strip(),
     }
@@ -226,6 +232,49 @@ def _clean_tailscale_strategy(value: str | None) -> str:
     if strategy not in {"path", "subdomain"}:
         raise ArcLinkProvisioningError("ArcLink Tailscale host strategy must be path or subdomain")
     return strategy
+
+
+def _notion_callback_path(prefix: str, *, ingress_mode: str, tailscale_host_strategy: str) -> str:
+    clean_prefix = str(prefix or "").strip().lower()
+    if ingress_mode == "tailscale" and tailscale_host_strategy == "path":
+        return f"/u/{clean_prefix}/notion/webhook"
+    return "/notion/webhook"
+
+
+def _notion_callback_url(access_urls: Mapping[str, str]) -> str:
+    dashboard_url = str(access_urls.get("dashboard") or "").rstrip("/")
+    if not dashboard_url:
+        raise ArcLinkProvisioningError("ArcLink dashboard URL is required for Notion callback intent")
+    return f"{dashboard_url}/notion/webhook"
+
+
+def _render_notion_webhook_labels(
+    *,
+    prefix: str,
+    hostname: str,
+    callback_path: str,
+    strip_prefix: str = "",
+    port: int = 8283,
+) -> dict[str, str]:
+    router = f"arclink-{prefix}-notion-webhook"
+    clean_path = str(callback_path or "/notion/webhook").strip()
+    if not clean_path.startswith("/"):
+        clean_path = f"/{clean_path}"
+    labels = {
+        "traefik.enable": "true",
+        f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`) && PathPrefix(`{clean_path}`)",
+        f"traefik.http.routers.{router}.entrypoints": "websecure",
+        f"traefik.http.routers.{router}.tls": "true",
+        f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
+    }
+    clean_strip = str(strip_prefix or "").strip()
+    if clean_strip:
+        if not clean_strip.startswith("/"):
+            clean_strip = f"/{clean_strip}"
+        middleware = f"{router}-strip-user-prefix"
+        labels[f"traefik.http.routers.{router}.middlewares"] = middleware
+        labels[f"traefik.http.middlewares.{middleware}.stripprefix.prefixes"] = clean_strip
+    return labels
 
 
 def _compose_secret_name(key: str) -> str:
@@ -288,6 +337,7 @@ ARCLINK_DEFAULT_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "nextcloud-redis":         _resource_limit("128M", "0.25"),
     "nextcloud":               _resource_limit("512M", "1.0"),
     "code-server":             _resource_limit("1G",   "1.0"),
+    "notion-webhook":          _resource_limit("128M", "0.25"),
     "notification-delivery":   _resource_limit("128M", "0.25"),
     "health-watch":            _resource_limit("128M", "0.25"),
     "managed-context-install": _resource_limit("128M", "0.25"),
@@ -432,6 +482,17 @@ def _render_services(
             deploy=_limits("code-server"),
             healthcheck=_hc("code-server"),
         ),
+        "notion-webhook": _service(
+            image=app_image,
+            command=["./bin/arclink-notion-webhook.sh", "--host", "0.0.0.0", "--port", "8283"],
+            environment=env,
+            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}],
+            labels=labels["notion"],
+            secrets=[
+                {"source": "notion_webhook_secret", "target": secret_target["notion_webhook_secret"]},
+            ] if "notion_webhook_secret" in secret_target else [],
+            deploy=_limits("notion-webhook"),
+        ),
         "notification-delivery": _service(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/arclink-notification-delivery.sh"],
@@ -544,6 +605,26 @@ def render_arclink_provisioning_intent(
     )
     secret_refs = _render_secret_refs(deployment_id, metadata)
     compose_secrets = _render_compose_secrets(secret_refs)
+    access_urls = arclink_access_urls(
+        prefix=prefix,
+        base_domain=clean_base_domain,
+        ingress_mode=clean_ingress_mode,
+        tailscale_dns_name=clean_tailscale_dns_name,
+        tailscale_host_strategy=clean_tailscale_strategy,
+    )
+    notion_callback_path = _notion_callback_path(
+        prefix,
+        ingress_mode=clean_ingress_mode,
+        tailscale_host_strategy=clean_tailscale_strategy,
+    )
+    notion_callback_url = _notion_callback_url(access_urls)
+    labels = dict(labels)
+    labels["notion"] = _render_notion_webhook_labels(
+        prefix=prefix,
+        hostname=hostnames["dashboard"],
+        callback_path=notion_callback_path,
+        strip_prefix=f"/u/{prefix}" if clean_ingress_mode == "tailscale" and clean_tailscale_strategy == "path" else "",
+    )
     deployment_env = {
         "ARCLINK_DEPLOYMENT_ID": deployment_id,
         "ARCLINK_USER_ID": str(deployment["user_id"]),
@@ -579,6 +660,8 @@ def render_arclink_provisioning_intent(
         "TELEGRAM_BOT_TOKEN_REF": secret_refs["telegram_bot_token"],
         "DISCORD_BOT_TOKEN_REF": secret_refs["discord_bot_token"],
         "NOTION_TOKEN_REF": secret_refs["notion_token"],
+        "NOTION_WEBHOOK_SECRET_REF": secret_refs["notion_webhook_secret"],
+        "ARCLINK_NOTION_CALLBACK_URL": notion_callback_url,
     }
     services = _render_services(
         deployment_id=deployment_id,
@@ -627,6 +710,7 @@ def render_arclink_provisioning_intent(
                     "telegram_bot_token",
                     "discord_bot_token",
                     "notion_token",
+                    "notion_webhook_secret",
                 )
                 if secret_refs.get(name)
             ],
@@ -642,19 +726,22 @@ def render_arclink_provisioning_intent(
         },
         "traefik": {"labels": {role: dict(role_labels) for role, role_labels in labels.items()}},
         "access": {
-            "urls": arclink_access_urls(
-                prefix=prefix,
-                base_domain=clean_base_domain,
-                ingress_mode=clean_ingress_mode,
-                tailscale_dns_name=clean_tailscale_dns_name,
-                tailscale_host_strategy=clean_tailscale_strategy,
-            ),
+            "urls": {**access_urls, "notion": notion_callback_url},
             "ssh": {
                 "strategy": ssh.strategy,
                 "username": ssh.username,
                 "hostname": ssh.hostname,
                 "command_hint": ssh.command_hint,
             },
+        },
+        "integrations": {
+            "notion": {
+                "mode": "per_deployment",
+                "callback_url": notion_callback_url,
+                "callback_path": notion_callback_path,
+                "token_ref": secret_refs["notion_token"],
+                "secret_ref": secret_refs["notion_webhook_secret"],
+            }
         },
         "execution": {
             "ready": executable,

@@ -93,6 +93,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         "nextcloud-redis",
         "nextcloud",
         "code-server",
+        "notion-webhook",
         "notification-delivery",
         "health-watch",
         "managed-context-install",
@@ -151,7 +152,13 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["hermes-gateway"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-gateway"]))
     expect(intent["dns"]["files"]["hostname"] == "files-amber-vault-1a2b.example.test", str(intent["dns"]))
     expect(intent["access"]["urls"]["code"] == "https://code-amber-vault-1a2b.example.test", str(intent["access"]))
+    expect(intent["access"]["urls"]["notion"] == "https://u-amber-vault-1a2b.example.test/notion/webhook", str(intent["access"]))
     expect(intent["access"]["ssh"]["strategy"] == "cloudflare_access_tcp", str(intent["access"]))
+    expect(intent["integrations"]["notion"]["mode"] == "per_deployment", str(intent["integrations"]))
+    expect(intent["integrations"]["notion"]["callback_url"] == intent["access"]["urls"]["notion"], str(intent["integrations"]))
+    expect(intent["integrations"]["notion"]["secret_ref"] == "secret://arclink/notion/dep_1/webhook-secret", str(intent["integrations"]))
+    expect(services["notion-webhook"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-notion-webhook.rule"] == "Host(`u-amber-vault-1a2b.example.test`) && PathPrefix(`/notion/webhook`)", str(services["notion-webhook"]))
+    expect(services["notion-webhook"]["environment"]["ARCLINK_NOTION_CALLBACK_URL"] == intent["access"]["urls"]["notion"], str(services["notion-webhook"]))
     text = render_text(intent)
     for forbidden in ("sk_", "whsec_", "xoxb-", "ntn_", "123456:"):
         expect(forbidden not in text, text)
@@ -302,7 +309,7 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
         str(intent["runtime_resolution"]),
     )
     expect(
-        intent["runtime_resolution"]["app_ref_resolver_required"] == ["chutes_api_key"],
+        intent["runtime_resolution"]["app_ref_resolver_required"] == ["chutes_api_key", "notion_webhook_secret"],
         str(intent["runtime_resolution"]),
     )
     print("PASS test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit")
@@ -365,7 +372,7 @@ def test_rendered_services_include_resource_limits_and_healthchecks() -> None:
         expect("test" in hc and "interval" in hc, f"{name} healthcheck incomplete: {hc}")
 
     # App-only services should NOT have healthcheck
-    for name in ("dashboard", "vault-watch", "notification-delivery", "health-watch", "managed-context-install"):
+    for name in ("dashboard", "vault-watch", "notion-webhook", "notification-delivery", "health-watch", "managed-context-install"):
         expect("healthcheck" not in services[name], f"{name} should not have healthcheck")
 
     # Volume isolation: each service's volumes only reference its own deployment root
@@ -395,6 +402,7 @@ def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
     expect(intent["execution"]["dns_provider"] == "tailscale", str(intent["execution"]))
     expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
     expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/files", str(intent["access"]))
+    expect(intent["access"]["urls"]["notion"] == "https://worker.example.test/u/amber-vault-1a2b/notion/webhook", str(intent["access"]))
     expect(intent["access"]["ssh"]["strategy"] == "tailscale_direct_ssh", str(intent["access"]))
     expect(intent["access"]["ssh"]["command_hint"] == "ssh arc-amber-vault-1a2b@worker.example.test", str(intent["access"]))
     labels = intent["compose"]["services"]["nextcloud"]["labels"]
@@ -404,6 +412,17 @@ def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
         str(labels),
     )
     expect("stripprefix.prefixes" in ".".join(labels), str(labels))
+    notion_labels = intent["compose"]["services"]["notion-webhook"]["labels"]
+    expect(
+        notion_labels["traefik.http.routers.arclink-amber-vault-1a2b-notion-webhook.rule"]
+        == "Host(`worker.example.test`) && PathPrefix(`/u/amber-vault-1a2b/notion/webhook`)",
+        str(notion_labels),
+    )
+    expect(
+        notion_labels["traefik.http.middlewares.arclink-amber-vault-1a2b-notion-webhook-strip-user-prefix.stripprefix.prefixes"]
+        == "/u/amber-vault-1a2b",
+        str(notion_labels),
+    )
     expect(intent["environment"]["ARCLINK_TAILSCALE_NOTION_PATH"] == "/notion/webhook", str(intent["environment"]))
     print("PASS test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns")
 

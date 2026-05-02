@@ -278,16 +278,18 @@ shapes.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
-| **Sovereign Control Node Mode** | Paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, domain-or-Tailscale ingress intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
+| **Sovereign Control Node Mode** | Dockerized paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, domain-or-Tailscale ingress intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
 | **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
-| **Shared Host Docker Mode** | Containerized validation and operation of the Shared Host substrate, including Curator/enrollment flows and shared services without a full systemd install. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
+| **Shared Host Docker Mode** | Containerized validation and operation of the operator-led Shared Host substrate, including Curator/enrollment flows and shared services. This is not the paid Sovereign pod control path. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
 
 The interactive `./deploy.sh` menu first asks which mode you want, then opens
 that mode's control center. Sovereign Control Node actions live under the
-control menu. Shared Host actions live under the Shared Host menu. Shared Host
-Docker actions live under the Docker menu. The top-level default is Sovereign
-Control Node Mode. Direct commands that do not include `control` or `docker`,
-such as `./deploy.sh install`, use Shared Host Mode.
+control menu and are the Dockerized paid-customer pod path. Shared Host actions
+live under the Shared Host menu. Shared Host Docker actions live under the
+Docker menu and are for operator-led shared services, not Sovereign pods. The
+top-level default is Sovereign Control Node Mode. Direct commands that do not
+include `control` or `docker`, such as `./deploy.sh install`, use Shared Host
+Mode.
 
 ## Local Validation
 
@@ -454,6 +456,13 @@ FQDN, for example `https://worker.tailnet.ts.net/u/<prefix>/files`. A
 certificate sub-subdomains under a Tailscale name, but `path` is the safe
 default.
 
+Each Sovereign pod also reserves its own Notion callback surface in provisioning
+intent. In domain mode that is `https://u-<prefix>.<base-domain>/notion/webhook`;
+in Tailscale path mode that is
+`https://<worker-tailnet-name>/u/<prefix>/notion/webhook`. The shared host's
+operator Notion Funnel is separate and should not be confused with customer pod
+Notion connections.
+
 When enabled, `control-provisioner` runs
 `python/arclink_sovereign_worker.py`: it claims paid `provisioning_ready`
 deployments, places them onto registered fleet hosts, applies Cloudflare DNS in
@@ -468,9 +477,11 @@ Control-node details live in
 
 ## Shared Host Docker Mode
 
-Shared Host Docker Mode is the containerized operator substrate. It runs the
-shared-host services and Curator/enrollment machinery inside Docker Compose for
-validation, repair, and container-native operation.
+Shared Host Docker Mode is the containerized operator-led shared substrate. It
+runs the shared-host services and Curator/enrollment machinery inside Docker
+Compose for validation, repair, and container-native operation. It does not ask
+for Cloudflare-vs-Tailscale Sovereign pod ingress because it is not the paid
+customer pod control node.
 
 ### Shared Host Docker Quick Start
 

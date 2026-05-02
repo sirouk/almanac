@@ -1273,8 +1273,8 @@ printf 'PROMPTS_END\\n'
         expect("TAILSCALE_SERVE_PORT=8443" in result.stdout, result.stdout)
         prompts = result.stdout.split("PROMPTS_BEGIN\n", 1)[1].split("\nPROMPTS_END", 1)[0]
         expect(
-            "Public Tailscale Funnel HTTPS port for the Notion webhook|443" in prompts,
-            f"expected public Notion webhook default 443, got: {prompts!r}",
+            "Public Tailscale Funnel HTTPS port for the shared-host Notion webhook|443" in prompts,
+            f"expected shared-host Notion webhook default 443, got: {prompts!r}",
         )
         expect(
             "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes|8443" in prompts,
@@ -1419,11 +1419,11 @@ def test_deploy_menu_defaults_to_sovereign_control_node() -> None:
         "expected top-level menu to expose Shared Host mode",
     )
     expect(
-        "Sovereign Control Node control center (billing, bots, fleet, provisioning)" in mode_snippet,
+        "Sovereign Control Node control center (Dockerized billing, bots, fleet, provisioning)" in mode_snippet,
         "expected top-level menu to expose Sovereign Control Node mode",
     )
     expect(
-        "Shared Host Docker control center (containerized operator substrate)" in mode_snippet,
+        "Shared Host Docker control center (operator-led shared services, not Sovereign pods)" in mode_snippet,
         "expected top-level menu to expose Shared Host Docker mode",
     )
     sovereign_index = mode_snippet.index("1) Sovereign Control Node control center")

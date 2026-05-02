@@ -49,6 +49,7 @@ Tailscale name can be resolved and certificated. Access URLs are rendered as:
 | `https://{tailscale_dns_name}/u/{prefix}/files` | Nextcloud file access |
 | `https://{tailscale_dns_name}/u/{prefix}/code` | code-server workspace |
 | `https://{tailscale_dns_name}/u/{prefix}/hermes` | Hermes agent gateway |
+| `https://{tailscale_dns_name}/u/{prefix}/notion/webhook` | Per-deployment Notion callback |
 
 The optional `subdomain` strategy renders `u-{prefix}.{tailscale_dns_name}`,
 `files-{prefix}.{tailscale_dns_name}`, `code-{prefix}.{tailscale_dns_name}`,
@@ -113,6 +114,20 @@ SSH is never routed through HTTP path prefixes.
 
 `python/arclink_access.py` rejects raw SSH-over-HTTP strategies and rejects HTTP
 URLs for SSH hostnames.
+
+## Per-Deployment Notion Callback
+
+Sovereign pods reserve a customer-specific Notion callback endpoint in the
+rendered provisioning intent. This is separate from the operator-led shared-host
+Notion webhook used by Shared Host and Shared Host Docker modes.
+
+- Domain mode: `https://u-{prefix}.{base_domain}/notion/webhook`
+- Tailscale path mode:
+  `https://{tailscale_dns_name}/u/{prefix}/notion/webhook`
+
+The intent includes the callback URL, callback path, Notion token reference, and
+webhook secret reference under `integrations.notion`. Live creation of the
+customer's Notion integration/subscription remains credential-gated E2E work.
 
 ## Drift Detection
 

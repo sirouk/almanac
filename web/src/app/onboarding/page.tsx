@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
+import { ErrorAlert } from "@/components/ui";
 
 type Step = "start" | "questions" | "checkout" | "done";
 
@@ -71,13 +72,12 @@ export default function OnboardingPage() {
         cancel_url: window.location.origin + "/onboarding",
       });
       if (res.status === 200) {
-        const url = (res.data as Record<string, string>).checkout_url;
+        const session = (res.data as Record<string, Record<string, string>>).session;
+        const url = session?.checkout_url || (res.data as Record<string, string>).checkout_url;
         if (url) {
           setCheckoutUrl(url);
-          setStep("done");
-        } else {
-          setStep("done");
         }
+        setStep("done");
       } else {
         setError((res.data as Record<string, string>).error || "Checkout failed");
       }
@@ -102,11 +102,7 @@ export default function OnboardingPage() {
           {step === "done" && "You're All Set"}
         </h1>
 
-        {error && (
-          <div className="mt-4 rounded bg-red-900/40 px-4 py-2 text-sm text-red-300">
-            {error}
-          </div>
-        )}
+        {error && <ErrorAlert message={error} className="mt-4" />}
 
         {step === "start" && (
           <form onSubmit={handleStart} className="mt-6 space-y-4">

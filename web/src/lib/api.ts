@@ -73,4 +73,16 @@ export const api = {
 
   queueAdminAction: (body: Record<string, string>) =>
     request("/admin/actions", { method: "POST", body: JSON.stringify(body) }),
+
+  login: (kind: "user" | "admin", body: Record<string, string>) =>
+    request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }),
+
+  logout: (kind: "user" | "admin") =>
+    request(`/auth/${kind}/logout`, { method: "POST" }),
+
+  userPortal: (body: Record<string, string>) =>
+    request("/user/portal", { method: "POST", body: JSON.stringify(body) }),
+
+  revokeSession: (body: Record<string, string>) =>
+    request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }),
 };

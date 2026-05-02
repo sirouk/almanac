@@ -10,7 +10,10 @@ export default function Home() {
         <div className="font-display text-xl font-bold tracking-wide">
           <span className="text-signal-orange">ARC</span>LINK
         </div>
-        <div className="flex gap-4">
+        <div className="flex items-center gap-4">
+          <Link href="/login" className="text-sm text-soft-white/60 hover:text-soft-white">
+            Sign In
+          </Link>
           <Link
             href="/onboarding"
             className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"

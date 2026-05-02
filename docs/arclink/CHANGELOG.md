@@ -62,15 +62,18 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
 
 ### Schema
 
-18 `arclink_*` tables added to `almanac_control.py`:
+22 `arclink_*` tables are owned by `almanac_control.py`:
 
-- `arclink_users`, `arclink_deployments`, `arclink_subscriptions`
-- `arclink_stripe_webhooks`, `arclink_onboarding_sessions`,
-  `arclink_onboarding_events`
-- `arclink_provisioning_jobs`, `arclink_service_health`,
-  `arclink_timeline_events`
-- `arclink_action_intents`, `arclink_audit`, `arclink_rate_limits`
-- `arclink_admin_sessions`, `arclink_user_sessions`
+- `arclink_users`, `arclink_webhook_events`, `arclink_deployments`,
+  `arclink_subscriptions`
+- `arclink_provisioning_jobs`, `arclink_dns_records`, `arclink_admins`,
+  `arclink_user_sessions`, `arclink_admin_sessions`
+- `arclink_admin_roles`, `arclink_admin_totp_factors`,
+  `arclink_audit_log`, `arclink_service_health`, `arclink_events`
+- `arclink_model_catalog`, `arclink_onboarding_sessions`,
+  `arclink_onboarding_events`, `arclink_action_intents`
+- `arclink_fleet_hosts`, `arclink_deployment_placements`,
+  `arclink_action_attempts`, `arclink_rollouts`
 - And supporting indexes and partial unique constraints.
 
 ### Key Design Decisions
@@ -198,3 +201,38 @@ fake adapter coverage.
 - Live E2E scaffold exists but full live proof is blocked on real credentials
   and a deliberate credentialed run (P12).
 - TOTP/MFA is schema-ready but not code-verified against real TOTP providers.
+
+## Scale Operations Spine (2026-05-02)
+
+- **Fleet registry and placement**: `python/arclink_fleet.py` adds host
+  registration, active/degraded/offline status, drain flags, capacity slots,
+  observed load, region/tag filtering, deterministic placement by headroom, and
+  placement removal.
+- **Action worker bridge**: `python/arclink_action_worker.py` consumes queued
+  admin action intents, records attempts, dispatches supported actions through
+  the fake/live-gated executor or safe local transitions, writes audit/event
+  rows, redacts executor errors, and recovers stale running actions.
+- **Rollout records**: `python/arclink_rollout.py` adds durable rollout state,
+  canary wave advancement, pause/fail/rollback transitions, version drift
+  visibility, and rollback validation requiring `preserve_state_roots`.
+- **Operator visibility**: `GET /api/v1/admin/scale-operations` and
+  `build_scale_operations_snapshot()` expose fleet capacity, placements, stale
+  actions, recent action attempts, active rollouts, and last executor result
+  behind admin auth. The admin web view renders the same scale-operations
+  snapshot.
+- **Schema**: Added `arclink_fleet_hosts`,
+  `arclink_deployment_placements`, `arclink_action_attempts`, and
+  `arclink_rollouts`.
+
+Rationale: scale behavior stays inside the existing ArcLink control plane and
+executor gate until live proof demonstrates the need for a separate queue or
+scheduler.
+
+## Deterministic Web Linting (2026-05-02)
+
+- `web/eslint.config.mjs` uses ESLint flat config with Next core-web-vitals and
+  TypeScript rules.
+- `web/package.json` pins `npm run lint` to source/config files with
+  `--max-warnings=0`.
+- `web/package-lock.json` is refreshed so web lint/install behavior is
+  reproducible for future agents and CI.

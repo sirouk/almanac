@@ -1,111 +1,70 @@
 # Coverage Matrix
-<!-- refreshed: 2026-05-02T06:47:00Z document-phase after live-proof-orchestration build -->
+<!-- refreshed: 2026-05-02 plan phase -->
 
-| Goal / success criterion | Existing coverage | Plan coverage | Remaining gap / risk | Validation |
-| --- | --- | --- | --- | --- |
-| Transform Almanac into ArcLink identity | `python/arclink_product.py`, ArcLink docs, additive `arclink_*` tables | Continue staged identity work after contracts settle | Broad rename could break mature Almanac paths | Product config tests, docs review, public hygiene |
-| Preserve legacy compatibility | Env alias behavior and existing deploy paths | Keep `ALMANAC_*` compatibility where needed | Future env additions could skip alias rules | Product config and deploy regression tests |
-| Preserve Hermes/qmd/memory | Runtime pins, qmd scripts, managed-context plugin, memory synth, tests | Provisioning intent keeps these lanes in every deployment plan | Renderer/executor drift could omit a lane | qmd/plugin/memory tests plus provisioning/executor assertions |
-| Chutes-first inference | Chutes defaults, catalog parser, fake key manager | Catalog refresh and live key manager behind E2E gate | Live key lifecycle unverified | Chutes tests now; live E2E later |
-| Stripe entitlement gate | Webhook verifier, entitlement handler, subscription mirror, gate advancement, billing portal, reconciliation | Landed (P3). Live checkout/webhook delivery deferred to P12. | Live credentials needed for E2E | Entitlement and onboarding tests; live E2E later |
-| Public onboarding | Durable web/Telegram/Discord sessions, fake checkout, funnel events, shared state machine | Landed (P7). Website and public bot adapters share one contract. | Live HTTP transport for bots absent | Onboarding, product surface, public bot, adapter tests |
-| Cloudflare DNS/subdomains | Fake Cloudflare client, desired DNS persistence, drift events, DNS allowlist | Landed (P4). Live adapter through E2E flag. | Token/zone unavailable for unit tests | Ingress/executor tests; live E2E later |
-| Traefik ingress | Host planner and role label renderer with golden coverage | Render per-service host routing for deployments | Runtime Traefik smoke not live | Golden fixture, provisioning tests, later Compose smoke |
-| Obscure deployment prefixes | Prefix reservation, generator, denylist, collision retry | Use in onboarding/provisioning | Product policy may change | Schema and onboarding tests |
-| Nextcloud/files | Existing Nextcloud and dedicated isolation decision | Render isolated Nextcloud plus DB/Redis services | Resource cost may grow | Access and provisioning tests |
-| code-server | Existing code-server scripts/access helpers | Route by host in provisioning intent | Proxy/websocket smoke deferred | Access tests; browser smoke later |
-| SSH/TUI | Cloudflare Access TCP strategy guard | Implement tunnel/access records later | No live tunnel yet | Raw SSH-over-HTTP rejection tests |
-| Website surface | Next.js 15 + Tailwind 4 web app with landing, login, onboarding, user/admin dashboard views (~1,593 lines) | Landed (P8-10). Brand system applied, browser proof passing. | API wiring uses mock data until live deployment | Web app build/test, browser E2E |
-| Public Telegram/Discord bots | Shared state machine, runtime adapters with fake-mode fallback | Landed (P7). Live HTTP transport when tokens present. | Live bot tokens absent | Adapter tests (11 tests); live bot E2E later |
-| User dashboard | Dashboard read model, Next.js user dashboard page | Landed (P8). Wire to hosted API for live data. | Views use mock data | Dashboard/product surface tests, web app build |
-| Admin dashboard | Admin read model, Next.js admin page wired to all hosted API admin endpoints (18 tabs, queue-action, revoke-session forms) | LANDED (P9). | Complete for no-secret foundation | Admin/dashboard/executor tests, web app build |
-| Docker Compose executor | Render, validate, start/stop/restart/inspect/teardown with resource limits, health checks, volume isolation | Landed (P5). Live execution behind operator flag. | No real Docker mutation enabled | Executor tests; live E2E later |
-| API/auth boundary | Hosted WSGI API (1,099 lines), sessions, CSRF, rate limits, OpenAPI, operator snapshot, 42 route tests | Landed (P1-2). Extend as dashboard integration requires. | Not yet deployed behind production identity provider | API/auth tests, hosted API tests |
-| Live executor boundary | Fail-closed executor types, fake resolver/adapters, replay guards | Landed (P5-6). Add live adapters behind E2E gates. | No real Docker/provider mutation enabled | Executor tests; live E2E later |
-| Health/fleet operations | Health scripts, health-watch, service health table | Dashboard reads service snapshots and failures | Fleet observability stack deferred | Health and dashboard tests |
-| Per-tenant isolation | Docker user homes and dedicated Nextcloud decision | Dedicated state roots in provisioning plan | Quota/backup/resource policy not complete | Access/provisioning/rollback tests |
-| No live secrets in unit tests | Fakes/fixtures and hygiene tests | Keep all live paths opt-in | SDK calls could leak into CI if unguarded | Public hygiene and no-secret suites |
-| SQLite-first with Postgres path | Stable text IDs and helper validation | Keep schema portable | SQLite-specific assumptions can creep in | Schema tests and migration review |
-| Honest E2E docs | `docs/arclink/live-e2e-secrets-needed.md` | Update as live adapters land | Unit success could be mistaken for live readiness | Documentation truth checks |
-| Host readiness tooling (Gap A) | LANDED. `arclink_host_readiness.py` (213 lines), 14 tests | Executable checks for Docker, Docker Compose subcommand, ports, state root, env, secrets, ingress, CLI | No-secret readiness complete | Host readiness tests |
-| Live readiness diagnostics (Gap C) | LANDED. `arclink_diagnostics.py` (140 lines), 11 tests | Secret-safe diagnostics for Stripe, Cloudflare, Chutes, Telegram, Discord, Docker, CLI | No-secret diagnostics complete; live connectivity deferred | Redaction and missing-credential tests |
-| Live-gated Docker executor (Gap B) | LANDED. Injectable DockerRunner, FakeDockerRunner, DryRunStep, 20 tests | Live flags, state root, secret resolver required; rollback safeguards | No-secret runner boundary complete; real Docker mutation deferred | Executor live-gate tests |
-| Live proof orchestration runner | LANDED. `arclink_live_runner.py` (232 lines), `bin/arclink-live-proof` CLI, 13 tests | Composes host readiness, diagnostics, journey, and evidence into single pass. Dry-run default, live with `--live` flag. | Credentialed live execution externally blocked | Live runner tests, evidence redaction tests |
-| Full live E2E expansion (Gap D) | Ordered journey model and evidence ledger scaffolded; live proof runner landed; provider live checks skip cleanly without credentials | Expand to full signup-to-agent journey when credentials present | Credentialed execution remains skipped until credentials exist | Live E2E harness with credential gates |
+## Goal Coverage
 
-## Current ArcLink Test Coverage
-
-| Test file | Covered surface |
-| --- | --- |
-| `tests/test_arclink_product_config.py` | Product defaults, env precedence, blank fallback, legacy compatibility. |
-| `tests/test_arclink_schema.py` | ArcLink tables, onboarding tables, prefix reservation/generation, audit/events, subscriptions, service health, provisioning helpers, drift checks. |
-| `tests/test_arclink_chutes_and_adapters.py` | Chutes catalog validation, fake key references, fake Stripe sessions/webhooks, fake Cloudflare drift, Traefik labels. |
-| `tests/test_arclink_entitlements.py` | Stripe signature rejection, paid gate lift, invoice mapping, replay behavior, allowlists, manual comp, atomic rollback, transaction ownership, entitlement preservation. |
-| `tests/test_arclink_onboarding.py` | Public sessions, duplicate prevention, fake checkout, checkout cancellation/expiry, entitlement-gated readiness, channel handoff, secret rejection. |
-| `tests/test_arclink_ingress.py` | DNS persistence/drift and Traefik golden labels. |
-| `tests/test_arclink_access.py` | Dedicated Nextcloud decision and SSH-over-HTTP rejection. |
-| `tests/test_arclink_provisioning.py` | Dry-run service/DNS/access intent, entitlement visibility, no-secret validation, retry after secret repair, rollback planning. |
-| `tests/test_arclink_admin_actions.py` | Reason-required queued actions, idempotency, audit rows, secret-safe metadata, no live side effects. |
-| `tests/test_arclink_dashboard.py` | User dashboard summary and admin dashboard operational/failure projections. |
-| `tests/test_arclink_api_auth.py` | User/admin sessions, token hashing, scoped reads, public onboarding APIs, rate limits, CSRF checks, MFA-ready admin mutations, and secret masking. |
-| `tests/test_arclink_executor.py` | Live-gate refusal, secret resolver contracts, injectable DockerRunner, FakeDockerRunner, DryRunStep planning, fake apply result shape, digest mismatch rejection, provider idempotency, secret-material guards, Compose dependency validation. |
-| `tests/test_arclink_diagnostics.py` | Stripe/Cloudflare/Chutes/Telegram/Discord/Docker credential presence checks, secret value redaction, machine-readable output, no-op without live flag. |
-| `tests/test_arclink_host_readiness.py` | Docker/Compose binary detection, state root existence/writability, env var presence, secret env redaction, ingress strategy detection, machine-readable output, readiness failure without Docker. |
-| `tests/test_arclink_product_surface.py` | Local WSGI first screen, fake checkout flow, user/admin dashboard rendering, queued admin actions, no DNS mutation, mobile overflow guards, favicon route. |
-| `tests/test_arclink_public_bots.py` | Telegram/Discord public bot conversation-state contract, fake checkout, unsupported channel rejection, metadata secret rejection. |
-| `tests/test_arclink_telegram.py` | Telegram runtime adapter fake-mode turns, message dispatch, long-poll stub, token-absent fallback. |
-| `tests/test_arclink_discord.py` | Discord runtime adapter fake-mode interactions, slash command dispatch, signature verification stub, token-absent fallback. |
-| `tests/test_arclink_hosted_api.py` | Hosted API route dispatch (42 tests), session auth, CSRF, safe errors, request-ID, CORS, webhooks, health, provider state, reconciliation, billing portal, operator snapshot auth/shape. |
-| `tests/test_arclink_e2e_fake.py` | Full fake journey: signup, onboarding, checkout, webhook, entitlement, provisioning, health, dashboard, audit, admin actions. |
-| `tests/test_arclink_e2e_live.py` | Secret-gated live E2E scaffold: Stripe, Cloudflare, Chutes, Telegram, Discord, Docker checks skip without credentials; no-secret journey/evidence checks run. |
-| `tests/test_arclink_live_journey.py` | Ordered live journey steps, live-gate requirements, missing-credential names, skip behavior, runner success/failure behavior, summary helpers. |
-| `tests/test_arclink_evidence.py` | Deterministic evidence ledger output, run ID generation, journey-to-ledger conversion, secret/query-token/sensitive-key redaction. |
-| `tests/test_arclink_live_runner.py` | Live proof orchestration: no-secret dry-run blocked summary, credential-present dry-run readiness, fake runner live execution, evidence artifact redaction, CLI JSON output, missing-env deduplication. |
-| `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary skip behavior, provider-name context. |
-| `web/tests/test_api_client.mjs` | API client module unit tests. |
-| `web/tests/test_page_smoke.mjs` | Page route smoke tests. |
-
-## Production Grade Steering Coverage (Production 1-16)
-
-| Production item | Current state | Gap |
-| --- | --- | --- |
-| P1: Coherent versioned hosted API | LANDED. Hosted API (1,078 lines), 39 route tests, OpenAPI 3.1, rate-limit headers. | Complete. |
-| P2: Auth/CSRF/audit on every mutating route | LANDED. CSRF/auth gates, negative tests. | Complete. |
-| P3: Stripe boundary | LANDED. Fake checkout/webhook/entitlement/drift, billing portal, reconciliation. | Live proof deferred to P12. |
-| P4: Cloudflare boundary | LANDED. Fake DNS client, drift, hostname planning, propagation, teardown. | Live proof deferred to P12. |
-| P5: Docker Compose executor | LANDED. Render, validate, start/stop/restart/inspect/teardown, resource limits, health checks. | Live execution deferred to P12. |
-| P6: Chutes provider flow | LANDED. Owner key lifecycle, per-deployment key state, model catalog, inference smoke. | Live proof deferred to P12. |
-| P7: Telegram/Discord onboarding parity | LANDED. Shared state machine, runtime adapters, fake mode, payload validation. | Live HTTP transport deferred. |
-| P8: User dashboard | LANDED. Responsive layout, mock data panels. | Wire to hosted API for live data. |
-| P9: Admin dashboard | LANDED. 18-tab admin page wired to hosted API. Queue-action and revoke-session forms with CSRF. | Complete. |
-| P10: Web UI product checks | LANDED. Playwright suite (41 tests), brand system, mobile/desktop viewports, accessible forms, loading/empty/error states, fake-adapter labeling. | Complete. |
-| P11: Fake E2E harness | LANDED. 6 tests covering full journey. | Complete. |
-| P12: Live E2E harness | SCAFFOLDED. Provider live checks are secret-gated and skip cleanly; no-secret journey/evidence checks run. | Externally blocked: all live credentials and a deliberate credentialed run. |
-| P13: Deployment assets | LANDED. env.example, secret-checklist, ingress-plan, backup-restore, operations-runbook. | Complete. |
-| P14: Observability | LANDED. Structured events, alert-candidates doc, admin dashboard surfaces. | Complete. |
-| P15: Data safety | LANDED. data-safety doc, teardown safeguards, secret rejection, hygiene scan. | Complete. |
-| P16: Documentation truth | LANDED. All docs audited, live-e2e-secrets-needed updated, no overclaims. | Complete. |
-
-## Final Form Gaps (from steering)
-
-| Gap | Description | Status | Blocker |
+| Goal / criterion | Current coverage | Remaining gap / risk | Validation surface |
 | --- | --- | --- | --- |
-| Gap A | Executable host bootstrap/check script | LANDED. `arclink_host_readiness.py` (213 lines), 14 tests. | No-secret readiness complete. |
-| Gap B | Live-gated Docker executor deepening | LANDED. Injectable DockerRunner, FakeDockerRunner, DryRunStep. 20 tests. | Real Docker mutation still requires credentials and deliberate live flag. |
-| Gap C | Live-readiness diagnostics for all providers | LANDED. `arclink_diagnostics.py` (140 lines), 11 tests. | Live connectivity still deferred. |
-| Gap D | Full live E2E journey expansion | ACTIVE (no-secret scaffolding). Live journey module, ordered steps, skip modeling, evidence fields. Credentialed run externally blocked. | External credentials for live run only; scaffolding is unblocked. |
-| Gap E | Real deployment evidence recording | ACTIVE (no-secret scaffolding). Evidence recorder/schema, template, deterministic+redacted output. Credentialed evidence externally blocked. | External credentials for live run only; scaffolding is unblocked. |
+| Transform Almanac into ArcLink | Additive `arclink_*` modules, ArcLink docs, web app, product config/env precedence | Broad public rebrand must not break Almanac runtime compatibility | Product config tests, docs truth checks, hygiene scan |
+| Preserve Almanac services/tests | Existing `bin/`, `python/almanac_*`, systemd units, Compose services, focused tests | Future ArcLink refactors could drift from deploy scripts | Almanac regression tests and deploy/health checks |
+| Chutes-first provider | `arclink_chutes.py`, model provider config, fake key lifecycle, diagnostics | Live account/key lifecycle unverified | Chutes/provider tests; live E2E when credentials exist |
+| Stripe checkout/entitlement | Fake checkout/webhook, subscription mirror, entitlement gates, reconciliation, billing portal contract | Live Stripe proof blocked | Entitlement/API/fake E2E tests; live E2E later |
+| Cloudflare DNS/subdomains | Prefix reservation, DNS intent, fake Cloudflare, drift, Traefik labels, diagnostics | Live DNS/tunnel proof blocked | Ingress/executor tests; live E2E later |
+| Docker Compose provisioning | Dry-run plan, fake runner, resource/health/dependency validation, live gate | Real host mutation blocked until deliberate live run | Executor/provisioning/host-readiness tests |
+| Web onboarding | Next.js onboarding route plus hosted API/session contracts | Final live deployment identity/edge not proven | Web smoke, API/auth, fake E2E |
+| Telegram/Discord onboarding | Shared public bot state machine, fake-mode adapters, runtime adapter tests | Live transport blocked by bot credentials | Bot/adapter tests; live E2E later |
+| User dashboard | Dashboard read model and web user dashboard route | Live production data wiring/deployment proof pending | Dashboard/API/web tests |
+| Admin dashboard | Admin read model, web admin route, operator snapshot, scale operations view, guarded actions | Live production auth/edge proof pending | Dashboard/API/web tests |
+| Health and observability | Service health tables, health-watch, diagnostics, operator snapshot, alert docs | External alerting not yet configured | Health/dashboard/diagnostics tests, runbooks |
+| Fleet/scale operations | Fleet registry, placement, action worker, rollout/rollback model | Multi-host live proof still future | Fleet/action/rollout/API tests |
+| Data safety | Isolation docs, state-root planning, teardown safeguards, secret material rejection | Live backup/restore proof depends on host/account access | Data-safety docs, hygiene tests, executor tests |
+| Documentation truth | ArcLink docs, live-secret prerequisites, completion/status docs | Must stay synced after every build slice | Documentation truth tests and review |
+
+## Production Grade Steering Coverage
+
+| Production item | Status | Evidence | Remaining blocker |
+| --- | --- | --- | --- |
+| P1 Hosted API contract | Covered | `python/arclink_hosted_api.py`, OpenAPI docs/tests | None non-external. |
+| P2 Mutating route auth/CSRF/audit | Covered | `python/arclink_api_auth.py`, hosted API negative tests | None non-external. |
+| P3 Stripe boundary | Covered for fake/no-secret | Entitlement/adapters/fake E2E tests | Live Stripe credentials. |
+| P4 Cloudflare boundary | Covered for fake/no-secret | Ingress/executor/fake Cloudflare tests | Live Cloudflare zone/token. |
+| P5 Docker Compose executor | Covered for dry-run/fake/live-gated boundary | `arclink_executor.py`, provisioning tests | Production host and deliberate live flag. |
+| P6 Chutes provider flow | Covered for catalog/fake/no-secret | Chutes tests, diagnostics | Live Chutes account/key strategy. |
+| P7 Telegram/Discord parity | Covered for shared contract/fake mode | Public bot and adapter tests | Live bot credentials. |
+| P8 User dashboard | Covered for no-secret UI/read model | Dashboard/API/web surfaces | Live deployment data proof. |
+| P9 Admin dashboard | Covered for no-secret UI/read model | Admin route, operator/scale snapshots, action forms | Production identity/edge proof. |
+| P10 Web UI quality | Covered by web app and product checks | Brand docs, web tests, Playwright checks | Must be rerun after UI edits. |
+| P11 Fake E2E journey | Covered | `tests/test_arclink_e2e_fake.py` | None non-external. |
+| P12 Live E2E harness | Scaffolded, not live-proven | Live journey, live runner, evidence ledger, secret-gated tests | Stripe, Cloudflare, Chutes, Telegram, Discord, host credentials. |
+| P13 Deployment assets | Covered | Env example, secret checklist, ingress/backup/runbook docs | Final host-specific values. |
+| P14 Observability | Covered for current stack | Events, health snapshots, diagnostics, alert docs, admin views | External alerting setup future. |
+| P15 Data safety | Covered for current stack | Data-safety docs, secret guards, isolation planning | Live backup/restore proof. |
+| P16 Documentation truth | Covered | Live blockers named; docs avoid live overclaiming | Must remain enforced. |
+
+## Test Coverage Map
+
+| Test family | Covered surface |
+| --- | --- |
+| `tests/test_arclink_product_config.py` | Product defaults, env precedence, legacy compatibility. |
+| `tests/test_arclink_schema.py` | `arclink_*` schema, prefixes, audit/events, subscriptions, health, provisioning helpers. |
+| `tests/test_arclink_chutes_and_adapters.py` | Chutes catalog, fake key references, fake Stripe, fake Cloudflare, Traefik labels. |
+| `tests/test_arclink_entitlements.py` | Stripe signatures, webhooks, subscriptions, entitlement gates, comp/reconciliation/atomicity. |
+| `tests/test_arclink_onboarding.py` | Public sessions, fake checkout, entitlement readiness, channel handoff, secret rejection. |
+| `tests/test_arclink_ingress.py` / `tests/test_arclink_access.py` | DNS/Traefik/access planning and raw SSH-over-HTTP rejection. |
+| `tests/test_arclink_provisioning.py` / `tests/test_arclink_executor.py` | Deployment intent, dry-run/fake execution, live gates, replay/digest/dependency guards. |
+| `tests/test_arclink_api_auth.py` / `tests/test_arclink_hosted_api.py` | Sessions, CSRF, rate limits, scopes, hosted routes, webhooks, safe errors, operator snapshots. |
+| `tests/test_arclink_dashboard.py` / `tests/test_arclink_product_surface.py` | User/admin read models and local WSGI product probe. |
+| `tests/test_arclink_public_bots.py`, `tests/test_arclink_telegram.py`, `tests/test_arclink_discord.py` | Shared bot state machine and fake/live adapter boundaries. |
+| `tests/test_arclink_host_readiness.py` / `tests/test_arclink_diagnostics.py` | Host checks and secret-safe provider diagnostics. |
+| `tests/test_arclink_fleet.py`, `tests/test_arclink_action_worker.py`, `tests/test_arclink_rollout.py` | Fleet placement, queued action execution, rollout/rollback state. |
+| `tests/test_arclink_live_journey.py`, `tests/test_arclink_evidence.py`, `tests/test_arclink_live_runner.py` | Ordered live proof, redacted evidence, dry-run/live runner states. |
+| `tests/test_arclink_e2e_fake.py` / `tests/test_arclink_e2e_live.py` | Full fake journey and secret-gated live scaffold. |
+| `web/tests/` | API client smoke, page smoke, and browser product checks. |
 
 ## Coverage Verdict
 
-Coverage is sufficient for the no-secret foundation. 247 ArcLink Python test functions
-across 24 test files (plus 4 hygiene, 2 web tests, and 41 browser product checks)
-cover P1-11, P13-P16, Gaps A-C, and Gaps D-E no-secret scaffolding including
-the live proof orchestration runner. P12 credentialed proof remains externally blocked.
-
-Gaps A-C are landed. Gaps D-E no-secret scaffolding (live journey model,
-evidence recorder, skip/blocker modeling, redacted evidence schema) is landed.
-The live proof orchestration runner (`arclink_live_runner.py`, 232 lines, 13 tests)
-composes host readiness, provider diagnostics, journey model, and evidence ledger
-into a single dry-run or live proof pass with CLI at `bin/arclink-live-proof`.
-Only the credentialed live run itself is externally blocked.
+Coverage is sufficient for BUILD handoff. All non-external work currently
+named by the Production 1-16 steering is represented by code, docs, and tests.
+The only remaining incomplete production item is the credentialed execution
+portion of P12, which is externally blocked by live provider accounts,
+credentials, and production-host access.

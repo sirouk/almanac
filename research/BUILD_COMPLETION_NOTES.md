@@ -1,5 +1,95 @@
 # Build Completion Notes
 
+## 2026-05-02 Build Attempt 2 Handoff Repair
+
+Scope: repaired the Attempt 2 BUILD handoff artifacts so machine checks can
+distinguish the completed no-secret build slice from the remaining external
+P12 live-proof gate.
+
+Files changed:
+
+- `IMPLEMENTATION_PLAN.md` -- clarified that the scale-operations spine and
+  live-proof runner already satisfy the current no-secret BUILD scope, and that
+  credentialed P12 proof is not a repairable implementation gap without the
+  named external credentials.
+- `research/BUILD_COMPLETION_NOTES.md` -- added this retry record so the build
+  phase has an explicit tracked mutation and a current verification trail.
+
+Rationale:
+
+- Preserved the existing implementation modules and tests because the codebase
+  already contains `arclink_fleet.py`, `arclink_action_worker.py`,
+  `arclink_rollout.py`, `arclink_live_runner.py`, and their focused tests.
+- Recorded the external blocker as Stripe, Cloudflare, Chutes, Telegram,
+  Discord, and production host credentials rather than weakening the live gate
+  or claiming live proof from fake/no-secret tests.
+- Kept the retry to status artifacts because no failing acceptance test or
+  missing product-code artifact was identified.
+
+Verification run:
+
+- `git diff --check` passed.
+- Exact uppercase fallback-sentinel search across plan, research, docs, Python,
+  tests, and config returned no matches.
+- `PYTHONPATH=python python3 tests/test_arclink_live_runner.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_e2e_live.py` passed with the
+  expected six credential/live-gated skips.
+- `PYTHONPATH=python python3 tests/test_arclink_evidence.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_live_journey.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_host_readiness.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_diagnostics.py` passed.
+- `PYTHONPATH=python python3 tests/test_public_repo_hygiene.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_fleet.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_action_worker.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_rollout.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_hosted_api.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_dashboard.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+  passed.
+
+Known risks:
+
+- Production 12 remains unproven against live providers until the explicit
+  credentialed live run is supplied and executed.
+
+## 2026-05-02 Build Retry Validation Closure
+
+Scope: re-ran the active BUILD gate from `IMPLEMENTATION_PLAN.md` after the
+Attempt 2 retry guidance. No implementation repair was required: the plan's
+remaining actionable BUILD work is limited to externally credentialed live
+proof, and the no-secret validation floor passes.
+
+Rationale:
+
+- Preserved the existing scale-operations, operator snapshot, and live-proof
+  orchestration work instead of rebuilding completed slices without a failing
+  acceptance check.
+- Kept the phase artifact to implementation notes only because the retry found
+  no missing product-code artifact and no regression in the required no-secret
+  checks.
+- Continued to treat credentialed P12 live execution as blocked by named
+  external accounts and secrets.
+
+Verification run:
+
+- `git diff --check` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_live_runner.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_e2e_live.py` passed with the
+  expected six credential/live-gated skips.
+- `PYTHONPATH=python python3 tests/test_arclink_evidence.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_live_journey.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_host_readiness.py` passed.
+- `PYTHONPATH=python python3 tests/test_arclink_diagnostics.py` passed.
+- `PYTHONPATH=python python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/almanac_control.py python/arclink_*.py`
+  passed.
+
+Known risks:
+
+- Credentialed live proof still requires real Stripe, Cloudflare, Chutes,
+  Telegram, Discord, and production host credentials before P12 can be declared
+  proven live.
+
 ## 2026-05-02 Hosted API Contract Expansion
 
 Scope: expanded the hosted API boundary and API/auth layer with health,

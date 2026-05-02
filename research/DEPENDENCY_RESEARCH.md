@@ -1,83 +1,74 @@
 # Dependency Research
-<!-- refreshed: 2026-05-02T06:47:00Z plan-gate sync after live-proof-orchestration build -->
+<!-- refreshed: 2026-05-02 plan phase -->
 
-## Current Stack Components
+## Stack Components
 
-| Component | Evidence | Current role | ArcLink decision |
+| Component | Repository evidence | Current ArcLink role | Decision |
 | --- | --- | --- | --- |
-| Python 3.11+ / 3.12 preferred | `config/pins.json`, `python/`, `tests/` | Control plane, workers, adapters, provisioning, local product surface, tests | Keep as the primary implementation layer. |
-| Bash | `bin/`, `deploy.sh` | Host/Docker orchestration, health, bootstrap, service repair | Keep for deploy operations; wrap carefully rather than rewrite immediately. |
-| Docker Compose | `compose.yaml`, Docker scripts/tests | Container-first runtime and supervisor target | Use as ArcLink MVP provisioning substrate. |
-| SQLite | `python/almanac_control.py` | Current control-plane database | Extend for ArcLink now; keep portable for Postgres. |
-| Postgres 16 | `compose.yaml`, `config/pins.json` | Nextcloud database today | Keep for Nextcloud; evaluate ArcLink SaaS state migration later. |
-| Redis 7 | `compose.yaml`, `config/pins.json` | Nextcloud cache today | Keep; later use for jobs/pubsub/rate limits if needed. |
-| Hermes agent | `config/pins.json`, runtime scripts, plugins | Agent runtime, skills, chat gateways, dashboard, cron | Preserve and surface as product value. |
-| qmd 2.1.0 | `config/pins.json`, qmd scripts | Retrieval/indexing MCP | Preserve. |
-| Nextcloud 31 Apache | `compose.yaml`, pins | File/vault UI | Keep; MVP should use dedicated per-deployment instances. |
-| code-server 4.116.0 | Pins, access tests | Browser IDE | Keep and route by host. |
-| Telegram/Discord SDK lanes | Runtime adapters (`arclink_telegram.py`, `arclink_discord.py`), adapter tests | Bot onboarding and agent chat with fake-mode dispatch | Adapters landed; add live HTTP transport when tokens present. |
-| Notion API | SSOT modules/tests | Optional shared Notion rails | Preserve as guarded optional integration. |
-| Node 22 | `Dockerfile`, pins | qmd install, Hermes web build, Next.js dashboard runtime | Keep. |
-| Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py` | Primary OpenAI-compatible inference lane | Keep Chutes-first; fake key manager until live lifecycle is verified. |
-| Stripe | `python/arclink_adapters.py`, `python/arclink_entitlements.py` | Payment, checkout, entitlement gate | Fake boundary landed (P3); live adapter behind E2E config. |
-| Cloudflare + Traefik | `python/arclink_ingress.py`, `python/arclink_access.py`, `python/arclink_executor.py` | DNS, tunnel/access strategy, host routing | Fake boundary landed (P4); defer live mutation to E2E slice. |
-| Python WSGI stdlib surface | `python/arclink_product_surface.py` | Local no-secret onboarding/dashboard/API prototype | Keep as contract probe; not production UI. |
-| Python API/auth helpers | `python/arclink_api_auth.py` (887 lines) | User/admin session, CSRF, rate-limit, MFA-ready, scoped read, queued mutation boundary | Landed (P1-2). Extend as needed. |
-| Hosted WSGI API | `python/arclink_hosted_api.py` (1,078 lines) | Production API boundary with route dispatch, session transport, CORS, OpenAPI | Landed (P1-2). |
-| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,593 lines), 2 web tests | Production web app: landing, login, onboarding, user/admin dashboards | Landed (P8-10). |
+| Python | `python/`, `tests/`, `requirements-dev.txt` | Hosted API, auth, onboarding, entitlements, provider adapters, provisioning, executor, dashboards read models, diagnostics, fleet, rollout, live proof | Keep as primary business/control-plane layer. |
+| Bash | `deploy.sh`, `bin/`, `test.sh` | Bootstrap, deploy, health, Docker operations, job wrappers, operator flows | Preserve; wrap rather than rewrite. |
+| Docker Compose | `compose.yaml`, Docker health/deploy scripts, executor tests | MVP runtime and per-deployment provisioning target | Keep as first deployment substrate. |
+| SQLite | `python/almanac_control.py`, schema tests | Almanac and ArcLink control-plane state | Keep first; maintain Postgres-compatible schema habits. |
+| Postgres | `compose.yaml`, pins/config | Nextcloud database today; possible future ArcLink SaaS state | Keep as service dependency; defer SaaS migration. |
+| Redis | `compose.yaml`, pins/config | Nextcloud cache today; possible jobs/pubsub/rate-limit layer | Keep as available secondary service. |
+| Hermes | runtime pins, plugins, hooks, skills, gateway scripts | Agent runtime, skills, managed context, chat gateways, dashboard/cron behavior | Preserve and expose as a core product strength. |
+| qmd | qmd daemon/update scripts, qmd skill, tests | Vault/PDF/Notion retrieval MCP | Preserve. |
+| Nextcloud | Compose service, docs/tests | User file/vault surface | Keep with per-deployment isolation for MVP. |
+| code-server | pins/config/access tests | Browser IDE surface | Keep with host-per-service routing. |
+| Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py` | Primary OpenAI-compatible inference provider | Keep Chutes-first with model catalog/default centralization. |
+| Stripe | `python/arclink_adapters.py`, `python/arclink_entitlements.py` | Checkout, subscription mirror, entitlement gate, billing portal/reconciliation | Fake boundary complete; live proof credential-gated. |
+| Cloudflare | `python/arclink_ingress.py`, `python/arclink_access.py`, `python/arclink_executor.py` | Hostname reservation, DNS/drift, tunnel/access strategy | Fake/planning boundary complete; live proof credential-gated. |
+| Traefik | ingress docs, executor/label rendering tests | Host-per-service HTTP routing plan | Keep; avoid fragile path-prefix routing. |
+| Telegram/Discord | `python/arclink_telegram.py`, `python/arclink_discord.py`, public bot tests | Public onboarding channels sharing web onboarding state | Keep fake mode by default; live mode behind token gates. |
+| Next.js 15 | `web/package.json`, `web/src/app`, tests | Production web app for public, user, and admin surfaces | Keep; consume Python hosted API. |
+| Tailwind 4 | `web/package.json`, `web/src/app/globals.css` | ArcLink brand-aligned UI system | Keep with brand quality gate. |
+| Playwright | `web/package.json`, `web/tests/browser` | Browser/mobile product proof | Keep for UI quality gate. |
 
-## Repository Signals
-
-| Signal | Finding | Interpretation |
-| --- | ---: | --- |
-| Python files | 144+ | Primary implementation and regression-test surface. |
-| Shell scripts | 79 | Operational/deploy substrate remains significant. |
-| Markdown files | 63+ | Planning, docs, skills, and operating guides are extensive. |
-| Compose files | 2 | Docker-first path exists and should be evolved. |
-| `requirements-dev.txt` | Present | Python test/dev dependencies are explicit. |
-| `web/package.json` | Present | Next.js 15 + Tailwind 4 production web app foundation. |
-| Hermes hooks/plugins/skills | Present | Hermes integration is a core product asset. |
-
-## Path Comparison
-
-| Path | Benefits | Costs/Risks | Verdict |
-| --- | --- | --- | --- |
-| Evolve Docker/Python control plane | Preserves all working surfaces; keeps no-secret tests practical. | Requires careful compatibility and staged rebrand. | Chosen. |
-| Python API boundary next | Keeps business logic tested; serves web/bot/dashboard clients. | Hosted production auth/RBAC hardening continues. | Continuing. |
-| Next.js/Tailwind app (landed) | Dashboard foundation exists for all views. | Must wire to hosted API; avoid duplicating business logic. | Continuing. |
-| Separate SaaS shell | Cleaner product boundary later. | Duplicates semantics prematurely. | Defer. |
-| Scheduler-first rewrite | Better scheduling semantics. | Premature complexity. | Reject for MVP. |
-
-## Dependency Alternatives
+## Alternatives Compared
 
 | Decision area | Preferred | Alternative | Reasoning |
 | --- | --- | --- | --- |
-| ArcLink state DB | SQLite-first with Postgres-compatible shape | Immediate Postgres migration | Existing tests are SQLite-based; migrate after contracts stabilize. |
-| Provisioning jobs | DB-backed state machine first | Redis queue first | Durable idempotency before async scaling. |
-| Ingress | Traefik host-per-service routing | Path prefixes | Dedicated hosts safer for Nextcloud/code-server. |
-| Files UI | Dedicated Nextcloud per deployment | Shared Nextcloud | Stronger single-user SaaS isolation. |
-| SSH/TUI | Cloudflare Access/Tunnel TCP | Raw SSH over HTTP | HTTP cannot provide per-subdomain SSH. |
-| Dashboard frontend | Next.js 15 + Tailwind 4 | Python templates | Web app foundation landed; wire to API. |
-| Chutes key isolation | Per-deployment secret references | Shared global key | Per-deployment aligns with control/security goals. |
-| Live provider execution | Fake adapters plus E2E/live flag | Always-on live SDK calls | Tests must remain no-secret and deterministic. |
+| Product evolution | Add ArcLink modules beside Almanac | Full rename/rewrite first | Additive approach preserves working deploy/runtime behavior. |
+| Deployment substrate | Docker Compose | Kubernetes/Nomad | Compose is enough for MVP and is already supported. |
+| State database | SQLite-first | Immediate Postgres migration | Existing tests and helpers are SQLite-based; migrate after contracts stabilize. |
+| Async jobs | Durable DB-backed state machine first | Redis queue first | Idempotency and audit matter before throughput scaling. |
+| Ingress | Host-per-service Traefik/Cloudflare routing | Path prefixes | Nextcloud/code-server and SSH/TUI surfaces should not depend on brittle path prefixes. |
+| SSH/TUI | Bastion or Cloudflare Access/Tunnel TCP | Raw SSH through HTTP/Traefik | Raw SSH cannot be safely routed as HTTP by subdomain. |
+| Files UI | Dedicated Nextcloud per deployment | Shared multi-tenant Nextcloud | Dedicated instances are simpler and safer for MVP isolation. |
+| Inference provider | Chutes-first with BYOK/OAuth lanes retained | Provider-neutral first | Chutes is a product requirement; central config preserves future flexibility. |
+| Provider calls in tests | Fake adapters and secret-gated live harness | Always-on live SDK calls | Unit and fake E2E tests must not need secrets or mutate real services. |
+| Dashboard | Next.js/Tailwind consuming hosted API | Python templates | The web app exists and can stay UI-only while Python owns contracts. |
 
 ## Compatibility Rules
 
 - Prefer `ARCLINK_*` for new product-facing configuration.
-- Preserve `ALMANAC_*` aliases where migration safety requires them.
-- Treat blank ArcLink values as unset.
-- Never include secret values in diagnostics, docs, test fixtures, or logs.
-- Store JSON payloads as text and validate in helpers rather than depending on SQLite JSON1.
-- Use stable string IDs and explicit unique indexes for commercial records.
-- Keep public onboarding state separate from private deployment credentials.
+- Preserve `ALMANAC_*` aliases where existing deployment or runtime paths need
+  migration safety.
+- Treat blank env values as unset.
+- Store secret values only in private state or live environment; diagnostics and
+  tests may report credential names, never credential values.
+- Keep commercial records in `arclink_*` tables with stable string IDs and
+  explicit indexes.
+- Keep JSON payloads portable by validating in helpers rather than assuming
+  SQLite JSON extensions.
+- Keep public onboarding data separate from deployment credentials.
+
+## External Dependency Boundaries
+
+| Provider | No-secret boundary | Live blocker |
+| --- | --- | --- |
+| Stripe | Fake checkout/webhook, entitlement mirror, reconciliation, billing portal contract | API keys, webhook secret, product/price IDs. |
+| Cloudflare | Fake DNS client, hostname planning, drift/teardown contracts | Zone ID/token and final DNS/tunnel strategy. |
+| Chutes | Model catalog helpers, fake key lifecycle, inference smoke contract | Production account/key strategy and per-deployment key proof. |
+| Telegram | Fake-mode adapter and shared onboarding state machine | Public bot token and live transport proof. |
+| Discord | Fake-mode adapter and shared onboarding state machine | Application credentials, bot token, live transport proof. |
+| Docker/host | Dry-run executor, fake runner, readiness checks | Final production host access and deliberate live execution flag. |
 
 ## Validation Requirements
 
-- No-secret tests must cover all contract surfaces.
-- Product-surface acceptance should include desktop and narrow mobile browser smoke.
-- Executor tests must prove live mutation is disabled by default.
-- Live credentials belong in E2E documentation and local secrets only.
-- Gaps A-C are landed: host readiness tooling, provider diagnostics, and
-  live-gated executor deepening.
-- The foundation-runbook (`docs/arclink/foundation-runbook.md`) documents
-  current boundary behavior, ownership, and repair procedures.
+- Python contract changes should run focused `tests/test_arclink*.py` files and
+  compile touched modules.
+- Web changes should run web smoke, lint/type checks, and Playwright browser
+  checks when layout or copy changes.
+- Executor/provider changes must prove live mutation is disabled by default.
+- Docs must not claim live proof until credentialed live evidence exists.

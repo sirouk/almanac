@@ -1,22 +1,22 @@
 # Document Phase Status
 
-Generated: 2026-05-02 (updated after P13-16 landing)
+Generated: 2026-05-02 (updated after scale-operations spine and web lint landing)
 
 ## Documentation Audit
 
-All project-facing documentation has been verified against the current codebase
-state: 17 Python modules (7,877 lines), 19 arclink test files (166 test
-functions), 4 hygiene tests, 2 web tests, 41 browser product checks, Next.js
-15 + Tailwind 4 web app (~1,593 lines, 9 source files).
+Project-facing ArcLink documentation has been refreshed against the current
+codebase state: 25 ArcLink Python modules (10,067 lines), 27 arclink test
+files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
++ Tailwind 4 web app (1,991 lines, 9 source files).
 
 ### Files Updated (This Pass)
 
 | File | Change | Rationale |
 | --- | --- | --- |
-| `research/RALPHIE_PRODUCTION_GRADE_STEERING.md` | Checked P13-16 boxes with proof references | Items landed, steering was stale |
-| `docs/arclink/CHANGELOG.md` | Added P13-16 Operations/Safety/Docs section | New docs landed since last changelog entry |
-| `docs/arclink/architecture.md` | Removed stale "P13-16 remain" from Current Limitations, added credential blocker note | P13-16 docs/assets complete; limitation was outdated |
-| `docs/arclink/document-phase-status.md` | Full refresh for P13-16 completion | Prior version said "proceed with P13-16" |
+| `docs/arclink/architecture.md` | Added fleet/action-worker/rollout modules, scale operations data flow, admin route, ownership section, and live-worker limitation | Scale operations spine landed after the previous truth pass |
+| `docs/arclink/operations-runbook.md` | Added Scale Operations runbook with assumptions, module ownership, admin snapshot, manual worker processing, and stale recovery | Operators need reproducible handling steps before live worker automation |
+| `docs/arclink/CHANGELOG.md` | Added Scale Operations Spine and Deterministic Web Linting entries; updated ArcLink schema count to 22 tables | Changelog was stale after new schema tables, modules, API route, and ESLint config |
+| `docs/arclink/document-phase-status.md` | Refreshed audit status, counts, risks, and verdict | Prior version described the P13-16 pass only |
 
 ### Files Updated (Prior Passes)
 
@@ -32,11 +32,11 @@ functions), 4 hygiene tests, 2 web tests, 41 browser product checks, Next.js
 
 | File | Verdict |
 | --- | --- |
-| `docs/arclink/foundation.md` | Current. Covers config, schema, provisioning, executor, onboarding, bots, adapters. |
+| `docs/arclink/foundation.md` | Current. Covers config, schema, provisioning, executor, onboarding, bots, adapters. Scale details now live in architecture/runbook. |
 | `docs/arclink/foundation-runbook.md` | Current. Includes all test commands including E2E. |
 | `docs/arclink/brand-system.md` | Current. Brand identity documentation unchanged. |
 | `docs/arclink/professional-finish-gate.md` | Current. Gate criteria unchanged. |
-| `docs/arclink/operations-runbook.md` | Current. 9 sections: API, ingress, executor, Chutes, Stripe, rollback, health, restart, release. |
+| `docs/arclink/operations-runbook.md` | Current after this pass. 13 sections including API, ingress, executor, rollback, scale operations, readiness, diagnostics, and live evidence. |
 | `docs/arclink/secret-checklist.md` | Current. Secret inventory, handling rules, verification command. |
 | `docs/arclink/ingress-plan.md` | Current. DNS layout, Cloudflare, Traefik, SSH, drift, teardown. |
 | `docs/arclink/backup-restore.md` | Current. Backup targets, schedule, restore, DR, retention. |
@@ -53,21 +53,26 @@ functions), 4 hygiene tests, 2 web tests, 41 browser product checks, Next.js
   live journey needs credentials and an explicit credentialed run.
 - All 6 external credential sets remain absent (Stripe, Cloudflare, Chutes,
   Telegram, Discord, host).
+- The action worker has code-level batch and stale-recovery entrypoints, but no
+  documented production service/timer unit is live yet.
 
 ## Risks
 
-- Documentation correctness depends on the 166-test no-secret suite continuing
-  to pass. If tests diverge from docs, the foundation-runbook validation
+- Documentation correctness depends on the no-secret suite continuing to pass.
+  If tests diverge from docs, the foundation-runbook validation
   section lists the exact commands to reconfirm.
 - Provisioning resource limits and healthchecks are rendered in Compose intent
   but have not been validated against a live Docker Compose execution yet
   (blocked on external credentials).
+- Scale operations placement is intentionally deterministic and capacity-based,
+  not a replacement for an external scheduler. Live worker automation should
+  keep the same executor gates and secret rejection rules.
 
 ## Verdict
 
-Production 1-11 and P13-P16 documentation/assets are complete for the no-secret
-foundation. Production 12 remains externally blocked (credentials and a
-deliberate live run). All artifacts are reproducible and free of local context
-(no machine paths, operator names, live hostnames, tokens, or `.env` values).
-Metrics: 7,877 ArcLink module lines, 166 test functions across 19 test files,
-41 browser product checks.
+Project-facing docs are clear enough to proceed with no-secret development and
+operator rehearsal. Production 12 remains externally blocked by credentials and
+a deliberate live run. Scale operations are documented as durable, API-visible,
+and fake/live-gated, with live worker automation still an explicit follow-up.
+All updated artifacts are reproducible and free of local context (no machine
+paths, operator names, live hostnames, tokens, or `.env` values).

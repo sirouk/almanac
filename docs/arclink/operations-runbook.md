@@ -286,7 +286,84 @@ docker compose -p arclink-{deployment_id} down
 docker compose -p arclink-{deployment_id} up -d
 ```
 
-## 10. Host Readiness
+## 10. Scale Operations
+
+**Modules:** `python/arclink_fleet.py`, `python/arclink_action_worker.py`,
+`python/arclink_rollout.py`, `python/arclink_dashboard.py`
+
+Scale operations cover fleet capacity, deployment placement, queued admin
+action execution, rollout waves, and operator visibility. The design is
+SQLite-first and fake-by-default so operators can inspect and rehearse the
+workflow without live provider credentials.
+
+**Ownership:**
+
+| Area | Owner module | Notes |
+| --- | --- | --- |
+| Fleet hosts | `arclink_fleet.py` | Hostname, region, tags, capacity slots, drain flag, status |
+| Placement | `arclink_fleet.py` | Active placement is one row per deployment; load increments on placement |
+| Admin action execution | `arclink_action_worker.py` | Claims queued intents, records attempts, dispatches to executor/local transitions |
+| Rollouts | `arclink_rollout.py` | Version tag, wave count, current wave, pause/fail/rollback state |
+| Operator read model | `arclink_dashboard.py` | `build_scale_operations_snapshot()` powers the admin API route |
+
+**Assumptions:**
+
+- The executor remains fake unless `ArcLinkExecutorConfig.live_enabled` is set
+  by the operator path.
+- Action metadata, fleet metadata, rollout waves, and rollback plans must be
+  secret-free. Secret-looking material is rejected before persistence.
+- Rollback plans for rollouts must include `preserve_state_roots`; state roots
+  and vault data are not disposable rollout artifacts.
+- Placement is deterministic and capacity-based, not a general scheduler.
+
+**Read scale state:**
+
+```bash
+curl -s -H "Cookie: arclink_admin_session=..." \
+  http://localhost:8900/api/v1/admin/scale-operations | python3 -m json.tool
+```
+
+The response includes `fleet_capacity`, `placements`, `stale_actions`,
+`recent_action_attempts`, `last_executor_result`, and `active_rollouts`.
+
+**Process queued actions manually in a no-secret environment:**
+
+```bash
+PYTHONPATH=python python3 - <<'PY'
+from almanac_control import Config, connect_db, ensure_schema
+from arclink_action_worker import process_arclink_action_batch
+from arclink_executor import ArcLinkExecutor, ArcLinkExecutorConfig
+
+conn = connect_db(Config.from_env())
+ensure_schema(conn)
+executor = ArcLinkExecutor(ArcLinkExecutorConfig(live_enabled=False))
+print(process_arclink_action_batch(conn, executor=executor, batch_size=10))
+PY
+```
+
+**Recover stale running actions:**
+
+```bash
+PYTHONPATH=python python3 - <<'PY'
+from almanac_control import Config, connect_db, ensure_schema
+from arclink_action_worker import recover_stale_actions
+
+conn = connect_db(Config.from_env())
+ensure_schema(conn)
+print(recover_stale_actions(conn, stale_threshold_seconds=3600))
+PY
+```
+
+**Runbook checks before live worker automation:**
+
+1. Confirm fleet hosts are registered with realistic `capacity_slots`.
+2. Drain a host before planned maintenance; do not place new deployments there.
+3. Verify `/api/v1/admin/scale-operations` shows stale actions and recent
+   attempts before enabling any recurring worker.
+4. Keep rollout rollback plans state-preserving; destructive cleanup remains a
+   separately confirmed executor/admin action.
+
+## 11. Host Readiness
 
 **Module:** `python/arclink_host_readiness.py`
 
@@ -305,7 +382,7 @@ Checks Docker, Docker Compose, ports, writable state root, required env vars,
 secret presence (names only), and ingress strategy. Returns machine-readable
 JSON with pass/fail per check.
 
-## 11. Provider Diagnostics
+## 12. Provider Diagnostics
 
 **Module:** `python/arclink_diagnostics.py`
 
@@ -324,7 +401,7 @@ Reports which provider credentials (Stripe, Cloudflare, Chutes, Telegram,
 Discord, Docker) are present or missing. Credential values are never returned.
 Live connectivity checks require `ARCLINK_E2E_LIVE=1`.
 
-## 12. Live Journey and Evidence
+## 13. Live Journey and Evidence
 
 **Modules:** `python/arclink_live_journey.py`, `python/arclink_evidence.py`
 

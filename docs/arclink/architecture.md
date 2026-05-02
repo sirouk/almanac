@@ -16,6 +16,9 @@ arclink_ingress.py          Hostname generation, DNS drift detection, Traefik la
 arclink_access.py           Nextcloud isolation model, SSH access strategy guards
 arclink_provisioning.py     Dry-run provisioning renderer, job state, rollback planning
 arclink_executor.py         Guarded mutating boundary (Docker, Cloudflare, Chutes, Stripe, rollback)
+arclink_fleet.py            Fleet host registry, deterministic placement, capacity summaries
+arclink_action_worker.py    Queued admin action execution, attempts, stale recovery
+arclink_rollout.py          Durable rollout waves, pause/fail/rollback records, version drift
 arclink_dashboard.py        User/admin dashboard read models, queued admin action intent
 arclink_api_auth.py         Hashed session/CSRF tokens, rate limits, MFA-ready admin gates
 arclink_hosted_api.py       Production WSGI app, /api/v1 route dispatch, CORS, cookie transport
@@ -26,7 +29,7 @@ arclink_discord.py          Discord runtime adapter, interaction handler, fake m
 ```
 
 All modules live under `python/` and import from `almanac_control.py` for
-database access (18 `arclink_*` tables in the shared SQLite/Postgres schema).
+database access (22 `arclink_*` tables in the shared SQLite/Postgres schema).
 
 ## Data Flow
 
@@ -66,9 +69,14 @@ Customer ──► Public Onboarding (web / Telegram / Discord)
                 ├── Stripe refund / cancel / portal
                 └── Rollback apply
                 │
+                ├── Fleet placement (`arclink_fleet`)
+                ├── Queued admin action attempts (`arclink_action_worker`)
+                └── Release waves / rollback records (`arclink_rollout`)
+                │
                 ▼
          Dashboard reads (user / admin)
          Admin action intents (queued, audited)
+         Scale operations snapshot (admin only)
 ```
 
 ## Hosted API Routes
@@ -86,6 +94,7 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `GET /user/dashboard` | Session | User dashboard read |
 | `GET /admin/dashboard` | Admin session | Admin dashboard read |
 | `POST /admin/actions` | Admin + CSRF | Queue admin action intent |
+| `GET /admin/scale-operations` | Admin session | Fleet, placement, action-worker, rollout snapshot |
 | `POST /admin/sessions/revoke` | Admin + CSRF | Revoke admin session |
 
 ## Integration Boundaries
@@ -115,6 +124,30 @@ explicit `live_enabled=True` and injected credentials.
 - Plaintext secret values are rejected in persisted intent and executor results.
 - Dashboard and API responses never include raw secret material.
 
+## Scale Operations Spine
+
+ArcLink now has a SQLite-first operator spine for growth beyond one manually
+managed deployment:
+
+- `arclink_fleet.py` owns fleet host registration, health/drain status,
+  capacity slots, observed load, and deterministic placement. Placement prefers
+  active, non-draining hosts with the most headroom and breaks ties by hostname.
+- `arclink_action_worker.py` owns execution of queued admin actions. It records
+  attempts, updates intent status, writes events/audit rows, redacts executor
+  errors, and can return stale running actions to the queue.
+- `arclink_rollout.py` owns durable rollout records. Rollouts advance in
+  canary waves, can pause/fail/rollback, and rollback plans must include
+  `preserve_state_roots`.
+- `build_scale_operations_snapshot()` and
+  `GET /api/v1/admin/scale-operations` expose fleet capacity, placements,
+  stale queued/running actions, recent worker attempts, active rollouts, and
+  the last executor result behind admin session auth.
+
+The rationale is to keep operational ownership inside the existing ArcLink
+control plane until credentialed live proof shows a need for an external queue
+or scheduler. The worker still respects the executor's fake-by-default,
+live-gated behavior.
+
 ## Isolation Model
 
 - **Compute**: dedicated Docker Compose project per deployment.
@@ -128,6 +161,9 @@ explicit `live_enabled=True` and injected credentials.
 - Executor is fail-closed; no production live adapters are shipped yet.
 - Admin dashboard is wired to all hosted API admin endpoints; user dashboard
   live data wiring is deferred.
+- Scale operations are durable and API-visible, but no long-running production
+  worker service unit is documented as live yet. Operators should treat worker
+  execution as a controlled runbook step until live host orchestration lands.
 - Public bots have runtime adapters with fake-mode fallback; live HTTP
   transport requires bot tokens.
 - Live E2E scaffold exists (`tests/test_arclink_e2e_live.py`) with

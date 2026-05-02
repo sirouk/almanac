@@ -1,114 +1,89 @@
 # Research Summary
 
-<confidence>99</confidence>
-<!-- refreshed: 2026-05-02T06:47:00Z plan-gate sync after live-proof-orchestration build -->
+<confidence>96</confidence>
+<!-- refreshed: 2026-05-02 plan phase -->
 
 ## Goal
 
 Transform Almanac into ArcLink: a Chutes-first, self-serve, paid,
-single-user AI deployment SaaS with website, Telegram, and Discord onboarding;
+single-user AI deployment SaaS with web, Telegram, and Discord onboarding;
 Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
 user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
 Notion, Nextcloud, code-server, bot, and health robustness.
 
-## Finding
+## Current Finding
 
-ArcLink is a staged evolution of the Almanac Docker/Python/Bash control plane.
-The repository contains 22 ArcLink Python modules (9,045 lines), 24 test files
-(247 ArcLink Python test functions passing), a Next.js 15 + Tailwind 4 web app
-(~1,593 lines), and comprehensive fake/live adapter boundaries for all external
-providers.
+ArcLink is already being built as a staged evolution of the existing
+Docker/Python/Bash Almanac control plane. The repository now contains the
+ArcLink commercial/control-plane modules, fake/live provider boundaries,
+host-readiness and diagnostics tooling, fleet/action/rollout operations spine,
+Next.js dashboard shell, and extensive no-secret regression coverage.
 
-The no-live checklist is landed for P1-11 and P13-P16. Production 12 is
-scaffolded but externally blocked on live credentials:
-- P1-2: Hosted API contract with versioned routes, OpenAPI, auth/CSRF/audit.
-- P3-6: Stripe, Cloudflare, Docker executor, and Chutes fake boundaries.
-- P7: Telegram/Discord onboarding parity with shared state machine.
-- P8: User dashboard with hosted-API layout, service links, bot/model/memory
-  state, vault status, billing, provisioning, security, support, loading, and
-  empty states.
-- P9: Admin dashboard wired to all hosted API admin endpoints (18 tabs).
-- P10: Browser product proof with Playwright suite (41 tests passing),
-  brand system applied, mobile/desktop viewport checks, accessible forms,
-  loading/empty/error states, fake-adapter labeling, deterministic API mocks.
-- P11: Fake E2E journey harness (6 tests covering full signup-to-admin flow).
-- P12: Live E2E scaffold (provider live checks are secret-gated and skip cleanly;
-  no-secret journey/evidence tests run without credentials). Credentialed proof
-  remains externally blocked until real credentials are supplied.
-- P13: Deployment assets (env example, secret checklist, ingress plan, runbook).
-- P14: Observability (structured events, alert candidates, admin dashboard).
-- P15: Data safety (volume layout, backup plan, teardown safeguards, secret guards).
-- P16: Documentation truth pass (all docs audited, no overclaims).
+Observed implementation signals:
 
-## Next Pass: Final Form Gaps
+- 25 `python/arclink*.py` modules covering product config, Chutes, Stripe and
+  Cloudflare adapters, entitlements, onboarding, hosted API/auth, dashboards,
+  provisioning, executor, diagnostics, host readiness, fleet, action worker,
+  rollout, live journey, evidence, and bot adapters.
+- 27 `tests/test_arclink*.py` files covering the ArcLink Python surfaces.
+- `web/` contains a Next.js 15 + Tailwind 4 app with landing, login,
+  onboarding, user dashboard, admin dashboard, shared UI, API client, smoke
+  tests, and browser product checks.
+- `compose.yaml`, `Dockerfile`, `deploy.sh`, `bin/`, Hermes plugins/hooks, qmd
+  jobs, Nextcloud, memory synthesis, and systemd units remain the operational
+  substrate to preserve.
 
-Three steering documents define the next work beyond P1-16:
+## Production Coverage Status
 
-1. **RALPHIE_PRODUCTION_GRADE_STEERING.md**: Professional Finish Gate and
-   Current Next Objective Queue. P1-11 and P13-16 are checked complete.
-2. **RALPHIE_FINAL_FORM_GAPS_STEERING.md**: Gaps A-E for executable host
-   readiness, live-gated executor deepening, provider diagnostics, live E2E
-   expansion, and real deployment evidence.
-3. **RALPHIE_NEXT_PASS_STEERING.md**: Concrete build order: (1) host readiness
-   and bootstrap, (2) live readiness diagnostics, (3) live-gated Docker
-   executor path, (4) full live E2E expansion.
-4. **RALPHIE_LIVE_PROOF_ORCHESTRATION_STEERING.md**: Current next objective
-   after commit `007b6cb`. Defines the live-proof orchestration layer:
-   credential validation, dry-run plan, credential-gated execution, redacted
-   evidence ledger, and CLI wrapper with focused tests.
+The non-external ArcLink foundation is present for Production 1-11 and
+Production 13-16:
 
-Gaps A-C are landed for the no-secret foundation: host readiness
-(`arclink_host_readiness.py`), provider diagnostics
-(`arclink_diagnostics.py`), and an injectable Docker executor runner. Gaps D-E
-have non-external scaffolding work that is unblocked: live journey module with
-ordered steps/skip/blocker modeling, deployment evidence recorder with
-deterministic redacted output, and expanded E2E harness that uses the journey
-model. Only the credentialed live run is externally blocked.
+- Hosted API contract, auth/CSRF/audit, provider fake boundaries, Docker
+  executor planning, Chutes model/key abstractions, Telegram/Discord onboarding
+  parity, user/admin dashboard read models, fake full-journey E2E, deployment
+  docs, observability, data safety, and documentation truth are represented in
+  code/tests/docs.
+- Production 12 remains the only live-proof blocker. The live E2E harness,
+  live proof runner, readiness checks, diagnostics, ordered journey model, and
+  redacted evidence ledger exist, but credentialed execution is externally
+  blocked.
 
 ## Implementation Path Comparison
 
-Path A (selected): Evolve Docker/Python Almanac control plane into ArcLink.
-Preserves all working surfaces. Keeps tests deterministic and no-secret.
-
-Path B: Separate SaaS shell around Almanac. Viable later but duplicates state
-semantics prematurely.
-
-Path C: Kubernetes/Nomad rewrite. Premature for MVP.
+| Path | Strengths | Weaknesses | Decision |
+| --- | --- | --- | --- |
+| Evolve existing Docker/Python Almanac control plane | Preserves working Hermes/qmd/memory/deploy behavior, keeps no-secret tests deterministic, and avoids premature orchestration churn. | Requires staged naming and compatibility discipline. | Selected. |
+| Build a separate SaaS shell around Almanac | Cleaner commercial boundary later. | Duplicates auth, provisioning, health, and entitlement state before contracts settle. | Defer. |
+| Replatform to Kubernetes/Nomad | Better long-term scheduling primitives. | Too heavy before live demand and provider proof exist. | Reject for MVP. |
 
 ## Key Assumptions
 
-- Docker Compose is the first ArcLink provisioning target.
-- New commercial state in `arclink_*` tables with stable text IDs.
-- `ARCLINK_*` env vars take precedence; blank values treated as unset.
-- Unit tests never require live credentials.
-- Web, Telegram, and Discord onboarding share one backend session contract.
-- Dashboard surfaces consume backend read/action contracts via hosted API.
-- Next.js app consumes the hosted Python API; no external Python web framework.
+- Docker Compose is the first customer-deployment target.
+- Python remains the business-logic and hosted-API layer.
+- Next.js/Tailwind is the production dashboard layer and consumes API
+  contracts instead of duplicating business rules.
+- SQLite stays first for ArcLink commercial state, with schema choices kept
+  portable for a later Postgres path.
+- `ARCLINK_*` configuration takes precedence while `ALMANAC_*` compatibility is
+  preserved where existing runtime paths depend on it.
+- Fake adapters are the default for unit and fake E2E tests.
+- Live provider execution requires explicit live flags and real credentials.
 
-## Build Readiness
+## BUILD Handoff
 
-All non-external BUILD work is complete. P1-11, P13-P16, Gaps A-E no-secret
-scaffolding, operator snapshot, and live-proof orchestration are all landed.
-The live proof runner (`arclink_live_runner.py`, 232 lines, 13 tests) composes
-host readiness, diagnostics, journey, and evidence into a single CLI pass.
-P12 credentialed live proof remains externally blocked until real credentials
-are supplied. No further non-external BUILD tasks remain.
-
-247 ArcLink Python test functions + 41 browser product checks passing. No live secrets
-required for any non-live landed item.
+The plan phase is ready for BUILD handoff, but the actionable BUILD queue is
+credential-limited: all non-external production slices identified in
+`research/RALPHIE_PRODUCTION_GRADE_STEERING.md` are represented in current
+code/tests/docs. The next real build action is credentialed live proof through
+the existing live runner once external accounts are available.
 
 ## Remaining Risks
 
-- Live Chutes key lifecycle unverified until account-backed testing.
-- Stripe/Cloudflare live paths require real credentials and E2E evidence.
-- Telegram/Discord live HTTP transport not yet implemented.
-- API/auth boundary is not yet deployed behind production identity provider.
-- Dedicated Nextcloud per deployment may become resource-heavy at scale.
-- Host readiness tooling landed (Gap A); ops runbook links are present.
-- Provider diagnostics landed (Gap C); live connectivity checks deferred.
-
-## Reference Topics For Live Work
-
-Live adapter implementation should verify against official provider docs for
-Chutes, Stripe webhooks, Cloudflare Tunnel/Access, Docker Compose secrets,
-Traefik Docker labels, Next.js App Router, and Tailwind responsive design.
+- Stripe, Cloudflare, Chutes, Telegram, Discord, and production-host live proof
+  are unverified until credentials and accounts are supplied.
+- The Python hosted API has not yet been deployed behind a final production
+  identity/edge configuration.
+- Dedicated Nextcloud per deployment is strong isolation for MVP but may become
+  resource-heavy at scale.
+- Broad public rebrand from Almanac to ArcLink must avoid breaking preserved
+  Almanac deploy/runtime contracts.

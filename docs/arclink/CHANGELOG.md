@@ -42,6 +42,23 @@ All work is no-secret testable; no live provider credentials are required.
   workflow, user/admin dashboards, JSON API routes, ArcLink brand styling.
 - **arclink_public_bots.py**: Telegram and Discord public onboarding bot
   conversation skeletons sharing the same session contract as web.
+- **arclink_telegram.py**: Telegram runtime adapter with long-polling bot
+  runner, update parsing, and shared turn handler dispatch; fake mode when
+  `TELEGRAM_BOT_TOKEN` is absent.
+- **arclink_discord.py**: Discord runtime adapter with interaction handling,
+  slash commands, signature verification stub, and shared turn handler
+  dispatch; fake mode when `DISCORD_BOT_TOKEN` is absent.
+
+### Web App Foundation
+
+Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
+
+- Landing page with hero, feature grid, and navigation.
+- Multi-step onboarding workflow UI.
+- User dashboard with deployment health, access links, and service status.
+- Admin dashboard with system overview, user management, and operations.
+- API client stub for hosted API boundary (`/api/v1`).
+- Views use static/mock data; wiring to the hosted API is the next step.
 
 ### Schema
 
@@ -69,10 +86,18 @@ All work is no-secret testable; no live provider credentials are required.
 - **Secret references**: `secret://...` references throughout; plaintext
   rejection enforced in provisioning, executor, dashboard, and admin actions.
 
+### Entitlements Enhancements
+
+- Reconciliation drift detection for subscription/entitlement consistency.
+- Targeted comp: deployment-scoped comp without mutating user-level entitlement.
+- Profile-only upsert preservation: `upsert_arclink_user()` no longer resets
+  entitlement state during profile-only updates for returning users.
+
 ### Known Gaps
 
 - No production live execution adapters (Docker, Cloudflare, Chutes, Stripe).
-- No production frontend dashboard (Next.js/Tailwind planned).
-- No live Telegram/Discord public bot clients.
+- Web app foundation exists but views use mock data; API wiring needed.
+- Telegram/Discord runtime adapters exist with fake-mode dispatch; live HTTP
+  transport (polling/gateway) not yet implemented.
 - No live E2E test suite with real credentials.
 - TOTP/MFA is schema-ready but not code-verified against real TOTP providers.

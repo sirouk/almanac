@@ -54,7 +54,9 @@ Executor adapter credential checklist:
 The public onboarding contract can be tested without live secrets through fake
 Stripe checkout sessions, durable `arclink_onboarding_*` rows, the local
 `python/arclink_product_surface.py` web/API surface, and deterministic
-Telegram/Discord bot conversation skeletons in `python/arclink_public_bots.py`.
+Telegram/Discord bot conversation skeletons in `python/arclink_public_bots.py`,
+and runtime adapters in `python/arclink_telegram.py` and
+`python/arclink_discord.py` (fake mode when tokens are absent).
 A live E2E still needs Stripe checkout session creation against real
 product/price ids, signed checkout completion webhooks, hosted success/cancel
 URLs, and real Telegram/Discord public onboarding bot clients. Public bot ids

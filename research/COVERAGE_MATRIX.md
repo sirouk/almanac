@@ -14,10 +14,10 @@
 | Nextcloud/files | Existing Nextcloud and dedicated isolation decision | Render isolated Nextcloud plus DB/Redis services | Resource cost may grow | Access and provisioning tests |
 | code-server | Existing code-server scripts/access helpers | Route by host in provisioning intent | Proxy/websocket smoke deferred | Access tests; browser smoke later |
 | SSH/TUI | Cloudflare Access TCP strategy guard | Implement tunnel/access records later | No live tunnel yet | Raw SSH-over-HTTP rejection tests |
-| Website surface | Local WSGI onboarding, fake checkout, dashboards, API, accepted mobile/desktop overflow smoke, favicon response | Keep as replaceable prototype; add production API/auth before production UI | Not production auth or dashboard stack | Product surface tests, accepted browser smoke, favicon smoke |
-| Public Telegram/Discord bots | Deterministic turn handler | Replace skeleton with live SDK clients later | Real callback/bot credentials absent | Public bot tests; live bot E2E later |
-| User dashboard | Dashboard read model and local user view | Move to production UI after auth/API | Sessions and polished frontend absent | Dashboard/product surface tests |
-| Admin dashboard | Admin read model and local admin view | Add auth/RBAC and action API before frontend | Sensitive actions need strict audit and executor gates | Admin/dashboard/executor tests |
+| Website surface | Local WSGI prototype plus Next.js 15 + Tailwind 4 web app with landing, login, onboarding, user/admin dashboard views (~1,375 lines) | Wire web app to hosted API; extend views with real data flow | Web app views are static/mock; not yet consuming live API | Product surface tests, web app build/test, future browser E2E |
+| Public Telegram/Discord bots | Deterministic turn handler plus runtime adapters (`arclink_telegram.py`, `arclink_discord.py`) with fake-mode fallback, long-polling (Telegram) and interaction handling (Discord) | Runtime adapters landed with fake transport; live HTTP transport when tokens present | Live bot tokens absent in unit tests; live HTTP polling/gateway not yet implemented | Public bot tests, Telegram/Discord adapter tests (11 tests); live bot E2E later |
+| User dashboard | Dashboard read model, local user view, and Next.js user dashboard page | Wire Next.js view to hosted API user endpoints | Views exist but use mock data; live API integration needed | Dashboard/product surface tests, web app build |
+| Admin dashboard | Admin read model, local admin view, and Next.js admin dashboard page | Wire Next.js view to hosted API admin endpoints | Views exist but use mock data; live API integration needed | Admin/dashboard/executor tests, web app build |
 | Active session counts | Admin dashboard security counts enforce active/unrevoked/unexpired filtering | Preserve before broader hosted API work | Future dashboard query changes could overcount expired or revoked sessions | Dashboard regression test |
 | Admin actions | Queued action intents require reason/idempotency and reject secrets | Future worker consumes only audited intent | Executor could bypass audit if not enforced | Admin action and executor tests |
 | API/auth boundary | User/admin sessions, CSRF checks, rate limits, MFA-ready admin factors, scoped reads, queued mutation helpers, and hosted WSGI API with route dispatch, session transport, CORS, request-ID, and safe errors | Extend hosted API with remaining contract coverage before frontend/live actions | Hosted layer exists but not yet deployed behind production identity provider | API/auth tests, hosted API tests, public hygiene, future browser/API E2E |
@@ -50,17 +50,23 @@
 | `tests/test_arclink_executor.py` | Live-gate refusal, secret resolver contracts, fake apply result shape, digest mismatch rejection, provider idempotency, secret-material guards, Compose dependency validation. |
 | `tests/test_arclink_product_surface.py` | Local WSGI first screen, fake checkout flow, user/admin dashboard rendering, queued admin actions, no DNS mutation, mobile overflow guards, favicon route. |
 | `tests/test_arclink_public_bots.py` | Telegram/Discord public bot conversation-state contract, fake checkout, unsupported channel rejection, metadata secret rejection. |
+| `tests/test_arclink_telegram.py` | Telegram runtime adapter fake-mode turns, message dispatch, long-poll stub, token-absent fallback. |
+| `tests/test_arclink_discord.py` | Discord runtime adapter fake-mode interactions, slash command dispatch, signature verification stub, token-absent fallback. |
 | `tests/test_public_repo_hygiene.py` | Tracked and untracked text hygiene, binary skip behavior, provider-name context. |
+| `web/tests/test_api_client.mjs` | API client module unit tests. |
 
 ## Active Gaps
 
 - The hosted API/auth boundary exists but is not yet deployed behind a
   production identity provider or reverse proxy.
-- Production Next.js/Tailwind dashboards are not implemented.
-- Live Docker, Stripe, Cloudflare, Chutes, Telegram, Discord, Notion/OAuth, and
-  hosted dashboard E2E are not implemented.
-- Production browser automation still needs to be added when the Next.js or
-  equivalent production frontend exists.
+- Next.js 15 + Tailwind 4 web app foundation exists but views use mock/static
+  data; wiring to the hosted API is the next step.
+- Telegram/Discord runtime adapters exist with fake-mode dispatch but live
+  HTTP transport (polling/gateway) is not yet implemented.
+- Live Docker, Stripe, Cloudflare, Chutes, Notion/OAuth, and hosted dashboard
+  E2E are not implemented.
+- Production browser E2E tests should be added now that the Next.js frontend
+  exists.
 
 ## Coverage Verdict
 

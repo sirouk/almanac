@@ -14,7 +14,7 @@
 | qmd 2.1.0 | `config/pins.json`, qmd scripts | Retrieval/indexing MCP | Preserve. |
 | Nextcloud 31 Apache | `compose.yaml`, pins | File/vault UI | Keep; MVP should use dedicated per-deployment instances. |
 | code-server 4.116.0 | Pins, access tests | Browser IDE | Keep and route by host. |
-| Telegram/Discord SDK lanes | Onboarding modules/tests | Bot onboarding and agent chat | Preserve; adapt public entrypoints to ArcLink sessions. |
+| Telegram/Discord SDK lanes | Onboarding modules, runtime adapters (`arclink_telegram.py`, `arclink_discord.py`), and adapter tests | Bot onboarding and agent chat with fake-mode dispatch | Adapters landed; add live HTTP transport when tokens present. |
 | Notion API | SSOT modules/tests | Optional shared Notion rails | Preserve as guarded optional integration. |
 | Node 22 | `Dockerfile`, pins | qmd install, Hermes web build, future dashboard runtime | Keep; add dashboard app later. |
 | Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py` | Primary OpenAI-compatible inference lane | Keep Chutes-first; fake key manager until live lifecycle is verified. |
@@ -22,18 +22,18 @@
 | Cloudflare + Traefik | `python/arclink_ingress.py`, `python/arclink_access.py`, `python/arclink_executor.py` | DNS, tunnel/access strategy, host routing | Keep host-per-service plan; defer live mutation to executor/E2E slice. |
 | Python WSGI stdlib surface | `python/arclink_product_surface.py` | Local no-secret onboarding/dashboard/API prototype | Keep short-term as a contract probe; do not treat as production UI. |
 | Python API/auth helpers | `python/arclink_api_auth.py` | Initial no-secret user/admin session, CSRF, rate-limit, MFA-ready, scoped read, and queued mutation boundary | Keep and harden before production frontend or live actions. |
-| Next.js + Tailwind | Goals context; no app manifest yet | Future responsive user/admin dashboards | Defer until API/auth/RBAC and action contracts are ready. |
+| Next.js 15 + Tailwind 4 | `web/package.json`, 9 source files (~1,288 lines), 1 web test | Production web app: landing, login, onboarding, user/admin dashboards | Foundation landed; wire to hosted API and extend views. |
 
 ## Repository Signals
 
 | Signal | Finding | Interpretation |
 | --- | ---: | --- |
-| Python files | 134 | Primary implementation and regression-test surface. |
+| Python files | 136 | Primary implementation and regression-test surface. |
 | Shell scripts | 75 | Operational/deploy substrate remains significant. |
 | Markdown files | 63 | Planning, docs, skills, and operating guides are extensive. |
 | Compose files | 2 | Docker-first path exists and should be evolved. |
 | `requirements-dev.txt` | Present | Python test/dev dependencies are explicit. |
-| `package.json` | Absent | No production dashboard app exists yet. |
+| `web/package.json` | Present | Next.js 15 + Tailwind 4 production web app foundation. |
 | Hermes hooks/plugins/skills | Present | Hermes integration is a core product asset. |
 
 ## Path Comparison
@@ -42,7 +42,7 @@
 | --- | --- | --- | --- |
 | Evolve Docker/Python control plane | Preserves working Hermes/qmd/memory/health/onboarding; keeps no-secret tests practical. | Requires careful compatibility and staged rebrand. | Choose. |
 | Python API boundary next | Keeps business logic in the existing tested language and can serve web/bot/dashboard clients. | Initial no-secret helpers exist; hosted production auth, routing, CSRF, rate-limit storage, and RBAC hardening remain. | Continue. |
-| Immediate Next.js/Tailwind app | Matches eventual dashboard goal and supports polished UI. | Risk of duplicating auth, billing, provisioning, and admin action logic before API contracts exist. | Defer. |
+| Next.js/Tailwind app (landed) | Matches dashboard goal, foundation exists with views for all surfaces. | Must wire to hosted API for real data; avoid duplicating business logic. | Continue. |
 | Separate SaaS shell around Almanac | Cleaner product boundary later. | Duplicates state, audit, billing, health, and provisioning semantics too early. | Defer. |
 | Scheduler-first rewrite | Better long-term scheduling semantics. | Premature complexity; weaker no-secret local loop. | Reject for MVP. |
 
@@ -57,7 +57,7 @@
 | SSH/TUI | Cloudflare Access/Tunnel TCP | Raw SSH over HTTP | HTTP routing cannot honestly provide per-subdomain SSH without a TCP tunnel/access design. |
 | Product surface now | Python WSGI prototype over read models | Immediate production frontend | Current priority is no-secret contract proving. |
 | Production API/auth | Python API boundary, likely ASGI | Put business logic in frontend route handlers | Keeping contracts in Python avoids duplicating entitlement, provisioning, audit, and executor semantics. The current helper module proves the no-secret contract but is not a hosted service yet. |
-| Dashboard frontend later | Next.js/Tailwind | Long-term server-rendered Python templates | Requirements call for responsive user/admin apps; current Python surface should remain replaceable. |
+| Dashboard frontend | Next.js 15 + Tailwind 4 (landed) | Server-rendered Python templates | Web app foundation exists; wire to hosted API and extend. |
 | Chutes key isolation | Per-deployment secret references and eventual live keys | Shared global Chutes key | Per-deployment references align with control/security goals. |
 | Live provider execution | Fake adapters plus E2E/live flag | Always-on live SDK calls | Unit tests and local development must remain no-secret and deterministic. |
 

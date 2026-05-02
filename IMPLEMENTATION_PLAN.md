@@ -10,31 +10,31 @@ Notion, Nextcloud, code-server, bot, and health robustness.
 
 ## Current Status
 
-ArcLink is partially scaffolded inside the existing Almanac repository. The
-foundation is additive: it introduces `arclink_*` state, product helpers,
-fakeable provider adapters, entitlement gates, public onboarding contracts,
+ArcLink is scaffolded inside the existing Almanac repository with 16 Python
+modules (7,094 lines), 18 test files (130 test functions), 1 hygiene test, and
+a Next.js 15 + Tailwind 4 web app (~1,375 lines across 8 source files, plus 1
+web test).
+
+The foundation includes: `arclink_*` state (18 tables), product helpers,
+fakeable provider adapters, entitlement gates (with reconciliation drift,
+targeted comp, profile-only upsert preservation), public onboarding contracts,
 ingress/access/provisioning intent, dashboard read models, queued admin-action
-contracts, initial API/auth helpers, executor boundaries, a local
-product-surface prototype, and public bot skeletons.
+contracts, API/auth helpers (853 lines), executor boundaries, a local
+product-surface prototype, public bot turn handlers, Telegram/Discord runtime
+adapters with fake-mode dispatch, and a hosted API boundary (667 lines).
 
-This is not live SaaS provisioning yet. The current code records intent and
-proves no-secret behavior. It does not create live infrastructure, mutate live
-provider accounts, host a production identity system, or run hosted public
-bots.
+The hosted API boundary (`python/arclink_hosted_api.py`) wraps ArcLink
+contracts into a production-oriented WSGI application with route dispatch under
+`/api/v1`, cookie/header session transport, CORS, request-ID propagation,
+structured logging, safe error shaping, and Stripe webhook skip.
 
-The latest foundation slice includes the narrow API/auth and product-surface
-repairs that previously blocked BUILD: missing session revocation now fails
-before mutation or audit, active session counts exclude expired/revoked rows,
-generic product-surface errors use safe copy, public bot turns share the
-onboarding rate-limit rail, and `start_public_onboarding_api()` rejects invalid
-channels before writing rate-limit state.
+The Next.js web app (`web/`) provides landing page, login, onboarding workflow,
+user dashboard, and admin dashboard views using the ArcLink brand system. Views
+currently use static/mock data and need wiring to the hosted API.
 
-The hosted API boundary (`python/arclink_hosted_api.py`) now wraps existing
-ArcLink helper contracts into a production-oriented WSGI application with route
-dispatch under `/api/v1`, cookie/header session transport, CORS, request-ID
-propagation, structured logging, safe error shaping, and Stripe webhook skip
-for no-secret environments. This means BUILD task 1 begins from an existing
-hosted layer rather than from scratch.
+This is not live SaaS provisioning yet. The code records intent and proves
+no-secret behavior. It does not create live infrastructure, mutate live provider
+accounts, or run hosted public bots.
 
 ## Active Next Pass
 
@@ -54,8 +54,8 @@ Priority order:
    contracts.
 2. Add the real ArcLink web app after the API boundary is stable, defaulting to
    Next.js/Tailwind unless a smaller repo-fit is justified.
-3. Add Telegram and Discord runtime adapters that share the same onboarding
-   contract as the web workflow.
+3. Add live HTTP transport to the landed Telegram and Discord runtime adapters
+   when bot tokens are present.
 4. Add live-gated Docker/Cloudflare/Stripe/Chutes/bot executor paths with fake
    adapters remaining default.
 5. Run live E2E only when explicit credentials are present and record the proof.
@@ -215,16 +215,20 @@ git diff --check
 
 ### 2. Production Dashboard
 
-- Add the production web app after API/auth contracts are stable.
-- Use Next.js/Tailwind unless a better fit is documented at that time.
-- Make the first screen a usable onboarding workflow, not a marketing-only
-  landing page.
-- Build responsive user dashboard views for deployment health, access links,
-  bot setup, files, code, Hermes, qmd/memory freshness, skills, model,
-  billing, security, and support.
-- Build responsive admin dashboard views for onboarding funnel, users,
-  deployments, payments, infrastructure, bots, security/abuse,
-  releases/maintenance, logs, audit, and queued admin actions.
+Status: Next.js 15 + Tailwind 4 web app foundation landed in `web/` with
+landing page, onboarding workflow, user dashboard, and admin dashboard views.
+Views use static/mock data; wiring to the hosted API is the next step.
+
+- Wire onboarding page to hosted API public onboarding endpoints.
+- Wire user dashboard to hosted API user session/billing/deployment reads.
+- Wire admin dashboard to hosted API admin reads and queued action mutations.
+- Add real authentication flow (login/session creation via hosted API).
+- Extend user dashboard with deployment health, access links, bot setup,
+  files, code, Hermes, qmd/memory freshness, skills, model, billing,
+  security, and support views.
+- Extend admin dashboard with onboarding funnel, users, deployments, payments,
+  infrastructure, bots, security/abuse, releases/maintenance, logs, audit,
+  and queued admin actions.
 - Prefer deep links for Nextcloud, code-server, and Hermes until embedding is
   proven safe and reliable.
 
@@ -302,7 +306,10 @@ git diff --check
 
 - The API/auth/RBAC boundary is an initial no-secret helper layer, not a hosted
   production identity system.
-- Production Next.js/Tailwind dashboards are missing.
+- Next.js web app exists (including login page) but views use mock data; API wiring is needed.
+- Telegram/Discord runtime adapters exist with fake-mode dispatch; live HTTP
+  transport not yet implemented.
+- 1 hygiene test fails (provider name in docs context); cosmetic, not blocking.
 - Live Stripe, Cloudflare, Chutes, Telegram, Discord, Notion, OAuth, and host
   execution require real credentials and E2E verification.
 - Dedicated Nextcloud per deployment may become resource-heavy.

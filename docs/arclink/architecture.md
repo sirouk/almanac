@@ -21,6 +21,8 @@ arclink_api_auth.py         Hashed session/CSRF tokens, rate limits, MFA-ready a
 arclink_hosted_api.py       Production WSGI app, /api/v1 route dispatch, CORS, cookie transport
 arclink_product_surface.py  Local no-secret WSGI prototype for development/contract testing
 arclink_public_bots.py      Telegram/Discord public onboarding bot conversation skeletons
+arclink_telegram.py         Telegram runtime adapter, long-polling bot runner, fake mode
+arclink_discord.py          Discord runtime adapter, interaction handler, fake mode
 ```
 
 All modules live under `python/` and import from `almanac_control.py` for
@@ -124,7 +126,7 @@ explicit `live_enabled=True` and injected credentials.
 ## Current Limitations
 
 - Executor is fail-closed; no production live adapters are shipped yet.
-- Frontend dashboard (Next.js/Tailwind) is planned but not implemented.
+- Frontend dashboard (Next.js 15/Tailwind 4) exists in `web/` but uses mock data; API wiring needed.
 - Public bots are conversation skeletons, not running clients.
 - Live E2E testing requires credentials listed in
   `docs/arclink/live-e2e-secrets-needed.md`.

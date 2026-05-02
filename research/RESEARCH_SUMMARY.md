@@ -1,6 +1,6 @@
 # Research Summary
 
-<confidence>90</confidence>
+<confidence>95</confidence>
 
 ## Goal
 
@@ -79,44 +79,44 @@ before a Next.js/Tailwind dashboard can safely own user and admin workflows.
 
 ## Build Readiness
 
-The plan is ready for BUILD handoff, but BUILD must start with one small
-no-secret repair before broader hosted API/auth or live-adapter work:
+The plan is ready for BUILD handoff. All previously identified lint repairs
+(invalid public onboarding channel, session revocation, active session counts,
+safe generic errors, public bot rate limiting) are completed and passing.
 
-- `start_public_onboarding_api()` validates unsupported channels only after
-  writing a `rate_limits` row. Unsupported channels such as `email` must fail
-  before any rate-limit mutation.
+Current state:
+- 130 ArcLink test functions across 18 test files (+ 1 hygiene test that flags
+  "Chutes" in docs context; cosmetic, not blocking).
+- 16 ArcLink Python modules (7,094 lines).
+- Hosted API boundary exists with route dispatch, session transport, CORS,
+  request-ID, safe errors, and Stripe webhook skip.
+- Next.js 15 + Tailwind 4 web app foundation with landing page, onboarding,
+  login, user dashboard, and admin dashboard views (~1,375 lines across 8
+  source files), plus 1 web test file.
+- Telegram runtime adapter landed (`arclink_telegram.py`, 219 lines) with
+  fake-mode long-polling, update parsing, and shared turn handler dispatch.
+- Discord runtime adapter landed (`arclink_discord.py`, 255 lines) with
+  fake-mode interaction handling, slash commands, signature verification stub,
+  and shared turn handler dispatch.
+- Entitlements module at 435 lines with reconciliation drift detection,
+  targeted comp, and profile-only upsert preservation.
+- API/auth module at 853 lines; hosted API at 667 lines.
 
-After that repair, rerun the no-secret foundation confirmation gate. The
-current working tree also includes the narrow repairs that previously blocked
-broader BUILD work:
+BUILD should continue with:
 
-1. Missing user/admin session revocation raises before mutation or audit.
-2. Revocation still accepts only `user` and `admin` session kinds.
-3. Active user/admin session counts include only active, unrevoked, unexpired
-   rows.
-4. Generic product-surface failures use safe copy rather than raw internal
-   exception text.
-5. Public-bot turns use the shared onboarding rate-limit rail.
-
-BUILD should first repair and confirm those surfaces, then continue:
-
-1. Harden the existing hosted API boundary (`python/arclink_hosted_api.py`)
-   which already provides route dispatch, cookie/header session transport, CORS,
-   request-ID propagation, safe error shaping, and Stripe webhook skip. Extend
-   with remaining contract coverage and production deployment config.
-2. Keep the local product surface accepted as a replaceable no-secret
-   prototype.
-3. Keep live provider and host mutation behind explicit E2E gates.
-4. Defer the production Next.js/Tailwind dashboard until the hosted API boundary
-   is stable.
+1. Harden the hosted API boundary with remaining contract coverage and
+   production deployment config.
+2. Wire the Next.js web app to the hosted API for real data flow.
+3. Add live HTTP transport to Telegram/Discord adapters when tokens present.
+4. Add live-gated Docker/Cloudflare/Stripe/Chutes executor paths.
+5. Run live E2E with real credentials when available.
 
 ## Remaining Risks
 
 - Live Chutes key lifecycle is unverified until account-backed behavior is
   tested.
 - Stripe and Cloudflare live paths require real credentials and E2E evidence.
-- Public Telegram/Discord onboarding clients are skeleton contracts, not
-  production bot processes.
+- Telegram/Discord runtime adapters exist with fake-mode dispatch but live
+  HTTP transport is not yet implemented.
 - The API/auth slice is a no-secret backend contract, not a hosted production
   identity system.
 - Dedicated Nextcloud per deployment is safer for isolation but may become

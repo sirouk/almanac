@@ -257,6 +257,26 @@ checkout semantics as the website surface. They intentionally store public
 channel identity only and reject private bot-token-shaped or provider-token
 material in metadata. They do not run live Telegram or Discord clients yet.
 
+## Telegram And Discord Runtime Adapters
+
+`python/arclink_telegram.py` provides a long-polling bot runner that connects
+Telegram messages to the shared public bot turn handler from
+`arclink_public_bots.py`. It requires `TELEGRAM_BOT_TOKEN` to start live
+polling. When the token is absent, it operates in fake mode with no network
+calls, allowing unit tests to exercise message dispatch and turn logic without
+live credentials.
+
+`python/arclink_discord.py` provides an interaction handler for Discord slash
+commands and messages, also connecting to the shared public bot turn handler.
+It requires `DISCORD_BOT_TOKEN` to start. When the token is absent, it
+operates in fake mode. Discord signature verification is stubbed for unit
+tests.
+
+Both adapters share the same `arclink_onboarding_sessions` rows and onboarding
+contract as the website surface. They do not duplicate billing, entitlement, or
+provisioning logic. Private user-agent bot tokens remain outside these public
+onboarding adapters.
+
 ## Local Checks
 
 No live secrets are required for these foundation checks:
@@ -278,6 +298,8 @@ python3 tests/test_arclink_api_auth.py
 python3 tests/test_arclink_product_surface.py
 python3 tests/test_arclink_public_bots.py
 python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_telegram.py
+python3 tests/test_arclink_discord.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
 python3 -m py_compile python/almanac_control.py python/arclink_*.py

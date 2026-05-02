@@ -103,6 +103,8 @@ ArcLink owns:
 - Local no-secret website/API views in `python/arclink_product_surface.py`.
 - Public Telegram/Discord bot conversation skeletons in
   `python/arclink_public_bots.py`.
+- Telegram runtime adapter in `python/arclink_telegram.py`.
+- Discord runtime adapter in `python/arclink_discord.py`.
 
 Almanac continues to own the live shared-host substrate: deploy/install/upgrade
 scripts, Docker orchestration wrappers, Hermes runtime installation, qmd,
@@ -301,6 +303,21 @@ Hosted API boundary:
   (`arclink_product_surface.py`) remains a no-secret prototype and contract
   smoke tool.
 
+Telegram and Discord runtime adapters:
+
+- `python/arclink_telegram.py` runs a long-polling loop when
+  `TELEGRAM_BOT_TOKEN` is set. It dispatches incoming messages to the shared
+  public bot turn handler and records onboarding session state in the same
+  `arclink_onboarding_sessions` rows used by web and Discord.
+- `python/arclink_discord.py` handles slash commands and messages when
+  `DISCORD_BOT_TOKEN` is set. It verifies interaction signatures (stubbed in
+  tests), dispatches to the shared turn handler, and shares the same
+  onboarding session contract.
+- Both adapters fall back to fake mode (no network) when their token is absent,
+  keeping unit tests no-secret and deterministic.
+- Neither adapter stores private user-agent bot tokens or provider credentials
+  in public onboarding rows.
+
 Public bot skeletons:
 
 - `python/arclink_public_bots.py` provides deterministic Telegram and Discord
@@ -418,6 +435,8 @@ python3 tests/test_arclink_api_auth.py
 python3 tests/test_arclink_product_surface.py
 python3 tests/test_arclink_public_bots.py
 python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_telegram.py
+python3 tests/test_arclink_discord.py
 python3 tests/test_model_providers.py
 python3 tests/test_public_repo_hygiene.py
 python3 -m py_compile python/almanac_control.py python/arclink_*.py

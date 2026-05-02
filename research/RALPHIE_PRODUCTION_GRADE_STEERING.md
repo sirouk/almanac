@@ -146,31 +146,30 @@ loop. Complete these in order, one coherent slice per build cycle, with tests
 and docs. Do not mark the project done while any non-external item remains.
 
 1. Respect the landed checkpoint:
-   - Production 1-2 are complete at commit `019f75d`.
-   - Do not rebuild the hosted API/OpenAPI/rate-limit/status/auth slice unless
+   - Production 1-9 are complete through commit `8cd17a4`.
+   - Do not rebuild hosted API, auth, Stripe, Cloudflare, Docker executor,
+     Chutes, Telegram, Discord, user dashboard, or admin dashboard slices unless
      a regression is proven by a failing test.
-   - A tiny documentation/spec correction is allowed, especially making `429`
-     explicit anywhere the OpenAPI contract still describes rate limit as
-     `401`.
-2. Respect the landed provider checkpoint:
-   - Production 3-6 no-secret/fake boundaries are complete in the current provider-boundary slice.
-   - Do not rebuild Stripe, Cloudflare, Docker executor, or Chutes boundaries unless a regression is proven by a failing test.
-   - Live provider proof remains deferred to Production 12 and requires real credentials.
-3. Build Product Surface (Production 7-10) next:
-   - Wire the Next.js user dashboard to `/api/v1` endpoints instead of mock
-     data.
-   - Wire the Next.js admin dashboard to `/api/v1/admin/*` endpoints instead of
-     mock data.
-   - Preserve website, Telegram, and Discord onboarding parity through the
-     shared API/state machine.
-   - Apply the ArcLink brand system and verify desktop/mobile layout behavior.
-4. Prove the Journey (Production 11-12):
+   - Live provider proof remains deferred to Production 12 and requires real
+     credentials.
+2. Complete Browser/Product Proof (Production 10) next:
+   - Add or wire a Playwright-equivalent browser harness for `/`, `/login`,
+     `/onboarding`, `/dashboard`, and `/admin`.
+   - Run desktop and narrow mobile viewports with deterministic mocked API
+     responses for user/admin pages.
+   - Prove no blank pages, text overlap, clipped controls, hidden primary
+     actions, unsupported live claims, or fake/local adapter ambiguity.
+   - Capture screenshots or equivalent artifacts into an ignored directory and
+     document how to regenerate them.
+   - Add package/test scripts so the browser proof is repeatable locally and in
+     CI without live secrets.
+3. Prove the Journey (Production 11-12):
    - Add a no-secret fake E2E harness for web signup, onboarding, checkout
      simulation, entitlement activation, provisioning request, service-health
      visibility, admin audit, and user dashboard state.
    - Add a secret-gated live E2E harness that skips cleanly until Stripe,
      Cloudflare, Chutes, Telegram, Discord, and Docker live credentials exist.
-5. Finish Operations (Production 13-16):
+4. Finish Operations (Production 13-16):
    - Deployment assets, env examples, runbooks, backup/restore, health checks,
      restart/release/rollback procedures.
    - Observability and admin-facing drift/audit visibility.

@@ -21,7 +21,9 @@ Production 1-9 of the 16-item steering checklist are landed and checked:
 - P1-2: Hosted API contract with versioned routes, OpenAPI, auth/CSRF/audit.
 - P3-6: Stripe, Cloudflare, Docker executor, and Chutes fake boundaries.
 - P7: Telegram/Discord onboarding parity with shared state machine.
-- P8: User dashboard with responsive layout and mock data.
+- P8: User dashboard with hosted-API layout, service links, bot/model/memory
+  state, vault status, billing, provisioning, security, support, loading, and
+  empty states.
 - P9: Admin dashboard wired to all hosted API admin endpoints (18 tabs).
 
 Production 10-16 remain:
@@ -54,7 +56,8 @@ Path C: Kubernetes/Nomad rewrite. Premature for MVP.
 ## Build Readiness
 
 BUILD should proceed with Production 10-16. The immediate priority is:
-1. P10: Brand system, mobile/responsive checks, empty/error/loading states.
+1. P10: Browser-backed brand/mobile proof for website, onboarding, dashboard,
+   and admin routes with deterministic mocked API data and saved artifacts.
 2. P11: Fake E2E full journey harness.
 3. P12-16: Live E2E, deploy assets, observability, data safety, docs truth.
 
@@ -67,7 +70,8 @@ All 160 ArcLink tests passing. No live secrets required to continue.
 - Telegram/Discord live HTTP transport not yet implemented.
 - API/auth boundary is not yet deployed behind production identity provider.
 - Dedicated Nextcloud per deployment may become resource-heavy at scale.
-- Admin dashboard is wired to API; user dashboard mock data wiring remains.
+- Browser/mobile proof is still missing; current web tests are route/content
+  smoke checks, not rendered viewport evidence.
 
 ## Reference Topics For Live Work
 

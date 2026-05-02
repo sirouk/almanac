@@ -35,10 +35,12 @@ external credential.
   Chutes fake boundaries landed. Live proof deferred to P12.
 - **Production 7** (Bot parity): Telegram/Discord shared state machine, runtime
   adapters with fake mode, payload validation.
-- **Production 8** (User dashboard): Responsive layout with mock data panels.
+- **Production 8** (User dashboard): Responsive hosted-API layout with billing,
+  provisioning, service links, vault, bot, model, memory, security, support,
+  loading, and empty states.
 - **Production 9** (Admin dashboard): All 18 tabs wired to hosted API, admin
   actions form with all target kinds, session revocation, provider state,
-  reconciliation drift, responsive layout. Landed at this commit.
+  reconciliation drift, responsive layout. Landed at commit `8cd17a4`.
 
 Do not rebuild P1-9 unless a regression is proven by a failing test.
 
@@ -77,13 +79,19 @@ PLAN is complete when:
 - Accessible forms (labels, focus states, keyboard navigation).
 - Route-level smoke tests for `/`, `/login`, `/onboarding`, `/dashboard`,
   `/admin`.
+- Repeatable browser checks for desktop and narrow mobile viewports using
+  deterministic mocked API responses.
+- Screenshot or equivalent browser artifacts written to an ignored directory
+  with regeneration instructions.
 
 Validation:
 
 ```bash
 python3 tests/test_arclink_dashboard.py
 python3 tests/test_arclink_hosted_api.py
-cd web && npm test && npm run build
+cd web && npx tsc --noEmit && node --test tests/test_page_smoke.mjs
+# add and run a browser proof script in this phase, for example:
+# npm run test:browser
 ```
 
 ### Phase 4: E2E Journey (Production 11-12)
@@ -171,7 +179,9 @@ no-secret test coverage. Live proof deferred to P12.
 ### Phase 2.5: Bot Parity and User Dashboard (Production 7-8) -- COMPLETE
 
 Telegram/Discord shared state machine and runtime adapters. User dashboard
-with responsive layout and mock data.
+with responsive hosted-API layout for billing, provisioning, services, vault,
+bots, model/provider state, memory/qmd freshness, security, support, and empty
+states.
 
 ## External Live Proof Checklist (Blocked)
 

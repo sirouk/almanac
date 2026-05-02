@@ -1,12 +1,12 @@
 # ArcLink
 
 ArcLink is the self-serve private AI deployment product being built from the
-ArcLink substrate. It keeps ArcLink's proven Hermes, qmd, vault, memory,
+shared-host substrate. It keeps the proven Hermes, qmd, vault, memory,
 Nextcloud, code-server, Notion, bot, health, and deploy machinery, then adds
 ArcLink product identity, hosted API contracts, Stripe entitlements,
-Cloudflare/Traefik intent, Chutes-first provider defaults, responsive user and
-admin dashboards, fleet operations, rollout records, and a secret-gated live
-proof harness.
+domain-or-Tailscale ingress intent, Chutes-first provider defaults, responsive
+user and admin dashboards, fleet operations, rollout records, and a
+secret-gated live proof harness.
 
 `deploy.sh` still plays a real role: it is the host bootstrap and operations
 entrypoint for the underlying machine. It now exposes three explicit paths:
@@ -26,7 +26,9 @@ docs/arclink/             product, operations, safety, and live-proof docs
 Production live proof is intentionally not claimed yet. The no-secret
 foundation is implemented and tested; the full live journey is blocked until
 real Stripe, Cloudflare, Chutes, Telegram, Discord, and production host
-credentials are supplied.
+credentials are supplied for domain mode, or real Stripe, Tailscale, Chutes,
+Telegram, Discord, and production host credentials are supplied for Tailscale
+mode.
 
 ## What Ships Today
 
@@ -60,8 +62,8 @@ ArcLink runtime. The combined system provides:
 - Health, repair, enrollment cleanup, and upgrade tooling.
 - ArcLink `ARCLINK_*` config, hosted API, auth/CSRF, Stripe/Cloudflare/Chutes
   fake/live boundaries, public onboarding contracts, dashboards, fleet
-  placement, admin action worker, rollouts, diagnostics, host readiness, and
-  live-proof evidence tooling.
+  placement, domain/Tailscale ingress, admin action worker, rollouts,
+  diagnostics, host readiness, and live-proof evidence tooling.
 - A Next.js 15 + Tailwind 4 ArcLink web shell with route smoke tests and
   browser product checks.
 
@@ -194,7 +196,7 @@ For ArcLink today, the recommended first host path is Sovereign Control Node
 Mode through `deploy.sh`. That makes this machine the product control plane:
 website/API onboarding, shared Telegram and Discord bot webhooks, Stripe
 checkout/webhook handling, admin/user dashboards, fleet placement, Cloudflare
-intent, and provisioning orchestration.
+or Tailscale ingress intent, and provisioning orchestration.
 
 ### 1. Prepare The Host
 
@@ -249,7 +251,8 @@ synthesis, and supporting jobs from `compose.yaml`.
 The SaaS control plane and web shell are present in code, tests, and docs, but
 credentialed production proof is still gated. Do not mark the system
 launch-live until the explicit Production 12 live run is completed with real
-Stripe, Cloudflare, Chutes, Telegram, Discord, and production host credentials.
+Stripe, Chutes, Telegram, Discord, production host credentials, and the selected
+ingress-mode credentials.
 
 ### 5. Day-Two Host Commands
 
@@ -275,7 +278,7 @@ shapes.
 
 | Path | Best for | Command shape | Runtime manager |
 | --- | --- | --- | --- |
-| **Sovereign Control Node Mode** | Paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, Cloudflare intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
+| **Sovereign Control Node Mode** | Paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, domain-or-Tailscale ingress intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
 | **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
 | **Shared Host Docker Mode** | Containerized validation and operation of the Shared Host substrate, including Curator/enrollment flows and shared services without a full systemd install. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
 
@@ -1136,9 +1139,9 @@ non-external coverage for Production 1-11 and Production 13-16 in
 closed by default, fake adapters prove contract behavior, and the live proof
 runner can execute once credentials exist.
 
-Production 12 is the remaining external gate: real Stripe, Cloudflare, Chutes,
-Telegram, Discord, and production host credentials are required before ArcLink
-can be claimed live-proven end to end.
+Production 12 is the remaining external gate: real Stripe, Chutes, Telegram,
+Discord, production host credentials, and the selected ingress-mode credentials
+are required before ArcLink can be claimed live-proven end to end.
 
 Detailed ArcLink documentation:
 

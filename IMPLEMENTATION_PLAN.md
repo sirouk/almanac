@@ -2,9 +2,9 @@
 
 ## Goal
 
-Transform ArcLink into ArcLink: a Chutes-first, self-serve, paid,
+Transform the inherited shared-host foundation into ArcLink: a Chutes-first, self-serve, paid,
 single-user AI deployment SaaS with web, Telegram, and Discord onboarding;
-Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
+Stripe entitlement gates; domain-or-Tailscale ingress; responsive
 user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
 Notion, Nextcloud, code-server, bot, and health robustness.
 
@@ -48,8 +48,8 @@ Rejected/deferred paths:
 - SQLite remains the first ArcLink commercial-state database, with Postgres
   kept as an evolution path.
 - Next.js 15 + Tailwind 4 is the production dashboard shell.
-- Fake adapters default for Stripe, Cloudflare, Chutes, Telegram, Discord, and
-  Docker executor tests.
+- Fake adapters default for Stripe, Cloudflare/domain ingress, Tailscale
+  ingress, Chutes, Telegram, Discord, and Docker executor tests.
 - Live execution is behind explicit flags, credential checks, and redacted
   evidence output.
 
@@ -82,7 +82,7 @@ Keep these surfaces green and avoid rebuilding them unless tests prove a
 regression:
 
 - Production 1-2: hosted API, auth, CSRF, audit, OpenAPI.
-- Production 3-6: Stripe, Cloudflare, Docker executor, Chutes fake/live
+- Production 3-6: Stripe, Cloudflare/domain ingress, Tailscale ingress, Docker executor, Chutes fake/live
   boundaries.
 - Production 7: web/Telegram/Discord shared onboarding state machine.
 - Production 8-10: user dashboard, admin dashboard, brand/browser product
@@ -98,8 +98,9 @@ Status: externally blocked.
 Use the existing readiness/diagnostics/live-proof stack when credentials are
 available:
 
-1. Populate local/private live configuration for Stripe, Cloudflare, Chutes,
-   Telegram, Discord, and the production host.
+1. Populate local/private live configuration for Stripe, Chutes, Telegram,
+   Discord, the production host, and either Cloudflare domain ingress or
+   Tailscale ingress.
 2. Run host readiness and provider diagnostics in live mode.
 3. Run the live proof runner first as a dry run, then with explicit live
    execution enabled.
@@ -129,8 +130,10 @@ Status: future after credentialed proof.
 
 - [ ] [external] Stripe production account, API keys, webhook secret,
   product/price IDs, and portal config.
-- [ ] [external] Cloudflare zone for `arclink.online` and scoped DNS/tunnel
-  token.
+- [ ] [external] Domain-mode ingress: Cloudflare zone for `arclink.online` and
+  scoped DNS/tunnel token.
+- [ ] [external] Tailscale-mode ingress: Tailscale node login, MagicDNS/HTTPS
+  certificate readiness, and Funnel/Serve approval for the selected host.
 - [ ] [external] Chutes production account/key strategy for live inference and
   per-deployment credential proof.
 - [ ] [external] Telegram public onboarding bot token.
@@ -172,6 +175,6 @@ credentialed proof for Production 12.
 
 Retry guard: do not treat the missing credentialed live proof as a repairable
 BUILD implementation gap. Re-enter BUILD only if a no-secret regression appears
-or if the required Stripe, Cloudflare, Chutes, Telegram, Discord, and production
-host credentials are supplied for the explicit live run. See
+or if the required Stripe, Chutes, Telegram, Discord, production host, and
+selected ingress-mode credentials are supplied for the explicit live run. See
 `consensus/build_gate.md` for the local blocker gate.

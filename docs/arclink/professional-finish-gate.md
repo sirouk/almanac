@@ -21,8 +21,8 @@ end with honest evidence.
 ## Admin Finish
 
 - Operators can see onboarding funnel state, users, payments, provisioning
-  queue, service health, host health, Cloudflare/DNS drift, bot state, provider
-  state, audit, and guarded actions.
+  queue, service health, host health, domain/Tailscale ingress drift, bot state,
+  provider state, audit, and guarded actions.
 - Mutating actions require auth, role, CSRF or webhook signature, reason,
   idempotency, and audit.
 - Reconciliation drift is visible: Stripe versus local entitlement, active DNS

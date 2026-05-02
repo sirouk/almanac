@@ -2,7 +2,7 @@
 
 ## Foundation (2026-05-01)
 
-Initial ArcLink foundation landed as an additive layer on the ArcLink substrate.
+Initial ArcLink foundation landed as an additive layer on the shared-host substrate.
 All work is no-secret testable; no live provider credentials are required.
 
 ### Modules Delivered

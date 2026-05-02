@@ -38,7 +38,7 @@ files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
 | `docs/arclink/professional-finish-gate.md` | Current. Gate criteria unchanged. |
 | `docs/arclink/operations-runbook.md` | Current after this pass. 13 sections including API, ingress, executor, rollback, scale operations, readiness, diagnostics, and live evidence. |
 | `docs/arclink/secret-checklist.md` | Current. Secret inventory, handling rules, verification command. |
-| `docs/arclink/ingress-plan.md` | Current. DNS layout, Cloudflare, Traefik, SSH, drift, teardown. |
+| `docs/arclink/ingress-plan.md` | Current. Domain/Tailscale ingress, DNS layout, Traefik, SSH, drift, teardown. |
 | `docs/arclink/backup-restore.md` | Current. Backup targets, schedule, restore, DR, retention. |
 | `docs/arclink/alert-candidates.md` | Current. Critical/warning/info alert signals with sources. |
 | `docs/arclink/data-safety.md` | Current. Isolation, volumes, secrets, teardown safeguards. |
@@ -51,8 +51,8 @@ files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
   credentials are available.
 - Production 12 is not live-proven yet; the scaffold is ready, but the full
   live journey needs credentials and an explicit credentialed run.
-- All 6 external credential sets remain absent (Stripe, Cloudflare, Chutes,
-  Telegram, Discord, host).
+- External credential sets remain absent (Stripe, Chutes, Telegram, Discord,
+  host, and the selected Cloudflare-domain or Tailscale ingress mode).
 - The action worker has code-level batch and stale-recovery entrypoints, but no
   documented production service/timer unit is live yet.
 

@@ -42,30 +42,51 @@ unreachable or background service unhealthy).
 - Cookie issues: verify `ARCLINK_COOKIE_DOMAIN` matches the request domain;
   set `ARCLINK_COOKIE_SECURE=0` for plain HTTP dev.
 
-## 2. Ingress / DNS (Cloudflare)
+## 2. Ingress / DNS
 
 **Module:** `python/arclink_ingress.py`
 
 **Operations:**
 | Function | Purpose |
 |----------|---------|
-| `desired_arclink_dns_records(prefix, base_domain, target)` | Compute expected DNS shape |
-| `provision_arclink_dns(...)` | Create/update records (fake default) |
-| `reconcile_arclink_dns(...)` | Detect drift between desired and actual |
-| `teardown_arclink_dns(...)` | Remove records for a deployment |
-| `render_traefik_dynamic_labels(...)` | Generate Traefik Docker labels |
+| `desired_arclink_ingress_records(...)` | Compute expected domain-mode DNS records or empty Tailscale DNS intent |
+| `provision_arclink_dns(...)` | Create/update Cloudflare records in domain mode (fake default) |
+| `reconcile_arclink_dns(...)` | Detect domain-mode drift between desired and actual |
+| `teardown_arclink_dns(...)` | Remove Cloudflare records for a deployment |
+| `render_traefik_dynamic_labels(...)` | Generate host or path-based Traefik Docker labels |
 
-**Env vars (live mode):**
+**Common env vars:**
+| Var | Purpose |
+|-----|---------|
+| `ARCLINK_INGRESS_MODE` | `domain` or `tailscale` |
+| `ARCLINK_BASE_DOMAIN` | Root domain in domain mode; fallback host in Tailscale mode |
+| `ARCLINK_EDGE_TARGET` | CNAME target in domain mode |
+
+**Domain-mode env vars:**
 | Var | Purpose |
 |-----|---------|
 | `CLOUDFLARE_API_TOKEN` | Scoped API token for zone writes |
 | `CLOUDFLARE_ZONE_ID` | Target zone |
 
-**Fake mode:** Default. Records are persisted to SQLite but no Cloudflare API
-calls are made. Drift reconciliation reports local-only state.
+**Tailscale-mode env vars:**
+| Var | Purpose |
+|-----|---------|
+| `ARCLINK_TAILSCALE_DNS_NAME` | Control or worker node FQDN |
+| `ARCLINK_TAILSCALE_HTTPS_PORT` | Funnel/Serve HTTPS port, default `443` |
+| `ARCLINK_TAILSCALE_NOTION_PATH` | Public Notion webhook path |
+| `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY` | `path` by default; `subdomain` only when proven |
 
-**Live mode:** Enabled when both `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID`
-are set. Creates real DNS records. Teardown deletes records from Cloudflare.
+**Fake mode:** Default. Records and intent are persisted to SQLite but no
+provider API calls are made. Drift reconciliation reports local-only state.
+
+**Domain live mode:** Enabled when both `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ZONE_ID` are set. Creates real DNS records. Teardown deletes records
+from Cloudflare.
+
+**Tailscale live mode:** `deploy.sh control install` keeps the control node
+Dockerized, then uses the host Tailscale CLI as the network edge. It publishes
+the web/API/Notion routes on the selected HTTPS port and does not require
+Cloudflare DNS credentials.
 
 **Drift detection:**
 ```python
@@ -77,6 +98,8 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
 **Troubleshooting:**
 - Drift false positives: ensure the raw Cloudflare export is current.
 - Provision fails: check token scope includes `Zone:DNS:Edit` for the zone.
+- Tailscale route absent: confirm the host is logged in to Tailscale and any
+  Funnel/Serve approval URL was accepted by a tailnet admin.
 
 ## 3. Docker Compose Executor
 
@@ -397,9 +420,9 @@ print(json.dumps(result.to_dict(), indent=2))
 "
 ```
 
-Reports which provider credentials (Stripe, Cloudflare, Chutes, Telegram,
-Discord, Docker) are present or missing. Credential values are never returned.
-Live connectivity checks require `ARCLINK_E2E_LIVE=1`.
+Reports which billing, ingress, model-provider (Chutes), bot, and Docker
+credentials are present or missing. Credential values are never returned. Live
+connectivity checks require `ARCLINK_E2E_LIVE=1`.
 
 ## 13. Live Journey and Evidence
 

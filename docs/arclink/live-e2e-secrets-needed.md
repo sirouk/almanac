@@ -19,8 +19,10 @@ secrets.
 | `ARCLINK_E2E_LIVE` | All steps | Master gate for live E2E |
 | `STRIPE_SECRET_KEY` | Checkout, webhook | Stripe test-mode key (sk_test_*) |
 | `STRIPE_WEBHOOK_SECRET` | Webhook delivery | Stripe webhook signature |
-| `CLOUDFLARE_API_TOKEN` | DNS health | Scoped zone DNS token |
-| `CLOUDFLARE_ZONE_ID` | DNS health | Target zone ID |
+| `ARCLINK_INGRESS_MODE` | Ingress selection | `domain` or `tailscale` |
+| `CLOUDFLARE_API_TOKEN` | Domain ingress DNS health | Scoped zone DNS token |
+| `CLOUDFLARE_ZONE_ID` | Domain ingress DNS health | Target zone ID |
+| `ARCLINK_TAILSCALE_DNS_NAME` | Tailscale ingress health | Control or worker node FQDN |
 | `ARCLINK_E2E_DOCKER` | Docker check | Opt-in for Docker access |
 | `CHUTES_API_KEY` | Key provisioning | Chutes owner key |
 | `TELEGRAM_BOT_TOKEN` | Bot check | Telegram bot token |
@@ -35,8 +37,10 @@ After a live run, the evidence ledger JSON can be saved using the template at
 
 Initial development can proceed without live secrets. Real end-to-end deployment testing will need:
 
-- Cloudflare API token scoped to DNS edit/read for the test customer domain and
-  the zone id if auto-discovery is not implemented yet.
+- Domain mode: Cloudflare API token scoped to DNS edit/read for the test
+  customer domain and the zone id if auto-discovery is not implemented yet.
+- Tailscale mode: a logged-in Tailscale node, MagicDNS/HTTPS certificate
+  readiness, and tailnet operator approval for any Serve/Funnel prompts.
 - Hetzner API token or SSH access to the target server.
 - Stripe secret key, webhook signing secret, product/price ids, and customer portal config.
 - Chutes owner/admin API key or account credentials capable of creating/revoking per-deployment API keys.
@@ -50,30 +54,33 @@ Never paste these into tracked files. Provide them through local `.env`, secret 
 
 The local foundation tests in `docs/arclink/foundation.md` use fake clients and
 fixture catalog data. Passing them does not prove live Stripe, Cloudflare,
-Chutes, Telegram, Discord, Notion, or host provisioning access.
+Tailscale, Chutes, Telegram, Discord, Notion, or host provisioning access.
 
 The provisioning dry-run renderer records Docker, DNS, Traefik, state-root, and
 access intent without live secrets. A live E2E still needs a deployment host
 that can execute the rendered Compose plan, bind the resulting services through
-Traefik, create Cloudflare DNS/tunnel records, and verify the health placeholders
-against real containers.
+Traefik, publish either Cloudflare domain-mode records or Tailscale-mode routes,
+and verify the health placeholders against real containers.
 
 The executor boundary can be tested without live secrets because mutating calls
 fail closed by default and fake adapters consume rendered intent. A live E2E
-must explicitly enable the executor, provide production Docker/Cloudflare/
-Chutes/Stripe/rollback adapters, and inject a secret resolver that materializes
-only `secret://...` references to `/run/secrets/...` files.
+must explicitly enable the executor, provide production Docker, Stripe, Chutes,
+rollback, and selected ingress-mode adapters, and inject a secret resolver that
+materializes only `secret://...` references to `/run/secrets/...` files.
 
 Executor adapter credential checklist:
 
 - Docker Compose apply: deployment host shell access, Docker context access,
   writable per-deployment state root, and a secret resolver that writes only
   `/run/secrets/*` files.
-- Cloudflare DNS apply: zone id or discoverable zone name plus a scoped API
-  token that can read and edit DNS records for the test domain.
-- Cloudflare Access/Tunnel apply: account id, tunnel credentials, Access policy
-  configuration, and a scoped API token that can manage tunnels and Access
-  applications for the test domain.
+- Domain ingress apply: Cloudflare zone id or discoverable zone name plus a
+  scoped API token that can read and edit DNS records for the test domain.
+- Domain SSH apply: Cloudflare Access/Tunnel account id, tunnel credentials,
+  Access policy configuration, and a scoped API token that can manage tunnels
+  and Access applications for the test domain.
+- Tailscale ingress apply: host Tailscale CLI access, logged-in node state,
+  selected HTTPS port, selected Notion path, and tailnet approval for
+  Serve/Funnel publication.
 - Chutes key apply: owner/admin Chutes credential capable of creating,
   rotating, and revoking per-deployment API keys while storing returned key
   material only in the configured secret manager.

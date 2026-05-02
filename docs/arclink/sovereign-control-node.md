@@ -101,10 +101,10 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      Cloudflare DNS only in domain mode, applies Docker Compose locally or over
      SSH, records service health, and writes audited timeline events.
    - `python/arclink_executor.py` is the executor boundary for Docker Compose,
-     Cloudflare DNS/access, Chutes key lifecycle, Stripe actions, and rollback.
+     domain/Tailscale ingress, Chutes key lifecycle, Stripe actions, and rollback.
      In live mode it materializes compose/env/secret files under the deployment
-     root, supports local and SSH Docker Compose runners, and uses the
-     Cloudflare API for DNS upserts.
+     root, supports local and SSH Docker Compose runners, uses the Cloudflare
+     API for domain-mode DNS upserts, and skips DNS in Tailscale mode.
    - `python/arclink_action_worker.py` consumes queued admin actions.
    - `control-api` exposes admin health, DNS drift, reconciliation, actions,
      payments, bots, security, and scale-operation views.

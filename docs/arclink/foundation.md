@@ -1,6 +1,6 @@
 # ArcLink Foundation Notes
 
-ArcLink foundation code is intentionally additive. Existing ArcLink deploy,
+ArcLink foundation code is intentionally additive. Existing deploy,
 onboarding, Hermes, qmd, vault, memory, Notion, and service-health paths remain
 under their current names while new SaaS-facing primitives use `ARCLINK_*`
 configuration and `arclink_*` database tables.
@@ -66,20 +66,23 @@ Provisioning work must plan a dedicated Nextcloud instance and data volume for
 each deployment. A shared Nextcloud instance remains a future optimization only
 if access-isolation tests prove it is simpler and at least as safe.
 
-ArcLink SSH access strategy:
-`ARCLINK_SSH_ACCESS_STRATEGY=cloudflare_access_tcp`.
+ArcLink SSH access strategies:
+`cloudflare_access_tcp` in domain mode and `tailscale_direct_ssh` in Tailscale
+mode.
 
 The SaaS surface may advertise Cloudflare Access TCP SSH hints after the tunnel
-exists. It must not advertise raw SSH over HTTP or path-prefix HTTP routing as
-an SSH transport.
+exists in domain mode, or direct SSH to the tailnet host in Tailscale mode. It
+must not advertise raw SSH over HTTP or path-prefix HTTP routing as an SSH
+transport.
 
 ## Provisioning Dry Runs
 
 `python/arclink_provisioning.py` renders the first no-secret ArcLink
 provisioning contract. It does not start containers. It turns a deployment row
-into Compose, DNS, Traefik, state-root, service-health placeholder, and access
-intent so dashboard/admin code and the guarded executor boundary can build
-against stable records before production host execution is wired in.
+into Compose, selected ingress, Traefik, state-root, service-health
+placeholder, and access intent so dashboard/admin code and the guarded executor
+boundary can build against stable records before production host execution is
+wired in.
 
 The renderer deliberately keeps Docker Compose as the MVP substrate instead of
 introducing a second scheduler. That preserves the current Hermes, qmd, vault
@@ -96,8 +99,9 @@ Nextcloud dry-run intent uses a dedicated app container plus dedicated
 the MVP isolation contract explicit in Compose and avoids depending on a shared
 database or cache before cross-tenant isolation is proven.
 
-Chutes, Stripe, Cloudflare, bot, Notion, code-server, and Nextcloud
-credentials are represented only by `secret://...` references. The provisioning
+Chutes, Stripe, Cloudflare/domain ingress, Tailscale ingress, bot, Notion,
+code-server, and Nextcloud credentials are represented only by `secret://...`
+references. The provisioning
 validator rejects plaintext-looking secret values in rendered output and marks
 the provisioning job failed so the same idempotency key can be resumed after
 the metadata is repaired. This keeps Docker dry-run output safe to persist for
@@ -135,7 +139,7 @@ requires the explicit live/E2E executor gate and production adapter wiring.
 ## Executor Boundary
 
 `python/arclink_executor.py` defines the current mutating boundary for Docker
-Compose, Cloudflare DNS, Cloudflare Access, Chutes key lifecycle, Stripe
+Compose, domain/Tailscale ingress, Chutes key lifecycle, Stripe
 actions, and rollback application. The default executor is disabled:
 mutating methods raise unless `ArcLinkExecutorConfig.live_enabled` is set.
 
@@ -146,10 +150,10 @@ prove the contract without exposing plaintext secret values in returned data.
 
 Fake executor replays are intentionally strict. Docker Compose idempotency keys
 are bound to the rendered intent digest, while Cloudflare DNS, Cloudflare
-Access, Chutes key lifecycle, and rollback idempotency keys are bound to stable
-operation digests derived from their request inputs. Reusing a key with changed
-records, access plans, Chutes actions, Chutes secret refs, rollback plans, or
-Compose intent raises before returning a stored result.
+Access, Tailscale ingress, Chutes key lifecycle, and rollback idempotency keys
+are bound to stable operation digests derived from their request inputs. Reusing
+a key with changed records, access plans, Chutes actions, Chutes secret refs,
+rollback plans, or Compose intent raises before returning a stored result.
 
 The fake Compose path also validates the dependency graph before apply. Services
 may use list-style or object-style `depends_on`, but every dependency must refer
@@ -159,9 +163,9 @@ to the dependency validation real Docker Compose would perform.
 This is not a production live execution implementation yet. The shipped
 boundary verifies the fail-closed behavior, idempotency metadata, secret
 materialization rules, Compose dependency validation, DNS record type allowlist,
-Cloudflare Access TCP guard, supported Chutes actions, supported Stripe actions,
-and rollback state-root preservation requirement. Real Docker, Cloudflare,
-Chutes, Stripe, and rollback adapters remain E2E work.
+Cloudflare Access TCP guard, Tailscale SSH guard, supported Chutes actions,
+supported Stripe actions, and rollback state-root preservation requirement. Real
+Docker, selected ingress, Chutes, Stripe, and rollback adapters remain E2E work.
 
 ## Public Onboarding Contract
 

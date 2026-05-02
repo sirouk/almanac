@@ -6,14 +6,14 @@ operations.
 
 ## Current Boundary
 
-ArcLink is currently an additive foundation on top of ArcLink. New product
+ArcLink is currently an additive foundation on top of the shared-host substrate. New product
 surfaces use `ARCLINK_*` configuration, `arclink_*` database tables, and
-`python/arclink_*.py` helpers while existing ArcLink deploy, onboarding,
+`python/arclink_*.py` helpers while existing deploy, onboarding,
 Hermes, qmd, vault, memory, Notion, and health paths keep their current names.
 
 The current provisioning layer records and validates intent. Public onboarding
 has no-secret durable session and checkout contracts. A guarded executor
-boundary exists for Docker Compose, Cloudflare, model-provider, Stripe, and
+boundary exists for Docker Compose, domain/Tailscale ingress, model-provider, Stripe, and
 rollback operations, but it fails closed unless live/E2E execution is explicitly
 enabled. ArcLink now ships a local no-secret Python product surface over the
 onboarding, user-dashboard, admin-dashboard, and queued-action contracts. It is
@@ -25,9 +25,9 @@ authenticate dashboard sessions, or execute queued admin actions.
 ## Assumptions
 
 - Docker Compose remains the MVP deployment substrate.
-- The existing ArcLink Docker path is the operational base for ArcLink work.
-- Unit and regression tests must not require live Stripe, Cloudflare, model
-  provider, Telegram, Discord, Notion, or host provisioning secrets.
+- The existing shared-host Docker path is the operational base for ArcLink work.
+- Unit and regression tests must not require live Stripe, Cloudflare, Tailscale,
+  model provider, Telegram, Discord, Notion, or host provisioning secrets.
 - Secret material is represented by `secret://...` references or Compose
   secret file targets, never plaintext values in persisted intent.
 - Public onboarding stores channel/customer/checkout hints only. It must not
@@ -57,12 +57,13 @@ authenticate dashboard sessions, or execute queued admin actions.
   an injected resolver.
 - Rendered Compose services must not reference missing `depends_on` services.
 - Dedicated per-deployment Nextcloud services are the MVP isolation model.
-- SSH access is advertised only through Cloudflare Access TCP-style hints, not
-  raw SSH over HTTP or path-prefix routing.
+- SSH access is advertised through Cloudflare Access TCP hints in domain mode or
+  direct Tailscale SSH hints in Tailscale mode, not raw SSH over HTTP or
+  path-prefix routing.
 
 ## Rationale
 
-The foundation keeps ArcLink additive so the project can reuse ArcLink's
+The foundation keeps ArcLink additive so the project can reuse the
 working host substrate instead of duplicating deploy, runtime, retrieval,
 memory, notification, and repair behavior too early. `ARCLINK_*` names and
 `arclink_*` tables give product work a clear namespace while preserving
@@ -76,8 +77,9 @@ roll back containers.
 
 Dedicated per-deployment Nextcloud services are the default because isolation is
 easier to reason about than shared app/database/cache tenancy during MVP work.
-Cloudflare Access TCP-style SSH hints are pinned because raw SSH cannot be
-routed safely through HTTP path prefixes or ordinary Traefik HTTP host rules.
+Cloudflare Access TCP-style SSH hints are pinned for domain mode because raw SSH
+cannot be routed safely through HTTP path prefixes or ordinary Traefik HTTP host
+rules. Tailscale mode uses direct SSH to the tailnet host.
 
 ## Ownership
 
@@ -177,7 +179,7 @@ Provisioning dry run:
 
 Executor boundary:
 
-- Docker Compose, Cloudflare DNS, Cloudflare Access, model-provider key, Stripe
+- Docker Compose, ingress, model-provider key, Stripe
   action, and rollback apply calls raise `ArcLinkLiveExecutionRequired` by
   default.
 - The testable fake path sets `ArcLinkExecutorConfig.live_enabled=True` and
@@ -198,12 +200,12 @@ Executor boundary:
   is returned.
 - Fake Docker failure injection requires a positive service limit; zero or
   negative limits fail closed.
-- Cloudflare DNS execution allows only `A`, `AAAA`, `CNAME`, and `TXT` records.
+- Domain-mode DNS execution allows only `A`, `AAAA`, `CNAME`, and `TXT` records.
   Other record types fail before fake or future live apply.
-- Cloudflare Access execution rejects SSH strategies other than
-  `cloudflare_access_tcp`.
+- SSH execution rejects raw HTTP strategies and accepts only
+  `cloudflare_access_tcp` or `tailscale_direct_ssh`.
 - Model-provider key actions are limited to `create`, `rotate`, and `revoke`.
-- Fake Cloudflare DNS, Cloudflare Access, Chutes key lifecycle, and rollback
+- Fake Cloudflare DNS, Cloudflare Access, Tailscale ingress, Chutes key lifecycle, and rollback
   replays store an operation digest. Reusing an idempotency key with changed
   inputs fails instead of returning stale provider, edge, key, or rollback
   results.
@@ -338,7 +340,7 @@ Dashboard and admin contracts:
 - Admin dashboard filters are intentionally simple and SQLite-compatible:
   channel, status, deployment id, user id, and `since`.
 - Admin actions are represented as `arclink_action_intents` rows with status
-  `queued`; the current helper does not call Stripe, Cloudflare,
+  `queued`; the current helper does not call Stripe, Cloudflare, Tailscale,
   model provider, Docker, Telegram, Discord, Notion, or host provisioning APIs.
 - Admin actions require an admin id, supported action type, supported target,
   reason, and idempotency key.
@@ -471,12 +473,12 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
 
 ## Open Risks
 
-- Live provisioning execution still needs production Docker, Cloudflare,
+- Live provisioning execution still needs production Docker, selected ingress,
   model-provider, Stripe, secret-provider, and rollback adapters wired behind
   the explicit live/E2E gate. The current live E2E scaffold is not a completed
   live customer journey until credentials are supplied and the run succeeds.
-- Cloudflare DNS/tunnel changes are represented as desired intent and fake drift
-  checks only.
+- Cloudflare DNS/tunnel or Tailscale publication changes are represented as
+  desired intent and fake drift checks only.
 - Live model provider key lifecycle is not implemented; the current key manager
   is a fake no-secret adapter.
 - The local product surface is not the production hosted UI. Production

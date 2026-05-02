@@ -382,6 +382,19 @@ def test_readme_distinguishes_control_shared_host_and_docker_paths() -> None:
     print("PASS test_readme_distinguishes_control_shared_host_and_docker_paths")
 
 
+def test_sovereign_ingress_docs_cover_domain_and_tailscale_modes() -> None:
+    ingress = read("docs/arclink/ingress-plan.md")
+    live = read("docs/arclink/live-e2e-secrets-needed.md")
+    plan = read("IMPLEMENTATION_PLAN.md")
+    expect("ARCLINK_INGRESS_MODE=domain" in ingress and "ARCLINK_INGRESS_MODE=tailscale" in ingress, ingress)
+    expect("u-{prefix}.{base_domain}" in ingress and "files-{prefix}.{base_domain}" in ingress, ingress)
+    expect("https://{tailscale_dns_name}/u/{prefix}/files" in ingress, ingress)
+    expect("cloudflare_access_tcp" in ingress and "tailscale_direct_ssh" in ingress, ingress)
+    expect("Domain mode:" in live and "Tailscale mode:" in live, live)
+    expect("domain-or-Tailscale ingress" in plan, plan)
+    print("PASS test_sovereign_ingress_docs_cover_domain_and_tailscale_modes")
+
+
 def test_docker_compose_config_validates_when_docker_is_available() -> None:
     docker = subprocess.run(["bash", "-lc", "command -v docker >/dev/null && docker compose version >/dev/null"], cwd=REPO)
     if docker.returncode != 0:
@@ -414,8 +427,9 @@ def main() -> int:
     test_dockerignore_excludes_sensitive_and_generated_context()
     test_readme_keeps_canonical_host_layout_root()
     test_readme_distinguishes_control_shared_host_and_docker_paths()
+    test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 11 ArcLink Docker regression tests")
+    print("PASS all 12 ArcLink Docker regression tests")
     return 0
 
 

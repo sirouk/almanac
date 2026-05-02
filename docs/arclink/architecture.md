@@ -1,7 +1,7 @@
 # ArcLink Architecture
 
 ArcLink is a self-serve AI deployment SaaS built as an additive layer on top of
-the ArcLink shared-host substrate. This document describes the current module
+the shared-host substrate. This document describes the current module
 map, data flow, and integration boundaries.
 
 ## Module Map
@@ -9,13 +9,13 @@ map, data flow, and integration boundaries.
 ```text
 arclink_product.py          Config resolution, ARCLINK_*/ARCLINK_* precedence
 arclink_chutes.py           Chutes catalog client, model discovery
-arclink_adapters.py         Fake/live adapter registry (Stripe, Cloudflare, Chutes, bots)
+arclink_adapters.py         Fake/live adapter registry (Stripe, ingress, Chutes, bots)
 arclink_entitlements.py     Stripe webhook verification, entitlement state machine, comp helpers
 arclink_onboarding.py       Public onboarding sessions and funnel events (web, Telegram, Discord)
 arclink_ingress.py          Hostname generation, DNS drift detection, Traefik label intent
 arclink_access.py           Nextcloud isolation model, SSH access strategy guards
 arclink_provisioning.py     Dry-run provisioning renderer, job state, rollback planning
-arclink_executor.py         Guarded mutating boundary (Docker, Cloudflare, Chutes, Stripe, rollback)
+arclink_executor.py         Guarded mutating boundary (Docker, ingress, Chutes, Stripe, rollback)
 arclink_fleet.py            Fleet host registry, deterministic placement, capacity summaries
 arclink_action_worker.py    Queued admin action execution, attempts, stale recovery
 arclink_rollout.py          Durable rollout waves, pause/fail/rollback records, version drift
@@ -54,7 +54,7 @@ Customer ──► Public Onboarding (web / Telegram / Discord)
          arclink_provisioning (dry-run intent)
                 │
                 ├── Docker Compose services
-                ├── Cloudflare DNS / Access intent
+                ├── Domain/Tailscale ingress and SSH intent
                 ├── Chutes key lifecycle intent
                 ├── Traefik labels and ingress
                 ├── State roots and secret references
@@ -64,7 +64,7 @@ Customer ──► Public Onboarding (web / Telegram / Discord)
          arclink_executor (guarded, fail-closed)
                 │
                 ├── Docker Compose apply
-                ├── Cloudflare DNS / Access apply
+                ├── Domain/Tailscale ingress apply
                 ├── Chutes key create / rotate / revoke
                 ├── Stripe refund / cancel / portal
                 └── Rollback apply
@@ -101,7 +101,7 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 
 ### ArcLink Substrate (existing, unchanged)
 
-ArcLink reuses ArcLink's Docker Compose orchestration, Hermes runtime, qmd
+ArcLink reuses the shared-host Docker Compose orchestration, Hermes runtime, qmd
 retrieval, vault watching, memory synthesis, Nextcloud, code-server, Curator,
 notification delivery, and health monitoring. These services run inside
 per-deployment containers rendered by the ArcLink provisioning layer.
@@ -109,7 +109,8 @@ per-deployment containers rendered by the ArcLink provisioning layer.
 ### External Providers (gated behind executor)
 
 - **Stripe**: checkout, webhooks, subscription lifecycle, refunds, portal.
-- **Cloudflare**: DNS records, tunnels, Access policies for TCP SSH.
+- **Ingress**: Cloudflare DNS/Access in domain mode; Tailscale publication and
+  direct SSH in Tailscale mode.
 - **Chutes**: per-deployment API key lifecycle, model catalog.
 - **Telegram/Discord**: public onboarding bot clients (skeleton only today).
 
@@ -152,8 +153,10 @@ live-gated behavior.
 
 - **Compute**: dedicated Docker Compose project per deployment.
 - **Storage**: dedicated Nextcloud instance, DB, and Redis per deployment.
-- **Network**: Traefik labels with per-deployment hostnames.
-- **SSH**: Cloudflare Access TCP only; no raw SSH over HTTP.
+- **Network**: Traefik labels with per-deployment hostnames or Tailscale path
+  routes.
+- **SSH**: Cloudflare Access TCP in domain mode or direct Tailscale SSH in
+  Tailscale mode; no raw SSH over HTTP.
 - **Secrets**: per-deployment secret references; no shared credentials.
 
 ## Current Limitations
@@ -167,8 +170,9 @@ live-gated behavior.
 - Public bots have runtime adapters with fake-mode fallback; live HTTP
   transport requires bot tokens.
 - Live E2E scaffold exists (`tests/test_arclink_e2e_live.py`) with
-  Stripe, Cloudflare, Chutes, Telegram, Discord, and read-only Docker checks,
+  Stripe, selected ingress mode, Chutes, Telegram, Discord, and read-only Docker checks,
   but full live proof skips until credentials and explicit live flags are
   available. See `docs/arclink/live-e2e-secrets-needed.md`.
-- All 6 external credential sets remain absent (Stripe, Cloudflare, Chutes,
-  Telegram, Discord, host). Production 12 live journey is blocked on these.
+- External credential sets remain absent (Stripe, Chutes, Telegram, Discord,
+  host, and selected Cloudflare-domain or Tailscale ingress mode). Production
+  12 live journey is blocked on these.

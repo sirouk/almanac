@@ -11,7 +11,8 @@ Each ArcLink deployment runs as an isolated Docker Compose stack with:
 - **Isolated Docker volumes** namespaced by Compose project name
 
 The isolation model is enforced by `arclink_access.py` which pins the
-`cloudflare_access_tcp` SSH strategy and `nextcloud_dedicated` isolation model.
+`cloudflare_access_tcp` domain SSH strategy, `tailscale_direct_ssh` Tailscale
+SSH strategy, and `nextcloud_dedicated` isolation model.
 
 ## Volume Layout
 

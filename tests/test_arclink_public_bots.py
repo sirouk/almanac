@@ -104,7 +104,7 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
 
     started = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:42", text="/start")
     expect(started.action == "prompt_name", str(started))
-    expect("Stripe will collect your email" in started.reply, started.reply)
+    expect("Stripe collects your email" in started.reply, started.reply)
     named = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -127,7 +127,7 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     )
     expect({started.session_id, named.session_id, planned.session_id, checkout.session_id} == {started.session_id}, "session changed")
     expect(checkout.action == "open_checkout" and checkout.checkout_url.startswith("https://stripe.test/checkout/"), str(checkout))
-    expect(checkout.buttons and checkout.buttons[0].label == "Hire First Agent", str(checkout.buttons))
+    expect(checkout.buttons and checkout.buttons[0].label == "Hire My First Agent", str(checkout.buttons))
     session = conn.execute(
         "SELECT channel, channel_identity, status, checkout_state, email_hint, display_name_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
         (checkout.session_id,),
@@ -318,7 +318,7 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
         text="/connect-notion",
     )
     expect(turn.action == "connect_notion_unavailable", str(turn))
-    expect("once your first agent is aboard ArcLink" in turn.reply, turn.reply)
+    expect("once your first agent is awake aboard ArcLink" in turn.reply, turn.reply)
     count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
     expect(count == 0, f"workflow command should not create an onboarding session, got {count}")
     print("PASS test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions")
@@ -338,7 +338,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         text="/agents",
     )
     expect(unavailable.action == "agents_unavailable", str(unavailable))
-    expect(unavailable.buttons and unavailable.buttons[0].label == "Board ArcLink", str(unavailable.buttons))
+    expect(unavailable.buttons and unavailable.buttons[0].label == "Take Me Aboard", str(unavailable.buttons))
 
     seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-prime")
     roster = bots.handle_arclink_public_bot_turn(

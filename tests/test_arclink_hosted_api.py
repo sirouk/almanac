@@ -1089,7 +1089,7 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
     expect(payload.get("sent") is True, str(payload))
     expect(payload.get("callback_acknowledged") is True, str(payload))
     expect(transport.answered_callbacks == [{"callback_query_id": "cb_start", "text": ""}], str(transport.answered_callbacks))
-    expect(transport.sent_messages and "Raven online" in transport.sent_messages[0]["text"], str(transport.sent_messages))
+    expect(transport.sent_messages and "I'm Raven" in transport.sent_messages[0]["text"], str(transport.sent_messages))
     print("PASS test_telegram_webhook_acknowledges_button_callbacks")
 
 

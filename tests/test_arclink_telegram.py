@@ -86,7 +86,7 @@ def test_telegram_fake_transport_polling() -> None:
     )
     expect(len(transport.sent_messages) == 2, f"expected 2 replies, got {len(transport.sent_messages)}")
     expect("Raven" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
-    expect("Mission owner saved" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("Name painted on the hatch" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
     expect("reply_markup" in transport.sent_messages[1], str(transport.sent_messages[1]))
     print("PASS test_telegram_fake_transport_polling")
 

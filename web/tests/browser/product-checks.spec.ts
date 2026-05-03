@@ -205,7 +205,7 @@ test.describe("Route smoke", () => {
 
   test("/onboarding renders start step", async ({ page }) => {
     await page.goto("/onboarding");
-    await expect(page.locator("text=Board The Vessel")).toBeVisible();
+    await expect(page.locator("text=I'm Raven")).toBeVisible();
     await expect(page.locator("text=Stripe collects email securely")).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toBeVisible();
     // Fake adapter notice present
@@ -416,15 +416,15 @@ test.describe("Onboarding flow", () => {
 
     // Step 1: Start without collecting email in ArcLink chat/form
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Name The Mission")).toBeVisible();
+    await expect(page.locator("text=Name On The Hatch")).toBeVisible();
 
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Hire First Agent").first()).toBeVisible();
+    await expect(page.locator("text=Hire My First Agent").first()).toBeVisible();
 
     // Step 3: Checkout
-    await page.click("text=Hire First Agent - $35/mo");
-    await expect(page.locator("text=Complete Hire").last()).toBeVisible();
+    await page.click("text=Hire My First Agent - $35/mo");
+    await expect(page.locator("text=Complete The Hire").last()).toBeVisible();
   });
 });

@@ -90,7 +90,7 @@ def test_discord_message_event_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
-    expect("Mission owner saved" in result["data"]["content"], result["data"]["content"])
+    expect("Name painted on the hatch" in result["data"]["content"], result["data"]["content"])
     print("PASS test_discord_message_event_through_bot_contract")
 
 

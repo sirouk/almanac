@@ -18,7 +18,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"
           >
-            Board ArcLink
+            Take Me Aboard
           </Link>
         </div>
       </nav>
@@ -26,13 +26,13 @@ export default function Home() {
       {/* Hero */}
       <main className="flex flex-1 flex-col items-center justify-center px-6 text-center">
         <h1 className="font-display text-4xl font-bold leading-tight sm:text-5xl md:text-6xl">
-          Raven guides you aboard<br />
-          <span className="text-signal-orange">the ArcLink vessel.</span>
+          I&apos;m Raven.<br />
+          <span className="text-signal-orange">I&apos;ll bring ArcLink online.</span>
         </h1>
         <p className="mt-6 max-w-xl text-lg text-soft-white/70">
-          ArcLink is a private agentic harness: weapons-grade agents, SOTA inference rails,
-          managed memory, retrieval, files, code tools, bot channels, and deployment health.
-          Raven turns a few answers into a live pod. First agent $35/month.
+          Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your
+          private ArcLink vessel: weapons-grade agents, SOTA inference rails, memory, retrieval,
+          files, code tools, bot channels, and live deployment health. First agent $35/month.
         </p>
         <img
           src="/brand/raven/raven_hero.webp"
@@ -44,7 +44,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-6 py-3 text-base font-semibold text-jet transition hover:opacity-90"
           >
-            Hire First Agent
+            Hire My First Agent
           </Link>
           <Link
             href="/dashboard"
@@ -59,12 +59,12 @@ export default function Home() {
       <section className="border-t border-border px-6 py-16">
         <div className="mx-auto grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {[
-            { title: "Hermes Agent", desc: "Private AI assistant backed by your knowledge, memory, and skills." },
-            { title: "SOTA Model Rails", desc: "Chutes-first inference with BYOK paths for frontier providers." },
-            { title: "qmd Retrieval", desc: "Fast vault search that lets agents pull the right context on demand." },
-            { title: "Managed Memory", desc: "Hot-swappable memory stubs that keep the vessel oriented." },
-            { title: "Files & Code", desc: "Nextcloud storage and browser VS Code bound to each deployment." },
-            { title: "Health & Ops", desc: "Live systems checks across DNS, provisioning, services, and billing." },
+            { title: "Hermes Agent", desc: "I give each pod a private assistant with memory, skills, and room to grow." },
+            { title: "SOTA Model Rails", desc: "I start on Chutes and keep BYOK lanes open for the frontier models you trust." },
+            { title: "qmd Retrieval", desc: "I keep the vault searchable so agents can pull the right context fast." },
+            { title: "Managed Memory", desc: "I keep lightweight memory stubs hot so the vessel stays oriented." },
+            { title: "Files & Code", desc: "I wire in Nextcloud and browser VS Code so your pod has hands, not just words." },
+            { title: "Health & Ops", desc: "I watch DNS, billing, provisioning, and services so the launch path stays visible." },
           ].map((f) => (
             <div key={f.title} className="rounded-lg border border-border bg-surface p-6">
               <h3 className="font-display text-lg font-semibold text-signal-orange">{f.title}</h3>

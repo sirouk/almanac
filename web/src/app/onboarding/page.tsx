@@ -107,10 +107,10 @@ export default function OnboardingPage() {
           className="mb-5 h-16 w-16 rounded-full border border-border object-cover"
         />
         <h1 className="font-display text-2xl font-bold">
-          {step === "start" && "Board The Vessel"}
-          {step === "questions" && "Name The Mission"}
-          {step === "checkout" && "Hire First Agent"}
-          {step === "done" && "Checkout Armed"}
+          {step === "start" && "I'm Raven"}
+          {step === "questions" && "Name On The Hatch"}
+          {step === "checkout" && "Hire My First Agent"}
+          {step === "done" && "Stripe Link Ready"}
         </h1>
 
         {error && <ErrorAlert message={error} className="mt-4" />}
@@ -118,14 +118,14 @@ export default function OnboardingPage() {
         {step === "start" && (
           <form onSubmit={handleStart} className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              Raven is your guide aboard ArcLink, a private agentic vessel built to put weapons-grade agents and SOTA model rails within reach. Stripe collects email securely at checkout.
+              I can take you from a few answers to a private ArcLink vessel with a weapons-grade agent, SOTA model rails, memory, tools, and deployment health. Stripe collects email securely at checkout.
             </p>
             <button
               type="submit"
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Opening..." : "Board ArcLink"}
+              {loading ? "Opening..." : "Take Me Aboard"}
             </button>
           </form>
         )}
@@ -145,14 +145,14 @@ export default function OnboardingPage() {
               />
             </div>
             <p className="text-sm text-soft-white/40">
-              Starter: <span className="text-signal-orange">$35/month</span> for your first ArcLink agent. Additional crew agents are $15/month.
+              Starter puts your first ArcLink agent aboard for <span className="text-signal-orange">$35/month</span>. After launch, I can add more agents for $15/month each.
             </p>
             <button
               type="submit"
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Saving..." : "Lock Mission Name"}
+              {loading ? "Saving..." : "Paint The Hatch"}
             </button>
           </form>
         )}
@@ -160,14 +160,14 @@ export default function OnboardingPage() {
         {step === "checkout" && (
           <div className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              Raven will hand you to Stripe for secure payment, then watch for confirmation and move your ArcLink pod from manifest to launch queue.
+              I will hand you to Stripe, watch for confirmation, then move your first ArcLink agent from idea to launch queue.
             </p>
             <button
               onClick={handleCheckout}
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Preparing..." : "Hire First Agent - $35/mo"}
+              {loading ? "Preparing..." : "Hire My First Agent - $35/mo"}
             </button>
           </div>
         )}
@@ -177,19 +177,19 @@ export default function OnboardingPage() {
             {checkoutUrl ? (
               <>
                 <p className="text-sm text-soft-white/60">
-                  Your checkout session is armed.
+                  I have your checkout link ready.
                 </p>
                 <a
                   href={checkoutUrl}
                   className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
                 >
-                  Complete Hire
+                  Complete The Hire
                 </a>
               </>
             ) : (
               <>
                 <p className="text-sm text-neon-green">
-                  Onboarding complete. Raven is preparing your deployment.
+                  Onboarding complete. I am preparing your deployment.
                 </p>
                 <Link
                   href="/dashboard"

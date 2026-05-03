@@ -98,7 +98,7 @@ class LiveStripeClient:
             "custom_text": {
                 "submit": {
                     "message": (
-                        "Raven watches for payment confirmation, then moves your ArcLink pod from manifest to launch queue."
+                        "Raven is standing by. Once payment clears, I move your ArcLink pod into the launch queue."
                     )
                 }
             },

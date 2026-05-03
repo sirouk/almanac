@@ -26,6 +26,7 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("@tobilu/qmd@${qmd_version}" in body, body)
     expect("hermes-agent" in body and "hermes-venv" in body, body)
     expect("stripe" in body, body)
+    expect("[ -f /home/arclink/arclink/web/package-lock.json ]" in body, body)
     expect("cd /home/arclink/arclink/web" in body and "npm run build" in body, body)
     expect("ARCLINK_API_INTERNAL_URL=http://control-api:8900" in body, body)
     expect("poppler-utils" in body and "inotify-tools" in body and "sqlite3" in body, body)

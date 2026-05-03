@@ -24,7 +24,11 @@ export default function Home() {
       </nav>
 
       {/* Hero */}
-      <main className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+      <main className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
+        <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs uppercase tracking-[0.18em] text-soft-white/60">
+          <span className="h-1.5 w-1.5 rounded-full bg-signal-orange" aria-hidden />
+          Sovereign Cohort 001 — first 100 boarding
+        </div>
         <h1 className="font-display text-4xl font-bold leading-tight sm:text-5xl md:text-6xl">
           I&apos;m Raven.<br />
           <span className="text-signal-orange">I&apos;ll bring ArcLink online.</span>
@@ -53,10 +57,19 @@ export default function Home() {
             Open Dashboard
           </Link>
         </div>
+        <p className="mt-8 text-xs uppercase tracking-[0.22em] text-soft-white/40">
+          Web · Telegram · Discord — same launch path, same Raven
+        </p>
       </main>
 
       {/* Feature grid */}
       <section className="border-t border-border px-6 py-16">
+        <div className="mx-auto mb-10 max-w-3xl text-center">
+          <h2 className="font-display text-2xl font-semibold sm:text-3xl">What boards aboard your vessel</h2>
+          <p className="mt-3 text-sm text-soft-white/60">
+            Every pod ships fully wired. No infrastructure homework, no cobbled stack — Raven brings the hull online and hands you the helm.
+          </p>
+        </div>
         <div className="mx-auto grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {[
             { title: "Hermes Agent", desc: "I give each pod a private assistant with memory, skills, and room to grow." },

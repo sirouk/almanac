@@ -106,6 +106,12 @@ export default function OnboardingPage() {
           alt=""
           className="mb-5 h-16 w-16 rounded-full border border-border object-cover"
         />
+        <p className="mb-2 text-xs uppercase tracking-[0.22em] text-soft-white/40">
+          {step === "start" && "Step 1 of 4 — First contact"}
+          {step === "questions" && "Step 2 of 4 — Name on the hatch"}
+          {step === "checkout" && "Step 3 of 4 — Stripe handoff"}
+          {step === "done" && "Step 4 of 4 — Launch queue"}
+        </p>
         <h1 className="font-display text-2xl font-bold">
           {step === "start" && "I'm Raven"}
           {step === "questions" && "Name On The Hatch"}

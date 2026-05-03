@@ -12,7 +12,7 @@ if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
 from arclink_discord import DiscordConfig, register_arclink_public_discord_commands
-from arclink_telegram import TelegramConfig, register_arclink_public_telegram_commands
+from arclink_telegram import TelegramConfig, ensure_arclink_public_telegram_webhook, register_arclink_public_telegram_commands
 
 
 def _load_shell_env_file(path: str) -> dict[str, str]:
@@ -56,6 +56,10 @@ def register_public_bot_commands(env: Mapping[str, str] | None = None) -> dict[s
     if telegram.bot_token:
         try:
             results["telegram"] = register_arclink_public_telegram_commands(telegram.bot_token)
+            results["telegram"]["webhook"] = ensure_arclink_public_telegram_webhook(
+                telegram.bot_token,
+                telegram.webhook_url,
+            )
         except Exception as exc:  # noqa: BLE001 - keep registering other platforms
             results["telegram"] = {"error": str(exc)}
             results["errors"].append("telegram")
@@ -81,10 +85,17 @@ def main() -> int:
     elif telegram.get("error"):
         print(f"Telegram public bot actions: failed ({telegram.get('error')})", file=sys.stderr)
     else:
+        webhook = telegram.get("webhook") or {}
+        webhook_note = ""
+        if webhook.get("skipped"):
+            webhook_note = " (webhook unchanged)"
+        elif webhook.get("allowed_updates"):
+            webhook_note = " (webhook accepts callback_query)"
         print(
             "Telegram public bot actions: registered "
             f"{len(telegram.get('registered') or [])} command(s) across "
             f"{', '.join(telegram.get('scopes') or [])}"
+            f"{webhook_note}"
         )
     if discord.get("skipped"):
         print("Discord public bot actions: skipped (missing bot token or application ID)")

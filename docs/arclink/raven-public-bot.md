@@ -43,6 +43,8 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 
 Telegram uses inline keyboard buttons. Discord uses message components. The command catalog remains intentionally small because global slash commands cannot reflect each individual account state.
 
+Telegram webhook registration must include `callback_query` in `allowed_updates`; otherwise inline buttons render but Telegram never delivers taps to ArcLink. `deploy.sh control install|upgrade` registers the public webhook at `/api/v1/webhooks/telegram` and refreshes command buttons so Raven can acknowledge taps and send the next turn.
+
 ## Asset Slots
 
 Drop the Raven profile and card artwork into:

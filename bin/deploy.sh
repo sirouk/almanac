@@ -2031,6 +2031,23 @@ default_curator_discord_onboarding_enabled() {
   fi
 }
 
+default_arclink_public_telegram_webhook_url() {
+  local control_url="" base_domain=""
+  if [[ -n "${ARCLINK_TAILSCALE_CONTROL_URL:-}" ]]; then
+    control_url="${ARCLINK_TAILSCALE_CONTROL_URL%/}"
+  elif [[ -n "${ARCLINK_BASE_DOMAIN:-}" ]]; then
+    base_domain="${ARCLINK_BASE_DOMAIN#http://}"
+    base_domain="${base_domain#https://}"
+    base_domain="${base_domain%%/*}"
+    if [[ -n "$base_domain" ]]; then
+      control_url="https://$base_domain"
+    fi
+  fi
+  if [[ -n "$control_url" ]]; then
+    printf '%s/api/v1/webhooks/telegram' "$control_url"
+  fi
+}
+
 normalize_runtime_config_defaults() {
   case "${VAULT_WATCH_DEBOUNCE_SECONDS:-}" in
     ""|5|5.0|5.00)
@@ -2048,6 +2065,9 @@ normalize_runtime_config_defaults() {
   fi
   if declare -F refresh_notion_webhook_public_url_from_tailscale >/dev/null 2>&1; then
     refresh_notion_webhook_public_url_from_tailscale
+  fi
+  if [[ -z "${TELEGRAM_WEBHOOK_URL:-}" ]]; then
+    TELEGRAM_WEBHOOK_URL="$(default_arclink_public_telegram_webhook_url)"
   fi
 }
 

@@ -555,23 +555,43 @@ def _handle_telegram_webhook(
     if result is None:
         return _json_response(200, {"ok": True, "action": "ignored"}, request_id=request_id)
     sent = False
+    callback_acknowledged = False
+    callback_query_id = str(result.get("callback_query_id") or "").strip()
     if telegram_transport is not None:
+        if callback_query_id and hasattr(telegram_transport, "answer_callback_query"):
+            try:
+                telegram_transport.answer_callback_query(callback_query_id)
+                callback_acknowledged = True
+            except Exception as exc:  # noqa: BLE001 - webhook must acknowledge update even if callback ack fails
+                logger.warning("telegram_callback_ack_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
         try:
-                telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
-                sent = True
+            telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+            sent = True
         except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
             logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
     else:
         telegram_config = TelegramConfig.from_env(config.env)
         if telegram_config.is_live:
+            live_transport = LiveTelegramTransport(telegram_config)
+            if callback_query_id:
+                try:
+                    live_transport.answer_callback_query(callback_query_id)
+                    callback_acknowledged = True
+                except Exception as exc:  # noqa: BLE001 - still try to send the actual reply
+                    logger.warning("telegram_callback_ack_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
             try:
-                LiveTelegramTransport(telegram_config).send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+                live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                 sent = True
             except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
                 logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
     return _json_response(
         200,
-        {"ok": True, "action": result.get("action", "reply"), "sent": sent},
+        {
+            "ok": True,
+            "action": result.get("action", "reply"),
+            "sent": sent,
+            "callback_acknowledged": callback_acknowledged,
+        },
         request_id=request_id,
     )
 

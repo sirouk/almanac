@@ -48,6 +48,11 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
    - Telegram: `POST /api/v1/webhooks/telegram`
    - Discord: `POST /api/v1/webhooks/discord`
 
+   Telegram must be registered with `callback_query` allowed updates so Raven's
+   inline buttons can deliver taps back to the control API. The deploy flow
+   writes `TELEGRAM_WEBHOOK_URL` to the public Telegram endpoint and public bot
+   registration refreshes both commands and webhook allowed updates.
+
 2. **Public onboarding**
    - `python/arclink_hosted_api.py` routes to `arclink_api_auth.py`.
    - `python/arclink_public_bots.py`, `arclink_telegram.py`, and

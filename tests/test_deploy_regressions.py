@@ -127,6 +127,9 @@ def render_runtime_config(
     qmd_embed_api_key: str = "",
     qmd_embed_dimensions: str = "",
     qmd_embed_force_on_next_refresh: str = "0",
+    arclink_base_domain: str = "arclink.example.ts.net",
+    arclink_tailscale_control_url: str = "",
+    telegram_webhook_url: str = "",
 ) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
@@ -138,6 +141,9 @@ ARCLINK_HOME=/home/arclink
 ARCLINK_REPO_DIR=/home/arclink/arclink
 ARCLINK_PRIV_DIR=/home/arclink/arclink/arclink-priv
 ARCLINK_PRIV_CONFIG_DIR=/home/arclink/arclink/arclink-priv/config
+ARCLINK_BASE_DOMAIN={shlex.quote(arclink_base_domain)}
+ARCLINK_TAILSCALE_CONTROL_URL={shlex.quote(arclink_tailscale_control_url)}
+TELEGRAM_WEBHOOK_URL={shlex.quote(telegram_webhook_url)}
 VAULT_DIR=/home/arclink/arclink/arclink-priv/vault
 STATE_DIR=/home/arclink/arclink/arclink-priv/state
 NEXTCLOUD_STATE_DIR=/home/arclink/arclink/arclink-priv/state/nextcloud
@@ -283,6 +289,35 @@ def test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag() -> N
     agent_flag = source_value(config, "ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE")
     expect(agent_flag == "1", f"expected agent tailscale serve flag to follow global enable, got {agent_flag!r}")
     print("PASS test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag")
+
+
+def test_emit_runtime_config_defaults_public_telegram_webhook_to_callback_ready_route() -> None:
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        arclink_base_domain="arclink.example.test",
+    )
+    expect(
+        source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://arclink.example.test/api/v1/webhooks/telegram",
+        config,
+    )
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        arclink_tailscale_control_url="https://s1396.tail77f45e.ts.net",
+    )
+    expect(
+        source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://s1396.tail77f45e.ts.net/api/v1/webhooks/telegram",
+        config,
+    )
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        arclink_base_domain="arclink.example.test",
+        telegram_webhook_url="https://custom.example.test/telegram",
+    )
+    expect(source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://custom.example.test/telegram", config)
+    print("PASS test_emit_runtime_config_defaults_public_telegram_webhook_to_callback_ready_route")
 
 
 def test_emit_runtime_config_migrates_legacy_vault_watch_debounce() -> None:
@@ -2982,6 +3017,7 @@ def main() -> int:
         test_bool_env_blank_uses_default,
         test_emit_runtime_config_normalizes_curator_onboarding_flags,
         test_emit_runtime_config_syncs_agent_tailscale_serve_with_global_flag,
+        test_emit_runtime_config_defaults_public_telegram_webhook_to_callback_ready_route,
         test_emit_runtime_config_migrates_legacy_vault_watch_debounce,
         test_emit_runtime_config_persists_notion_ssot_fields,
         test_emit_runtime_config_persists_hermes_docs_sync_fields,

@@ -1047,6 +1047,52 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
 
 
+def test_telegram_webhook_acknowledges_button_callbacks() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_callback_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_callback_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_callback_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    class CaptureTransport:
+        def __init__(self) -> None:
+            self.sent_messages = []
+            self.answered_callbacks = []
+
+        def send_message(self, chat_id: str, text: str, reply_markup=None):
+            self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
+            return {"message_id": len(self.sent_messages)}
+
+        def answer_callback_query(self, callback_query_id: str, text: str = ""):
+            self.answered_callbacks.append({"callback_query_id": callback_query_id, "text": text})
+            return {"ok": True}
+
+    transport = CaptureTransport()
+    update = {
+        "update_id": 2,
+        "callback_query": {
+            "id": "cb_start",
+            "from": {"id": 67890},
+            "message": {"message_id": 10, "chat": {"id": 12345}},
+            "data": "arclink:/start",
+        },
+    }
+    status, payload, _ = hosted._handle_telegram_webhook(
+        conn,
+        update,
+        "req_tg_callback",
+        config,
+        adapters.FakeStripeClient(),
+        telegram_transport=transport,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload.get("sent") is True, str(payload))
+    expect(payload.get("callback_acknowledged") is True, str(payload))
+    expect(transport.answered_callbacks == [{"callback_query_id": "cb_start", "text": ""}], str(transport.answered_callbacks))
+    expect(transport.sent_messages and "Raven online" in transport.sent_messages[0]["text"], str(transport.sent_messages))
+    print("PASS test_telegram_webhook_acknowledges_button_callbacks")
+
+
 def test_discord_webhook_route() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_dc_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dc_test")
@@ -1713,6 +1759,7 @@ def main() -> int:
     test_stripe_webhook_processes_entitlement_transition()
     test_telegram_webhook_route()
     test_telegram_webhook_sends_reply_when_transport_is_available()
+    test_telegram_webhook_acknowledges_button_callbacks()
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
     test_user_provider_state_route()
@@ -1733,7 +1780,7 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
     test_admin_scale_operations_requires_auth_and_returns_snapshot()
-    print("PASS all 46 ArcLink hosted API tests")
+    print("PASS all 47 ArcLink hosted API tests")
     return 0
 
 

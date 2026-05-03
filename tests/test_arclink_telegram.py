@@ -111,6 +111,22 @@ def test_telegram_registers_public_bot_actions() -> None:
     print("PASS test_telegram_registers_public_bot_actions")
 
 
+def test_telegram_webhook_registration_allows_buttons() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_webhook_register_test")
+    calls: list[dict[str, object]] = []
+    tg.telegram_set_webhook = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+    result = tg.ensure_arclink_public_telegram_webhook("123:abc", "https://example.test/api/v1/webhooks/telegram")
+
+    expect(calls, "expected setWebhook call")
+    expect(calls[0]["webhook_url"] == "https://example.test/api/v1/webhooks/telegram", str(calls))
+    expect("callback_query" in calls[0]["allowed_updates"], str(calls))
+    expect(result["allowed_updates"] == ["message", "edited_message", "callback_query"], str(result))
+    skipped = tg.ensure_arclink_public_telegram_webhook("123:abc", "")
+    expect(skipped.get("skipped") is True, str(skipped))
+    print("PASS test_telegram_webhook_registration_allows_buttons")
+
+
 def test_telegram_refuses_live_without_token() -> None:
     tg = load_module("arclink_telegram.py", "arclink_telegram_refuse_test")
     cfg = tg.TelegramConfig(bot_token="", bot_username="", webhook_url="", api_base="")
@@ -157,10 +173,11 @@ def main() -> int:
     test_telegram_handle_update_through_bot_contract()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
+    test_telegram_webhook_registration_allows_buttons()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 8 ArcLink Telegram adapter tests")
+    print("PASS all 9 ArcLink Telegram adapter tests")
     return 0
 
 

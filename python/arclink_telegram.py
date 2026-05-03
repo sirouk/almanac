@@ -30,6 +30,7 @@ from arclink_http import http_request, parse_json_object
 logger = logging.getLogger("arclink.telegram")
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
+ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 
 
 class ArcLinkTelegramError(RuntimeError):
@@ -196,6 +197,47 @@ def telegram_set_my_commands(
         payload=payload,
         timeout=20,
     )
+
+
+def telegram_set_webhook(
+    *,
+    bot_token: str,
+    webhook_url: str,
+    allowed_updates: tuple[str, ...] = ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES,
+    drop_pending_updates: bool = False,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "url": str(webhook_url or "").strip(),
+        "allowed_updates": list(allowed_updates),
+        "drop_pending_updates": bool(drop_pending_updates),
+    }
+    return _request_json(
+        _telegram_url(bot_token, "setWebhook"),
+        method="POST",
+        payload=payload,
+        timeout=20,
+    )
+
+
+def ensure_arclink_public_telegram_webhook(
+    bot_token: str,
+    webhook_url: str,
+) -> dict[str, Any]:
+    clean_token = str(bot_token or "").strip()
+    clean_url = str(webhook_url or "").strip()
+    if not clean_url:
+        return {"skipped": True}
+    if not clean_token:
+        raise ArcLinkTelegramError("TELEGRAM_BOT_TOKEN is required to configure the ArcLink Telegram webhook")
+    telegram_set_webhook(
+        bot_token=clean_token,
+        webhook_url=clean_url,
+        allowed_updates=ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES,
+    )
+    return {
+        "url": clean_url,
+        "allowed_updates": list(ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES),
+    }
 
 
 def register_arclink_public_telegram_commands(
@@ -373,6 +415,13 @@ class LiveTelegramTransport:
         result = self._call("sendMessage", payload)
         return result.get("result", {})
 
+    def answer_callback_query(self, callback_query_id: str, text: str = "") -> dict[str, Any]:
+        payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text[:200]
+        result = self._call("answerCallbackQuery", payload)
+        return result.get("result", {})
+
     def get_updates(self, offset: int = 0, timeout: int = 30) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"timeout": timeout}
         if offset:
@@ -394,6 +443,9 @@ class FakeTelegramTransport:
             msg["reply_markup"] = reply_markup
         self.sent_messages.append(msg)
         return msg
+
+    def answer_callback_query(self, callback_query_id: str, text: str = "") -> dict[str, Any]:
+        return {"callback_query_id": callback_query_id, "text": text}
 
     def get_updates(self, offset: int = 0, timeout: int = 0) -> list[dict[str, Any]]:
         updates = [u for u in self.updates_queue if u.get("update_id", 0) >= offset]

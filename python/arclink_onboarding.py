@@ -242,6 +242,7 @@ def create_or_resume_arclink_onboarding_session(
     selected_model_id: str = "",
     current_step: str = "started",
     metadata: Mapping[str, Any] | None = None,
+    force_new: bool = False,
 ) -> dict[str, Any]:
     clean_channel = _clean_channel(channel)
     clean_identity = _clean_identity(channel_identity)
@@ -252,7 +253,7 @@ def create_or_resume_arclink_onboarding_session(
         "selected_model_id": selected_model_id,
     }.items():
         _reject_secret_material(value, path=f"$.{key}")
-    existing = _active_session_row(conn, channel=clean_channel, channel_identity=clean_identity)
+    existing = None if force_new else _active_session_row(conn, channel=clean_channel, channel_identity=clean_identity)
     if existing is not None:
         updates: dict[str, str] = {}
         for key, value in (
@@ -406,6 +407,9 @@ def open_arclink_onboarding_checkout(
         return session
     user_id = str(session["user_id"])
     deployment_id = str(session["deployment_id"])
+    session_metadata = _json_loads(str(session.get("metadata_json") or "{}"))
+    selected_plan_id = str(session.get("selected_plan_id") or "").strip()
+    purchase_kind = str(session_metadata.get("purchase_kind") or ("additional_agent" if selected_plan_id == "additional_agent" else "first_agent"))
     checkout = stripe_client.create_checkout_session(
         user_id=user_id,
         client_reference_id=user_id,
@@ -417,6 +421,8 @@ def open_arclink_onboarding_checkout(
             "arclink_user_id": user_id,
             "arclink_onboarding_session_id": session_id,
             "arclink_deployment_id": deployment_id,
+            "arclink_purchase_kind": purchase_kind,
+            "arclink_plan_id": selected_plan_id,
         },
     )
     session = _update_session(

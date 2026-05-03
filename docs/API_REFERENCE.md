@@ -108,7 +108,9 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_COOKIE_SECURE` | `1` | Set Secure flag on cookies |
 | `STRIPE_WEBHOOK_SECRET` | (none) | Stripe signature verification |
 | `ARCLINK_LOG_LEVEL` | `INFO` | Logging verbosity |
-| `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_starter` | Default Stripe price for onboarding |
+| `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_starter` | Backward-compatible first-agent Stripe price |
+| `ARCLINK_FIRST_AGENT_PRICE_ID` | `price_arclink_starter` | First Raven agent Stripe price ($35/month target) |
+| `ARCLINK_ADDITIONAL_AGENT_PRICE_ID` | `price_arclink_additional_agent` | Additional Raven agent Stripe price ($15/month target) |
 
 ## Web Client Integration
 

@@ -43,6 +43,7 @@ class FakeStripeClient:
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,
             "metadata": dict(metadata or {}),
+            "subscription_data": {"metadata": dict(metadata or {})},
             "url": f"https://stripe.test/checkout/{session_id}",
         }
         self.checkout_sessions[session_id] = session
@@ -91,6 +92,16 @@ class LiveStripeClient:
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,
             "metadata": dict(metadata or {}),
+            "subscription_data": {"metadata": dict(metadata or {})},
+            "allow_promotion_codes": True,
+            "billing_address_collection": "auto",
+            "custom_text": {
+                "submit": {
+                    "message": (
+                        "Raven will watch for payment confirmation and move your ArcLink agent into provisioning."
+                    )
+                }
+            },
         }
         kwargs: dict[str, Any] = {}
         if idempotency_key:

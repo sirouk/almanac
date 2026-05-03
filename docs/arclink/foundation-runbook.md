@@ -277,8 +277,9 @@ Hosted API boundary:
   hosted WSGI application with route dispatch under `/api/v1`.
 - `HostedApiConfig` resolves runtime configuration from environment variables:
   `ARCLINK_BASE_DOMAIN`, `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`,
-  `ARCLINK_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, and
-  `ARCLINK_DEFAULT_PRICE_ID`.
+  `ARCLINK_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`,
+  `ARCLINK_DEFAULT_PRICE_ID`, `ARCLINK_FIRST_AGENT_PRICE_ID`, and
+  `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`.
 - Public onboarding routes (`/onboarding/start`, `/onboarding/answer`,
   `/onboarding/checkout`), admin login, and the Stripe webhook endpoint require
   no session authentication.
@@ -324,8 +325,9 @@ Public bot skeletons:
 
 - `python/arclink_public_bots.py` provides deterministic Telegram and Discord
   conversation turns over the same public onboarding session contract.
-- Supported turns collect email, name, plan, status, and fake checkout. The
-  module does not run live bot clients or store private user-agent bot tokens.
+- Supported turns collect name, plan, status, account-aware agent roster actions,
+  and fake checkout. Stripe Checkout collects email; chat onboarding does not.
+  The module does not run live bot clients or store private user-agent bot tokens.
 
 Dashboard and admin contracts:
 

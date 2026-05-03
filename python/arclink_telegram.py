@@ -20,7 +20,11 @@ _PYTHON_DIR = pathlib.Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
-from arclink_public_bots import arclink_public_bot_telegram_commands, handle_arclink_public_bot_turn
+from arclink_public_bots import (
+    arclink_public_bot_telegram_commands,
+    arclink_public_bot_turn_telegram_reply_markup,
+    handle_arclink_public_bot_turn,
+)
 from arclink_http import http_request, parse_json_object
 
 logger = logging.getLogger("arclink.telegram")
@@ -272,6 +276,23 @@ def _telegram_api_url(config: TelegramConfig, method: str) -> str:
 
 def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
     """Extract chat_id, user_id, and text from a Telegram update dict."""
+    callback = update.get("callback_query") or {}
+    if callback:
+        data = str(callback.get("data") or "").strip()
+        if data.startswith("arclink:"):
+            data = data[len("arclink:"):].strip()
+        msg = callback.get("message") or {}
+        chat = msg.get("chat") or {}
+        user = callback.get("from") or {}
+        chat_id = str(chat.get("id") or "")
+        user_id = str(user.get("id") or "")
+        if chat_id and data:
+            return {
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "text": data,
+                "callback_query_id": str(callback.get("id") or ""),
+            }
     msg = update.get("message") or update.get("edited_message") or {}
     text = str(msg.get("text") or "").strip()
     chat = msg.get("chat") or {}
@@ -289,6 +310,7 @@ def handle_telegram_update(
     *,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_starter",
+    additional_agent_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any] | None:
     """Process a single Telegram update through the shared bot contract.
@@ -307,13 +329,16 @@ def handle_telegram_update(
         text=parsed["text"],
         stripe_client=stripe_client,
         price_id=price_id,
+        additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
     )
     return {
         "chat_id": parsed["chat_id"],
         "text": turn.reply,
+        "reply_markup": arclink_public_bot_turn_telegram_reply_markup(turn),
         "session_id": turn.session_id,
         "action": turn.action,
+        "callback_query_id": parsed.get("callback_query_id", ""),
     }
 
 
@@ -341,8 +366,11 @@ class LiveTelegramTransport:
             logger.error("telegram_api_error method=%s status=%d body=%s", method, exc.code, body[:200])
             raise ArcLinkTelegramError(f"Telegram API error {exc.code}: {body[:200]}") from exc
 
-    def send_message(self, chat_id: str, text: str) -> dict[str, Any]:
-        result = self._call("sendMessage", {"chat_id": chat_id, "text": text})
+    def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        result = self._call("sendMessage", payload)
         return result.get("result", {})
 
     def get_updates(self, offset: int = 0, timeout: int = 30) -> list[dict[str, Any]]:
@@ -360,8 +388,10 @@ class FakeTelegramTransport:
         self.sent_messages: list[dict[str, Any]] = []
         self.updates_queue: list[dict[str, Any]] = []
 
-    def send_message(self, chat_id: str, text: str) -> dict[str, Any]:
+    def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
         msg = {"chat_id": chat_id, "text": text, "message_id": len(self.sent_messages) + 1}
+        if reply_markup is not None:
+            msg["reply_markup"] = reply_markup
         self.sent_messages.append(msg)
         return msg
 
@@ -392,6 +422,7 @@ def run_telegram_polling(
     transport: FakeTelegramTransport | None = None,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_starter",
+    additional_agent_price_id: str = "",
     base_domain: str = "",
     max_iterations: int = 0,
 ) -> None:
@@ -425,10 +456,11 @@ def run_telegram_polling(
                     conn, update,
                     stripe_client=stripe_client,
                     price_id=price_id,
+                    additional_agent_price_id=additional_agent_price_id,
                     base_domain=base_domain,
                 )
                 if result:
-                    transport.send_message(result["chat_id"], result["text"])
+                    transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                     logger.info("telegram_reply chat_id=%s action=%s", result["chat_id"], result["action"])
             except Exception:
                 logger.exception("telegram_update_error update_id=%s", update_id)

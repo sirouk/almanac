@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import re
+import secrets
 import sqlite3
 from typing import Any, Mapping
 
@@ -40,7 +41,12 @@ ARCLINK_PUBLIC_BOT_CONFIG_BACKUP_COMMANDS = frozenset(
 )
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
 ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop"})
+ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents", "agent roster"})
+ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS = frozenset(
+    {"/add-agent", "/add_agent", "add-agent", "add agent", "hire another agent", "add another agent"}
+)
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_contacted"})
+ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -73,24 +79,10 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         description="Check onboarding or pod status",
     ),
     ArcLinkPublicBotAction(
-        key="email",
-        telegram_command="email",
-        discord_command="email",
-        description="Set the email for your ArcLink account",
-        discord_options=(
-            {
-                "type": 3,
-                "name": "address",
-                "description": "Email address for your ArcLink account",
-                "required": True,
-            },
-        ),
-    ),
-    ArcLinkPublicBotAction(
         key="name",
         telegram_command="name",
         discord_command="name",
-        description="Set the name for your ArcLink workspace",
+        description="Name your ArcLink workspace",
         discord_options=(
             {
                 "type": 3,
@@ -123,7 +115,13 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="checkout",
         telegram_command="checkout",
         discord_command="checkout",
-        description="Open your secure Stripe checkout",
+        description="Hire your first Raven agent",
+    ),
+    ArcLinkPublicBotAction(
+        key="agents",
+        telegram_command="agents",
+        discord_command="agents",
+        description="Open your account-aware agent roster",
     ),
     ArcLinkPublicBotAction(
         key="connect_notion",
@@ -151,6 +149,14 @@ class ArcLinkPublicBotError(ValueError):
 
 
 @dataclass(frozen=True)
+class ArcLinkPublicBotButton:
+    label: str
+    command: str = ""
+    url: str = ""
+    style: str = "primary"
+
+
+@dataclass(frozen=True)
 class ArcLinkPublicBotTurn:
     channel: str
     channel_identity: str
@@ -162,6 +168,7 @@ class ArcLinkPublicBotTurn:
     checkout_url: str = ""
     user_id: str = ""
     deployment_id: str = ""
+    buttons: tuple[ArcLinkPublicBotButton, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -181,7 +188,17 @@ def _clean_identity(identity: str) -> str:
     return clean
 
 
-def _reply(session: Mapping[str, Any], *, action: str, reply: str) -> ArcLinkPublicBotTurn:
+def _button(label: str, *, command: str = "", url: str = "", style: str = "primary") -> ArcLinkPublicBotButton:
+    return ArcLinkPublicBotButton(label=label, command=command, url=url, style=style)
+
+
+def _reply(
+    session: Mapping[str, Any],
+    *,
+    action: str,
+    reply: str,
+    buttons: tuple[ArcLinkPublicBotButton, ...] = (),
+) -> ArcLinkPublicBotTurn:
     return ArcLinkPublicBotTurn(
         channel=str(session.get("channel") or ""),
         channel_identity=str(session.get("channel_identity") or ""),
@@ -193,6 +210,7 @@ def _reply(session: Mapping[str, Any], *, action: str, reply: str) -> ArcLinkPub
         checkout_url=str(session.get("checkout_url") or ""),
         user_id=str(session.get("user_id") or ""),
         deployment_id=str(session.get("deployment_id") or ""),
+        buttons=buttons,
     )
 
 
@@ -204,6 +222,7 @@ def _turn(
     reply: str,
     session: Mapping[str, Any] | None = None,
     deployment: Mapping[str, Any] | None = None,
+    buttons: tuple[ArcLinkPublicBotButton, ...] = (),
 ) -> ArcLinkPublicBotTurn:
     session = dict(session or {})
     deployment = dict(deployment or {})
@@ -218,6 +237,7 @@ def _turn(
         checkout_url=str(session.get("checkout_url") or ""),
         user_id=str(deployment.get("user_id") or session.get("user_id") or ""),
         deployment_id=str(deployment.get("deployment_id") or session.get("deployment_id") or ""),
+        buttons=buttons,
     )
 
 
@@ -265,6 +285,50 @@ def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
     return commands
 
 
+def arclink_public_bot_turn_telegram_reply_markup(turn: ArcLinkPublicBotTurn) -> dict[str, Any] | None:
+    buttons = tuple(turn.buttons or ())
+    if not buttons:
+        return None
+    rows: list[list[dict[str, Any]]] = []
+    row: list[dict[str, Any]] = []
+    for button in buttons:
+        payload: dict[str, Any] = {"text": button.label[:64]}
+        if button.url:
+            payload["url"] = button.url
+        else:
+            payload["callback_data"] = f"arclink:{button.command or button.label}"[:64]
+        row.append(payload)
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return {"inline_keyboard": rows}
+
+
+def arclink_public_bot_turn_discord_components(turn: ArcLinkPublicBotTurn) -> list[dict[str, Any]]:
+    buttons = tuple(turn.buttons or ())
+    if not buttons:
+        return []
+    rows: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    for index, button in enumerate(buttons):
+        payload: dict[str, Any] = {
+            "type": 2,
+            "label": button.label[:80],
+            "style": 5 if button.url else (2 if button.style == "secondary" else 1),
+        }
+        if button.url:
+            payload["url"] = button.url
+        else:
+            payload["custom_id"] = f"arclink:{button.command or button.label}"[:100]
+        current.append(payload)
+        if len(current) == 5 or index == len(buttons) - 1:
+            rows.append({"type": 1, "components": current})
+            current = []
+    return rows
+
+
 def _command_value(message: str, command: str, names: tuple[str, ...]) -> str | None:
     for name in names:
         prefix = f"{name} "
@@ -310,6 +374,11 @@ def _latest_session_for_contact(
 def _deployment_for_session(conn: sqlite3.Connection, session: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not session:
         return None
+    active_deployment_id = str(_metadata(session).get("active_deployment_id") or "").strip()
+    if active_deployment_id:
+        row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (active_deployment_id,)).fetchone()
+        if row is not None:
+            return dict(row)
     deployment_id = str(session.get("deployment_id") or "").strip()
     if deployment_id:
         row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
@@ -340,6 +409,53 @@ def _deployment_for_session(conn: sqlite3.Connection, session: Mapping[str, Any]
         (user_id,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def _deployments_for_user(conn: sqlite3.Connection, user_id: str) -> list[dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return []
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_deployments
+        WHERE user_id = ?
+          AND status NOT IN ('cancelled', 'teardown_complete')
+        ORDER BY
+          CASE status
+            WHEN 'active' THEN 0
+            WHEN 'first_contacted' THEN 1
+            WHEN 'provisioning_ready' THEN 2
+            WHEN 'provisioning' THEN 3
+            WHEN 'entitlement_required' THEN 4
+            WHEN 'provisioning_failed' THEN 5
+            ELSE 6
+          END,
+          created_at ASC,
+          deployment_id ASC
+        """,
+        (clean_user_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _agent_label(deployment: Mapping[str, Any], *, index: int = 0) -> str:
+    metadata = _metadata(deployment)
+    candidate = str(metadata.get("agent_name") or metadata.get("display_name") or "").strip()
+    if candidate:
+        return candidate[:40]
+    agent_id = str(deployment.get("agent_id") or "").strip()
+    if agent_id:
+        return agent_id[:40]
+    prefix = str(deployment.get("prefix") or "").strip()
+    if prefix:
+        return prefix.replace("arc-", "").replace("-", " ").title()[:40]
+    return f"Agent {index + 1}"
+
+
+def _agent_slug(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(label or "").strip().lower()).strip("-")
+    return slug or "agent"
 
 
 def _metadata(row: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -411,7 +527,7 @@ def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
 
 def _need_finished_onboarding_reply() -> str:
     return (
-        "I can guide that once your ArcLink pod exists. Send `/start` to open the launch path, "
+        "I can guide that once Raven has your first agent aboard ArcLink. Send `/start` to open the launch path, "
         "or finish checkout if your session is already in motion."
     )
 
@@ -560,6 +676,186 @@ def _config_backup_reply(
     )
 
 
+def _agents_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if not session or not deployment:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="agents_unavailable",
+            reply=(
+                "Raven has no agents aboard this ArcLink account yet. Start with one $35/month agent, "
+                "then I can help you add more at $15/month each."
+            ),
+            session=session,
+            buttons=(
+                _button("Start Launch", command="/start"),
+            ),
+        )
+    user_id = str(deployment.get("user_id") or session.get("user_id") or "").strip()
+    deployments = _deployments_for_user(conn, user_id)
+    active_id = str(deployment.get("deployment_id") or "")
+    buttons: list[ArcLinkPublicBotButton] = []
+    lines = [
+        "Raven agent roster",
+        "",
+        "Raven offers ArcLink: agents aboard a SOTA agentic harness at your fingertips without making you leave the couch. "
+        "I keep the roster tied to your account, not a generic command list.",
+        "",
+    ]
+    for index, item in enumerate(deployments):
+        label = _agent_label(item, index=index)
+        status = str(item.get("status") or "unknown")
+        marker = "active" if str(item.get("deployment_id") or "") == active_id else status
+        lines.append(f"- {label}: {marker}")
+        if str(item.get("deployment_id") or "") != active_id:
+            buttons.append(_button(f"Switch to {label}", command=f"/agent-{_agent_slug(label)}"))
+    if deployments:
+        buttons.append(_button("Add Agent - $15/mo", command="/add-agent"))
+    if not buttons and deployments:
+        buttons.append(_button("Add Agent - $15/mo", command="/add-agent"))
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="show_agents",
+        reply="\n".join(lines),
+        session=session,
+        deployment=deployment,
+        buttons=tuple(buttons),
+    )
+
+
+def _switch_agent_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    requested_slug: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if not session or not deployment:
+        return _turn(channel=channel, channel_identity=channel_identity, action="switch_agent_unavailable", reply=_need_finished_onboarding_reply(), session=session)
+    deployments = _deployments_for_user(conn, str(deployment.get("user_id") or ""))
+    requested = str(requested_slug or "").strip().lower()
+    for index, item in enumerate(deployments):
+        label = _agent_label(item, index=index)
+        if requested in {_agent_slug(label), _agent_slug(str(item.get("prefix") or "")), _agent_slug(str(item.get("agent_id") or ""))}:
+            updated = _update_session_metadata(
+                conn,
+                session_id=str(session["session_id"]),
+                updates={"active_deployment_id": str(item.get("deployment_id") or ""), "active_agent_label": label},
+            )
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="switch_agent",
+                reply=f"Raven has the rail pointed at {label}. Commands like `/connect_notion` and `/config_backup` now target that agent.",
+                session=updated,
+                deployment=item,
+                buttons=(
+                    _button("Open Agents", command="/agents", style="secondary"),
+                    _button("Status", command="/status", style="secondary"),
+                ),
+            )
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="switch_agent_not_found",
+        reply="I do not see that agent on your ArcLink roster. Open `/agents` and use the account-aware buttons I show you there.",
+        session=session,
+        deployment=deployment,
+        buttons=(_button("Open Agents", command="/agents"),),
+    )
+
+
+def _add_agent_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+    stripe_client: Any | None,
+    additional_agent_price_id: str,
+    base_domain: str,
+) -> ArcLinkPublicBotTurn:
+    if not session or not deployment:
+        return _turn(channel=channel, channel_identity=channel_identity, action="add_agent_unavailable", reply=_need_finished_onboarding_reply(), session=session)
+    if str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="add_agent_blocked",
+            reply=_deployment_not_ready_reply(deployment),
+            session=session,
+            deployment=deployment,
+        )
+    if stripe_client is None:
+        raise ArcLinkPublicBotError("additional agent checkout requires an injected Stripe client")
+    price_id = str(additional_agent_price_id or "").strip()
+    if not price_id:
+        raise ArcLinkPublicBotError("additional agent checkout requires ARCLINK_ADDITIONAL_AGENT_PRICE_ID")
+
+    user_id = str(deployment.get("user_id") or session.get("user_id") or "").strip()
+    root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
+    add_token = secrets.token_hex(10)
+    extra_identity = f"{channel_identity}#add:{add_token}"
+    extra_session = create_or_resume_arclink_onboarding_session(
+        conn,
+        channel=channel,
+        channel_identity=extra_identity,
+        session_id=f"onb_add_{add_token}",
+        display_name_hint=str(session.get("display_name_hint") or ""),
+        selected_plan_id="additional_agent",
+        selected_model_id=chutes_default_model({}),
+        current_step="additional_agent",
+        metadata={
+            "purchase_kind": "additional_agent",
+            "public_channel_identity": channel_identity,
+            "parent_deployment_id": str(deployment.get("deployment_id") or ""),
+            "parent_session_id": str(session.get("session_id") or ""),
+            "active_deployment_id": str(deployment.get("deployment_id") or ""),
+        },
+        force_new=True,
+    )
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET user_id = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (user_id, utc_now_iso(), str(extra_session["session_id"])),
+    )
+    conn.commit()
+    extra_session = open_arclink_onboarding_checkout(
+        conn,
+        session_id=str(extra_session["session_id"]),
+        stripe_client=stripe_client,
+        price_id=price_id,
+        success_url=f"{root}/checkout/success?kind=additional_agent",
+        cancel_url=f"{root}/checkout/cancel?kind=additional_agent",
+        base_domain=base_domain or default_base_domain({}),
+    )
+    return _reply(
+        extra_session,
+        action="open_add_agent_checkout",
+        reply=(
+            "Additional agent bay is armed at $15/month. Hire it through Stripe and I will move the new pod into the provisioning queue."
+        ),
+        buttons=(
+            _button("Hire Additional Agent", url=str(extra_session.get("checkout_url") or "")),
+            _button("Back to Agents", command="/agents", style="secondary"),
+        ),
+    )
+
+
 def _handle_active_workflow(
     conn: sqlite3.Connection,
     *,
@@ -674,19 +970,23 @@ def _help_reply(*, channel: str, channel_identity: str, session: Mapping[str, An
         channel_identity=channel_identity,
         action="show_help",
         reply=(
-            "ArcLink action palette\n\n"
-            "I'm your launch liaison: a clean path from a few answers to a private agentic workspace with model rails, memory, tools, files, and deployment health.\n\n"
+            "Raven action palette\n\n"
+            "I am Raven, your ArcLink launch liaison. ArcLink is the system I am offering you: sharp rails, SOTA model power, memory, tools, files, and deployment health wrapped into a private agentic workspace.\n\n"
             "`/start` - open your launch path\n"
-            "`/email you@example.com` - set account email\n"
             "`/name Your Name` - name the workspace owner\n"
             "`/plan starter` - choose starter, operator, or scale\n"
-            "`/checkout` - open secure Stripe checkout\n"
+            "`/checkout` - hire your first $35/month agent\n"
             "`/status` - check onboarding or pod status\n"
+            "`/agents` - open your account-aware agent roster\n"
             "`/connect_notion` - connect Notion to your pod\n"
             "`/config_backup` - configure private pod backup\n"
             "`/cancel` - close the active setup lane"
         ),
         session=session,
+        buttons=(
+            _button("Start Launch", command="/start"),
+            _button("Agents", command="/agents", style="secondary"),
+        ),
     )
 
 
@@ -698,6 +998,7 @@ def handle_arclink_public_bot_turn(
     text: str,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_starter",
+    additional_agent_price_id: str = "",
     base_domain: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkPublicBotTurn:
@@ -712,6 +1013,41 @@ def handle_arclink_public_bot_turn(
             channel=clean_channel,
             channel_identity=clean_identity,
             session=_latest_session_for_contact(conn, channel=clean_channel, channel_identity=clean_identity),
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _agents_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _add_agent_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+            stripe_client=stripe_client,
+            additional_agent_price_id=additional_agent_price_id,
+            base_domain=base_domain,
+        )
+
+    switch_match = ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE.match(command)
+    if switch_match:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _switch_agent_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            requested_slug=switch_match.group(1),
+            session=session,
+            deployment=deployment,
         )
 
     if command in ARCLINK_PUBLIC_BOT_CONNECT_NOTION_COMMANDS:
@@ -755,35 +1091,39 @@ def handle_arclink_public_bot_turn(
     if command in {"", "/start", "start", "restart"}:
         return _reply(
             session,
-            action="prompt_identity",
+            action="prompt_name",
             reply=(
-                "Welcome to ArcLink. I'm your launch liaison, here to turn a few clear answers into a private agentic workspace: "
-                "model rail, memory, tools, files, and a live deployment path.\n\n"
-                "Send `/email you@example.com` to reserve your path."
+                "Raven online. Comms are clean.\n\n"
+                "I am here to put ArcLink in your hands: agents aboard a SOTA agentic harness without making you leave the couch. Model power, memory, tools, files, and a live deployment path are all on the rail.\n\n"
+                "Stripe will collect your email securely at checkout. Send `/name Your Name` and I will shape the first workspace around you."
+            ),
+            buttons=(
+                _button("Show Plans", command="/plan starter", style="secondary"),
+                _button("Help", command="/help", style="secondary"),
             ),
         )
     if command in {"status", "/status"}:
+        context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        deployment_label = _agent_label(deployment or {}, index=0) if deployment else ""
         return _reply(
-            session,
+            context_session or session,
             action="show_status",
             reply=(
-                f"ArcLink status: session `{session['session_id']}` is `{session['status']}`. "
-                f"Current launch step: `{session['current_step'] or 'started'}`."
+                f"Raven status: session `{(context_session or session)['session_id']}` is `{(context_session or session)['status']}`. "
+                f"Current launch step: `{(context_session or session)['current_step'] or 'started'}`."
+                + (f"\nActive agent: {deployment_label}." if deployment_label else "")
+            ),
+            buttons=(
+                _button("Agents", command="/agents", style="secondary"),
+                _button("Checkout", command="/checkout", style="secondary"),
             ),
         )
     email = _command_value(message, command, ("email", "/email"))
     if email is not None:
-        session = answer_arclink_onboarding_question(
-            conn,
-            session_id=str(session["session_id"]),
-            question_key="email",
-            answer_summary="email captured",
-            email_hint=email,
-        )
         return _reply(
             session,
             action="prompt_name",
-            reply="Email locked in. Send `/name Your Name` and I'll shape the workspace around you.",
+            reply="I do not need your email in chat anymore. Stripe will collect it securely during checkout. Send `/name Your Name` and I will shape the workspace around you.",
         )
     name = _command_value(message, command, ("name", "/name"))
     if name is not None:
@@ -797,7 +1137,15 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_plan",
-            reply="Name saved. Choose your launch tier with `/plan starter`, `/plan operator`, or `/plan scale`.",
+            reply=(
+                "Name saved. Choose your launch tier. Starter hires your first Raven agent for $35/month; "
+                "additional agents are $15/month once your first pod is active."
+            ),
+            buttons=(
+                _button("Starter - $35/mo", command="/plan starter"),
+                _button("Operator", command="/plan operator", style="secondary"),
+                _button("Scale", command="/plan scale", style="secondary"),
+            ),
         )
     plan_answer = _command_value(message, command, ("plan", "/plan"))
     if plan_answer is not None:
@@ -815,7 +1163,11 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_checkout",
-            reply="Plan saved. Send `/checkout` when you're ready to make it real through secure Stripe checkout.",
+            reply="Plan saved. Hit Hire Agent when you are ready to make it real through secure Stripe checkout.",
+            buttons=(
+                _button("Hire Agent - $35/mo", command="/checkout"),
+                _button("Change Plan", command="/plan starter", style="secondary"),
+            ),
         )
     if command in {"checkout", "/checkout"}:
         if stripe_client is None:
@@ -833,13 +1185,23 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="open_checkout",
-            reply=f"Checkout is open. Complete it here, then I'll watch for payment and move your pod toward launch:\n{session['checkout_url']}",
+            reply=(
+                "Checkout is open. Hire your first Raven agent through Stripe, then I will watch for payment and move your pod toward launch."
+            ),
+            buttons=(
+                _button("Hire Agent", url=str(session.get("checkout_url") or "")),
+                _button("Status", command="/status", style="secondary"),
+            ),
         )
     return _reply(
         session,
         action="prompt_command",
-        reply=(
-            "I'm here. ArcLink is the launch rail for your private agent workspace: inference, memory, tools, vault, and deployment health in one path.\n\n"
-            "Use `/start` to begin, `/help` for the action palette, `/status` to check progress, `/connect_notion` for Notion, or `/config_backup` for private backups."
+            reply=(
+                "Raven is online. ArcLink is what I am offering: inference, memory, tools, vault, and deployment health in one private agentic workspace.\n\n"
+                "Use `/start` to begin, `/agents` for your roster, `/help` for actions, `/connect_notion` for Notion, or `/config_backup` for private backups."
+            ),
+        buttons=(
+            _button("Start Launch", command="/start"),
+            _button("Agents", command="/agents", style="secondary"),
         ),
     )

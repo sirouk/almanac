@@ -92,7 +92,10 @@ class HostedApiConfig:
         self.cookie_secure: bool = str(e.get("ARCLINK_COOKIE_SECURE", "1")).strip() != "0"
         self.stripe_webhook_secret: str = str(e.get("STRIPE_WEBHOOK_SECRET", "")).strip()
         self.log_level: str = str(e.get("ARCLINK_LOG_LEVEL", "INFO")).strip().upper()
-        self.default_price_id: str = str(e.get("ARCLINK_DEFAULT_PRICE_ID", "price_arclink_starter")).strip()
+        self.default_price_id: str = str(
+            e.get("ARCLINK_FIRST_AGENT_PRICE_ID") or e.get("ARCLINK_DEFAULT_PRICE_ID", "price_arclink_starter")
+        ).strip()
+        self.additional_agent_price_id: str = str(e.get("ARCLINK_ADDITIONAL_AGENT_PRICE_ID", "")).strip()
 
 
 # --- Request / Response helpers -----------------------------------------------
@@ -546,6 +549,7 @@ def _handle_telegram_webhook(
         conn, body,
         stripe_client=stripe_client,
         price_id=config.default_price_id,
+        additional_agent_price_id=config.additional_agent_price_id,
         base_domain=config.base_domain,
     )
     if result is None:
@@ -553,15 +557,15 @@ def _handle_telegram_webhook(
     sent = False
     if telegram_transport is not None:
         try:
-            telegram_transport.send_message(result["chat_id"], result["text"])
-            sent = True
+                telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+                sent = True
         except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
             logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
     else:
         telegram_config = TelegramConfig.from_env(config.env)
         if telegram_config.is_live:
             try:
-                LiveTelegramTransport(telegram_config).send_message(result["chat_id"], result["text"])
+                LiveTelegramTransport(telegram_config).send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                 sent = True
             except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
                 logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
@@ -596,6 +600,7 @@ def _handle_discord_webhook(
             config=dc,
             stripe_client=stripe_client,
             price_id=config.default_price_id,
+            additional_agent_price_id=config.additional_agent_price_id,
             base_domain=config.base_domain,
         )
     except ArcLinkDiscordError as exc:

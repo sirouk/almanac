@@ -19,7 +19,9 @@ python3 python/arclink_hosted_api.py   # starts on 127.0.0.1:8900
 | `ARCLINK_COOKIE_DOMAIN` | (none) | Cookie domain attribute |
 | `ARCLINK_COOKIE_SECURE` | `1` | Set 0 for HTTP-only dev |
 | `ARCLINK_LOG_LEVEL` | `INFO` | Structured log verbosity |
-| `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_starter` | Default Stripe price |
+| `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_starter` | Backward-compatible first-agent Stripe price |
+| `ARCLINK_FIRST_AGENT_PRICE_ID` | `price_arclink_starter` | First Raven agent Stripe price ($35/month target) |
+| `ARCLINK_ADDITIONAL_AGENT_PRICE_ID` | `price_arclink_additional_agent` | Additional Raven agent Stripe price ($15/month target) |
 
 **Health check:**
 ```bash

@@ -110,6 +110,10 @@ ARCLINK_WEB_PORT="${ARCLINK_WEB_PORT:-3000}"
 ARCLINK_CORS_ORIGIN="${ARCLINK_CORS_ORIGIN:-}"
 ARCLINK_COOKIE_DOMAIN="${ARCLINK_COOKIE_DOMAIN:-}"
 ARCLINK_DEFAULT_PRICE_ID="${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+ARCLINK_FIRST_AGENT_PRICE_ID="${ARCLINK_FIRST_AGENT_PRICE_ID:-$ARCLINK_DEFAULT_PRICE_ID}"
+ARCLINK_ADDITIONAL_AGENT_PRICE_ID="${ARCLINK_ADDITIONAL_AGENT_PRICE_ID:-price_arclink_additional_agent}"
+ARCLINK_FIRST_AGENT_MONTHLY_CENTS="${ARCLINK_FIRST_AGENT_MONTHLY_CENTS:-3500}"
+ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS="${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-1500}"
 ARCLINK_CONTROL_PROVISIONER_ENABLED="${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}"
 ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS="${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}"
 ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE="${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
@@ -2118,6 +2122,10 @@ emit_runtime_config() {
     write_kv ARCLINK_CORS_ORIGIN "${ARCLINK_CORS_ORIGIN:-}"
     write_kv ARCLINK_COOKIE_DOMAIN "${ARCLINK_COOKIE_DOMAIN:-}"
     write_kv ARCLINK_DEFAULT_PRICE_ID "${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+    write_kv ARCLINK_FIRST_AGENT_PRICE_ID "${ARCLINK_FIRST_AGENT_PRICE_ID:-${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}}"
+    write_kv ARCLINK_ADDITIONAL_AGENT_PRICE_ID "${ARCLINK_ADDITIONAL_AGENT_PRICE_ID:-price_arclink_additional_agent}"
+    write_kv ARCLINK_FIRST_AGENT_MONTHLY_CENTS "${ARCLINK_FIRST_AGENT_MONTHLY_CENTS:-3500}"
+    write_kv ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS "${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-1500}"
     write_kv ARCLINK_CONTROL_PROVISIONER_ENABLED "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}"
     write_kv ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS "${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}"
     write_kv ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
@@ -8669,7 +8677,8 @@ collect_control_install_answers() {
   default_web_port="${ARCLINK_WEB_PORT:-3000}"
   default_cors_origin="${ARCLINK_CORS_ORIGIN:-https://$default_base_domain}"
   default_cookie_domain="${ARCLINK_COOKIE_DOMAIN:-.$default_base_domain}"
-  default_price_id="${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}"
+  default_first_agent_price_id="${ARCLINK_FIRST_AGENT_PRICE_ID:-${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_starter}}"
+  default_additional_agent_price_id="${ARCLINK_ADDITIONAL_AGENT_PRICE_ID:-price_arclink_additional_agent}"
 
   if [[ -n "$detected_tailscale_dns" ]]; then
     echo "Detected Tailscale DNS name: $detected_tailscale_dns"
@@ -8726,10 +8735,17 @@ collect_control_install_answers() {
   ARCLINK_WEB_PORT="$(ask "Control web local port" "$default_web_port")"
   ARCLINK_CORS_ORIGIN="$(normalize_optional_answer "$(ask "Browser CORS origin (type none to clear)" "$default_cors_origin")")"
   ARCLINK_COOKIE_DOMAIN="$(normalize_optional_answer "$(ask "Session cookie domain (type none to clear)" "$default_cookie_domain")")"
-  ARCLINK_DEFAULT_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe default subscription price ID" "$default_price_id")")"
-  if [[ -z "$ARCLINK_DEFAULT_PRICE_ID" ]]; then
-    ARCLINK_DEFAULT_PRICE_ID="price_arclink_starter"
+  ARCLINK_FIRST_AGENT_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe first Raven agent price ID ($35/month)" "$default_first_agent_price_id")")"
+  if [[ -z "$ARCLINK_FIRST_AGENT_PRICE_ID" ]]; then
+    ARCLINK_FIRST_AGENT_PRICE_ID="price_arclink_starter"
   fi
+  ARCLINK_DEFAULT_PRICE_ID="$ARCLINK_FIRST_AGENT_PRICE_ID"
+  ARCLINK_ADDITIONAL_AGENT_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe additional Raven agent price ID ($15/month)" "$default_additional_agent_price_id")")"
+  if [[ -z "$ARCLINK_ADDITIONAL_AGENT_PRICE_ID" ]]; then
+    ARCLINK_ADDITIONAL_AGENT_PRICE_ID="price_arclink_additional_agent"
+  fi
+  ARCLINK_FIRST_AGENT_MONTHLY_CENTS="${ARCLINK_FIRST_AGENT_MONTHLY_CENTS:-3500}"
+  ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS="${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-1500}"
   ARCLINK_CONTROL_PROVISIONER_ENABLED="$(ask_yes_no "Enable Sovereign pod provisioner now" "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}")"
   ARCLINK_EXECUTOR_ADAPTER="${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
   if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" ]]; then

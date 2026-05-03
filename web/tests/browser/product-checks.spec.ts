@@ -205,8 +205,8 @@ test.describe("Route smoke", () => {
 
   test("/onboarding renders start step", async ({ page }) => {
     await page.goto("/onboarding");
-    await expect(page.locator("text=Start Your Deployment")).toBeVisible();
-    await expect(page.locator('input[type="email"]')).toBeVisible();
+    await expect(page.locator("text=Raven Is Online")).toBeVisible();
+    await expect(page.locator("text=Stripe collects email securely")).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toBeVisible();
     // Fake adapter notice present
     await expect(page.locator("text=Fake adapters")).toBeVisible();
@@ -240,10 +240,12 @@ test.describe("Accessibility", () => {
   });
 
   test("onboarding form has labeled inputs", async ({ page }) => {
+    await mockApi(page);
     await page.goto("/onboarding");
-    const emailInput = page.locator('input[id="email"]');
-    await expect(emailInput).toBeVisible();
-    const label = page.locator('label[for="email"]');
+    await page.click('button[type="submit"]');
+    const nameInput = page.locator('input[id="name"]');
+    await expect(nameInput).toBeVisible();
+    const label = page.locator('label[for="name"]');
     await expect(label).toBeVisible();
   });
 
@@ -412,18 +414,17 @@ test.describe("Onboarding flow", () => {
     await mockApi(page);
     await page.goto("/onboarding");
 
-    // Step 1: Start
-    await page.fill('input[type="email"]', "new@arclink.dev");
+    // Step 1: Start without collecting email in ArcLink chat/form
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Tell Us About You")).toBeVisible();
+    await expect(page.locator("text=Name The Mission")).toBeVisible();
 
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Activate Your Plan")).toBeVisible();
+    await expect(page.locator("text=Hire Your Agent")).toBeVisible();
 
     // Step 3: Checkout
-    await page.click("text=Activate & Pay");
-    await expect(page.locator("text=Complete Payment")).toBeVisible();
+    await page.click("text=Hire Agent - $35/mo");
+    await expect(page.locator("text=Hire Agent").last()).toBeVisible();
   });
 });

@@ -18,7 +18,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"
           >
-            Get Started &rarr;
+            Hire Agent
           </Link>
         </div>
       </nav>
@@ -26,20 +26,25 @@ export default function Home() {
       {/* Hero */}
       <main className="flex flex-1 flex-col items-center justify-center px-6 text-center">
         <h1 className="font-display text-4xl font-bold leading-tight sm:text-5xl md:text-6xl">
-          Private AI systems<br />
-          <span className="text-signal-orange">that run your business.</span>
+          Raven offers ArcLink:<br />
+          <span className="text-signal-orange">your private ArcLink.</span>
         </h1>
         <p className="mt-6 max-w-xl text-lg text-soft-white/70">
-          Deploy your own AI workforce — Hermes agents, knowledge retrieval,
-          managed memory, file storage, code tools, and bot integrations.
-          Built once. Runs forever.
+          Agents aboard a SOTA agentic harness at your fingertips, without making you leave the couch:
+          Hermes agents, knowledge retrieval, managed memory, files, code tools, and bot integrations.
+          First agent $35/month.
         </p>
+        <img
+          src="/brand/raven/raven_hero.webp"
+          alt=""
+          className="mt-8 h-auto w-full max-w-2xl border border-border object-contain"
+        />
         <div className="mt-10 flex flex-wrap justify-center gap-4">
           <Link
             href="/onboarding"
             className="rounded bg-signal-orange px-6 py-3 text-base font-semibold text-jet transition hover:opacity-90"
           >
-            Start Your Deployment &rarr;
+            Hire Your First Agent
           </Link>
           <Link
             href="/dashboard"

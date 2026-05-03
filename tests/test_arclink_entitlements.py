@@ -592,6 +592,7 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
             "customer": "cus_checkout",
             "subscription": "sub_checkout",
             "client_reference_id": prepared["user_id"],
+            "customer_details": {"email": "stripe-checkout@example.test"},
             "metadata": {
                 "arclink_user_id": prepared["user_id"],
                 "arclink_onboarding_session_id": session["session_id"],
@@ -604,7 +605,8 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
     expect(result.event_type == "checkout.session.completed", str(result))
     expect(result.entitlement_state == "paid", str(result))
     expect(len(result.advanced_deployments) >= 1, str(result))
-    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = ?", (prepared["user_id"],)).fetchone()
+    user = conn.execute("SELECT email, entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = ?", (prepared["user_id"],)).fetchone()
+    expect(user["email"] == "stripe-checkout@example.test", str(dict(user)))
     expect(user["entitlement_state"] == "paid", str(dict(user)))
     expect(user["stripe_customer_id"] == "cus_checkout", str(dict(user)))
     dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = ?", (prepared["deployment_id"],)).fetchone()

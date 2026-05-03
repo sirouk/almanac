@@ -232,7 +232,8 @@ cookie/header session transport, CORS, request-ID propagation, structured
 logging, safe error shaping, and Stripe webhook skip for no-secret environments.
 `HostedApiConfig` resolves runtime settings from `ARCLINK_BASE_DOMAIN`,
 `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`, `ARCLINK_COOKIE_SECURE`,
-`STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, and `ARCLINK_DEFAULT_PRICE_ID`.
+`STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, `ARCLINK_DEFAULT_PRICE_ID`,
+`ARCLINK_FIRST_AGENT_PRICE_ID`, and `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`.
 The hosted API is the intended production boundary; the local product surface
 remains a no-secret prototype.
 

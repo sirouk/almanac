@@ -38,8 +38,9 @@ def test_discord_slash_command_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, interaction)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
-    expect("ArcLink" in result["data"]["content"], result["data"]["content"])
-    expect(result["action"] == "prompt_identity", result["action"])
+    expect("Raven" in result["data"]["content"], result["data"]["content"])
+    expect(result["action"] == "prompt_name", result["action"])
+    expect(result["data"].get("components"), str(result["data"]))
     print("PASS test_discord_slash_command_through_bot_contract")
 
 
@@ -49,11 +50,11 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
         "type": 2,
         "channel_id": "ch_1",
         "member": {"user": {"id": "u_1"}},
-        "data": {"name": "email", "options": [{"name": "address", "value": "buyer@example.test"}]},
+        "data": {"name": "name", "options": [{"name": "display_name", "value": "Buyer"}]},
     }
     parsed = dc.parse_discord_interaction(interaction)
     expect(parsed is not None, "expected parse result")
-    expect(parsed["text"] == "email buyer@example.test", str(parsed))
+    expect(parsed["text"] == "name Buyer", str(parsed))
 
     plan = {
         "type": 2,
@@ -63,6 +64,14 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
     }
     parsed_plan = dc.parse_discord_interaction(plan)
     expect(parsed_plan["text"] == "plan operator", str(parsed_plan))
+    component = {
+        "type": 3,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"custom_id": "arclink:/plan starter"},
+    }
+    parsed_component = dc.parse_discord_interaction(component)
+    expect(parsed_component["text"] == "/plan starter", str(parsed_component))
     print("PASS test_discord_registered_action_command_options_parse_to_bot_contract")
 
 
@@ -72,7 +81,7 @@ def test_discord_message_event_through_bot_contract() -> None:
     conn = memory_db(control)
 
     transport = dc.FakeDiscordTransport()
-    msg = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="email test@example.test")
+    msg = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="name Test Buyer")
 
     # First start a session
     start = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="/start")
@@ -81,7 +90,7 @@ def test_discord_message_event_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
-    expect("Email locked in" in result["data"]["content"], result["data"]["content"])
+    expect("Name saved" in result["data"]["content"], result["data"]["content"])
     print("PASS test_discord_message_event_through_bot_contract")
 
 
@@ -94,8 +103,7 @@ def test_discord_full_onboarding_flow() -> None:
     transport = dc.FakeDiscordTransport()
 
     steps = [
-        ("/start", "prompt_identity"),
-        ("email bot@discord.test", "prompt_name"),
+        ("/start", "prompt_name"),
         ("name Discord Bot", "prompt_plan"),
         ("plan starter", "prompt_checkout"),
     ]
@@ -116,7 +124,8 @@ def test_discord_full_onboarding_flow() -> None:
         conn, checkout, stripe_client=stripe, base_domain="example.test"
     )
     expect(result["action"] == "open_checkout", result["action"])
-    expect("stripe.test" in result["data"]["content"], result["data"]["content"])
+    expect(result["data"].get("components"), str(result["data"]))
+    expect(result["data"]["components"][0]["components"][0]["url"].startswith("https://stripe.test"), str(result["data"]))
     print("PASS test_discord_full_onboarding_flow")
 
 
@@ -152,7 +161,7 @@ def test_discord_webhook_handler() -> None:
         conn, body=cmd_body, signature="sig", timestamp="ts", config=config,
     )
     expect(result["type"] == 4, f"expected type 4, got {result}")
-    expect("ArcLink" in result["data"]["content"], result["data"]["content"])
+    expect("Raven" in result["data"]["content"], result["data"]["content"])
 
     # Bad signature
     bad_config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="bad_key", guild_id="g1")
@@ -220,7 +229,8 @@ def test_discord_registers_public_bot_actions() -> None:
     expect(calls[0]["path"] == "/applications/app123/commands", str(calls[0]))
     expect(calls[0]["method"] == "PUT", str(calls[0]))
     names = {item["name"] for item in calls[0]["payload"]}
-    expect({"arclink", "connect-notion", "config-backup", "email", "name", "plan"} <= names, str(names))
+    expect({"arclink", "connect-notion", "config-backup", "agents", "name", "plan"} <= names, str(names))
+    expect("email" not in names, str(names))
     expect(result["scope"] == "global", str(result))
     expect(result["result_count"] == len(calls[0]["payload"]), str(result))
     print("PASS test_discord_registers_public_bot_actions")

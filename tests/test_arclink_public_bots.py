@@ -103,13 +103,8 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     stripe = adapters.FakeStripeClient()
 
     started = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:42", text="/start")
-    expect(started.action == "prompt_identity", str(started))
-    emailed = bots.handle_arclink_public_bot_turn(
-        conn,
-        channel="telegram",
-        channel_identity="tg:42",
-        text="/email bot@example.test",
-    )
+    expect(started.action == "prompt_name", str(started))
+    expect("Stripe will collect your email" in started.reply, started.reply)
     named = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -130,15 +125,16 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
         stripe_client=stripe,
         base_domain="example.test",
     )
-    expect({started.session_id, emailed.session_id, named.session_id, planned.session_id, checkout.session_id} == {started.session_id}, "session changed")
+    expect({started.session_id, named.session_id, planned.session_id, checkout.session_id} == {started.session_id}, "session changed")
     expect(checkout.action == "open_checkout" and checkout.checkout_url.startswith("https://stripe.test/checkout/"), str(checkout))
+    expect(checkout.buttons and checkout.buttons[0].label == "Hire Agent", str(checkout.buttons))
     session = conn.execute(
         "SELECT channel, channel_identity, status, checkout_state, email_hint, display_name_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
         (checkout.session_id,),
     ).fetchone()
     expect(session["channel"] == "telegram" and session["channel_identity"] == "tg:42", str(dict(session)))
     expect(session["status"] == "checkout_open" and session["checkout_state"] == "open", str(dict(session)))
-    expect(session["email_hint"] == "bot@example.test" and session["display_name_hint"] == "Bot Buyer", str(dict(session)))
+    expect(session["email_hint"] == "" and session["display_name_hint"] == "Bot Buyer", str(dict(session)))
     events = {
         row["event_type"]
         for row in conn.execute("SELECT event_type FROM arclink_onboarding_events WHERE session_id = ?", (checkout.session_id,)).fetchall()
@@ -158,10 +154,9 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
 
     discord = bots.arclink_public_bot_discord_application_commands()
     discord_names = {item["name"] for item in discord}
-    expect({"arclink", "connect-notion", "config-backup", "email", "name", "plan"} <= discord_names, str(discord_names))
-    email = next(item for item in discord if item["name"] == "email")
+    expect({"arclink", "connect-notion", "config-backup", "agents", "name", "plan"} <= discord_names, str(discord_names))
+    expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
-    expect(email["options"][0]["name"] == "address", str(email))
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"starter", "operator", "scale"}, str(plan))
     print("PASS test_public_bot_action_catalog_has_real_platform_commands")
 
@@ -323,10 +318,91 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
         text="/connect-notion",
     )
     expect(turn.action == "connect_notion_unavailable", str(turn))
-    expect("once your ArcLink pod exists" in turn.reply, turn.reply)
+    expect("once Raven has your first agent aboard ArcLink" in turn.reply, turn.reply)
     count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
     expect(count == 0, f"workflow command should not create an onboarding session, got {count}")
     print("PASS test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions")
+
+
+def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_agents_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_agents_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_agents_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+
+    unavailable = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:new",
+        text="/agents",
+    )
+    expect(unavailable.action == "agents_unavailable", str(unavailable))
+    expect(unavailable.buttons and unavailable.buttons[0].label == "Start Launch", str(unavailable.buttons))
+
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-prime")
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    expect(any(button.command == "/add-agent" for button in roster.buttons), str(roster.buttons))
+
+    add = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/add-agent",
+        stripe_client=stripe,
+        additional_agent_price_id="price_additional_agent",
+        base_domain="example.test",
+    )
+    expect(add.action == "open_add_agent_checkout", str(add))
+    expect(add.checkout_url.startswith("https://stripe.test/checkout/"), str(add))
+    checkout = stripe.checkout_sessions[add.checkout_url.rsplit("/", 1)[1]]
+    expect(checkout["price_id"] == "price_additional_agent", str(checkout))
+    add_session = conn.execute(
+        "SELECT user_id, selected_plan_id, metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (add.session_id,),
+    ).fetchone()
+    add_metadata = json.loads(add_session["metadata_json"])
+    expect(add_session["user_id"] == seeded["user_id"], str(dict(add_session)))
+    expect(add_session["selected_plan_id"] == "additional_agent", str(dict(add_session)))
+    expect(add_metadata.get("active_deployment_id") == seeded["deployment_id"], str(add_metadata))
+
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_bob",
+        user_id=seeded["user_id"],
+        prefix="arc-bob",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Bob",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    switched = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/agent-bob",
+    )
+    expect(switched.action == "switch_agent", str(switched))
+    expect(switched.deployment_id == "arcdep_bob", str(switched))
+    notion = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/connect-notion",
+    )
+    expect(notion.action == "connect_notion", str(notion))
+    expect("/u/arc-bob/notion/webhook" in notion.reply, notion.reply)
+    print("PASS test_public_bot_agents_roster_add_agent_and_switch_are_account_aware")
 
 
 def main() -> int:
@@ -337,7 +413,8 @@ def main() -> int:
     test_public_bot_connect_notion_resolves_active_deployment_and_records_event()
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
-    print("PASS all 7 ArcLink public bot tests")
+    test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
+    print("PASS all 8 ArcLink public bot tests")
     return 0
 
 

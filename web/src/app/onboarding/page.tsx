@@ -9,7 +9,6 @@ type Step = "start" | "questions" | "checkout" | "done";
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
-  const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [planId] = useState("starter");
   const [sessionId, setSessionId] = useState("");
@@ -17,12 +16,21 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState("");
 
+  function webContactId() {
+    const key = "arclink_web_contact_id";
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const generated = `web:${window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem(key, generated);
+    return generated;
+  }
+
   async function handleStart(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const res = await api.startOnboarding({ channel: "web", email, plan_id: planId });
+      const res = await api.startOnboarding({ channel: "web", channel_identity: webContactId(), plan_id: planId });
       if (res.status === 201 && res.data) {
         const session = (res.data as Record<string, Record<string, string>>).session;
         setSessionId(session.session_id);
@@ -47,7 +55,6 @@ export default function OnboardingPage() {
         question_key: "name",
         answer_summary: name,
         display_name: name,
-        email,
       });
       if (res.status === 200) {
         setStep("checkout");
@@ -67,7 +74,6 @@ export default function OnboardingPage() {
     try {
       const res = await api.openCheckout({
         session_id: sessionId,
-        price_id: "price_arclink_starter",
         success_url: window.location.origin + "/dashboard",
         cancel_url: window.location.origin + "/onboarding",
       });
@@ -95,35 +101,31 @@ export default function OnboardingPage() {
       </Link>
 
       <div className="w-full max-w-md rounded-lg border border-border bg-surface p-8">
+        <img
+          src="/brand/raven/raven_pfp.webp"
+          alt=""
+          className="mb-5 h-16 w-16 rounded-full border border-border object-cover"
+        />
         <h1 className="font-display text-2xl font-bold">
-          {step === "start" && "Start Your Deployment"}
-          {step === "questions" && "Tell Us About You"}
-          {step === "checkout" && "Activate Your Plan"}
-          {step === "done" && "You're All Set"}
+          {step === "start" && "Raven Is Online"}
+          {step === "questions" && "Name The Mission"}
+          {step === "checkout" && "Hire Your Agent"}
+          {step === "done" && "Checkout Armed"}
         </h1>
 
         {error && <ErrorAlert message={error} className="mt-4" />}
 
         {step === "start" && (
           <form onSubmit={handleStart} className="mt-6 space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm text-soft-white/60">Email</label>
-              <input
-                id="email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-soft-white outline-none focus:border-signal-orange"
-                placeholder="you@company.com"
-              />
-            </div>
+            <p className="text-sm text-soft-white/60">
+              Raven offers ArcLink: agents aboard a SOTA agentic harness at your fingertips without making you leave the couch. Stripe collects email securely at checkout.
+            </p>
             <button
               type="submit"
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Starting..." : "Continue →"}
+              {loading ? "Starting..." : "Begin Launch"}
             </button>
           </form>
         )}
@@ -143,14 +145,14 @@ export default function OnboardingPage() {
               />
             </div>
             <p className="text-sm text-soft-white/40">
-              Plan: <span className="text-signal-orange">Starter</span>
+              Starter: <span className="text-signal-orange">$35/month</span> for your first Raven agent. Additional agents are $15/month.
             </p>
             <button
               type="submit"
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Saving..." : "Continue to Checkout →"}
+              {loading ? "Saving..." : "Continue to Checkout"}
             </button>
           </form>
         )}
@@ -158,15 +160,14 @@ export default function OnboardingPage() {
         {step === "checkout" && (
           <div className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              Ready to activate your ArcLink Starter deployment. You&apos;ll be redirected to
-              Stripe for secure payment.
+              Raven will hand you to Stripe for secure payment, then watch for confirmation and move your ArcLink pod toward launch.
             </p>
             <button
               onClick={handleCheckout}
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Preparing..." : "Activate & Pay →"}
+              {loading ? "Preparing..." : "Hire Agent - $35/mo"}
             </button>
           </div>
         )}
@@ -182,7 +183,7 @@ export default function OnboardingPage() {
                   href={checkoutUrl}
                   className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
                 >
-                  Complete Payment →
+                  Hire Agent
                 </a>
               </>
             ) : (

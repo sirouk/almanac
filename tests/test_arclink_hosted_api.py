@@ -1002,8 +1002,8 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         def __init__(self) -> None:
             self.sent_messages = []
 
-        def send_message(self, chat_id: str, text: str):
-            self.sent_messages.append({"chat_id": chat_id, "text": text})
+        def send_message(self, chat_id: str, text: str, reply_markup=None):
+            self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
             return {"message_id": len(self.sent_messages)}
 
     transport = CaptureTransport()
@@ -1031,7 +1031,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     expect("/connect_notion" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
 
     class FailingTransport:
-        def send_message(self, chat_id: str, text: str):
+        def send_message(self, chat_id: str, text: str, reply_markup=None):
             raise RuntimeError("telegram api unavailable")
 
     status, payload, _ = hosted._handle_telegram_webhook(

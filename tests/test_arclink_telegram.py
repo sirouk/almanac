@@ -33,6 +33,17 @@ def test_telegram_parse_update() -> None:
 
     empty = tg.parse_telegram_update({"update_id": 2})
     expect(empty is None, "should be None for non-message")
+    callback = tg.parse_telegram_update({
+        "update_id": 3,
+        "callback_query": {
+            "id": "cb_1",
+            "from": {"id": 99},
+            "message": {"chat": {"id": 42}},
+            "data": "arclink:/plan starter",
+        },
+    })
+    expect(callback is not None, "should parse callback")
+    expect(callback["text"] == "/plan starter", str(callback))
     print("PASS test_telegram_parse_update")
 
 
@@ -48,8 +59,9 @@ def test_telegram_handle_update_through_bot_contract() -> None:
     result = tg.handle_telegram_update(conn, update)
     expect(result is not None, "should have result")
     expect(result["chat_id"] == "42", result["chat_id"])
-    expect(result["action"] == "prompt_identity", result["action"])
-    expect("ArcLink" in result["text"], result["text"])
+    expect(result["action"] == "prompt_name", result["action"])
+    expect("Raven" in result["text"], result["text"])
+    expect(result.get("reply_markup"), str(result))
     print("PASS test_telegram_handle_update_through_bot_contract")
 
 
@@ -62,7 +74,7 @@ def test_telegram_fake_transport_polling() -> None:
     stripe = adapters.FakeStripeClient()
 
     transport.enqueue_update("42", "99", "/start")
-    transport.enqueue_update("42", "99", "email test@example.test")
+    transport.enqueue_update("42", "99", "name Test Buyer")
 
     cfg = tg.TelegramConfig(bot_token="", bot_username="test", webhook_url="", api_base="")
     tg.run_telegram_polling(
@@ -73,8 +85,9 @@ def test_telegram_fake_transport_polling() -> None:
         max_iterations=2,
     )
     expect(len(transport.sent_messages) == 2, f"expected 2 replies, got {len(transport.sent_messages)}")
-    expect("ArcLink" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
-    expect("Email locked in" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("Raven" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
+    expect("Name saved" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("reply_markup" in transport.sent_messages[1], str(transport.sent_messages[1]))
     print("PASS test_telegram_fake_transport_polling")
 
 
@@ -89,10 +102,12 @@ def test_telegram_registers_public_bot_actions() -> None:
     command_sets = [{item["command"] for item in call["commands"]} for call in calls]
     expect("connect_notion" in command_sets[0], str(command_sets))
     expect("config_backup" in command_sets[0], str(command_sets))
+    expect("agents" in command_sets[0], str(command_sets))
+    expect("email" not in command_sets[0], str(command_sets))
     expect("connect-notion" not in command_sets[0], str(command_sets))
     expect(calls[0].get("scope") is None, str(calls[0]))
     expect(calls[1].get("scope") == {"type": "all_private_chats"}, str(calls[1]))
-    expect("email" in result["registered"] and "plan" in result["registered"], str(result))
+    expect("agents" in result["registered"] and "plan" in result["registered"], str(result))
     print("PASS test_telegram_registers_public_bot_actions")
 
 

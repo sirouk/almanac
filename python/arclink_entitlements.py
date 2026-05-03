@@ -10,6 +10,7 @@ from arclink_control import (
     append_arclink_audit,
     append_arclink_event,
     set_arclink_user_entitlement,
+    upsert_arclink_user,
     upsert_arclink_subscription_mirror,
     utc_now_iso,
 )
@@ -233,6 +234,15 @@ def _stripe_onboarding_session_id(obj: Mapping[str, Any]) -> str:
     ))
 
 
+def _stripe_customer_email(obj: Mapping[str, Any]) -> str:
+    customer_details = _safe_mapping(obj.get("customer_details"))
+    return _first_nonempty((
+        customer_details.get("email"),
+        obj.get("customer_email"),
+        obj.get("receipt_email"),
+    ))
+
+
 def _entitlement_for_stripe_event(event_type: str, obj: Mapping[str, Any]) -> str:
     stripe_status = str(obj.get("status") or "").strip().lower()
     if event_type == "checkout.session.completed":
@@ -424,13 +434,24 @@ def process_stripe_webhook(
                 raw=obj,
                 commit=False,
             )
-        set_arclink_user_entitlement(
-            conn,
-            user_id=user_id,
-            entitlement_state=entitlement_state,
-            stripe_customer_id=stripe_customer_id,
-            commit=False,
-        )
+        stripe_customer_email = _stripe_customer_email(obj)
+        if stripe_customer_email:
+            upsert_arclink_user(
+                conn,
+                user_id=user_id,
+                email=stripe_customer_email,
+                stripe_customer_id=stripe_customer_id,
+                entitlement_state=entitlement_state,
+                commit=False,
+            )
+        else:
+            set_arclink_user_entitlement(
+                conn,
+                user_id=user_id,
+                entitlement_state=entitlement_state,
+                stripe_customer_id=stripe_customer_id,
+                commit=False,
+            )
         advanced = tuple(advance_arclink_entitlement_gates_for_user(conn, user_id=user_id, commit=False))
         onboarding_session_id = _stripe_onboarding_session_id(obj)
         if event_type == "checkout.session.completed" and onboarding_session_id:

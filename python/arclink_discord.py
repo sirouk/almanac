@@ -19,7 +19,11 @@ _PYTHON_DIR = pathlib.Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
-from arclink_public_bots import arclink_public_bot_discord_application_commands, handle_arclink_public_bot_turn
+from arclink_public_bots import (
+    arclink_public_bot_discord_application_commands,
+    arclink_public_bot_turn_discord_components,
+    handle_arclink_public_bot_turn,
+)
 from arclink_http import http_request, parse_json_object, parse_json_response
 
 logger = logging.getLogger("arclink.discord")
@@ -256,7 +260,20 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "text": text,
         }
 
-    # Type 3 = MESSAGE_COMPONENT, type 4 = AUTOCOMPLETE — skip for now
+    # Type 3 = MESSAGE_COMPONENT (buttons)
+    if itype == 3:
+        data = interaction.get("data") or {}
+        custom_id = str(data.get("custom_id") or "").strip()
+        if custom_id.startswith("arclink:"):
+            custom_id = custom_id[len("arclink:"):].strip()
+        user = (interaction.get("member") or {}).get("user") or interaction.get("user") or {}
+        return {
+            "channel_id": str(interaction.get("channel_id") or ""),
+            "user_id": str(user.get("id") or ""),
+            "text": custom_id,
+        }
+
+    # Type 4 = AUTOCOMPLETE — skip for now
     # Fallback for plain message content (gateway events)
     if "content" in interaction:
         author = interaction.get("author") or {}
@@ -275,6 +292,7 @@ def handle_discord_interaction(
     *,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_starter",
+    additional_agent_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any] | None:
     """Process a Discord interaction through the shared bot contract.
@@ -298,13 +316,18 @@ def handle_discord_interaction(
         text=parsed["text"],
         stripe_client=stripe_client,
         price_id=price_id,
+        additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
     )
+    data: dict[str, Any] = {
+        "content": turn.reply,
+    }
+    components = arclink_public_bot_turn_discord_components(turn)
+    if components:
+        data["components"] = components
     return {
         "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
-        "data": {
-            "content": turn.reply,
-        },
+        "data": data,
         "session_id": turn.session_id,
         "action": turn.action,
     }
@@ -357,6 +380,7 @@ def handle_discord_webhook_request(
     config: DiscordConfig,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_starter",
+    additional_agent_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any]:
     """Handle an incoming Discord interaction webhook request.
@@ -373,6 +397,7 @@ def handle_discord_webhook_request(
         conn, interaction,
         stripe_client=stripe_client,
         price_id=price_id,
+        additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
     )
     if result is None:

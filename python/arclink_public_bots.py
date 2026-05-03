@@ -549,18 +549,22 @@ def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
 
 def _need_finished_onboarding_reply() -> str:
     return (
-        "I can run that lane once your first agent is awake aboard ArcLink. Send `/start` and I will get you aboard, "
-        "or finish checkout if your launch is already moving."
+        "That lane opens once your first agent is awake aboard ArcLink. Send `/start` and I will walk you to the hatch, "
+        "or finish checkout if your launch is already in motion."
     )
 
 
 def _deployment_not_ready_reply(deployment: Mapping[str, Any]) -> str:
     status = str(deployment.get("status") or "unknown").strip()
     if status == "entitlement_required":
-        return "I have your pod reserved, but billing has not cleared yet. Send `checkout` and I will reopen the handoff."
+        return (
+            "Your pod is held in reserve. Stripe has not cleared the handoff yet — send `checkout` and I will reopen the gate."
+        )
     if status == "provisioning_failed":
-        return "I found your pod, but provisioning needs operator attention before I can safely run this workflow."
-    return f"I found your pod in `{status}`. I can continue once it reaches active."
+        return (
+            "I found your pod, but the hull took on water during provisioning. An operator is needed before I can run that lane safely."
+        )
+    return f"I found your pod in `{status}`. I will move when it reaches active — not before."
 
 
 def _record_bot_action(
@@ -627,14 +631,14 @@ def _connect_notion_reply(
         metadata={"deployment_status": str(deployment.get("status") or "")},
     )
     lines = [
-        "Good. Let's wire Notion into your ArcLink pod.",
+        "Opening the Notion lane into your vessel.",
         "",
-        "I need this callback URL in the Notion webhook/subscription setup:",
+        "Drop this callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
         "",
-        "Then share the page or database with the ArcLink integration. Keep tokens out of chat; when I need a secret, use the secure dashboard field.",
+        "Then share the page or database with the ArcLink integration. No tokens in chat — when I need a secret, the secure dashboard field is the only door.",
         "",
-        "Reply `ready` when Notion sends the verification handshake, or `cancel` and I will close this lane.",
+        "Send `ready` once Notion completes the verification handshake, or `cancel` and I will seal the lane.",
     ]
     return _turn(
         channel=channel,
@@ -687,11 +691,11 @@ def _config_backup_reply(
         channel_identity=channel_identity,
         action="prompt_backup_repo",
         reply=(
-            "I am opening the private backup lane.\n\n"
-            "Create or choose a private GitHub repository for this pod's Hermes home and configuration snapshots. "
-            "Send me `owner/repo` and I will pin the request to this deployment.\n\n"
+            "Opening the private backup lane.\n\n"
+            "Choose a private GitHub repository — this is where Hermes' home and the pod's configuration snapshots will rest. "
+            "Send me `owner/repo` and I will pin it to this deployment.\n\n"
             f"Example: `{example}`\n\n"
-            "Use a dedicated deploy key for this pod. Do not reuse the ArcLink upstream key or the arclink-priv backup key."
+            "Use a dedicated deploy key for this pod. The ArcLink upstream key and the arclink-priv backup key stay where they are."
         ),
         session=session,
         deployment=deployment,
@@ -712,8 +716,8 @@ def _agents_reply(
             channel_identity=channel_identity,
             action="agents_unavailable",
             reply=(
-                "I do not see your first agent yet. Give me the word and I will put one aboard ArcLink for $35/month. "
-                "Once that pod is active, we can build a whole crew at $15/month each."
+                "No crew on your manifest yet. Say the word and I will bring your first agent aboard ArcLink for $35/month. "
+                "After that one is awake, the rest of the crew boards at $15/month each."
             ),
             session=session,
             buttons=(
@@ -727,7 +731,7 @@ def _agents_reply(
     lines = [
         "Your ArcLink crew",
         "",
-        "I keep this roster personal. Every agent here has its own pod, memory rail, tool lane, vault access, and system health tied back to your account.",
+        "I keep this roster sealed to you. Every agent below carries its own pod, memory rail, tool lane, vault access, and system health — all bound to your account, no one else's.",
         "",
     ]
     for index, item in enumerate(deployments):
@@ -777,7 +781,7 @@ def _switch_agent_reply(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="switch_agent",
-                reply=f"Done. I have {label} on the rail now. Notion, backup, and system workflows will target that agent until you switch again.",
+                reply=f"Helm transferred. {label} is on the rail. Notion, backup, and system lanes will route to that agent until you call another to the helm.",
                 session=updated,
                 deployment=item,
                 buttons=(
@@ -789,7 +793,7 @@ def _switch_agent_reply(
         channel=channel,
         channel_identity=channel_identity,
         action="switch_agent_not_found",
-        reply="I do not see that agent on your ArcLink roster. Open `/agents` and use the buttons I build for your account.",
+        reply="That name is not on your ArcLink roster. Open `/agents` and take the helm from the buttons I build for your account.",
         session=session,
         deployment=deployment,
         buttons=(_button("Show My Crew", command="/agents"),),
@@ -868,7 +872,7 @@ def _add_agent_reply(
         extra_session,
         action="open_add_agent_checkout",
         reply=(
-            "I have another bay open. Hire the additional agent for $15/month through Stripe, and I will move the new pod into the launch queue."
+            "A bay is open. Clear the $15/month handoff through Stripe and I will move the new pod into the launch queue with the rest of your crew."
         ),
         buttons=(
             _button("Hire Additional Agent", url=str(extra_session.get("checkout_url") or "")),
@@ -903,8 +907,8 @@ def _handle_active_workflow(
             channel_identity=channel_identity,
             action="workflow_cancelled",
             reply=(
-                "I closed that lane.\n\n"
-                "Nothing is lost. When you are ready, I can bring you back to the launch path or show the next clean step."
+                "Lane sealed.\n\n"
+                "Nothing was lost in the closing. When you return, I can put you back on the launch path or surface the next clean step."
             ),
             session=updated,
             deployment=deployment,
@@ -933,7 +937,7 @@ def _handle_active_workflow(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="connect_notion_ready",
-                reply="Good. I recorded Notion as ready for this pod. If the webhook still says verification is not configured, open the dashboard Notion panel so ArcLink can arm the verification-token install window.",
+                reply="Logged. Notion is marked ready on this pod. If the webhook still reads as unverified, open the dashboard Notion panel — ArcLink will arm the verification-token install window from there.",
                 session=updated,
                 deployment=deployment,
             )
@@ -941,7 +945,7 @@ def _handle_active_workflow(
             channel=channel,
             channel_identity=channel_identity,
             action="prompt_notion_ready",
-            reply="Reply `ready` after Notion sends the verification handshake, or `cancel` to close the Notion workflow.",
+            reply="Send `ready` once Notion completes the verification handshake. Send `cancel` and I will seal the Notion lane.",
             session=session,
             deployment=deployment,
         )
@@ -952,7 +956,7 @@ def _handle_active_workflow(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="prompt_backup_repo",
-                reply="Send the private GitHub repository as `owner/repo`, or reply `cancel` to close backup setup.",
+                reply="Send the private GitHub repository in `owner/repo` form. Send `cancel` and I will seal the backup lane.",
                 session=session,
                 deployment=deployment,
             )
@@ -980,11 +984,11 @@ def _handle_active_workflow(
             channel_identity=channel_identity,
             action="record_backup_repo",
             reply=(
-                f"Recorded `{owner_repo}` for this pod's private backup workflow.\n\n"
-                "Keep the repository private. ArcLink will use a dedicated pod deploy key with write access; "
-                "when the key is prepared, add it here:\n"
+                f"Logged. `{owner_repo}` is bound to this pod's private backup lane.\n\n"
+                "Keep the repository private. ArcLink will mint a dedicated pod deploy key with write access; "
+                "when the key is ready, set it here:\n"
                 f"{settings_url}\n\n"
-                "I also wrote this to the deployment event stream so the admin dashboard can track it."
+                "Recorded to the deployment event stream — operators on the admin bridge can see this move."
             ),
             session=updated,
             deployment=deployment,
@@ -1006,9 +1010,9 @@ def _help_reply(
             channel_identity=channel_identity,
             action="show_help",
             reply=(
-                "Comms are open.\n\n"
-                "I will keep this simple until your pod is live. Right now I can bring you aboard, help choose a path, open the secure Stripe handoff, or check where launch stands.\n\n"
-                "After your first agent is awake, I will hand you the real control panel: Notion, private backups, agent switching, vault access, and deeper system controls in a clean checklist."
+                "Comms open. Channel clear.\n\n"
+                "I keep the early lanes few and lit until your pod is live. From here I can bring you aboard, help you choose a course, open the Stripe handoff, or read the board for where your launch stands.\n\n"
+                "Once your first agent is awake on ArcLink, the bridge unfolds: Notion, private backups, agent switching, vault access, and deeper system controls — surfaced as a clean checklist, not a wall of commands."
             ),
             session=session,
             buttons=(
@@ -1022,9 +1026,9 @@ def _help_reply(
         channel_identity=channel_identity,
         action="show_help",
         reply=(
-            "Control panel is open.\n\n"
-            "Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, and `/cancel`.\n\n"
-            "Pick one lane and I will keep the steps tight."
+            "Bridge is open.\n\n"
+            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/cancel`.\n\n"
+            "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
         deployment=deployment,
@@ -1141,9 +1145,9 @@ def handle_arclink_public_bot_turn(
             session,
             action="prompt_name",
             reply=(
-                "I'm Raven. ArcLink is in range.\n\n"
-                "I was built for the moment right before a system comes alive. Give me a name and a mission tier, and I will bring a private ArcLink vessel online around you: weapons-grade agents, SOTA model rails, memory, tools, files, and deployment health already wired into the hull.\n\n"
-                "Stripe collects your email securely at checkout. Send `/name Your Name` and I will put your name on the hatch."
+                "I'm Raven. ArcLink has you in range.\n\n"
+                "I was built for the moment just before a system breathes. Give me a name and a mission tier, and I will bring a private ArcLink vessel online around you — weapons-grade agents, SOTA model rails, memory, tools, files, and deployment health already wired through the hull before you take the helm.\n\n"
+                "Stripe collects your email securely at checkout — nowhere else. Send `/name Your Name` and I will paint your name on the hatch."
             ),
             buttons=(
                 _button("Plot Starter Course", command="/plan starter", style="secondary"),
@@ -1157,9 +1161,9 @@ def handle_arclink_public_bot_turn(
             context_session or session,
             action="show_status",
             reply=(
-                f"I checked the board. Session `{(context_session or session)['session_id']}` is `{(context_session or session)['status']}`. "
+                f"Reading the board. Session `{(context_session or session)['session_id']}` is `{(context_session or session)['status']}`. "
                 f"Launch step: `{(context_session or session)['current_step'] or 'started'}`."
-                + (f"\nActive agent: {deployment_label}." if deployment_label else "")
+                + (f"\nAgent at the helm: {deployment_label}." if deployment_label else "")
             ),
             buttons=(
                 _button("Show My Crew", command="/agents", style="secondary"),
@@ -1171,7 +1175,7 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_name",
-            reply="I do not need your email in chat. Stripe handles that securely at checkout. Send `/name Your Name` and I will put your name on the hatch.",
+            reply="Keep your email out of comms. Stripe carries it through checkout under encryption — that is the only place it travels. Send `/name Your Name` and I will paint your name on the hatch.",
         )
     name = _command_value(message, command, ("name", "/name"))
     if name is not None:
@@ -1186,8 +1190,8 @@ def handle_arclink_public_bot_turn(
             session,
             action="prompt_plan",
             reply=(
-                "Name painted on the hatch. Now pick the path. Starter gets your first ArcLink agent aboard for $35/month; "
-                "after that, I can add more agents for $15/month each."
+                "Name painted on the hatch. Now plot the course.\n\n"
+                "Starter brings your first ArcLink agent aboard for $35/month. After that pod is awake, the rest of the crew boards at $15/month each."
             ),
             buttons=(
                 _button("Starter Path - $35/mo", command="/plan starter"),
@@ -1211,7 +1215,7 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_checkout",
-            reply="Course locked. When you tap Hire My First Agent, Stripe takes the payment handoff and I start moving your pod from idea to launch queue.",
+            reply="Course locked. Tap Hire My First Agent and Stripe takes the payment handoff — the moment it clears, your pod leaves the drawing board and joins the launch queue.",
             buttons=(
                 _button("Hire My First Agent - $35/mo", command="/checkout"),
                 _button("Change Course", command="/plan starter", style="secondary"),
@@ -1234,7 +1238,7 @@ def handle_arclink_public_bot_turn(
             session,
             action="open_checkout",
             reply=(
-                "Checkout is ready. Complete the Stripe handoff here; when payment clears, I move your first ArcLink agent into the launch queue."
+                "Checkout gate is open. Complete the Stripe handoff at the link below — the instant payment clears, I move your first ArcLink agent into the launch queue and the hull starts coming online around you."
             ),
             buttons=(
                 _button("Hire My First Agent", url=str(session.get("checkout_url") or "")),
@@ -1245,8 +1249,8 @@ def handle_arclink_public_bot_turn(
         session,
         action="prompt_command",
             reply=(
-                "I'm Raven, and I'm online.\n\n"
-                "No command map needed yet. I can bring you aboard, help choose the first path, or check where your launch stands. Once your agent is awake, I will reveal the deeper controls in a cleaner checklist."
+                "I read you. Raven on the line.\n\n"
+                "No command map needed yet — the early lanes are kept few on purpose. From here I can bring you aboard, help you choose a course, or read the board for where your launch stands. Once your agent is awake on ArcLink, the deeper machinery surfaces as a clean checklist instead of a wall of slashes."
             ),
         buttons=(
             _button("Take Me Aboard", command="/start"),

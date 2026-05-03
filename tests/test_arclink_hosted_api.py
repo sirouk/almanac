@@ -1028,7 +1028,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     expect(payload.get("sent") is True, str(payload))
     expect(len(transport.sent_messages) == 1, str(transport.sent_messages))
     expect(transport.sent_messages[0]["chat_id"] == "12345", str(transport.sent_messages))
-    expect("/connect_notion" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
+    expect("I will keep this simple until your pod is live" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
 
     class FailingTransport:
         def send_message(self, chat_id: str, text: str, reply_markup=None):

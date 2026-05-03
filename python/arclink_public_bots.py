@@ -493,6 +493,28 @@ def _update_session_metadata(
     return dict(conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone())
 
 
+def _clear_session_workflow(conn: sqlite3.Connection, *, session_id: str) -> dict[str, Any]:
+    row = conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if row is None:
+        raise KeyError(session_id)
+    payload = _metadata(dict(row))
+    payload.pop("public_bot_workflow", None)
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json_dumps_safe(payload, label="ArcLink public bot workflow", error_cls=ArcLinkPublicBotError),
+            utc_now_iso(),
+            session_id,
+        ),
+    )
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone())
+
+
 def _deployment_context(
     conn: sqlite3.Connection,
     *,
@@ -880,9 +902,16 @@ def _handle_active_workflow(
             channel=channel,
             channel_identity=channel_identity,
             action="workflow_cancelled",
-            reply="Closed that ArcLink workflow. Your pod path is still ready when you are. Send `/connect_notion` or `/config_backup` to reopen a setup lane.",
+            reply=(
+                "I closed that lane.\n\n"
+                "Nothing is lost. When you are ready, I can bring you back to the launch path or show the next clean step."
+            ),
             session=updated,
             deployment=deployment,
+            buttons=(
+                _button("Take Me Aboard", command="/start"),
+                _button("Run Systems Check", command="/status", style="secondary"),
+            ),
         )
     if workflow == "connect_notion":
         if command in {"ready", "done", "verified", "complete"}:
@@ -963,28 +992,46 @@ def _handle_active_workflow(
     return None
 
 
-def _help_reply(*, channel: str, channel_identity: str, session: Mapping[str, Any] | None = None) -> ArcLinkPublicBotTurn:
+def _help_reply(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None = None,
+    deployment: Mapping[str, Any] | None = None,
+) -> ArcLinkPublicBotTurn:
+    ready = bool(deployment and str(deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES)
+    if not ready:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="show_help",
+            reply=(
+                "Comms are open.\n\n"
+                "I will keep this simple until your pod is live. Right now I can bring you aboard, help choose a path, open the secure Stripe handoff, or check where launch stands.\n\n"
+                "After your first agent is awake, I will hand you the real control panel: Notion, private backups, agent switching, vault access, and deeper system controls in a clean checklist."
+            ),
+            session=session,
+            buttons=(
+                _button("Take Me Aboard", command="/start"),
+                _button("Plot Starter Course", command="/plan starter", style="secondary"),
+                _button("Run Systems Check", command="/status", style="secondary"),
+            ),
+        )
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="show_help",
         reply=(
-            "Raven comms deck\n\n"
-            "I am Raven. I do not hand you a chatbot and vanish. I bring ArcLink online around you: a private vessel with SOTA model rails, managed memory, tools, files, Notion and backup lanes, and live health checks. You point at the mission. I handle the launch path.\n\n"
-            "`/start` - let me bring you aboard\n"
-            "`/name Your Name` - tell me whose name goes on the hatch\n"
-            "`/plan starter` - pick the starter, operator, or scale path\n"
-            "`/checkout` - hire your first $35/month agent\n"
-            "`/status` - let me run a systems check\n"
-            "`/agents` - show the agents on your account\n"
-            "`/connect_notion` - wire Notion into the active pod\n"
-            "`/config_backup` - set up private pod backup\n"
-            "`/cancel` - close the active setup lane"
+            "Control panel is open.\n\n"
+            "Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, and `/cancel`.\n\n"
+            "Pick one lane and I will keep the steps tight."
         ),
         session=session,
+        deployment=deployment,
         buttons=(
-            _button("Take Me Aboard", command="/start"),
             _button("Show My Crew", command="/agents", style="secondary"),
+            _button("Wire Notion", command="/connect_notion", style="secondary"),
+            _button("Set Up Backup", command="/config_backup", style="secondary"),
         ),
     )
 
@@ -1008,10 +1055,12 @@ def handle_arclink_public_bot_turn(
     command = message.lower()
 
     if command in ARCLINK_PUBLIC_BOT_HELP_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         return _help_reply(
             channel=clean_channel,
             channel_identity=clean_identity,
-            session=_latest_session_for_contact(conn, channel=clean_channel, channel_identity=clean_identity),
+            session=session,
+            deployment=deployment,
         )
 
     if command in ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS:
@@ -1196,11 +1245,12 @@ def handle_arclink_public_bot_turn(
         session,
         action="prompt_command",
             reply=(
-                "I'm Raven, and I am online. I can take you from a few answers to a private ArcLink pod with inference, memory, tools, vault, and deployment health already wired in.\n\n"
-                "Use `/start` and I will bring you aboard. Use `/agents` for your crew, `/help` for comms, `/connect_notion` for Notion, or `/config_backup` for private backups."
+                "I'm Raven, and I'm online.\n\n"
+                "No command map needed yet. I can bring you aboard, help choose the first path, or check where your launch stands. Once your agent is awake, I will reveal the deeper controls in a cleaner checklist."
             ),
         buttons=(
             _button("Take Me Aboard", command="/start"),
-            _button("Show My Crew", command="/agents", style="secondary"),
+            _button("Plot Starter Course", command="/plan starter", style="secondary"),
+            _button("Run Systems Check", command="/status", style="secondary"),
         ),
     )

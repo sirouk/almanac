@@ -108,19 +108,19 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
         conn,
         channel="telegram",
         channel_identity="tg:42",
-        text="email bot@example.test",
+        text="/email bot@example.test",
     )
     named = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:42",
-        text="name Bot Buyer",
+        text="/name Bot Buyer",
     )
     planned = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:42",
-        text="plan starter",
+        text="/plan starter",
     )
     checkout = bots.handle_arclink_public_bot_turn(
         conn,
@@ -145,6 +145,25 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     }
     expect({"started", "question_answered", "checkout_opened"} <= events, str(events))
     print("PASS test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout")
+
+
+def test_public_bot_action_catalog_has_real_platform_commands() -> None:
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_action_catalog_test")
+    telegram = bots.arclink_public_bot_telegram_commands()
+    telegram_names = {item["command"] for item in telegram}
+    expect("connect_notion" in telegram_names, str(telegram))
+    expect("config_backup" in telegram_names, str(telegram))
+    expect("connect-notion" not in telegram_names, str(telegram))
+    expect("config-backup" not in telegram_names, str(telegram))
+
+    discord = bots.arclink_public_bot_discord_application_commands()
+    discord_names = {item["name"] for item in discord}
+    expect({"arclink", "connect-notion", "config-backup", "email", "name", "plan"} <= discord_names, str(discord_names))
+    email = next(item for item in discord if item["name"] == "email")
+    plan = next(item for item in discord if item["name"] == "plan")
+    expect(email["options"][0]["name"] == "address", str(email))
+    expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"starter", "operator", "scale"}, str(plan))
+    print("PASS test_public_bot_action_catalog_has_real_platform_commands")
 
 
 def test_public_bot_contract_rejects_wrong_channel_and_secret_metadata() -> None:
@@ -304,7 +323,7 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
         text="/connect-notion",
     )
     expect(turn.action == "connect_notion_unavailable", str(turn))
-    expect("after your ArcLink pod exists" in turn.reply, turn.reply)
+    expect("once your ArcLink pod exists" in turn.reply, turn.reply)
     count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
     expect(count == 0, f"workflow command should not create an onboarding session, got {count}")
     print("PASS test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions")
@@ -312,12 +331,13 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
 
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
+    test_public_bot_action_catalog_has_real_platform_commands()
     test_public_bot_contract_rejects_wrong_channel_and_secret_metadata()
     test_public_bot_turns_use_shared_onboarding_rate_limit()
     test_public_bot_connect_notion_resolves_active_deployment_and_records_event()
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
-    print("PASS all 6 ArcLink public bot tests")
+    print("PASS all 7 ArcLink public bot tests")
     return 0
 
 

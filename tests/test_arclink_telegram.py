@@ -74,8 +74,26 @@ def test_telegram_fake_transport_polling() -> None:
     )
     expect(len(transport.sent_messages) == 2, f"expected 2 replies, got {len(transport.sent_messages)}")
     expect("ArcLink" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
-    expect("Email saved" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("Email locked in" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
     print("PASS test_telegram_fake_transport_polling")
+
+
+def test_telegram_registers_public_bot_actions() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_register_actions_test")
+    calls: list[dict[str, object]] = []
+    tg.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+    result = tg.register_arclink_public_telegram_commands("123:abc")
+
+    expect(len(calls) == 2, str(calls))
+    command_sets = [{item["command"] for item in call["commands"]} for call in calls]
+    expect("connect_notion" in command_sets[0], str(command_sets))
+    expect("config_backup" in command_sets[0], str(command_sets))
+    expect("connect-notion" not in command_sets[0], str(command_sets))
+    expect(calls[0].get("scope") is None, str(calls[0]))
+    expect(calls[1].get("scope") == {"type": "all_private_chats"}, str(calls[1]))
+    expect("email" in result["registered"] and "plan" in result["registered"], str(result))
+    print("PASS test_telegram_registers_public_bot_actions")
 
 
 def test_telegram_refuses_live_without_token() -> None:
@@ -123,10 +141,11 @@ def main() -> int:
     test_telegram_parse_update()
     test_telegram_handle_update_through_bot_contract()
     test_telegram_fake_transport_polling()
+    test_telegram_registers_public_bot_actions()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 7 ArcLink Telegram adapter tests")
+    print("PASS all 8 ArcLink Telegram adapter tests")
     return 0
 
 

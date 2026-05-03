@@ -19,8 +19,8 @@ _PYTHON_DIR = pathlib.Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
-from arclink_public_bots import handle_arclink_public_bot_turn
-from arclink_http import http_request, parse_json_object
+from arclink_public_bots import arclink_public_bot_discord_application_commands, handle_arclink_public_bot_turn
+from arclink_http import http_request, parse_json_object, parse_json_response
 
 logger = logging.getLogger("arclink.discord")
 
@@ -58,6 +58,34 @@ def _request_json(
     if response.status_code >= 400:
         raise RuntimeError(f"discord http {response.status_code}: {response.text[:200]}")
     return parse_json_object(response, label="discord")
+
+
+def _request_any_json(
+    path: str,
+    *,
+    bot_token: str,
+    method: str = "GET",
+    payload: Any | None = None,
+    timeout: int = 30,
+) -> Any:
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Accept": "application/json",
+        "User-Agent": DISCORD_USER_AGENT,
+    }
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    response = http_request(
+        f"{DISCORD_API_BASE}{path}",
+        method=method,
+        headers=headers,
+        json_payload=payload,
+        timeout=timeout,
+        allow_loopback_http=False,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"discord http {response.status_code}: {response.text[:200]}")
+    return parse_json_response(response, label="discord")
 
 
 def discord_get_current_user(*, bot_token: str) -> dict[str, Any]:
@@ -113,6 +141,28 @@ def discord_edit_message(
         payload=payload,
         timeout=20,
     )
+
+
+def register_arclink_public_discord_commands(config: DiscordConfig) -> dict[str, Any]:
+    if not config.bot_token:
+        raise ArcLinkDiscordError("DISCORD_BOT_TOKEN is required to register ArcLink public bot commands")
+    if not config.app_id:
+        raise ArcLinkDiscordError("DISCORD_APP_ID is required to register ArcLink public bot commands")
+    commands = arclink_public_bot_discord_application_commands()
+    if config.guild_id:
+        path = f"/applications/{config.app_id}/guilds/{config.guild_id}/commands"
+        scope = "guild"
+    else:
+        path = f"/applications/{config.app_id}/commands"
+        scope = "global"
+    result = _request_any_json(path, bot_token=config.bot_token, method="PUT", payload=commands, timeout=30)
+    registered_count = len(result) if isinstance(result, list) else 0
+    return {
+        "scope": scope,
+        "path": path,
+        "registered": [str(item["name"]) for item in commands],
+        "result_count": registered_count,
+    }
 
 
 @dataclass(frozen=True)
@@ -181,12 +231,24 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
         data = interaction.get("data") or {}
         options = data.get("options") or []
         text = ""
+        option_values = {
+            str(opt.get("name") or ""): str(opt.get("value") or "")
+            for opt in options
+            if isinstance(opt, Mapping)
+        }
         for opt in options:
             if opt.get("name") == "message":
                 text = str(opt.get("value") or "")
         if not text:
             name = str(data.get("name") or "")
-            text = f"/{name}" if name else "/start"
+            if name == "email":
+                text = f"email {option_values.get('address', '').strip()}".strip()
+            elif name == "name":
+                text = f"name {option_values.get('display_name', '').strip()}".strip()
+            elif name == "plan":
+                text = f"plan {option_values.get('tier', '').strip()}".strip()
+            else:
+                text = f"/{name}" if name else "/start"
         user = (interaction.get("member") or {}).get("user") or interaction.get("user") or {}
         return {
             "channel_id": str(interaction.get("channel_id") or ""),

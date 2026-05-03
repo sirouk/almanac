@@ -43,6 +43,29 @@ def test_discord_slash_command_through_bot_contract() -> None:
     print("PASS test_discord_slash_command_through_bot_contract")
 
 
+def test_discord_registered_action_command_options_parse_to_bot_contract() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_registered_action_parse_test")
+    interaction = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "email", "options": [{"name": "address", "value": "buyer@example.test"}]},
+    }
+    parsed = dc.parse_discord_interaction(interaction)
+    expect(parsed is not None, "expected parse result")
+    expect(parsed["text"] == "email buyer@example.test", str(parsed))
+
+    plan = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "plan", "options": [{"name": "tier", "value": "operator"}]},
+    }
+    parsed_plan = dc.parse_discord_interaction(plan)
+    expect(parsed_plan["text"] == "plan operator", str(parsed_plan))
+    print("PASS test_discord_registered_action_command_options_parse_to_bot_contract")
+
+
 def test_discord_message_event_through_bot_contract() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_msg_test")
     control = load_module("arclink_control.py", "arclink_control_dc_msg_test")
@@ -58,7 +81,7 @@ def test_discord_message_event_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
-    expect("Email saved" in result["data"]["content"], result["data"]["content"])
+    expect("Email locked in" in result["data"]["content"], result["data"]["content"])
     print("PASS test_discord_message_event_through_bot_contract")
 
 
@@ -175,17 +198,47 @@ def test_discord_validate_live_readiness() -> None:
     print("PASS test_discord_validate_live_readiness")
 
 
+def test_discord_registers_public_bot_actions() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_register_actions_test")
+    calls: list[dict[str, object]] = []
+
+    def fake_request(path, *, bot_token, method="GET", payload=None, timeout=30):
+        calls.append({
+            "path": path,
+            "bot_token": bot_token,
+            "method": method,
+            "payload": payload,
+            "timeout": timeout,
+        })
+        return [{"name": item["name"]} for item in payload]
+
+    dc._request_any_json = fake_request
+    cfg = dc.DiscordConfig(bot_token="tok", app_id="app123", public_key="pk", guild_id="")
+    result = dc.register_arclink_public_discord_commands(cfg)
+
+    expect(len(calls) == 1, str(calls))
+    expect(calls[0]["path"] == "/applications/app123/commands", str(calls[0]))
+    expect(calls[0]["method"] == "PUT", str(calls[0]))
+    names = {item["name"] for item in calls[0]["payload"]}
+    expect({"arclink", "connect-notion", "config-backup", "email", "name", "plan"} <= names, str(names))
+    expect(result["scope"] == "global", str(result))
+    expect(result["result_count"] == len(calls[0]["payload"]), str(result))
+    print("PASS test_discord_registers_public_bot_actions")
+
+
 def main() -> int:
     test_discord_config_from_env()
     test_discord_ping_pong()
     test_discord_slash_command_through_bot_contract()
+    test_discord_registered_action_command_options_parse_to_bot_contract()
     test_discord_message_event_through_bot_contract()
     test_discord_full_onboarding_flow()
     test_discord_verify_signature_test_mode()
     test_discord_webhook_handler()
     test_discord_live_transport_requires_config()
     test_discord_validate_live_readiness()
-    print("PASS all 9 ArcLink Discord adapter tests")
+    test_discord_registers_public_bot_actions()
+    print("PASS all 11 ArcLink Discord adapter tests")
     return 0
 
 

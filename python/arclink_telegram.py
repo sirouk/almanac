@@ -20,7 +20,7 @@ _PYTHON_DIR = pathlib.Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
-from arclink_public_bots import handle_arclink_public_bot_turn
+from arclink_public_bots import arclink_public_bot_telegram_commands, handle_arclink_public_bot_turn
 from arclink_http import http_request, parse_json_object
 
 logger = logging.getLogger("arclink.telegram")
@@ -192,6 +192,28 @@ def telegram_set_my_commands(
         payload=payload,
         timeout=20,
     )
+
+
+def register_arclink_public_telegram_commands(
+    bot_token: str,
+    *,
+    include_private_scope: bool = True,
+) -> dict[str, Any]:
+    clean_token = str(bot_token or "").strip()
+    if not clean_token:
+        raise ArcLinkTelegramError("TELEGRAM_BOT_TOKEN is required to register ArcLink public bot commands")
+    commands = arclink_public_bot_telegram_commands()
+    scopes: list[dict[str, Any] | None] = [None]
+    if include_private_scope:
+        scopes.append({"type": "all_private_chats"})
+    registered_scopes: list[str] = []
+    for scope in scopes:
+        telegram_set_my_commands(bot_token=clean_token, commands=commands, scope=scope)
+        registered_scopes.append(str((scope or {}).get("type") or "default"))
+    return {
+        "registered": [item["command"] for item in commands],
+        "scopes": registered_scopes,
+    }
 
 
 def telegram_get_updates(

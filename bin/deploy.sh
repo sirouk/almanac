@@ -8838,6 +8838,27 @@ run_docker_install_flow() {
   trap 'arclink_deploy_stable_copy_cleanup' EXIT
 }
 
+register_control_public_bot_actions() {
+  local docker_env=""
+
+  docker_env="$(docker_env_file_path)"
+  if [[ ! -r "$docker_env" ]]; then
+    echo "ArcLink public bot action registration skipped: config not readable at $docker_env" >&2
+    return 0
+  fi
+  if [[ ! -f "$BOOTSTRAP_DIR/python/arclink_public_bot_commands.py" ]]; then
+    echo "ArcLink public bot action registration skipped: helper is missing" >&2
+    return 0
+  fi
+  echo "Registering ArcLink public bot actions with Telegram and Discord..."
+  if ! ARCLINK_CONFIG_FILE="$docker_env" \
+    PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 "$BOOTSTRAP_DIR/python/arclink_public_bot_commands.py"; then
+    echo "ArcLink public bot action registration failed; the control node remains deployed." >&2
+    return 0
+  fi
+}
+
 run_control_install_flow() {
   local run_interactive="${1:-1}"
   local operation="control-upgrade"
@@ -8857,6 +8878,7 @@ run_control_install_flow() {
   run_arclink_docker up
   load_docker_runtime_config
   publish_control_tailscale_ingress
+  register_control_public_bot_actions
   run_arclink_docker record-release
   run_arclink_docker ports
   run_arclink_docker health
@@ -8873,6 +8895,7 @@ run_control_reconfigure_flow() {
   run_arclink_docker config -q
   load_docker_runtime_config
   publish_control_tailscale_ingress
+  register_control_public_bot_actions
   run_arclink_docker ports
 }
 

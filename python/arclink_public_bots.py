@@ -44,6 +44,108 @@ ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_conta
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
+@dataclass(frozen=True)
+class ArcLinkPublicBotAction:
+    key: str
+    telegram_command: str
+    discord_command: str
+    description: str
+    discord_options: tuple[dict[str, Any], ...] = ()
+
+
+ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
+    ArcLinkPublicBotAction(
+        key="start",
+        telegram_command="start",
+        discord_command="start",
+        description="Begin your ArcLink launch path",
+    ),
+    ArcLinkPublicBotAction(
+        key="help",
+        telegram_command="help",
+        discord_command="help",
+        description="Open the ArcLink action palette",
+    ),
+    ArcLinkPublicBotAction(
+        key="status",
+        telegram_command="status",
+        discord_command="status",
+        description="Check onboarding or pod status",
+    ),
+    ArcLinkPublicBotAction(
+        key="email",
+        telegram_command="email",
+        discord_command="email",
+        description="Set the email for your ArcLink account",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "address",
+                "description": "Email address for your ArcLink account",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="name",
+        telegram_command="name",
+        discord_command="name",
+        description="Set the name for your ArcLink workspace",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "display_name",
+                "description": "Your name or team name",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="plan",
+        telegram_command="plan",
+        discord_command="plan",
+        description="Choose starter, operator, or scale",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "tier",
+                "description": "ArcLink plan",
+                "required": True,
+                "choices": [
+                    {"name": "Starter", "value": "starter"},
+                    {"name": "Operator", "value": "operator"},
+                    {"name": "Scale", "value": "scale"},
+                ],
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="checkout",
+        telegram_command="checkout",
+        discord_command="checkout",
+        description="Open your secure Stripe checkout",
+    ),
+    ArcLinkPublicBotAction(
+        key="connect_notion",
+        telegram_command="connect_notion",
+        discord_command="connect-notion",
+        description="Connect Notion to your live pod",
+    ),
+    ArcLinkPublicBotAction(
+        key="config_backup",
+        telegram_command="config_backup",
+        discord_command="config-backup",
+        description="Configure private pod backup",
+    ),
+    ArcLinkPublicBotAction(
+        key="cancel",
+        telegram_command="cancel",
+        discord_command="cancel",
+        description="Close the active setup workflow",
+    ),
+)
+
+
 class ArcLinkPublicBotError(ValueError):
     pass
 
@@ -122,6 +224,53 @@ def _turn(
 def _parse_answer(text: str, prefix: str) -> str:
     _, _, value = text.partition(prefix)
     return value.strip()
+
+
+def arclink_public_bot_actions() -> tuple[ArcLinkPublicBotAction, ...]:
+    return ARCLINK_PUBLIC_BOT_ACTIONS
+
+
+def arclink_public_bot_telegram_commands() -> list[dict[str, str]]:
+    return [
+        {"command": action.telegram_command, "description": action.description}
+        for action in ARCLINK_PUBLIC_BOT_ACTIONS
+    ]
+
+
+def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
+    commands: list[dict[str, Any]] = [
+        {
+            "name": "arclink",
+            "type": 1,
+            "description": "Talk to your ArcLink launch liaison",
+            "options": [
+                {
+                    "type": 3,
+                    "name": "message",
+                    "description": "Freeform onboarding message or command",
+                    "required": True,
+                }
+            ],
+        }
+    ]
+    for action in ARCLINK_PUBLIC_BOT_ACTIONS:
+        payload: dict[str, Any] = {
+            "name": action.discord_command,
+            "type": 1,
+            "description": action.description,
+        }
+        if action.discord_options:
+            payload["options"] = [dict(item) for item in action.discord_options]
+        commands.append(payload)
+    return commands
+
+
+def _command_value(message: str, command: str, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        prefix = f"{name} "
+        if command.startswith(prefix):
+            return message[len(prefix):].strip()
+    return None
 
 
 def _check_public_bot_rate_limit(conn: sqlite3.Connection, *, channel: str, channel_identity: str) -> None:
@@ -262,8 +411,8 @@ def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
 
 def _need_finished_onboarding_reply() -> str:
     return (
-        "I can do that after your ArcLink pod exists. Send `/start` to begin onboarding, "
-        "or finish checkout if you already have a session open."
+        "I can guide that once your ArcLink pod exists. Send `/start` to open the launch path, "
+        "or finish checkout if your session is already in motion."
     )
 
 
@@ -340,7 +489,7 @@ def _connect_notion_reply(
         metadata={"deployment_status": str(deployment.get("status") or "")},
     )
     lines = [
-        "Let’s connect Notion to your ArcLink pod.",
+        "Let's connect Notion to your ArcLink pod.",
         "",
         "Use this callback URL in the Notion webhook/subscription setup:",
         callback_url or "(callback URL is not available yet)",
@@ -401,7 +550,7 @@ def _config_backup_reply(
         action="prompt_backup_repo",
         reply=(
             "Private backup setup is open.\n\n"
-            "Create or choose a private GitHub repository for this pod’s Hermes home and configuration snapshots. "
+            "Create or choose a private GitHub repository for this pod's Hermes home and configuration snapshots. "
             "Reply with `owner/repo` and ArcLink will keep the request attached to this deployment.\n\n"
             f"Example: `{example}`\n\n"
             "Use a dedicated deploy key for this pod. Do not reuse the ArcLink upstream key or the arclink-priv backup key."
@@ -436,7 +585,7 @@ def _handle_active_workflow(
             channel=channel,
             channel_identity=channel_identity,
             action="workflow_cancelled",
-            reply="Closed that ArcLink workflow. Send `/connect-notion` or `/config-backup` whenever you want to reopen it.",
+            reply="Closed that ArcLink workflow. Your pod path is still ready when you are. Send `/connect_notion` or `/config_backup` to reopen a setup lane.",
             session=updated,
             deployment=deployment,
         )
@@ -507,7 +656,7 @@ def _handle_active_workflow(
             channel_identity=channel_identity,
             action="record_backup_repo",
             reply=(
-                f"Recorded `{owner_repo}` for this pod’s private backup workflow.\n\n"
+                f"Recorded `{owner_repo}` for this pod's private backup workflow.\n\n"
                 "Keep the repository private. ArcLink will use a dedicated pod deploy key with write access; "
                 "when the key is prepared, add it here:\n"
                 f"{settings_url}\n\n"
@@ -525,13 +674,17 @@ def _help_reply(*, channel: str, channel_identity: str, session: Mapping[str, An
         channel_identity=channel_identity,
         action="show_help",
         reply=(
-            "ArcLink bot commands:\n"
-            "`/start` - begin onboarding\n"
-            "`/status` - show onboarding status\n"
-            "`/checkout` - open checkout when your plan is selected\n"
-            "`/connect-notion` - connect your pod to Notion\n"
-            "`/config-backup` - configure private pod backup\n"
-            "`/cancel` - close the active workflow"
+            "ArcLink action palette\n\n"
+            "I'm your launch liaison: a clean path from a few answers to a private agentic workspace with model rails, memory, tools, files, and deployment health.\n\n"
+            "`/start` - open your launch path\n"
+            "`/email you@example.com` - set account email\n"
+            "`/name Your Name` - name the workspace owner\n"
+            "`/plan starter` - choose starter, operator, or scale\n"
+            "`/checkout` - open secure Stripe checkout\n"
+            "`/status` - check onboarding or pod status\n"
+            "`/connect_notion` - connect Notion to your pod\n"
+            "`/config_backup` - configure private pod backup\n"
+            "`/cancel` - close the active setup lane"
         ),
         session=session,
     )
@@ -603,16 +756,23 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_identity",
-            reply="ArcLink deploys a private AI workspace. Send `email you@example.com` to continue.",
+            reply=(
+                "Welcome to ArcLink. I'm your launch liaison, here to turn a few clear answers into a private agentic workspace: "
+                "model rail, memory, tools, files, and a live deployment path.\n\n"
+                "Send `/email you@example.com` to reserve your path."
+            ),
         )
     if command in {"status", "/status"}:
         return _reply(
             session,
             action="show_status",
-            reply=f"Session {session['session_id']} is {session['status']}. Current step: {session['current_step'] or 'started'}.",
+            reply=(
+                f"ArcLink status: session `{session['session_id']}` is `{session['status']}`. "
+                f"Current launch step: `{session['current_step'] or 'started'}`."
+            ),
         )
-    if command.startswith("email "):
-        email = _parse_answer(message, " ")
+    email = _command_value(message, command, ("email", "/email"))
+    if email is not None:
         session = answer_arclink_onboarding_question(
             conn,
             session_id=str(session["session_id"]),
@@ -623,10 +783,10 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_name",
-            reply="Email saved. Send `name Your Name` next.",
+            reply="Email locked in. Send `/name Your Name` and I'll shape the workspace around you.",
         )
-    if command.startswith("name "):
-        name = _parse_answer(message, " ")
+    name = _command_value(message, command, ("name", "/name"))
+    if name is not None:
         session = answer_arclink_onboarding_question(
             conn,
             session_id=str(session["session_id"]),
@@ -637,10 +797,11 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_plan",
-            reply="Name saved. Send `plan starter`, `plan operator`, or `plan scale`.",
+            reply="Name saved. Choose your launch tier with `/plan starter`, `/plan operator`, or `/plan scale`.",
         )
-    if command.startswith("plan "):
-        plan = _parse_answer(command, " ")
+    plan_answer = _command_value(message, command, ("plan", "/plan"))
+    if plan_answer is not None:
+        plan = plan_answer.strip().lower()
         if plan not in ARCLINK_PUBLIC_BOT_PLANS:
             raise ArcLinkPublicBotError(f"unsupported ArcLink public bot plan: {plan or 'blank'}")
         session = answer_arclink_onboarding_question(
@@ -654,7 +815,7 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_checkout",
-            reply="Plan saved. Send `checkout` to open the no-secret checkout contract.",
+            reply="Plan saved. Send `/checkout` when you're ready to make it real through secure Stripe checkout.",
         )
     if command in {"checkout", "/checkout"}:
         if stripe_client is None:
@@ -672,10 +833,13 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="open_checkout",
-            reply=f"Checkout opened: {session['checkout_url']}",
+            reply=f"Checkout is open. Complete it here, then I'll watch for payment and move your pod toward launch:\n{session['checkout_url']}",
         )
     return _reply(
         session,
         action="prompt_command",
-        reply="Use `email`, `name`, `plan`, `checkout`, `status`, `/connect-notion`, or `/config-backup`.",
+        reply=(
+            "I'm here. ArcLink is the launch rail for your private agent workspace: inference, memory, tools, vault, and deployment health in one path.\n\n"
+            "Use `/start` to begin, `/help` for the action palette, `/status` to check progress, `/connect_notion` for Notion, or `/config_backup` for private backups."
+        ),
     )

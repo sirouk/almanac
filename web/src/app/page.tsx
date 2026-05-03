@@ -18,7 +18,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"
           >
-            Hire Agent
+            Board ArcLink
           </Link>
         </div>
       </nav>
@@ -26,13 +26,13 @@ export default function Home() {
       {/* Hero */}
       <main className="flex flex-1 flex-col items-center justify-center px-6 text-center">
         <h1 className="font-display text-4xl font-bold leading-tight sm:text-5xl md:text-6xl">
-          Raven offers ArcLink:<br />
-          <span className="text-signal-orange">your private ArcLink.</span>
+          Raven guides you aboard<br />
+          <span className="text-signal-orange">the ArcLink vessel.</span>
         </h1>
         <p className="mt-6 max-w-xl text-lg text-soft-white/70">
-          Agents aboard a SOTA agentic harness at your fingertips, without making you leave the couch:
-          Hermes agents, knowledge retrieval, managed memory, files, code tools, and bot integrations.
-          First agent $35/month.
+          ArcLink is a private agentic harness: weapons-grade agents, SOTA inference rails,
+          managed memory, retrieval, files, code tools, bot channels, and deployment health.
+          Raven turns a few answers into a live pod. First agent $35/month.
         </p>
         <img
           src="/brand/raven/raven_hero.webp"
@@ -44,7 +44,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-6 py-3 text-base font-semibold text-jet transition hover:opacity-90"
           >
-            Hire Your First Agent
+            Hire First Agent
           </Link>
           <Link
             href="/dashboard"
@@ -60,11 +60,11 @@ export default function Home() {
         <div className="mx-auto grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {[
             { title: "Hermes Agent", desc: "Private AI assistant backed by your knowledge, memory, and skills." },
-            { title: "qmd Retrieval", desc: "Structured document retrieval from your vault content." },
-            { title: "Managed Memory", desc: "Persistent context synthesis across conversations." },
-            { title: "Files & Code", desc: "Nextcloud storage and code-server IDE per deployment." },
-            { title: "Bot Gateway", desc: "Telegram and Discord integrations with shared onboarding." },
-            { title: "Health & Ops", desc: "Real-time service health, DNS, provisioning, and admin controls." },
+            { title: "SOTA Model Rails", desc: "Chutes-first inference with BYOK paths for frontier providers." },
+            { title: "qmd Retrieval", desc: "Fast vault search that lets agents pull the right context on demand." },
+            { title: "Managed Memory", desc: "Hot-swappable memory stubs that keep the vessel oriented." },
+            { title: "Files & Code", desc: "Nextcloud storage and browser VS Code bound to each deployment." },
+            { title: "Health & Ops", desc: "Live systems checks across DNS, provisioning, services, and billing." },
           ].map((f) => (
             <div key={f.title} className="rounded-lg border border-border bg-surface p-6">
               <h3 className="font-display text-lg font-semibold text-signal-orange">{f.title}</h3>

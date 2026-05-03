@@ -205,7 +205,7 @@ test.describe("Route smoke", () => {
 
   test("/onboarding renders start step", async ({ page }) => {
     await page.goto("/onboarding");
-    await expect(page.locator("text=Raven Is Online")).toBeVisible();
+    await expect(page.locator("text=Board The Vessel")).toBeVisible();
     await expect(page.locator("text=Stripe collects email securely")).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toBeVisible();
     // Fake adapter notice present
@@ -421,10 +421,10 @@ test.describe("Onboarding flow", () => {
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Hire Your Agent")).toBeVisible();
+    await expect(page.locator("text=Hire First Agent").first()).toBeVisible();
 
     // Step 3: Checkout
-    await page.click("text=Hire Agent - $35/mo");
-    await expect(page.locator("text=Hire Agent").last()).toBeVisible();
+    await page.click("text=Hire First Agent - $35/mo");
+    await expect(page.locator("text=Complete Hire").last()).toBeVisible();
   });
 });

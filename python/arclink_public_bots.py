@@ -115,13 +115,13 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="checkout",
         telegram_command="checkout",
         discord_command="checkout",
-        description="Hire your first Raven agent",
+        description="Hire your first ArcLink agent",
     ),
     ArcLinkPublicBotAction(
         key="agents",
         telegram_command="agents",
         discord_command="agents",
-        description="Open your account-aware agent roster",
+        description="Open your ArcLink crew manifest",
     ),
     ArcLinkPublicBotAction(
         key="connect_notion",
@@ -262,7 +262,7 @@ def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
         {
             "name": "arclink",
             "type": 1,
-            "description": "Talk to your ArcLink launch liaison",
+            "description": "Talk to Raven, your ArcLink guide",
             "options": [
                 {
                     "type": 3,
@@ -527,8 +527,8 @@ def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
 
 def _need_finished_onboarding_reply() -> str:
     return (
-        "I can guide that once Raven has your first agent aboard ArcLink. Send `/start` to open the launch path, "
-        "or finish checkout if your session is already in motion."
+        "I can open that system once your first agent is aboard ArcLink. Send `/start` to board the vessel, "
+        "or finish checkout if your launch is already in motion."
     )
 
 
@@ -690,12 +690,12 @@ def _agents_reply(
             channel_identity=channel_identity,
             action="agents_unavailable",
             reply=(
-                "Raven has no agents aboard this ArcLink account yet. Start with one $35/month agent, "
-                "then I can help you add more at $15/month each."
+                "Your ArcLink crew manifest is empty. Hire the first weapons-grade agent for $35/month, "
+                "then I can help you add more specialized agents at $15/month each."
             ),
             session=session,
             buttons=(
-                _button("Start Launch", command="/start"),
+                _button("Board ArcLink", command="/start"),
             ),
         )
     user_id = str(deployment.get("user_id") or session.get("user_id") or "").strip()
@@ -703,10 +703,10 @@ def _agents_reply(
     active_id = str(deployment.get("deployment_id") or "")
     buttons: list[ArcLinkPublicBotButton] = []
     lines = [
-        "Raven agent roster",
+        "ArcLink crew manifest",
         "",
-        "Raven offers ArcLink: agents aboard a SOTA agentic harness at your fingertips without making you leave the couch. "
-        "I keep the roster tied to your account, not a generic command list.",
+        "ArcLink is your private agentic vessel: SOTA inference rails, managed memory, tools, vault, and deployment health. "
+        "Every agent here is tied to your account and current mission path.",
         "",
     ]
     for index, item in enumerate(deployments):
@@ -715,11 +715,11 @@ def _agents_reply(
         marker = "active" if str(item.get("deployment_id") or "") == active_id else status
         lines.append(f"- {label}: {marker}")
         if str(item.get("deployment_id") or "") != active_id:
-            buttons.append(_button(f"Switch to {label}", command=f"/agent-{_agent_slug(label)}"))
+            buttons.append(_button(f"Take Helm: {label}", command=f"/agent-{_agent_slug(label)}"))
     if deployments:
-        buttons.append(_button("Add Agent - $15/mo", command="/add-agent"))
+        buttons.append(_button("Add Crew - $15/mo", command="/add-agent"))
     if not buttons and deployments:
-        buttons.append(_button("Add Agent - $15/mo", command="/add-agent"))
+        buttons.append(_button("Add Crew - $15/mo", command="/add-agent"))
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -756,22 +756,22 @@ def _switch_agent_reply(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="switch_agent",
-                reply=f"Raven has the rail pointed at {label}. Commands like `/connect_notion` and `/config_backup` now target that agent.",
+                reply=f"Helm transferred to {label}. Notion, backup, and system workflows now target that ArcLink agent.",
                 session=updated,
                 deployment=item,
                 buttons=(
-                    _button("Open Agents", command="/agents", style="secondary"),
-                    _button("Status", command="/status", style="secondary"),
+                    _button("Open Crew", command="/agents", style="secondary"),
+                    _button("Check Systems", command="/status", style="secondary"),
                 ),
             )
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="switch_agent_not_found",
-        reply="I do not see that agent on your ArcLink roster. Open `/agents` and use the account-aware buttons I show you there.",
+        reply="I do not see that agent on your ArcLink crew manifest. Open `/agents` and use the account-aware helm buttons I show you there.",
         session=session,
         deployment=deployment,
-        buttons=(_button("Open Agents", command="/agents"),),
+        buttons=(_button("Open Crew", command="/agents"),),
     )
 
 
@@ -847,11 +847,11 @@ def _add_agent_reply(
         extra_session,
         action="open_add_agent_checkout",
         reply=(
-            "Additional agent bay is armed at $15/month. Hire it through Stripe and I will move the new pod into the provisioning queue."
+            "A new ArcLink crew bay is ready at $15/month. Hire the additional agent through Stripe and I will move that pod into the launch queue."
         ),
         buttons=(
             _button("Hire Additional Agent", url=str(extra_session.get("checkout_url") or "")),
-            _button("Back to Agents", command="/agents", style="secondary"),
+            _button("Back to Crew", command="/agents", style="secondary"),
         ),
     )
 
@@ -970,22 +970,22 @@ def _help_reply(*, channel: str, channel_identity: str, session: Mapping[str, An
         channel_identity=channel_identity,
         action="show_help",
         reply=(
-            "Raven action palette\n\n"
-            "I am Raven, your ArcLink launch liaison. ArcLink is the system I am offering you: sharp rails, SOTA model power, memory, tools, files, and deployment health wrapped into a private agentic workspace.\n\n"
-            "`/start` - open your launch path\n"
-            "`/name Your Name` - name the workspace owner\n"
+            "Raven comms deck\n\n"
+            "I am Raven, your guide aboard ArcLink. ArcLink is the vessel and the harness: private deployment, SOTA model rails, managed memory, tools, files, Notion/backup workflows, and live health checks. You choose the mission; I get the systems online.\n\n"
+            "`/start` - board ArcLink and open the launch path\n"
+            "`/name Your Name` - name the mission owner\n"
             "`/plan starter` - choose starter, operator, or scale\n"
             "`/checkout` - hire your first $35/month agent\n"
-            "`/status` - check onboarding or pod status\n"
-            "`/agents` - open your account-aware agent roster\n"
-            "`/connect_notion` - connect Notion to your pod\n"
+            "`/status` - run a systems check\n"
+            "`/agents` - open your account-aware crew manifest\n"
+            "`/connect_notion` - connect Notion to the active pod\n"
             "`/config_backup` - configure private pod backup\n"
             "`/cancel` - close the active setup lane"
         ),
         session=session,
         buttons=(
-            _button("Start Launch", command="/start"),
-            _button("Agents", command="/agents", style="secondary"),
+            _button("Board ArcLink", command="/start"),
+            _button("View Crew", command="/agents", style="secondary"),
         ),
     )
 
@@ -1093,13 +1093,13 @@ def handle_arclink_public_bot_turn(
             session,
             action="prompt_name",
             reply=(
-                "Raven online. Comms are clean.\n\n"
-                "I am here to put ArcLink in your hands: agents aboard a SOTA agentic harness without making you leave the couch. Model power, memory, tools, files, and a live deployment path are all on the rail.\n\n"
-                "Stripe will collect your email securely at checkout. Send `/name Your Name` and I will shape the first workspace around you."
+                "Raven online. ArcLink is in range.\n\n"
+                "I am your guide aboard the vessel: a private agentic harness with weapons-grade agents, SOTA model rails, memory, tools, files, and deployment health already wired in. Answer a few clean prompts, hire the first agent, and I move your pod toward launch.\n\n"
+                "Stripe will collect your email securely at checkout. Send `/name Your Name` and I will shape the first mission around you."
             ),
             buttons=(
-                _button("Show Plans", command="/plan starter", style="secondary"),
-                _button("Help", command="/help", style="secondary"),
+                _button("Choose Mission Tier", command="/plan starter", style="secondary"),
+                _button("Open Comms", command="/help", style="secondary"),
             ),
         )
     if command in {"status", "/status"}:
@@ -1114,8 +1114,8 @@ def handle_arclink_public_bot_turn(
                 + (f"\nActive agent: {deployment_label}." if deployment_label else "")
             ),
             buttons=(
-                _button("Agents", command="/agents", style="secondary"),
-                _button("Checkout", command="/checkout", style="secondary"),
+                _button("View Crew", command="/agents", style="secondary"),
+                _button("Hire First Agent", command="/checkout", style="secondary"),
             ),
         )
     email = _command_value(message, command, ("email", "/email"))
@@ -1123,7 +1123,7 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_name",
-            reply="I do not need your email in chat anymore. Stripe will collect it securely during checkout. Send `/name Your Name` and I will shape the workspace around you.",
+            reply="I do not need your email in chat. Stripe collects it securely at checkout. Send `/name Your Name` and I will shape the first ArcLink mission around you.",
         )
     name = _command_value(message, command, ("name", "/name"))
     if name is not None:
@@ -1138,11 +1138,11 @@ def handle_arclink_public_bot_turn(
             session,
             action="prompt_plan",
             reply=(
-                "Name saved. Choose your launch tier. Starter hires your first Raven agent for $35/month; "
-                "additional agents are $15/month once your first pod is active."
+                "Mission owner saved. Choose the tier. Starter boards your first ArcLink agent for $35/month; "
+                "additional crew can join for $15/month once your first pod is active."
             ),
             buttons=(
-                _button("Starter - $35/mo", command="/plan starter"),
+                _button("Starter Crew - $35/mo", command="/plan starter"),
                 _button("Operator", command="/plan operator", style="secondary"),
                 _button("Scale", command="/plan scale", style="secondary"),
             ),
@@ -1163,10 +1163,10 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_checkout",
-            reply="Plan saved. Hit Hire Agent when you are ready to make it real through secure Stripe checkout.",
+            reply="Tier locked. Hit Hire First Agent when you are ready to make the ArcLink vessel real through secure Stripe checkout.",
             buttons=(
-                _button("Hire Agent - $35/mo", command="/checkout"),
-                _button("Change Plan", command="/plan starter", style="secondary"),
+                _button("Hire First Agent - $35/mo", command="/checkout"),
+                _button("Change Tier", command="/plan starter", style="secondary"),
             ),
         )
     if command in {"checkout", "/checkout"}:
@@ -1186,22 +1186,22 @@ def handle_arclink_public_bot_turn(
             session,
             action="open_checkout",
             reply=(
-                "Checkout is open. Hire your first Raven agent through Stripe, then I will watch for payment and move your pod toward launch."
+                "Checkout is armed. Hire your first ArcLink agent through Stripe; when payment clears, I move the pod from manifest to launch queue."
             ),
             buttons=(
-                _button("Hire Agent", url=str(session.get("checkout_url") or "")),
-                _button("Status", command="/status", style="secondary"),
+                _button("Hire First Agent", url=str(session.get("checkout_url") or "")),
+                _button("Check Systems", command="/status", style="secondary"),
             ),
         )
     return _reply(
         session,
         action="prompt_command",
             reply=(
-                "Raven is online. ArcLink is what I am offering: inference, memory, tools, vault, and deployment health in one private agentic workspace.\n\n"
-                "Use `/start` to begin, `/agents` for your roster, `/help` for actions, `/connect_notion` for Notion, or `/config_backup` for private backups."
+                "Raven is online. ArcLink is the vessel I am guiding you toward: inference, memory, tools, vault, and deployment health in one private agentic harness.\n\n"
+                "Use `/start` to board, `/agents` for your crew, `/help` for comms, `/connect_notion` for Notion, or `/config_backup` for private backups."
             ),
         buttons=(
-            _button("Start Launch", command="/start"),
-            _button("Agents", command="/agents", style="secondary"),
+            _button("Board ArcLink", command="/start"),
+            _button("View Crew", command="/agents", style="secondary"),
         ),
     )

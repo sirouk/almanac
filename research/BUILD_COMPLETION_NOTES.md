@@ -148,9 +148,9 @@ Rationale:
 
 Files changed:
 
-- `python/arclink_api_auth.py` — removed `_rowdict` definition (3 lines),
+- `python/arclink_api_auth.py` - removed `_rowdict` definition (3 lines),
   replaced 5 call sites with `rowdict`.
-- `python/arclink_dashboard.py` — removed `_rowdict` definition (3 lines),
+- `python/arclink_dashboard.py` - removed `_rowdict` definition (3 lines),
   replaced 6 call sites with `rowdict`.
 
 Known risks:

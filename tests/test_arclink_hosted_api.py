@@ -1178,7 +1178,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     expect(payload.get("sent") is True, str(payload))
     expect(len(transport.sent_messages) == 1, str(transport.sent_messages))
     expect(transport.sent_messages[0]["chat_id"] == "12345", str(transport.sent_messages))
-    expect("Comms open" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
+    expect("Comms are open" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
 
     class FailingTransport:
         def send_message(self, chat_id: str, text: str, reply_markup=None):
@@ -1239,7 +1239,7 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
     expect(payload.get("sent") is True, str(payload))
     expect(payload.get("callback_acknowledged") is True, str(payload))
     expect(transport.answered_callbacks == [{"callback_query_id": "cb_start", "text": ""}], str(transport.answered_callbacks))
-    expect(transport.sent_messages and "I'm Raven" in transport.sent_messages[0]["text"], str(transport.sent_messages))
+    expect(transport.sent_messages and "Raven here" in transport.sent_messages[0]["text"], str(transport.sent_messages))
     print("PASS test_telegram_webhook_acknowledges_button_callbacks")
 
 

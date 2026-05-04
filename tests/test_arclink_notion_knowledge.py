@@ -1028,17 +1028,17 @@ def test_today_plate_discovers_child_task_databases_and_filters_owner_items() ->
             # the workspace-specific "DRI" / "Reviewer" pair.
             expect("Tasks for the team (Owner)" in plate_text, plate_text)
             expect("Initiatives (DRI, Reviewer)" in plate_text, plate_text)
-            # Per-row role tag uses the workspace's actual property names —
+            # Per-row role tag uses the workspace's actual property names -
             # "Owner" for the Owner DB row, "DRI, Reviewer" for the Initiatives row,
             # and the provenance "Changed By" must NOT show up as a role.
-            expect("Wire up daily plate — as Owner" in plate_text, plate_text)
-            expect("North-star initiative — as DRI, Reviewer" in plate_text, plate_text)
+            expect("Wire up daily plate - as Owner" in plate_text, plate_text)
+            expect("North-star initiative - as DRI, Reviewer" in plate_text, plate_text)
             expect("Changed By" not in plate_text, plate_text)
             expect("Verification: confirmed" in plate_text, plate_text)
             expect("Per-surface breakdown" in plate_text, plate_text)
 
             # Notion was queried with an OR filter spanning every people-typed
-            # property on the data source — verbatim names, no special-casing of
+            # property on the data source - verbatim names, no special-casing of
             # Owner/Assignee.
             owner_filter = queried_filters[queried_ids.index(owner_db_id)]
             dri_filter = queried_filters[queried_ids.index(dri_db_id)]

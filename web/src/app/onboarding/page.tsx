@@ -40,7 +40,7 @@ export default function OnboardingPage() {
         setResumed(true);
       }
     } catch {
-      // Stale or corrupt — ignore and start fresh.
+      // Stale or corrupt - ignore and start fresh.
     }
   }, []);
 
@@ -53,7 +53,7 @@ export default function OnboardingPage() {
     try {
       window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
     } catch {
-      // localStorage quota or disabled — drop silently.
+      // localStorage quota or disabled - drop silently.
     }
   }, [step, sessionId, name, checkoutUrl]);
 
@@ -156,10 +156,10 @@ export default function OnboardingPage() {
           className="mb-5 h-16 w-16 rounded-full border border-border object-cover"
         />
         <p className="mb-2 text-xs uppercase tracking-[0.22em] text-soft-white/40">
-          {step === "start" && "Step 1 of 4 — First contact"}
-          {step === "questions" && "Step 2 of 4 — Name on the hatch"}
-          {step === "checkout" && "Step 3 of 4 — Stripe handoff"}
-          {step === "done" && "Step 4 of 4 — Launch queue"}
+          {step === "start" && "Step 1 of 4 - First contact"}
+          {step === "questions" && "Step 2 of 4 - Name on the hatch"}
+          {step === "checkout" && "Step 3 of 4 - Stripe handoff"}
+          {step === "done" && "Step 4 of 4 - Launch queue"}
         </p>
         <h1 className="font-display text-2xl font-bold">
           {step === "start" && "I'm Raven"}
@@ -172,21 +172,21 @@ export default function OnboardingPage() {
 
         {resumed && step !== "start" && step !== "done" && (
           <p className="mt-4 rounded border border-border bg-carbon/60 px-3 py-2 text-xs text-soft-white/70">
-            Welcome back. I held your place — pick up where you left off.
+            Welcome back. I held your place - pick up where you left off.
           </p>
         )}
 
         {step === "start" && (
           <form onSubmit={handleStart} className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              I can take you from a few answers to a private AI agent of your own — with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects your email securely at checkout. No technical setup on your end.
+              I can take you from a few answers to a private AI agent of your own - with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects your email securely at checkout. No technical setup on your end.
             </p>
             <button
               type="submit"
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Opening..." : "Take Me Aboard"}
+              {loading ? "Opening..." : "Start Launch"}
             </button>
           </form>
         )}

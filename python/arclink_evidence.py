@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ArcLink deployment evidence ledger — Gap E scaffolding.
+"""ArcLink deployment evidence ledger - Gap E scaffolding.
 
 Deterministic, secret-redacted evidence records for live journey steps.
 Each record captures step name, status, timestamps, commit hash,

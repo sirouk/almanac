@@ -62,8 +62,8 @@ Hidden/account-state actions:
 
 Raven should prefer buttons over typed pseudo-actions whenever the platform supports them. Labels should be vivid, but each one must still explain the action:
 
-- `Take Me Aboard` starts onboarding.
-- `Plot Starter Course` chooses the starter path quickly.
+- `Start Launch` starts onboarding.
+- `Starter - $35/mo` chooses the starter path quickly.
 - `Hire My First Agent - $35/mo` opens first-agent checkout.
 - `Show My Crew` opens the account-aware `/agents` roster.
 - `Add Another Agent - $15/mo` opens additional-agent checkout after the first deployment exists.

@@ -1,5 +1,5 @@
 /**
- * ArcLink Production 10 — Browser Product Checks
+ * ArcLink Production 10 - Browser Product Checks
  *
  * Runs against the built Next.js app with deterministic mocked API responses.
  * Verifies brand system, layout integrity, accessible forms, empty/error/loading

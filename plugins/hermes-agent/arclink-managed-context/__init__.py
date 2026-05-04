@@ -256,7 +256,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "vault or notion",
         ),
         (
-            "knowledge.search-and-fetch — source-agnostic ArcLink retrieval. The plugin injects token automatically; omit token. Required: query. "
+            "knowledge.search-and-fetch - source-agnostic ArcLink retrieval. The plugin injects token automatically; omit token. Required: query. "
             "Searches both vault/PDF and shared Notion by default; use sources:[\"vault\"] or [\"notion\"] to narrow. "
             "Bounded defaults: search_limit ≤ 5 per source, vault_fetch_limit ≤ 2, notion_fetch_limit ≤ 3, body_char_limit ≤ 12000. "
             "Best first call when the user did not clearly say whether the answer lives in files/PDFs or Notion."
@@ -298,7 +298,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "revise that page",
         ),
         (
-            "ssot.write — governed Notion write. The plugin injects token automatically; omit token. Required: operation, payload. "
+            "ssot.write - governed Notion write. The plugin injects token automatically; omit token. Required: operation, payload. "
             "operation is one of insert|update|append|create_page|create_database (archive/delete are rejected). "
             "For org-wide pages, lists, task tables, or databases, use operation:create_page or operation:create_database through this broker; do not use personal Notion MCP or workspace-level creation, which can land in a user's Private section. "
             "For create_page, payload is {\"title\":\"...\",\"children\":[...]} and target_id is the shared parent page or omitted for the configured ArcLink root page. "
@@ -324,7 +324,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "check pending",
         ),
         (
-            "ssot.status — pending_id lookup. The plugin injects token automatically; omit token. Required: pending_id. "
+            "ssot.status - pending_id lookup. The plugin injects token automatically; omit token. Required: pending_id. "
             "Returns final_state: applied|queued|denied|expired. "
             "Prefer over ssot.pending when you already have the pending_id from a prior ssot.write."
         ),
@@ -340,7 +340,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "what is in my queue",
         ),
         (
-            "ssot.pending — list own queued or decided writes. The plugin injects token automatically; omit token. "
+            "ssot.pending - list own queued or decided writes. The plugin injects token automatically; omit token. "
             "Optional status in {pending|applied|denied|expired} (default pending); optional limit ≤ 100."
         ),
     ),
@@ -360,7 +360,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "what does the pdf say about",
         ),
         (
-            "vault.search-and-fetch — one-shot vault/PDF retrieval. The plugin injects token automatically; omit token. Required: query. "
+            "vault.search-and-fetch - one-shot vault/PDF retrieval. The plugin injects token automatically; omit token. Required: query. "
             "Bounded: search_limit ≤ 5, fetch_limit ≤ 2, maxLines ≤ 500, body_char_limit ≤ 12000. "
             "Includes vault-pdf-ingest by default and is the preferred first call for shared vault knowledge. "
             "Leading YAML metadata stays inline in text when fetched from the top and is duplicated into metadata."
@@ -395,7 +395,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "page about",
         ),
         (
-            "notion.search-and-fetch — one-shot \"find and read\". The plugin injects token automatically; omit token. Required: query. "
+            "notion.search-and-fetch - one-shot \"find and read\". The plugin injects token automatically; omit token. Required: query. "
             "Bounded: search_limit ≤ 10, fetch_limit ≤ 3, body_char_limit ≤ 12000. "
             "Prefer over separate notion.search + fetch loops."
         ),
@@ -412,7 +412,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "from this url",
         ),
         (
-            "notion.fetch — live read of one exact page/database/data source. The plugin injects token automatically; omit token. Required: target_id (id or URL). "
+            "notion.fetch - live read of one exact page/database/data source. The plugin injects token automatically; omit token. Required: target_id (id or URL). "
             "Prefer over notion.search when the user already gave a URL or id."
         ),
     ),
@@ -427,9 +427,9 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "status is in progress",
         ),
         (
-            "notion.query — live structured query. The plugin injects token automatically; omit token. "
+            "notion.query - live structured query. The plugin injects token automatically; omit token. "
             "Use for an exact database/data-source target or an explicitly requested live refresh, not as the first move for broad plate/task questions. "
-            "Optional target_id (database or data source id/URL) — omit only for the configured shared SSOT database. "
+            "Optional target_id (database or data source id/URL) - omit only for the configured shared SSOT database. "
             "query follows the Notion API (filter/sorts/page_size). Prefer one targeted query; do not fan out across discovered databases in a chat turn."
         ),
     ),
@@ -1338,7 +1338,7 @@ def _render_context(
     include_sections: bool = True,
 ) -> str:
     label = "refreshed local ArcLink context" if include_sections else "turn tool recipe"
-    lines = [f"[Plugin: {PLUGIN_NAME} — {label}]", f"managed revision: {managed_revision}"]
+    lines = [f"[Plugin: {PLUGIN_NAME} - {label}]", f"managed revision: {managed_revision}"]
     if include_sections and context_revision != managed_revision:
         lines.append(f"live revision: {context_revision}")
 

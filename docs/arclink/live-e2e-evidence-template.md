@@ -16,18 +16,18 @@ Template for recording live journey evidence. Fill in after a credentialed run.
 
 | # | Step | Status | Duration (ms) | Notes |
 |---|------|--------|---------------|-------|
-| 1 | web_onboarding_start | pending | — | |
-| 2 | web_onboarding_checkout | pending | — | Requires STRIPE_SECRET_KEY |
-| 3 | stripe_webhook_delivery | pending | — | Requires STRIPE_WEBHOOK_SECRET |
-| 4 | entitlement_activation | pending | — | |
-| 5 | provisioning_request | pending | — | |
-| 6 | dns_health_check | pending | — | Requires CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID |
-| 7 | docker_deployment_check | pending | — | Requires ARCLINK_E2E_DOCKER |
-| 8 | chutes_key_provisioning | pending | — | Requires CHUTES_API_KEY |
-| 9 | user_dashboard_verification | pending | — | |
-| 10 | admin_dashboard_verification | pending | — | |
-| 11 | telegram_bot_check | pending | — | Requires TELEGRAM_BOT_TOKEN |
-| 12 | discord_bot_check | pending | — | Requires DISCORD_BOT_TOKEN |
+| 1 | web_onboarding_start | pending | - | |
+| 2 | web_onboarding_checkout | pending | - | Requires STRIPE_SECRET_KEY |
+| 3 | stripe_webhook_delivery | pending | - | Requires STRIPE_WEBHOOK_SECRET |
+| 4 | entitlement_activation | pending | - | |
+| 5 | provisioning_request | pending | - | |
+| 6 | dns_health_check | pending | - | Requires CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID |
+| 7 | docker_deployment_check | pending | - | Requires ARCLINK_E2E_DOCKER |
+| 8 | chutes_key_provisioning | pending | - | Requires CHUTES_API_KEY |
+| 9 | user_dashboard_verification | pending | - | |
+| 10 | admin_dashboard_verification | pending | - | |
+| 11 | telegram_bot_check | pending | - | Requires TELEGRAM_BOT_TOKEN |
+| 12 | discord_bot_check | pending | - | Requires DISCORD_BOT_TOKEN |
 
 ## Evidence JSON
 

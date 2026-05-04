@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ArcLink Hosted API — production HTTP boundary over existing contracts.
+"""ArcLink Hosted API - production HTTP boundary over existing contracts.
 
 This module wraps the existing ArcLink helper layer into a hosted WSGI
 application with proper authentication middleware, request IDs, structured
@@ -296,7 +296,7 @@ def _handle_stripe_webhook(
 def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str) -> int | None:
     """Queue an outbound 'payment cleared' message back to the user's original
     public channel. Returns the queued notification id, or None if no eligible
-    channel was found (e.g., web-only user — they get a different surface).
+    channel was found (e.g., web-only user - they get a different surface).
     """
     row = conn.execute(
         """
@@ -321,7 +321,7 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     message = (
         f"{greeting}payment cleared.\n\n"
         "I have your bay reserved and the hull is coming up around you. "
-        "I will ping this same channel the moment your vessel is online — usually 30 to 90 seconds."
+        "I will ping this same channel the moment your vessel is online - usually 30 to 90 seconds."
     )
     nid = queue_notification(
         conn,
@@ -622,7 +622,7 @@ def _handle_health(
     conn: sqlite3.Connection,
     request_id: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    """Simple liveness check — verifies DB is reachable."""
+    """Simple liveness check - verifies DB is reachable."""
     try:
         conn.execute("SELECT 1").fetchone()
         db_ok = True

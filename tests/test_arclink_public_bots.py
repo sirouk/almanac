@@ -339,7 +339,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         text="/agents",
     )
     expect(unavailable.action == "agents_unavailable", str(unavailable))
-    expect(unavailable.buttons and unavailable.buttons[0].label == "Take Me Aboard", str(unavailable.buttons))
+    expect(unavailable.buttons and unavailable.buttons[0].label == "Start Launch", str(unavailable.buttons))
 
     seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-prime")
     roster = bots.handle_arclink_public_bot_turn(

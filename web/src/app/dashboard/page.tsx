@@ -141,7 +141,7 @@ export default function DashboardPage() {
             <ErrorAlert message={error} className="mb-6 py-3" />
           )}
 
-          {/* Mobile tab bar — scrollable to fit all tabs */}
+          {/* Mobile tab bar - scrollable to fit all tabs */}
           <div className="mb-6 flex gap-2 overflow-x-auto md:hidden">
             {ALL_TABS.map((tab) => (
               <button
@@ -209,7 +209,7 @@ export default function DashboardPage() {
               {billing?.subscriptions && billing.subscriptions.length > 0 ? (
                 billing.subscriptions.map((sub, i) => (
                   <div key={i} className="rounded-lg border border-border bg-surface p-4 text-sm">
-                    <p>Subscription: <span className="text-soft-white">{sub.subscription_id || "—"}</span></p>
+                    <p>Subscription: <span className="text-soft-white">{sub.subscription_id || "-"}</span></p>
                     <p>Status: <StatusBadge status={sub.status || "unknown"} /></p>
                   </div>
                 ))
@@ -248,7 +248,7 @@ export default function DashboardPage() {
                         <p className="text-xs text-soft-white/40">Provisioning Jobs:</p>
                         {dep.provisioning_jobs.map((job, i) => (
                           <div key={i} className="rounded bg-carbon px-2 py-1 text-xs">
-                            <span className="font-mono">{job.job_id || "—"}</span>{" "}
+                            <span className="font-mono">{job.job_id || "-"}</span>{" "}
                             <StatusBadge status={job.status || "unknown"} />
                           </div>
                         ))}
@@ -297,7 +297,7 @@ export default function DashboardPage() {
                             key={svc.name}
                             className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white/60"
                           >
-                            {svc.name} — <span className="text-soft-white/30">link available after provisioning</span>
+                            {svc.name} - <span className="text-soft-white/30">link available after provisioning</span>
                           </div>
                         ),
                       )}
@@ -368,7 +368,7 @@ export default function DashboardPage() {
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded bg-carbon px-3 py-2">
                         <p className="text-xs text-soft-white/60">Onboarding Channel</p>
-                        <p className="text-sm text-soft-white">{bot?.channel || "—"}</p>
+                        <p className="text-sm text-soft-white">{bot?.channel || "-"}</p>
                       </div>
                       <div className="rounded bg-carbon px-3 py-2">
                         <p className="text-xs text-soft-white/60">Contact Status</p>
@@ -406,7 +406,7 @@ export default function DashboardPage() {
                   <DeploymentCard key={dep.deployment_id} dep={dep}>
                     {model ? (
                       <div className="space-y-2 text-sm">
-                        <p><span className="text-soft-white/60">Provider:</span> {model.provider || "—"}</p>
+                        <p><span className="text-soft-white/60">Provider:</span> {model.provider || "-"}</p>
                         <p><span className="text-soft-white/60">Model:</span> {model.model_id || "default"}</p>
                         <p><span className="text-soft-white/60">Credential:</span> <StatusBadge status={model.credential_state || "pending"} /></p>
                       </div>

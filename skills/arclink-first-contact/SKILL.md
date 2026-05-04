@@ -19,10 +19,10 @@ scripts/run-first-contact.sh
 
 The script expects these environment variables (all normally exported by `init.sh agent` or `activate-agent.sh`):
 
-- `ARCLINK_MCP_URL` — control-plane MCP URL, e.g. `http://127.0.0.1:8282/mcp`
-- `ARCLINK_QMD_URL` — retrieval-plane MCP URL
-- `ARCLINK_BOOTSTRAP_TOKEN_FILE` — path to the agent's raw bootstrap token
-- `ARCLINK_SHARED_REPO_DIR` — absolute path to the shared repo root
+- `ARCLINK_MCP_URL` - control-plane MCP URL, e.g. `http://127.0.0.1:8282/mcp`
+- `ARCLINK_QMD_URL` - retrieval-plane MCP URL
+- `ARCLINK_BOOTSTRAP_TOKEN_FILE` - path to the agent's raw bootstrap token
+- `ARCLINK_SHARED_REPO_DIR` - absolute path to the shared repo root
 
 Its output is a JSON summary on stdout. A non-zero exit code means first-contact failed a hard check; the operator should inspect before proceeding.
 
@@ -66,4 +66,4 @@ When shared Notion indexing is configured for the host, the summary should also 
 - do not store raw vault bodies or PDF bodies in built-in memory
 - if vault subscription defaults already exist from a prior archived enrollment, keep them unless the user explicitly changes them
 - if the user only has TUI enabled, skip home-channel configuration without treating it as a failure
-- never write to the vault from this skill — it is read-only verification
+- never write to the vault from this skill - it is read-only verification

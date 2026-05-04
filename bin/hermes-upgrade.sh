@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hermes-upgrade.sh — operator-facing alias for the Hermes-runtime upgrade.
+# hermes-upgrade.sh - operator-facing alias for the Hermes-runtime upgrade.
 #
 # Kept as its own entry point because it's the most-frequently-bumped pin and
 # the documentation already references this filename. The actual logic lives

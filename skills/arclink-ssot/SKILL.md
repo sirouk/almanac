@@ -101,7 +101,7 @@ Decision tree:
 
 ## Ownership Resolution
 
-1. the first people-typed column on the page that lists a principal — opaque
+1. the first people-typed column on the page that lists a principal - opaque
    to the column name (`Owner`, `Assignee`, `DRI`, `Lead`, `Reviewer`, etc.);
    the `Changed By` provenance column is excluded
 2. `created_by`

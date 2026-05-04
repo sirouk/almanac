@@ -64,7 +64,7 @@ def test_pins_json_parses_and_has_required_components() -> None:
 def test_pins_json_kind_required_fields_present() -> None:
     """Spot-check the same allOf if/then rules the JSON schema enforces.
 
-    Keeps the test free of a third-party schema validator dep — pure stdlib.
+    Keeps the test free of a third-party schema validator dep - pure stdlib.
     """
     data = json.loads(PINS_JSON.read_text(encoding="utf-8"))
     components = data["components"]
@@ -121,7 +121,7 @@ def test_pins_sh_round_trip_does_not_corrupt_other_components() -> None:
         env = {**os.environ, "ARCLINK_PINS_FILE": str(scratch)}
 
         before_other = json.loads(scratch.read_text())["components"]["nextcloud"]
-        # set a fake ref on hermes-agent (no commit, no push — just file edit)
+        # set a fake ref on hermes-agent (no commit, no push - just file edit)
         subprocess.check_call([
             "bash", "-c",
             f"source {PINS_SH}; pins_set hermes-agent ref deadbeef" + "deadbeef" * 4
@@ -181,7 +181,7 @@ def test_common_sh_reads_hermes_pin_from_pins_json() -> None:
 def test_hermes_upgrade_check_is_read_only() -> None:
     """`./deploy.sh hermes-upgrade-check` must not modify pins.json."""
     before = PINS_JSON.read_bytes()
-    # Run the check; ignore network failures (offline CI) — the structural
+    # Run the check; ignore network failures (offline CI) - the structural
     # invariant is "doesn't write to pins.json".
     subprocess.run(
         ["bash", str(REPO / "deploy.sh"), "hermes-upgrade-check"],

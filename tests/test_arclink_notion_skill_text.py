@@ -107,7 +107,7 @@ def test_ssot_skill_marks_broker_as_non_workspace_search_lane() -> None:
     expect("any people-typed column" in body, body)
     expect("`Owner`" in body and "`Assignee`" in body and "`DRI`" in body, body)
     # The "opaque ownership channels" phrasing may wrap across lines in the
-    # markdown source — collapse whitespace before asserting.
+    # markdown source - collapse whitespace before asserting.
     body_collapsed = " ".join(body.split())
     expect("opaque ownership channels" in body_collapsed, body)
     expect('"read_after":true' not in body, body)

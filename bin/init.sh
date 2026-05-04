@@ -497,7 +497,7 @@ PY
 
   if [[ -z "$preseeded_request_id" && "$resuming_pending" != "1" && "${ARCLINK_INIT_SKIP_HERMES_SETUP:-0}" != "1" && -t 0 ]]; then
     echo
-    echo "Launching 'hermes setup' — ArcLink will read back your model choice from Hermes when it finishes."
+    echo "Launching 'hermes setup' - ArcLink will read back your model choice from Hermes when it finishes."
     HERMES_HOME="$hermes_home" "$hermes_bin" setup
   fi
 

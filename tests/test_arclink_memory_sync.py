@@ -869,7 +869,7 @@ def test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit() -> None:
             "resource-ref": "Canonical user access rails and shared ArcLink addresses:\n- Credentials are intentionally omitted from plugin-managed context.",
             "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
             "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via ArcLink MCP.",
-            "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on — Active project workspaces",
+            "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on - Active project workspaces",
             "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
             "catalog": [{"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"}],
             "subscriptions": [
@@ -920,7 +920,7 @@ def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> 
             "resource-ref": "Canonical user access rails and shared ArcLink addresses:\n- Credentials are intentionally omitted from plugin-managed context.",
             "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
             "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via ArcLink MCP.",
-            "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on — Active project workspaces",
+            "vault-topology": "Vault subscription hierarchy (precedence: user override > catalog default; push follows effective subscription):\n  + Projects: source=default, default=on, push=on - Active project workspaces",
             "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
             "catalog": [{"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"}],
             "subscriptions": [

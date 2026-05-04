@@ -142,7 +142,7 @@ def test_dns_provision_is_idempotent_on_retry() -> None:
     conn = memory_db(control)
     cloudflare = adapters.FakeCloudflareClient()
 
-    # Provision twice — should be idempotent
+    # Provision twice - should be idempotent
     ingress.provision_arclink_dns(
         conn, deployment_id="dep_retry", prefix="retrytest",
         base_domain="example.test", target="edge.example.test", cloudflare=cloudflare,

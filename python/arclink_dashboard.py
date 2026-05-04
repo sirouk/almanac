@@ -71,7 +71,7 @@ def build_operator_snapshot(
     """Build a read-only operator snapshot aggregating host readiness,
     provider diagnostics, live journey blockers, and evidence status.
 
-    Never returns secret values — only credential names and presence.
+    Never returns secret values - only credential names and presence.
     """
     from arclink_host_readiness import run_readiness
     from arclink_diagnostics import run_diagnostics

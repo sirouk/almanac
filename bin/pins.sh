@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pins.sh — read/write the ArcLink dependency pins file (config/pins.json).
+# pins.sh - read/write the ArcLink dependency pins file (config/pins.json).
 #
 # This is the single source of truth for every external dependency the deploy
 # hard-installs. Hot-path callers (bin/common.sh, install scripts, deploy.sh
@@ -18,7 +18,7 @@ __pins_default_path() {
 
 ARCLINK_PINS_FILE="${ARCLINK_PINS_FILE:-$(__pins_default_path)}"
 
-# pins_require — exit nonzero with a clear message if the prerequisites aren't met.
+# pins_require - exit nonzero with a clear message if the prerequisites aren't met.
 pins_require() {
   if ! command -v jq >/dev/null 2>&1; then
     echo "pins.sh: jq is required (apt install jq)" >&2
@@ -70,7 +70,7 @@ pins_resolve_inherited_ref() {
   pins_get "$component" ref
 }
 
-# pins_set <component> <jq-dotted-path> <value> — atomic in-place rewrite.
+# pins_set <component> <jq-dotted-path> <value> - atomic in-place rewrite.
 # The value is treated as a string; jq's --arg quotes it. For numeric or
 # boolean values use pins_set_raw.
 pins_set() {
@@ -99,13 +99,13 @@ pins_set_raw() {
   mv "$tmp" "$ARCLINK_PINS_FILE"
 }
 
-# pins_components — print the list of all component keys, one per line.
+# pins_components - print the list of all component keys, one per line.
 pins_components() {
   pins_require || return 1
   jq -r '.components | keys[]' "$ARCLINK_PINS_FILE"
 }
 
-# pins_show — pretty-print every pin in human-readable form. Stable ordering.
+# pins_show - pretty-print every pin in human-readable form. Stable ordering.
 pins_show() {
   pins_require || return 1
   jq -r '
@@ -118,7 +118,7 @@ pins_show() {
   ' "$ARCLINK_PINS_FILE"
 }
 
-# pins_validate — quick structural check. Returns 0 if every component has the
+# pins_validate - quick structural check. Returns 0 if every component has the
 # fields its kind requires, nonzero on the first broken component.
 pins_validate() {
   pins_require || return 1

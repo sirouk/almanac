@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# component-upgrade.sh — generic upgrade dispatcher for any pinned component.
+# component-upgrade.sh - generic upgrade dispatcher for any pinned component.
 #
 # Reads config/pins.json to determine the component's kind, resolves the
 # upstream "latest" (or a user-specified --ref/--tag/--version), and either
@@ -27,8 +27,8 @@
 #   npm              `npm view <pkg> dist-tags.latest`
 #   nvm-version      `nvm ls-remote <major>` then take the last (=highest)
 #   release-asset    GitHub releases/latest tag
-#   installer-url    "n/a — installer is the source of truth"
-#   uv-python        "n/a — interpreter version is host policy"
+#   installer-url    "n/a - installer is the source of truth"
+#   uv-python        "n/a - interpreter version is host policy"
 #
 # Idempotent: equal pins skip the commit/push/upgrade steps entirely.
 
@@ -274,7 +274,7 @@ do_check() {
       [[ -n "$digest" ]] && note "  current digest: $digest"
       note "  recent tags on $image:"
       resolve_container_recent_tags "$image" 8 | sed 's/^/    /' || true
-      note "  status: pin is a moving tag (\"$tag\") — apply --tag <newer> to bump explicitly"
+      note "  status: pin is a moving tag (\"$tag\") - apply --tag <newer> to bump explicitly"
       ;;
     npm)
       local pkg current latest
@@ -306,7 +306,7 @@ do_check() {
         return 0
       fi
       note "  latest in series: $latest"
-      note "  status: pin is a major-only spec (\"$current\") — apply --version <vX.Y.Z> to lock more tightly"
+      note "  status: pin is a major-only spec (\"$current\") - apply --version <vX.Y.Z> to lock more tightly"
       ;;
     release-asset)
       local repo current latest
@@ -315,7 +315,7 @@ do_check() {
       note "  pinned: ${current:-<none>}"
       latest="$(resolve_github_release_latest "$repo")"
       if [[ -z "$latest" ]]; then
-        note "  status: no GitHub releases published — install policy keeps this floating"
+        note "  status: no GitHub releases published - install policy keeps this floating"
       else
         note "  latest: $latest"
         if [[ "${current:-}" == "$latest" ]]; then
@@ -586,7 +586,7 @@ do_apply() {
   esac
 
   if [[ "$current" == "$target" ]]; then
-    note "$name pin already at $current — no-op."
+    note "$name pin already at $current - no-op."
     if [[ "$dry_run" == "1" ]]; then
       return 0
     fi
@@ -611,7 +611,7 @@ do_apply() {
   note "Planned: $name.$field $current -> $target"
 
   if [[ "$dry_run" == "1" ]]; then
-    note "Dry run — would write to config/pins.json (and update inheritors)."
+    note "Dry run - would write to config/pins.json (and update inheritors)."
     return 0
   fi
 

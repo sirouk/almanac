@@ -135,7 +135,7 @@ export default function AdminPage() {
                   <h3 className="font-display font-semibold text-red-400">Recent Failures</h3>
                   <ul className="mt-2 space-y-1 text-sm text-red-300">
                     {data.recent_failures.map((f, i) => (
-                      <li key={i}>{f.service_name} on {f.deployment_id} — {f.status}</li>
+                      <li key={i}>{f.service_name} on {f.deployment_id} - {f.status}</li>
                     ))}
                   </ul>
                 </div>
@@ -177,9 +177,9 @@ export default function AdminPage() {
                     <tbody>
                       {data.users.map((u, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 font-mono text-xs">{u.user_id || "—"}</td>
-                          <td className="px-3 py-2">{u.email || "—"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{u.display_name || "—"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{u.user_id || "-"}</td>
+                          <td className="px-3 py-2">{u.email || "-"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{u.display_name || "-"}</td>
                           <td className="px-3 py-2"><StatusBadge status={u.entitlement_state || "unknown"} /></td>
                         </tr>
                       ))}
@@ -211,8 +211,8 @@ export default function AdminPage() {
                         .filter((u) => u.stripe_customer_id || u.entitlement_state === "paid")
                         .map((u, i) => (
                           <tr key={i} className="border-b border-border/50">
-                            <td className="px-3 py-2">{u.email || u.user_id || "—"}</td>
-                            <td className="px-3 py-2 font-mono text-xs">{u.stripe_customer_id || "—"}</td>
+                            <td className="px-3 py-2">{u.email || u.user_id || "-"}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{u.stripe_customer_id || "-"}</td>
                             <td className="px-3 py-2"><StatusBadge status={u.entitlement_state || "unknown"} /></td>
                           </tr>
                         ))}
@@ -246,7 +246,7 @@ export default function AdminPage() {
                           <td className="px-3 py-2 font-mono text-xs">{h.deployment_id}</td>
                           <td className="px-3 py-2">{h.service_name}</td>
                           <td className="px-3 py-2"><StatusBadge status={h.status} /></td>
-                          <td className="px-3 py-2 text-soft-white/40">{h.last_check_at || "—"}</td>
+                          <td className="px-3 py-2 text-soft-white/40">{h.last_check_at || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -282,7 +282,7 @@ export default function AdminPage() {
               {drift?.dns_drift?.length ? (
                 drift.dns_drift.map((d, i) => (
                   <div key={i} className="rounded-lg border border-border bg-surface p-4 text-sm">
-                    <p>{d.deployment_id}: {d.expected || "—"} → {d.actual || "—"}</p>
+                    <p>{d.deployment_id}: {d.expected || "-"} → {d.actual || "-"}</p>
                     <StatusBadge status={d.status || "drift"} />
                   </div>
                 ))
@@ -311,11 +311,11 @@ export default function AdminPage() {
                     <tbody>
                       {audit.audit.map((a, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 text-soft-white/40 text-xs">{a.created_at || "—"}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{a.actor_id || "—"}</td>
-                          <td className="px-3 py-2">{a.action_type || "—"}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{a.target_id || "—"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{a.reason || "—"}</td>
+                          <td className="px-3 py-2 text-soft-white/40 text-xs">{a.created_at || "-"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{a.actor_id || "-"}</td>
+                          <td className="px-3 py-2">{a.action_type || "-"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{a.target_id || "-"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{a.reason || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -345,10 +345,10 @@ export default function AdminPage() {
                     <tbody>
                       {events.events.map((ev, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 text-soft-white/40 text-xs">{ev.created_at || "—"}</td>
-                          <td className="px-3 py-2">{ev.event_type || "—"}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{ev.deployment_id || "—"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{ev.detail || ev.message || "—"}</td>
+                          <td className="px-3 py-2 text-soft-white/40 text-xs">{ev.created_at || "-"}</td>
+                          <td className="px-3 py-2">{ev.event_type || "-"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{ev.deployment_id || "-"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{ev.detail || ev.message || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -369,14 +369,14 @@ export default function AdminPage() {
                 actions.actions.map((a, i) => (
                   <div key={i} className="rounded-lg border border-border bg-surface p-4 text-sm">
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-xs">{a.action_id || "—"}</span>
+                      <span className="font-mono text-xs">{a.action_id || "-"}</span>
                       <StatusBadge status={a.status || "queued"} />
                     </div>
                     <p className="mt-1">
                       <span className="text-soft-white/60">Type:</span> {a.action_type}{" "}
                       <span className="text-soft-white/60">Target:</span> {a.target_id}
                     </p>
-                    <p className="mt-1 text-soft-white/40">Reason: {a.reason || "—"}</p>
+                    <p className="mt-1 text-soft-white/40">Reason: {a.reason || "-"}</p>
                   </div>
                 ))
               ) : (
@@ -404,11 +404,11 @@ export default function AdminPage() {
                     <tbody>
                       {data.deployments.map((dep, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 font-mono text-xs">{dep.deployment_id || "—"}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{dep.user_id || "—"}</td>
-                          <td className="px-3 py-2">{dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : "—"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{dep.deployment_id || "-"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{dep.user_id || "-"}</td>
+                          <td className="px-3 py-2">{dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : "-"}</td>
                           <td className="px-3 py-2"><StatusBadge status={dep.status || "unknown"} /></td>
-                          <td className="px-3 py-2 text-soft-white/40 text-xs">{dep.updated_at || "—"}</td>
+                          <td className="px-3 py-2 text-soft-white/40 text-xs">{dep.updated_at || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -430,7 +430,7 @@ export default function AdminPage() {
                   <h3 className="font-display font-semibold text-red-400">Recent Failures</h3>
                   <ul className="mt-2 space-y-1 text-sm text-red-300">
                     {data.recent_failures.map((f, i) => (
-                      <li key={i}>{f.service_name || f.job_kind || "unknown"} on {f.deployment_id} — {f.status}</li>
+                      <li key={i}>{f.service_name || f.job_kind || "unknown"} on {f.deployment_id} - {f.status}</li>
                     ))}
                   </ul>
                 </div>
@@ -513,10 +513,10 @@ export default function AdminPage() {
                     <tbody>
                       {reconciliation.drift.map((d, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 font-mono text-xs">{d.user_id || d.customer_id || "—"}</td>
-                          <td className="px-3 py-2">{d.field || "—"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{d.local_value || "—"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{d.stripe_value || "—"}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{d.user_id || d.customer_id || "-"}</td>
+                          <td className="px-3 py-2">{d.field || "-"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{d.local_value || "-"}</td>
+                          <td className="px-3 py-2 text-soft-white/60">{d.stripe_value || "-"}</td>
                           <td className="px-3 py-2"><StatusBadge status={d.status || "drift"} /></td>
                         </tr>
                       ))}

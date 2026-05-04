@@ -60,7 +60,7 @@ huge files from runaway content.
 
 1. Drives headless chromium against each Notion URL the user supplies.
 2. Discovers direct sub-pages of each root via Notion's `/api/v3/loadPageChunk`
-   JSON endpoint (publicly readable for web-shared pages — no auth needed,
+   JSON endpoint (publicly readable for web-shared pages - no auth needed,
    no rate limits in normal use).
 3. Renders each page (root + every direct child by default) as a content-
    sized PDF.
@@ -113,21 +113,21 @@ sudo -u arclink \
 
 ## Failure modes
 
-- **Page redirects to `/login`** — the page is not web-shared. Ask the owner
+- **Page redirects to `/login`** - the page is not web-shared. Ask the owner
   to enable Share → "Anyone with the link" (view), or share with the
   ArcLink integration and use the proper SSOT rails.
-- **Some collection columns still cut off** — Notion may have changed CSS
+- **Some collection columns still cut off** - Notion may have changed CSS
   classes; inspect the live page in chromium devtools and add the new
   selector to `PRINT_CSS` in `bin/notion-page-pdf-export.py` (the uncap
   block + the `overflow-x: visible` block).
-- **Output is 8 KB and almost empty** — the print CSS hid a wrapper element
+- **Output is 8 KB and almost empty** - the print CSS hid a wrapper element
   it shouldn't have. The wrappers `.notion-frame`, `.notion-cursor-listener`,
   `.notion-app-inner` are scroll containers; never set them to
   `display: none` in the print CSS.
-- **Sub-pages not discovered** — `loadPageChunk` returns up to 200 blocks
+- **Sub-pages not discovered** - `loadPageChunk` returns up to 200 blocks
   per call. For pages with > 200 first-level children, extend the discover
   function to follow the `cursor.stack` for paging.
-- **PDF too tall** — bump `--max-height-in` (default 200) or split the
+- **PDF too tall** - bump `--max-height-in` (default 200) or split the
   scrape across the explicit child URLs at depth 0.
 
 ## Where the captured content ends up
@@ -154,5 +154,5 @@ Headless-browser captures are static. Real-time edits in Notion don't show
 up until the next manual re-run. The ArcLink integration + webhook pipeline
 gives sub-second propagation and is the right mechanism for material we
 control. Use this skill for material we don't control (third-party
-workspaces, public-facing pages from other orgs, archived snapshots) — and
+workspaces, public-facing pages from other orgs, archived snapshots) - and
 re-run it on a schedule if the source still changes.

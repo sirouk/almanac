@@ -4758,7 +4758,7 @@ def _fanout_default_subscriptions(
 ) -> dict[str, int]:
     """For each active user agent, ensure it has a subscription row for every
     vault in `vault_names` where default_subscribed=1. Never overrides an
-    existing opt-out — only adds missing rows."""
+    existing opt-out - only adds missing rows."""
     rows = conn.execute(
         "SELECT vault_name, default_subscribed FROM vaults WHERE vault_name IN ({})".format(
             ",".join(["?"] * len(vault_names)) or "NULL"
@@ -5820,7 +5820,7 @@ def _repo_sync_state_dir(cfg: Config) -> Path:
 
 def _repo_sync_slug_from_remote(remote_url: str, fallback_path: Path | None = None) -> str:
     """Derive a display slug from a git remote URL, falling back to a path
-    component when the URL can't be parsed. Used only for logs/status output —
+    component when the URL can't be parsed. Used only for logs/status output -
     repo identity in the new rail is the on-disk path, not the slug."""
     remote = str(remote_url or "").strip()
     if remote:
@@ -6004,7 +6004,7 @@ def _repo_sync_pull_local_repo(repo_dir: Path, remote_url: str = "") -> dict[str
     and build caches. This keeps qmd from indexing local artifacts that are not
     part of the upstream repository.
 
-    Detached HEAD or no `origin` remote raises — the caller treats those as
+    Detached HEAD or no `origin` remote raises - the caller treats those as
     per-repo failures and keeps going through the rest of the vault.
     """
     branch = _repo_sync_current_branch(repo_dir)
@@ -8342,7 +8342,7 @@ def write_shared_manifest(
 ) -> Path:
     manifest_path = _manifest_path_for(cfg, agent_id, role)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    # tui_enabled is a structural invariant — every agent has TUI access, the flag exists
+    # tui_enabled is a structural invariant - every agent has TUI access, the flag exists
     # so downstream tooling can assert it and refuse to disable it.
     payload = {
         "agent_id": agent_id,
@@ -8900,7 +8900,7 @@ def _notion_payload_people_property_names(payload: dict[str, Any]) -> list[str]:
 
 def _notion_payload_people_identities(payload: dict[str, Any]) -> list[tuple[str, str]]:
     """Return (identity, source) pairs across every people-shaped column on
-    the payload — the broad form of _notion_property_people_identities that
+    the payload - the broad form of _notion_property_people_identities that
     iterates dynamic column names instead of a fixed Owner/Assignee tuple.
     """
     candidates: list[tuple[str, str]] = []
@@ -8932,7 +8932,7 @@ def _notion_owner_identity(payload: dict[str, Any]) -> tuple[str, str]:
     first people-typed column (in declaration order, opaque to column name)
     -> created_by -> ('', 'needs-approval'). The first explicit assignment
     wins regardless of whether the workspace named the column Owner, DRI,
-    Lead, etc. — see _notion_payload_people_identities.
+    Lead, etc. - see _notion_payload_people_identities.
     """
     for value, source in _notion_payload_people_identities(payload):
         return value, source
@@ -9006,7 +9006,7 @@ def _page_access_matches_identity(
             return True, source
     # Do not let local broker history override an explicit people-typed
     # assignment that points at somebody else. Treat every people-typed
-    # column as an ownership channel, not just Owner/Assignee — a workspace
+    # column as an ownership channel, not just Owner/Assignee - a workspace
     # may have named the column DRI, Lead, Reviewer, Approver, etc.
     if _notion_payload_people_identities(payload):
         return False, "ownership-mismatch"
@@ -9653,7 +9653,7 @@ def _load_notion_collection_schema(
 
 def _configured_people_properties(schema_payload: dict[str, Any]) -> list[str]:
     """Return every people-typed property name in the schema, in the order
-    Notion declared them. The "Changed By" provenance column is excluded —
+    Notion declared them. The "Changed By" provenance column is excluded -
     it tracks writers, not ownership/assignment, and is handled separately
     by ``_configured_changed_by_property``. Property names are treated as
     opaque ownership channels (Owner, Assignee, Reviewer, DRI, Lead, ...);
@@ -9734,7 +9734,7 @@ def _identity_people_filter(database_payload: dict[str, Any], identity: dict[str
     if not property_names:
         raise PermissionError(
             "shared Notion SSOT must expose at least one people-typed property "
-            "(any name — Owner, Assignee, Reviewer, DRI, Lead, etc.) so user-scoped reads can filter by membership"
+            "(any name - Owner, Assignee, Reviewer, DRI, Lead, etc.) so user-scoped reads can filter by membership"
         )
     filters = [
         {"property": property_name, "people": {"contains": notion_user_id}}
@@ -9850,7 +9850,7 @@ def _notion_named_property_text(payload: dict[str, Any], preferred_names: tuple[
 def _people_property_iter(payload: dict[str, Any]):
     """Yield (property_name, prop_dict) for every people-typed property on
     the payload, excluding the provenance-only 'Changed By' column.
-    Property names are treated as opaque ownership channels — the caller
+    Property names are treated as opaque ownership channels - the caller
     decides the semantics, not this helper.
     """
     properties = payload.get("properties")
@@ -9885,7 +9885,7 @@ def _notion_all_people_names(payload: dict[str, Any]) -> list[str]:
 
 def _notion_user_role_properties(payload: dict[str, Any], notion_user_id: str) -> list[str]:
     """Return the list of people-typed property names that contain
-    ``notion_user_id`` on this payload — i.e. every ownership channel the
+    ``notion_user_id`` on this payload - i.e. every ownership channel the
     user appears in for this row. Empty when the user is unset.
     """
     if not notion_user_id:
@@ -11489,7 +11489,7 @@ def _build_notion_stub(
             "- Current SSOT shape: page-scoped. ArcLink cannot build a structured database digest from this target yet.",
             "- Read routing: use knowledge.search-and-fetch or notion.search-and-fetch for indexed shared Notion/vault context; use notion.fetch when an exact page URL or id is known. ssot.read page reads require verified Notion ownership and a scoped target.",
             "- Write routing: use ssot.write for permitted brokered updates on in-scope user work.",
-            "- Best fit for repeated brokered writes is still a database row whose people-typed column(s) name the verified caller (any column name — Owner, Assignee, DRI, Lead, Reviewer, ...). Plain child pages can be more fragile under strict scope checks.",
+            "- Best fit for repeated brokered writes is still a database row whose people-typed column(s) name the verified caller (any column name - Owner, Assignee, DRI, Lead, Reviewer, ...). Plain child pages can be more fragile under strict scope checks.",
             "- If a brokered action is denied, explain it as a verification, scope, or allowed-operation limit; do not describe that as the skill being missing or the rail disappearing.",
         ]
         if verification_status != "verified":
@@ -11588,7 +11588,7 @@ def _today_plate_work_line(item: dict[str, Any], *, is_new: bool = False) -> str
         parts.append("updated recently")
     if is_new:
         parts.append("NEW since last plate")
-    return " — ".join(parts)
+    return " - ".join(parts)
 
 
 def _today_plate_sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -11608,7 +11608,7 @@ def _discover_child_task_databases(
     max_depth: int = 2,
 ) -> list[dict[str, Any]]:
     """Walk the SSOT root page tree and return child databases that expose
-    at least one people-typed property — any label the workspace uses
+    at least one people-typed property - any label the workspace uses
     (Owner, Assignee, Reviewer, DRI, Lead, ...) qualifies as an ownership
     channel. Cached in ``notion_stub_cache`` so repeated calls within a
     single plugin-context build don't re-issue the same Notion API requests.
@@ -11694,7 +11694,7 @@ def _query_owner_items_in_database(
 ) -> list[dict[str, Any]]:
     """Return rows in ``database_id`` where any people-typed property on
     the row contains ``notion_user_id``. Property names are treated as
-    opaque ownership channels — Owner, Assignee, Reviewer, DRI, Lead, or
+    opaque ownership channels - Owner, Assignee, Reviewer, DRI, Lead, or
     any other label the workspace uses. Empty list when the user is not
     verified or the database has no people-typed properties.
     """
@@ -11769,19 +11769,19 @@ def _build_today_plate(
             lines.append("- No structured ownership surfaces discovered: no child database under the SSOT root exposes a people-typed property the current user could appear in.")
             if pending_lines:
                 lines.extend(pending_lines)
-            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: answer from this managed snapshot first. If it is thin, read the qmd notion-shared collection with one bounded knowledge.search-and-fetch or notion.search-and-fetch using the user's own framing — names, projects, intent — and reason from what comes back rather than matching specific keywords.")
+            lines.append("- When the user asks anything about their work, focus, recent activity, or what's on their plate: answer from this managed snapshot first. If it is thin, read the qmd notion-shared collection with one bounded knowledge.search-and-fetch or notion.search-and-fetch using the user's own framing - names, projects, intent - and reason from what comes back rather than matching specific keywords.")
             lines.append("- Live read routing: use notion.fetch for exact page URLs/ids and notion.query only for one exact live structured database target. Do not fan out notion.query across discovered databases during a generic plate check. Use ssot.read only after Notion verification and only for scoped brokered targets; unverified page reads are refused by design.")
             lines.append("- For brokered writes to the SSOT page or its descendants use ssot.write; use ssot.preflight first when scope is uncertain.")
             return "\n".join(lines)
         per_db_channels: list[str] = []
         for db in task_dbs[:6]:
-            channels = ", ".join(db.get("people_properties") or []) or "—"
+            channels = ", ".join(db.get("people_properties") or []) or "-"
             per_db_channels.append(f"{db.get('title') or 'Unnamed'} ({channels})")
         lines.append(
             f"- Ownership surfaces discovered under the SSOT root ({len(task_dbs)} database(s)): "
             + "; ".join(per_db_channels[:6])
             + ("; ..." if len(task_dbs) > 6 else "")
-            + ". Property names are treated as opaque ownership channels — any people-typed column qualifies."
+            + ". Property names are treated as opaque ownership channels - any people-typed column qualifies."
         )
         if identity is None or verification_status != "verified" or not notion_user_id:
             if claimed_email:
@@ -11846,7 +11846,7 @@ def _build_today_plate(
             lines.append("- Agent posture: when the user asks about their work, focus, recent activity, or what's on their plate, lead with this structured snapshot. For broader or unstructured questions, supplement with one bounded knowledge.search-and-fetch on the notion-shared collection using the user's own framing. Use notion.query / ssot.read only for a specific live target or before changing shared state.")
         else:
             lines.append("- No record currently lists the verified user in any people-typed column across the discovered surfaces.")
-            lines.append("- Agent posture: ask the user what they want to focus on, or use knowledge.search-and-fetch on the notion-shared collection to find content that mentions or references them — the index reflects Notion within seconds.")
+            lines.append("- Agent posture: ask the user what they want to focus on, or use knowledge.search-and-fetch on the notion-shared collection to find content that mentions or references them - the index reflects Notion within seconds.")
         return "\n".join(lines)
 
     verification_status = str((identity or {}).get("verification_status") or "").strip()
@@ -13838,7 +13838,7 @@ def build_managed_memory_payload(
             f"source={source_label}, default={default_label}, push={push_label}"
         )
         if brief:
-            line += f" — {brief}"
+            line += f" - {brief}"
         topology_lines.append(line)
 
     display_name = str(agent["display_name"] or "").strip()
@@ -13895,7 +13895,7 @@ def build_managed_memory_payload(
         "- The shared vault does not require a fixed Projects/Repos taxonomy; qmd indexes text-like files anywhere under the vault root, and .vault files only define subscription/notification lanes.\n"
         "- All vaults remain retrievable through ArcLink/qmd even when a vault is unsubscribed; subscriptions only shape plugin-managed awareness and Curator push behavior.\n"
         "- Curator publishes a shared Notion digest into plugin-managed context so the agent has ambient SSOT orientation without live cross-user reads.\n"
-        "- Curator publishes [managed:today-plate] as the user's compact involvement snapshot — every record across discovered task surfaces where the user appears in any people-typed column, regardless of what the workspace named that column. Use it as the structured starting point when the user asks about their work, focus, recent involvement, or what's on their plate; then verify live details before changing shared state.\n"
+        "- Curator publishes [managed:today-plate] as the user's compact involvement snapshot - every record across discovered task surfaces where the user appears in any people-typed column, regardless of what the workspace named that column. Use it as the structured starting point when the user asks about their work, focus, recent involvement, or what's on their plate; then verify live details before changing shared state.\n"
         "- The intended sync rail is curator fanout -> activation trigger / refresh timer -> user-agent-refresh -> local plugin context state and recent events.\n"
         "- ArcLink does not patch dynamic [managed:*] stubs into built-in MEMORY.md; the arclink-managed-context plugin hot-injects refreshed local ArcLink context into future turns without requiring /reset or a gateway restart once that plugin is loaded.\n"
         "- The arclink-managed-context plugin also injects [local:model-runtime] from Hermes's actual current-turn model argument, so model self-identification uses the live runtime instead of stale session prompts, saved memory, onboarding records, or config defaults after setup or model switches.\n"
@@ -14653,7 +14653,7 @@ def _build_recall_stubs(
                 str(subscription.get("brief_template") or subscription.get("description") or ""),
                 limit=120,
             )
-            suffix = f" — {brief}" if brief else ""
+            suffix = f" - {brief}" if brief else ""
             lines.append(
                 f"- {vault_name}: category={category}, owner={owner}. "
                 f"Ask vault.search-and-fetch for depth; current lane root is ~/ArcLink/{vault_name}.{suffix}"
@@ -14772,7 +14772,7 @@ def write_managed_memory_stubs(
     `SOUL.md` overlay.
 
     Returns the paths written. Called from the user-agent-refresh context
-    running as the enrollment user — never from the central curator (which runs
+    running as the enrollment user - never from the central curator (which runs
     as a different uid and would violate the HOME boundary).
     """
     payload = dict(payload)

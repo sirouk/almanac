@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for arclink_live_runner — live proof orchestration."""
+"""Tests for arclink_live_runner - live proof orchestration."""
 from __future__ import annotations
 
 import json

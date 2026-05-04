@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for arclink_evidence — deterministic output and secret redaction."""
+"""Tests for arclink_evidence - deterministic output and secret redaction."""
 from __future__ import annotations
 
 import json

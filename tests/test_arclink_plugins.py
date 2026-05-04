@@ -174,7 +174,7 @@ def test_arclink_managed_context_reads_writer_materialized_notion_state() -> Non
                 "recall-stubs": "Retrieval memory stubs:\n- Projects: ask vault.search-and-fetch for depth.",
                 "notion-landmarks": "Shared Notion landmarks:\n- Marketing Visibility Board: 1 indexed page/source(s); examples: Launch Reddit ad test.",
                 "notion-stub": "Shared Notion digest:\n- No shared digest published yet.",
-                "today-plate": "Today plate:\n- Scoped work: 1 owned/assigned record(s). Due today/overdue: 0.\n- Work candidates:\n  - Example Unicorn launch — status In Progress",
+                "today-plate": "Today plate:\n- Scoped work: 1 owned/assigned record(s). Due today/overdue: 0.\n- Work candidates:\n  - Example Unicorn launch - status In Progress",
                 "vault_landmark_items": [
                     {
                         "name": "Research Annex",
@@ -910,7 +910,7 @@ def _write_minimal_managed_state(hermes_home: Path) -> None:
                 "qmd-ref": "qmd MCP (deep retrieval): https://kor.example/mcp",
                 "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.",
                 "recall-stubs": "Retrieval memory stubs:\n- Projects: ask vault.search-and-fetch for depth.",
-                "today-plate": "Today plate:\n- Work candidates:\n  - Example Unicorn launch — status In Progress",
+                "today-plate": "Today plate:\n- Work candidates:\n  - Example Unicorn launch - status In Progress",
             },
             indent=2,
             sort_keys=True,
@@ -1143,7 +1143,7 @@ def test_arclink_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             expect(isinstance(status_turn, dict) and status_turn.get("context"), f"expected context on status-trigger, got {status_turn!r}")
             expect("- ssot.status:" in status_turn["context"], status_turn["context"])
             expect("pending_id lookup" in status_turn["context"], status_turn["context"])
-            expect("[Plugin: arclink-managed-context — turn tool recipe]" in status_turn["context"], status_turn["context"])
+            expect("[Plugin: arclink-managed-context - turn tool recipe]" in status_turn["context"], status_turn["context"])
             expect("[managed:" not in status_turn["context"], status_turn["context"])
 
             neutral_turn = hook(

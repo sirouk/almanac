@@ -479,7 +479,7 @@ def test_detector_clears_state_when_pin_no_longer_lags_upstream() -> None:
                 rows = conn.execute("SELECT COUNT(*) FROM pin_upgrade_notifications").fetchone()[0]
                 expect(rows == 1, "row should exist before clear")
 
-                # Operator applied the upgrade — pin matches upstream now.
+                # Operator applied the upgrade - pin matches upstream now.
                 detector._run_check = lambda c: ("status: up-to-date\n"
                                                   "pinned: bbbb2222\nlatest: bbbb2222 (branch HEAD)\n")
                 detector.run_detector(conn, cfg)
@@ -553,7 +553,7 @@ def test_detector_preserves_state_on_transient_upstream_failure() -> None:
                 expect(outbox_after == outbox_before,
                        f"transient run must not enqueue: before {outbox_before}, after {outbox_after}")
 
-                # Then upstream comes back — same target — and detector resumes normal behavior.
+                # Then upstream comes back - same target - and detector resumes normal behavior.
                 detector._run_check = lambda c: ("status: upgrade available\n"
                                                   "pinned: aaaa1111\nlatest: bbbb2222 (branch HEAD)\n")
                 res = detector.run_detector(conn, cfg)

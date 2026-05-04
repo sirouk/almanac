@@ -70,11 +70,11 @@ scripts/curate-vaults.sh --json curate
 
 What they do:
 
-- `list` — show the current vault catalog with subscribed/default markers
-- `refresh` — run `vaults.refresh` for the current agent
-- `stubs` — fetch the canonical managed-memory payload (`agents.managed-memory`)
-- `subscribe` / `unsubscribe` — change one vault subscription via `vaults.subscribe`
-- `curate` — show the unified view: catalog, active subscriptions, plugin-context keys, and the trigger rail used to keep context in sync
+- `list` - show the current vault catalog with subscribed/default markers
+- `refresh` - run `vaults.refresh` for the current agent
+- `stubs` - fetch the canonical managed-memory payload (`agents.managed-memory`)
+- `subscribe` / `unsubscribe` - change one vault subscription via `vaults.subscribe`
+- `curate` - show the unified view: catalog, active subscriptions, plugin-context keys, and the trigger rail used to keep context in sync
 
 Markers:
 
@@ -86,9 +86,9 @@ Markers:
 
 The script expects the same user-agent environment used by the existing ArcLink rails:
 
-- `ARCLINK_MCP_URL` — defaults to `http://127.0.0.1:${ARCLINK_MCP_PORT:-8282}/mcp`
+- `ARCLINK_MCP_URL` - defaults to `http://127.0.0.1:${ARCLINK_MCP_PORT:-8282}/mcp`
 - `ARCLINK_BOOTSTRAP_TOKEN_FILE` or `ARCLINK_BOOTSTRAP_TOKEN_PATH`
-- `HERMES_HOME` — defaults to the user-agent Hermes home
+- `HERMES_HOME` - defaults to the user-agent Hermes home
 
 ## Trigger model
 

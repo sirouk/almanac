@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""arclink_pin_upgrade_check — detect upstream upgrades for pinned components
+"""arclink_pin_upgrade_check - detect upstream upgrades for pinned components
 and notify the operator with a digest, throttled per release.
 
 Runs hourly via arclink-curator-refresh.timer (also callable via
@@ -77,7 +77,7 @@ class CheckResult:
     kind: str
     field: str            # which pins.json field carries the value (ref/tag/version)
     current: str
-    target: str           # upstream "latest" — empty if check is informational only
+    target: str           # upstream "latest" - empty if check is informational only
     upgrade_available: bool
     note: str = ""        # human-readable extra context for the digest
     transient_failure: bool = False  # upstream lookup failed; preserve state, don't delete
@@ -259,19 +259,19 @@ def _parse_check_output(component: str, kind: str, output: str) -> CheckResult:
     )
 
     if transient:
-        # Network/rate-limit hiccup — keep existing throttle row intact, but
+        # Network/rate-limit hiccup - keep existing throttle row intact, but
         # don't propose anything new this run.
         upgrade_available = False
         note = status_line
         latest = ""
     elif kind == "container-image":
         # Moving tags don't auto-flag as "upgrade available". Detector treats
-        # them as informational — operator decides explicit --tag bumps.
+        # them as informational - operator decides explicit --tag bumps.
         upgrade_available = False
         note = status_line or "moving tag; explicit --tag bump required"
         latest = ""  # no concrete target proposed
     elif kind == "nvm-version":
-        # Major-only pin — informational only. Latest patch is shown but the
+        # Major-only pin - informational only. Latest patch is shown but the
         # detector doesn't propose auto-bumping (operator decides).
         upgrade_available = False
         note = status_line or "major-only pin"
@@ -410,13 +410,13 @@ def _upsert_state(
     existing = cursor.fetchone()
 
     if result.transient_failure:
-        # Upstream lookup hiccupped this run — preserve any existing row so
+        # Upstream lookup hiccupped this run - preserve any existing row so
         # we don't lose throttle state on flapping networks.
         return False, {}
 
     if not result.upgrade_available or not result.target:
         if existing is not None:
-            # Stale row — pin advanced past the tracked target (operator
+            # Stale row - pin advanced past the tracked target (operator
             # upgraded) or upstream rolled back.
             conn.execute(
                 "DELETE FROM pin_upgrade_notifications WHERE component = ?",
@@ -480,7 +480,7 @@ def _upsert_state(
         return True, state
 
     if stored_throttle_target != target_value:
-        # A new upgrade target appeared — reset throttle.
+        # A new upgrade target appeared - reset throttle.
         conn.execute(
             """
             UPDATE pin_upgrade_notifications

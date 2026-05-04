@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ArcLink fake E2E harness — Production 11.
+"""ArcLink fake E2E harness - Production 11.
 
 Proves the full journey using only fake adapters and in-memory SQLite:
   web signup -> onboarding answers -> checkout simulation -> Stripe webhook

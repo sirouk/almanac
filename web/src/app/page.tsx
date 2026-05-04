@@ -18,7 +18,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"
           >
-            Take Me Aboard
+            Start Launch
           </Link>
         </div>
       </nav>
@@ -27,7 +27,7 @@ export default function Home() {
       <main className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
         <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs uppercase tracking-[0.18em] text-soft-white/60">
           <span className="h-1.5 w-1.5 rounded-full bg-signal-orange" aria-hidden />
-          Sovereign Cohort 001 — first 100 boarding
+          Sovereign Cohort 001 - first 100 boarding
         </div>
         <h1 className="font-display text-4xl font-bold leading-tight sm:text-5xl md:text-6xl">
           I&apos;m Raven.<br />
@@ -35,8 +35,8 @@ export default function Home() {
         </h1>
         <p className="mt-6 max-w-xl text-lg text-soft-white/70">
           Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your
-          private ArcLink vessel: weapons-grade agents, SOTA inference rails, memory, retrieval,
-          files, code tools, bot channels, and live deployment health. First agent $35/month.
+          private ArcLink vessel: an agent, model access, memory, retrieval, files, code tools,
+          bot channels, and live deployment health. First agent $35/month.
         </p>
         <img
           src="/brand/raven/raven_hero.webp"
@@ -58,7 +58,7 @@ export default function Home() {
           </Link>
         </div>
         <p className="mt-8 text-xs uppercase tracking-[0.22em] text-soft-white/40">
-          Web · Telegram · Discord — same launch path, same Raven
+          Web · Telegram · Discord - same launch path, same Raven
         </p>
       </main>
 
@@ -67,12 +67,12 @@ export default function Home() {
         <div className="mx-auto mb-10 max-w-3xl text-center">
           <h2 className="font-display text-2xl font-semibold sm:text-3xl">What boards aboard your vessel</h2>
           <p className="mt-3 text-sm text-soft-white/60">
-            Every pod ships fully wired. No infrastructure homework, no cobbled stack — Raven brings the hull online and hands you the helm.
+            Every pod ships fully wired. No infrastructure homework, no cobbled stack - Raven brings the hull online and hands you the helm.
           </p>
         </div>
         <div className="mx-auto grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {[
-            { title: "Your Private Agent", desc: "Each agent is yours alone — with memory, skills, and room to grow. Powered by the Hermes runtime." },
+            { title: "Your Private Agent", desc: "Each agent is yours alone - with memory, skills, and room to grow. Powered by the Hermes runtime." },
             { title: "Frontier Model Rails", desc: "I start on a frontier-class model and keep the door open for your own Claude or OpenAI keys when you want them." },
             { title: "Document Retrieval", desc: "I keep your files searchable so the agent pulls the right context fast." },
             { title: "Live Memory", desc: "I keep your agent's working memory hot so it stays oriented across sessions." },

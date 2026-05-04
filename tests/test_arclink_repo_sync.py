@@ -210,7 +210,7 @@ def test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors(
         config_path = make_config(root)
         write_repos_vault(root)
 
-        # A legitimate operator checkout — must be found.
+        # A legitimate operator checkout - must be found.
         legit_repo = root / "vault" / "Projects" / "demo"
         init_git_repo(legit_repo)
         subprocess.run(
@@ -220,7 +220,7 @@ def test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors(
             text=True,
         )
 
-        # A pinned-sync tree — must be skipped.
+        # A pinned-sync tree - must be skipped.
         pinned_dir = root / "vault" / "Agents_KB" / "hermes-agent-docs"
         pinned_dir.mkdir(parents=True, exist_ok=True)
         (pinned_dir / ".arclink-source.json").write_text("{\n  \"repo_ref\": \"abc123\"\n}\n", encoding="utf-8")
@@ -233,7 +233,7 @@ def test_discover_vault_repo_sources_skips_pinned_sync_trees_and_legacy_mirrors(
             text=True,
         )
 
-        # Legacy mirrors subtree — must be skipped.
+        # Legacy mirrors subtree - must be skipped.
         legacy_mirror = root / "vault" / "Repos" / "_mirrors" / "example-legacy"
         init_git_repo(legacy_mirror)
         subprocess.run(
@@ -289,7 +289,7 @@ def test_sync_vault_repo_mirrors_hard_resets_to_origin_overwriting_local_changes
         (local_repo / "README.md").write_text("MY LOCAL HACK\n", encoding="utf-8")           # uncommitted edit
         (local_repo / "scratch.md").write_text("untracked\n", encoding="utf-8")              # untracked file
         (local_repo / "build").mkdir(parents=True, exist_ok=True)
-        (local_repo / "build" / "artifact.bin").write_text("binary\n", encoding="utf-8")     # gitignored file — MUST be cleaned
+        (local_repo / "build" / "artifact.bin").write_text("binary\n", encoding="utf-8")     # gitignored file - MUST be cleaned
 
         # And a local commit ahead of origin that should also be dropped.
         (local_repo / "local-only.md").write_text("local only commit\n", encoding="utf-8")

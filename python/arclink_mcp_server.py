@@ -82,7 +82,7 @@ TOOLS = {
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
-    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering — returns rows where the caller appears in any of the database's people-typed columns (regardless of column name). Use this when the verified caller needs live structured involvement in the configured SSOT database. For broad plate/focus orientation, start from [managed:today-plate] and qmd-backed knowledge.search-and-fetch. For broad knowledge lookup by phrase or for content under page-scoped SSOTs and child databases, call notion.search-and-fetch instead.",
+    "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering - returns rows where the caller appears in any of the database's people-typed columns (regardless of column name). Use this when the verified caller needs live structured involvement in the configured SSOT database. For broad plate/focus orientation, start from [managed:today-plate] and qmd-backed knowledge.search-and-fetch. For broad knowledge lookup by phrase or for content under page-scoped SSOTs and child databases, call notion.search-and-fetch instead.",
     "ssot.pending": "List the caller's own shared Notion writes that are pending or recently decided. Use when the user asks about their queue in general; for a specific pending_id, call ssot.status instead.",
     "ssot.preflight": "Check whether a Notion SSOT write would apply, queue for user approval, or fail before attempting the write. Use quietly when writeability is uncertain.",
     "ssot.write": "Apply a Notion SSOT write (insert/update/append/create_page/create_database) through the central broker. Use create_page or create_database for org-wide pages, lists, and task tables so they are parented under the shared ArcLink page and inherit org access. Out-of-scope writes queue for user approval; applied page/database creates promote url/id as receipts. Archive/delete are rejected. For cross-turn follow-up on a queued write, call ssot.status.",
@@ -1518,7 +1518,7 @@ class Handler(BaseHTTPRequestHandler):
 
         Tailscale Serve strips client-supplied copies and injects these
         cryptographically-verified values on every proxied request. When
-        present, they are the authoritative caller identity — much stronger
+        present, they are the authoritative caller identity - much stronger
         than the raw source_ip (which behind the proxy is always 127.0.0.1).
         Returns an empty dict when the request did not come through Tailscale
         Serve (direct loopback, local testing, etc.).
@@ -1574,7 +1574,7 @@ class Handler(BaseHTTPRequestHandler):
                 # When Tailscale Serve forwards the request, prefer the verified
                 # identity over whatever the client put in `requester_identity`.
                 # The raw source_ip is always loopback behind the proxy, so use
-                # the tailnet login as the rate-limit subject too — otherwise one
+                # the tailnet login as the rate-limit subject too - otherwise one
                 # noisy caller exhausts the per-IP bucket for the whole tailnet.
                 if ts_identity.get("login"):
                     requester_identity = ts_identity["login"]

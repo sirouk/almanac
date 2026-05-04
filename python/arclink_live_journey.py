@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ArcLink live journey model — Gap D scaffolding.
+"""ArcLink live journey model - Gap D scaffolding.
 
 Ordered step model for the full customer journey proof:
   web onboarding -> checkout -> webhook/entitlement -> provisioning

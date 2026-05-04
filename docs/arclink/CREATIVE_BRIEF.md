@@ -58,10 +58,10 @@ Per-pod services:
 
 Per-pod hostname target:
 
-- `u-<prefix>.arclink.online` — unified dashboard
-- `files-<prefix>.arclink.online` — Nextcloud
-- `code-<prefix>.arclink.online` — code-server
-- `hermes-<prefix>.arclink.online` — Hermes
+- `u-<prefix>.arclink.online` - unified dashboard
+- `files-<prefix>.arclink.online` - Nextcloud
+- `code-<prefix>.arclink.online` - code-server
+- `hermes-<prefix>.arclink.online` - Hermes
 - Future: `mcp-<prefix>.arclink.online`
 
 Prefixes should be obscure and non-enumerable, for example `arc-7k9m2p`.
@@ -89,7 +89,7 @@ Pricing:
 Nav:
 
 ```text
-ARCLINK | Sign In | Take Me Aboard
+ARCLINK | Sign In | Start Launch
 ```
 
 Hero headline:
@@ -102,7 +102,7 @@ I'll bring ArcLink online.
 Hero body:
 
 ```text
-Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your private ArcLink vessel: weapons-grade agents, SOTA inference rails, memory, retrieval, files, code tools, bot channels, and live deployment health. First agent $35/month.
+Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your private ArcLink vessel: an agent, model access, memory, retrieval, files, code tools, bot channels, and live deployment health. First agent $35/month.
 ```
 
 Hero CTAs:
@@ -115,12 +115,12 @@ Open Dashboard
 Feature grid:
 
 ```text
-Hermes Agent — I give each pod a private assistant with memory, skills, and room to grow.
-SOTA Model Rails — I start on Chutes and keep BYOK lanes open for the frontier models you trust.
-qmd Retrieval — I keep the vault searchable so agents can pull the right context fast.
-Managed Memory — I keep lightweight memory stubs hot so the vessel stays oriented.
-Files & Code — I wire in Nextcloud and browser VS Code so your pod has hands, not just words.
-Health & Ops — I watch DNS, billing, provisioning, and services so the launch path stays visible.
+Hermes Agent - I give each pod a private assistant with memory, skills, and room to grow.
+SOTA Model Rails - I start on Chutes and keep BYOK lanes open for the frontier models you trust.
+qmd Retrieval - I keep the vault searchable so agents can pull the right context fast.
+Managed Memory - I keep lightweight memory stubs hot so the vessel stays oriented.
+Files & Code - I wire in Nextcloud and browser VS Code so your pod has hands, not just words.
+Health & Ops - I watch DNS, billing, provisioning, and services so the launch path stays visible.
 ```
 
 Footer:
@@ -142,13 +142,13 @@ I'm Raven
 Start body:
 
 ```text
-I can take you from a few answers to a private ArcLink vessel with a weapons-grade agent, SOTA model rails, memory, tools, and deployment health. Stripe collects email securely at checkout.
+I can take you from a few answers to a private AI agent of your own with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects email securely at checkout.
 ```
 
 Start CTA:
 
 ```text
-Take Me Aboard
+Start Launch
 ```
 
 Loading:
@@ -262,39 +262,39 @@ Telegram and Discord use the same state machine and should preserve the same con
 Triggered by `/start`, empty message, `start`, or `restart`.
 
 ```text
-I'm Raven. ArcLink is in range.
+Raven here. ArcLink is in range.
 
-I was built for the moment right before a system comes alive. Give me a name and a mission tier, and I will bring a private ArcLink vessel online around you: weapons-grade agents, SOTA model rails, memory, tools, files, and deployment health already wired into the hull.
+Give me a name and choose your path. I will bring your first private AI workspace online with an agent, memory, files, code tools, model access, and a live systems board. No bot-building. No server chores.
 
-Stripe collects your email securely at checkout. Send `/name Your Name` and I will put your name on the hatch.
+Stripe collects your email at checkout. Send `/name Your Name`, or tap Starter when you are ready.
 ```
 
 Buttons:
 
 ```text
-Plot Starter Course
+Starter - $35/mo
 Open Comms
 ```
 
-### Help — Prelaunch
+### Help - Prelaunch
 
 ```text
 Comms are open.
 
-I will keep this simple until your pod is live. Right now I can bring you aboard, help choose a path, open the secure Stripe handoff, or check where launch stands.
+I will keep this simple until your first pod is live. I can start your launch, set the Starter path, open checkout, or read the board.
 
-After your first agent is awake, I will hand you the real control panel: Notion, private backups, agent switching, vault access, and deeper system controls in a clean checklist.
+After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health.
 ```
 
 Buttons:
 
 ```text
-Take Me Aboard
-Plot Starter Course
+Start Launch
+Starter - $35/mo
 Run Systems Check
 ```
 
-### Unknown / Loose Message — Prelaunch
+### Unknown / Loose Message - Prelaunch
 
 ```text
 I'm Raven, and I'm online.
@@ -305,15 +305,15 @@ No command map needed yet. I can bring you aboard, help choose the first path, o
 Buttons:
 
 ```text
-Take Me Aboard
-Plot Starter Course
+Start Launch
+Starter - $35/mo
 Run Systems Check
 ```
 
 ### Email Attempted In Chat
 
 ```text
-I do not need your email in chat. Stripe handles that securely at checkout. Send `/name Your Name` and I will put your name on the hatch.
+I do not need your email in chat. Stripe handles that securely at checkout. Send `/name Your Name` and I will put your name on the workspace.
 ```
 
 ### Name Captured
@@ -337,7 +337,7 @@ Scale Path
 Triggered by `/plan starter`, `/plan operator`, or `/plan scale`.
 
 ```text
-Course locked. When you tap Hire My First Agent, Stripe takes the payment handoff and I start moving your pod from idea to launch queue.
+Starter is locked. Tap Hire My First Agent. Stripe handles payment, then I move your pod into the launch queue and report back here when the vessel is online.
 ```
 
 Buttons:
@@ -378,7 +378,7 @@ Hire My First Agent
 
 ## Postlaunch Raven Bot
 
-### Help — Postlaunch
+### Help - Postlaunch
 
 ```text
 Control panel is open.
@@ -425,7 +425,7 @@ I do not see your first agent yet. Give me the word and I will put one aboard Ar
 Button:
 
 ```text
-Take Me Aboard
+Start Launch
 ```
 
 ### Switch Agent
@@ -541,7 +541,7 @@ Nothing is lost. When you are ready, I can bring you back to the launch path or 
 Buttons:
 
 ```text
-Take Me Aboard
+Start Launch
 Run Systems Check
 ```
 
@@ -586,6 +586,7 @@ Registered public Telegram commands:
 | `/agents` | Open your ArcLink crew manifest |
 | `/connect_notion` | Connect Notion to your live pod |
 | `/config_backup` | Configure private pod backup |
+| `/pair_channel` | Pair Telegram and Discord to the same ArcLink account |
 | `/cancel` | Close the active setup workflow |
 
 Hidden/account-state actions:
@@ -600,8 +601,8 @@ Discord commands mirror the same set and include a top-level `/arclink message:<
 Canonical button labels:
 
 ```text
-Take Me Aboard
-Plot Starter Course
+Start Launch
+Starter - $35/mo
 Open Comms
 Run Systems Check
 Starter Path - $35/mo

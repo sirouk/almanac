@@ -54,7 +54,7 @@ def write_fake_rpc_client(path: Path) -> None:
         "        'notion-ref': 'Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via ArcLink MCP.',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
         "        'recall-stubs': 'Retrieval memory stubs:\\n- Projects: ask vault.search-and-fetch for depth.',\n"
-        "        'today-plate': 'Today plate:\\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\\n- Work candidates:\\n  - Example Unicorn launch — status In Progress — due today 2026-04-23',\n"
+        "        'today-plate': 'Today plate:\\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\\n- Work candidates:\\n  - Example Unicorn launch - status In Progress - due today 2026-04-23',\n"
         "        'vault_path_contract': 'user-home-arclink-v1',\n"
         "        'catalog': [\n"
         "            {'vault_name': 'Projects', 'default_subscribed': 1, 'description': 'Active project workspaces'},\n"
@@ -130,7 +130,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                     "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via ArcLink MCP.",
                     "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
                     "recall-stubs": "Retrieval memory stubs:\n- Projects: ask vault.search-and-fetch for depth.",
-                    "today-plate": "Today plate:\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\n- Work candidates:\n  - Example Unicorn launch — status In Progress — due today 2026-04-23",
+                    "today-plate": "Today plate:\n- Scoped work: 2 owned/assigned record(s). Due today/overdue: 1. Pending write approvals: 0.\n- Work candidates:\n  - Example Unicorn launch - status In Progress - due today 2026-04-23",
                     "vault_path_contract": "user-home-arclink-v1",
                     "catalog": [
                         {"vault_name": "Projects", "default_subscribed": 1, "description": "Active project workspaces"},

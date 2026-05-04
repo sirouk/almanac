@@ -276,7 +276,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "text": custom_id,
         }
 
-    # Type 4 = AUTOCOMPLETE — skip for now
+    # Type 4 = AUTOCOMPLETE - skip for now
     # Fallback for plain message content (gateway events)
     if "content" in interaction:
         author = interaction.get("author") or {}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for arclink_live_journey — no live secrets required."""
+"""Tests for arclink_live_journey - no live secrets required."""
 from __future__ import annotations
 
 import os

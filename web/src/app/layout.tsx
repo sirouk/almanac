@@ -17,7 +17,7 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "ArcLink — Private AI Infrastructure",
+  title: "ArcLink - Private AI Infrastructure",
   description: "Private AI systems that run your business. Built once. Runs forever.",
 };
 

@@ -4003,7 +4003,7 @@ run_startup_operational_probe() {
     return 0
 }
 
-# Engine Smoke Test — verify an engine can actually respond to a prompt
+# Engine Smoke Test - verify an engine can actually respond to a prompt
 smoke_test_engine() {
     local engine_cmd="$1"
     local engine_name="$2"
@@ -4064,7 +4064,7 @@ smoke_test_engine() {
 
     smoke_elapsed=$(( $(date +%s) - smoke_start ))
     local result=1
-    # Check for canary token in output regardless of exit code — the engine may
+    # Check for canary token in output regardless of exit code - the engine may
     # have written the correct response before timeout killed the process.
     # Strip newlines before matching to handle LLMs that split the token across lines.
     if [ -f "$output_file" ] && [ -s "$output_file" ]; then
@@ -4426,7 +4426,7 @@ acquire_lock() {
         LOCK_ACQUIRED="true"
         return 0
     fi
-    # Lock dir exists — check if holder is still alive
+    # Lock dir exists - check if holder is still alive
     local holder_pid=""
     local owner_wait_attempt=0
     while [ "$owner_wait_attempt" -lt 3 ]; do
@@ -5586,7 +5586,7 @@ run_handoff_validation() {
         return 1
     fi
 
-    # Preserve engine state — run_swarm_reviewer mutates ACTIVE_ENGINE/ACTIVE_CMD
+    # Preserve engine state - run_swarm_reviewer mutates ACTIVE_ENGINE/ACTIVE_CMD
     local saved_engine="$ACTIVE_ENGINE"
     local saved_cmd="$ACTIVE_CMD"
 

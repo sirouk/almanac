@@ -110,7 +110,7 @@ def model_reasoning_default(env: Mapping[str, str] | None = None) -> str:
 # their progress: bot /status, web success page, dashboard launch banner. The
 # operator codes (started/checkout_open/entitlement_required/...) stay in logs
 # and audit trails; users only ever read the phrase. Adding a new state without
-# adding a phrase here is a code smell — the user should never see a raw code.
+# adding a phrase here is a code smell - the user should never see a raw code.
 
 _LAUNCH_PHRASES: dict[str, str] = {
     # Onboarding-session statuses
@@ -118,7 +118,7 @@ _LAUNCH_PHRASES: dict[str, str] = {
     "collecting": "Plotting your course.",
     "checkout_open": "At the Stripe gate. I'm watching for clearance.",
     "checkout_pending": "At the Stripe gate. I'm watching for clearance.",
-    "payment_cancelled": "Stripe handoff was cancelled. Your seat is still warm — pick it up when you're ready.",
+    "payment_cancelled": "Stripe handoff was cancelled. Your seat is still warm - pick it up when you're ready.",
     "completed": "Vessel online. Helm is yours.",
     "first_contacted": "Vessel online. Helm is yours.",
     # Deployment statuses
@@ -126,7 +126,7 @@ _LAUNCH_PHRASES: dict[str, str] = {
     "provisioning": "Building the hull. Usually 30 to 90 seconds.",
     "provisioning_ready": "Wiring the lanes. Almost at first light.",
     "active": "Vessel online. Helm is yours.",
-    "provisioning_failed": "Hull took on water during launch. An operator is on it — I'll come back to you.",
+    "provisioning_failed": "Hull took on water during launch. An operator is on it - I'll come back to you.",
     "cancelled": "Launch closed.",
     "teardown_complete": "Launch closed.",
 }

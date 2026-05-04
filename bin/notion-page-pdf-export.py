@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""notion-page-pdf-export.py — print publicly-shared Notion pages as PDFs.
+"""notion-page-pdf-export.py - print publicly-shared Notion pages as PDFs.
 
 Use case: a Notion page (or set of pages) is shared via "Share to web" / "anyone
 with the link" but the ArcLink integration was never invited, so the
@@ -57,7 +57,7 @@ PRINT_CSS = """
 
   /* Uncap content-width caps that clip wide tables/images on the right edge.
      We DO NOT touch wrappers like .notion-frame, .notion-cursor-listener, or
-     .notion-app-inner — those are scroll containers and hiding them blanks
+     .notion-app-inner - those are scroll containers and hiding them blanks
      the print. Only target the inner content layers. */
   .notion-page-content,
   .notion-page-content-inner,

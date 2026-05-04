@@ -1713,7 +1713,7 @@ PY
 }
 
 assert_ssot_rails() {
-  # Use the already-enrolled smoke agent's token (still revoked above — create
+  # Use the already-enrolled smoke agent's token (still revoked above - create
   # a fresh one via the CLI path so we have an active token).
   local req_json="" req_id="" tok_json="" token="" ssot_home="/tmp/arclink-smoke-ssot-home"
   mkdir -p "$ssot_home/secrets"

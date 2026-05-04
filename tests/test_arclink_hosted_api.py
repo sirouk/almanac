@@ -325,7 +325,7 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
     print("PASS test_session_revoke_requires_admin_auth_and_csrf")
 
 
-def test_stripe_webhook_route_skips_without_secret() -> None:
+def test_stripe_webhook_route_rejects_without_secret() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_webhook_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_webhook_test")
     conn = memory_db(control)
@@ -339,10 +339,13 @@ def test_stripe_webhook_route_skips_without_secret() -> None:
         body="{}",
         config=config,
     )
-    expect(status == 200, f"expected 200 got {status}")
-    expect(payload.get("status") == "skipped", str(payload))
+    # Money-safety: misconfigured webhook MUST return 5xx so Stripe retries and
+    # operators are forced to notice. A 200 would silently accept payments.
+    expect(status == 503, f"expected 503 got {status}")
+    expect(payload.get("status") == "misconfigured", str(payload))
+    expect(payload.get("error") == "stripe_webhook_secret_unset", str(payload))
 
-    print("PASS test_stripe_webhook_route_skips_without_secret")
+    print("PASS test_stripe_webhook_route_rejects_without_secret")
 
 
 def test_user_billing_route_returns_entitlement_and_subscriptions() -> None:

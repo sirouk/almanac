@@ -256,7 +256,18 @@ def _handle_stripe_webhook(
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     if not config.stripe_webhook_secret:
-        return _json_response(200, {"status": "skipped", "reason": "no_webhook_secret"}, request_id=request_id)
+        # Money-safety: Stripe stops retrying on 2xx, so a 200 here would silently
+        # accept payments while never crediting entitlements. Return 503 so Stripe
+        # retries for up to 3 days and operators are forced to notice.
+        logger.error(
+            "stripe_webhook_misconfigured: STRIPE_WEBHOOK_SECRET is not set; rejecting webhook so Stripe retries request_id=%s",
+            request_id,
+        )
+        return _json_response(
+            503,
+            {"status": "misconfigured", "error": "stripe_webhook_secret_unset", "request_id": request_id},
+            request_id=request_id,
+        )
     sig = _api_header(headers, "stripe-signature")
     result: StripeWebhookResult = process_stripe_webhook(
         conn, payload=raw_body, signature=sig, secret=config.stripe_webhook_secret,

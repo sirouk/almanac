@@ -227,6 +227,31 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
         # periodic refresh. Leave them undelivered so the agent can read them.
         return "DEFERRED_TO_AGENT"
 
+    if target_kind == "public-bot-user":
+        # Outbound from Raven back to a paying/onboarding user on their original
+        # public channel. target_id is the chat_id (Telegram) for now; channel_kind
+        # picks the platform. TELEGRAM_BOT_TOKEN is the public bot's token.
+        channel_kind = (row.get("channel_kind") or "").lower()
+        if channel_kind == "telegram":
+            bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+            chat_id = str(row.get("target_id") or "")
+            if not bot_token:
+                return "TELEGRAM_BOT_TOKEN is not configured"
+            if not chat_id:
+                return "public-bot-user telegram delivery requires target_id"
+            reply_markup = extra.get("telegram_reply_markup")
+            if not isinstance(reply_markup, dict):
+                reply_markup = None
+            parse_mode = str(extra.get("telegram_parse_mode") or "")
+            return deliver_telegram(
+                row["message"],
+                bot_token=bot_token,
+                chat_id=chat_id,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+        return f"public-bot-user delivery for channel_kind={channel_kind!r} not implemented yet"
+
     return f"unknown target_kind: {target_kind}"
 
 

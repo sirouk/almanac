@@ -21,7 +21,7 @@ from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
 from arclink_adapters import StripeWebhookError, resolve_stripe_client
-from arclink_control import Config, connect_db
+from arclink_control import Config, connect_db, queue_notification
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
     GENERIC_ARCLINK_API_ERROR,
@@ -276,12 +276,72 @@ def _handle_stripe_webhook(
         "stripe_webhook event_type=%s event_id=%s user_id=%s entitlement=%s replayed=%s request_id=%s",
         result.event_type, result.event_id, result.user_id, result.entitlement_state, result.replayed, request_id,
     )
+
+    # Raven speaks before silence: queue a "payment cleared" ping back to the
+    # user's originating channel the first time entitlement transitions to paid.
+    if not result.replayed and result.entitlement_state == "paid" and result.user_id:
+        try:
+            _queue_paid_ping(conn, user_id=result.user_id, request_id=request_id)
+        except Exception:  # noqa: BLE001 - never fail the webhook over a ping
+            logger.exception("paid_ping_failed user_id=%s request_id=%s", result.user_id, request_id)
+
     return _json_response(200, {
         "status": "processed",
         "event_id": result.event_id,
         "event_type": result.event_type,
         "replayed": result.replayed,
     }, request_id=request_id)
+
+
+def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str) -> int | None:
+    """Queue an outbound 'payment cleared' message back to the user's original
+    public channel. Returns the queued notification id, or None if no eligible
+    channel was found (e.g., web-only user — they get a different surface).
+    """
+    row = conn.execute(
+        """
+        SELECT channel, channel_identity, display_name_hint
+        FROM arclink_onboarding_sessions
+        WHERE user_id = ?
+          AND channel IN ('telegram', 'discord')
+          AND channel_identity != ''
+        ORDER BY updated_at DESC, created_at DESC, session_id DESC
+        LIMIT 1
+        """,
+        (str(user_id or "").strip(),),
+    ).fetchone()
+    if row is None:
+        return None
+    channel = str(row["channel"] or "").strip().lower()
+    chat_id = str(row["channel_identity"] or "").strip()
+    if channel != "telegram":
+        # Discord DM delivery requires opening a DM channel via the Discord
+        # API; that lands in a follow-up slice. Web users are surfaced via the
+        # checkout success page (different slice).
+        logger.info(
+            "paid_ping_skipped channel=%s user_id=%s reason=delivery_not_implemented request_id=%s",
+            channel, user_id, request_id,
+        )
+        return None
+    name = str(row["display_name_hint"] or "").strip()
+    greeting = f"Captain {name}, " if name else ""
+    message = (
+        f"{greeting}payment cleared.\n\n"
+        "I have your bay reserved and the hull is coming up around you. "
+        "I will ping this same channel the moment your vessel is online — usually 30 to 90 seconds."
+    )
+    nid = queue_notification(
+        conn,
+        target_kind="public-bot-user",
+        target_id=chat_id,
+        channel_kind=channel,
+        message=message,
+    )
+    logger.info(
+        "paid_ping_queued user_id=%s channel=%s notification_id=%d request_id=%s",
+        user_id, channel, nid, request_id,
+    )
+    return nid
 
 
 def _handle_admin_login(

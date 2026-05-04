@@ -877,6 +877,86 @@ def test_admin_logout_clears_cookies_and_revokes_session() -> None:
     print("PASS test_admin_logout_clears_cookies_and_revokes_session")
 
 
+def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
+    """Raven speaks before silence: a Telegram user who pays must receive a
+    queued outbound 'payment cleared' message back to their chat.
+    """
+    import time as _time
+    control = load_module("arclink_control.py", "arclink_control_hosted_paid_ping_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_paid_ping_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_paid_ping_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_paid_ping_test")
+    conn = memory_db(control)
+    secret = "whsec_test_paidping"
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_WEBHOOK_SECRET": secret,
+    })
+    # Telegram-originated session: chat_id "987654321" is the channel_identity
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="telegram",
+        channel_identity="987654321",
+        session_id="onb_paidping",
+        display_name_hint="Hera",
+        selected_plan_id="starter",
+        selected_model_id="model-test",
+    )
+    prepared = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=session["session_id"],
+        base_domain="example.test",
+        prefix="paidping-1a",
+    )
+    event_payload = json.dumps({
+        "id": "evt_paidping_1",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_paidping_1",
+                "customer": "cus_paidping_1",
+                "subscription": "sub_paidping_1",
+                "client_reference_id": prepared["user_id"],
+                "metadata": {"arclink_onboarding_session_id": session["session_id"]},
+            }
+        },
+    })
+    signature = adapters.sign_stripe_webhook(event_payload, secret, timestamp=int(_time.time()))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload, config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+
+    row = conn.execute(
+        """
+        SELECT target_kind, target_id, channel_kind, message
+        FROM notification_outbox
+        WHERE target_kind = 'public-bot-user'
+          AND channel_kind = 'telegram'
+          AND target_id = '987654321'
+        """
+    ).fetchone()
+    expect(row is not None, "expected a paid-ping queued for the Telegram user")
+    expect(row["target_kind"] == "public-bot-user", str(row["target_kind"]))
+    expect("payment cleared" in str(row["message"]).lower(), str(row["message"]))
+    expect("Captain Hera" in str(row["message"]), str(row["message"]))
+
+    # Replay must NOT re-queue (entitlement transition is idempotent)
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload, config=config,
+    )
+    count = conn.execute(
+        "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'public-bot-user' AND target_id = '987654321'"
+    ).fetchone()["c"]
+    expect(count == 1, f"expected exactly 1 paid-ping after replay, got {count}")
+    print("PASS test_stripe_webhook_queues_paid_ping_for_telegram_user")
+
+
 def test_stripe_webhook_processes_entitlement_transition() -> None:
     import time as _time
     control = load_module("arclink_control.py", "arclink_control_hosted_whprocess_test")
@@ -1744,7 +1824,7 @@ def main() -> int:
     test_request_id_propagation_and_cors()
     test_admin_login_sets_session_cookies()
     test_session_revoke_requires_admin_auth_and_csrf()
-    test_stripe_webhook_route_skips_without_secret()
+    test_stripe_webhook_route_rejects_without_secret()
     test_user_billing_route_returns_entitlement_and_subscriptions()
     test_user_provisioning_status_route()
     test_admin_service_health_route()
@@ -1760,6 +1840,7 @@ def main() -> int:
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()
     test_stripe_webhook_processes_entitlement_transition()
+    test_stripe_webhook_queues_paid_ping_for_telegram_user()
     test_telegram_webhook_route()
     test_telegram_webhook_sends_reply_when_transport_is_available()
     test_telegram_webhook_acknowledges_button_callbacks()

@@ -72,12 +72,12 @@ export default function Home() {
         </div>
         <div className="mx-auto grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {[
-            { title: "Hermes Agent", desc: "I give each pod a private assistant with memory, skills, and room to grow." },
-            { title: "SOTA Model Rails", desc: "I start on Chutes and keep BYOK lanes open for the frontier models you trust." },
-            { title: "qmd Retrieval", desc: "I keep the vault searchable so agents can pull the right context fast." },
-            { title: "Managed Memory", desc: "I keep lightweight memory stubs hot so the vessel stays oriented." },
-            { title: "Files & Code", desc: "I wire in Nextcloud and browser VS Code so your pod has hands, not just words." },
-            { title: "Health & Ops", desc: "I watch DNS, billing, provisioning, and services so the launch path stays visible." },
+            { title: "Your Private Agent", desc: "Each agent is yours alone — with memory, skills, and room to grow. Powered by the Hermes runtime." },
+            { title: "Frontier Model Rails", desc: "I start on a frontier-class model and keep the door open for your own Claude or OpenAI keys when you want them." },
+            { title: "Document Retrieval", desc: "I keep your files searchable so the agent pulls the right context fast." },
+            { title: "Live Memory", desc: "I keep your agent's working memory hot so it stays oriented across sessions." },
+            { title: "Files & Code", desc: "I wire in cloud file storage and a browser code editor so your agent has hands, not just words." },
+            { title: "Health & Ops", desc: "I watch payments, provisioning, DNS, and service health so the launch path stays visible." },
           ].map((f) => (
             <div key={f.title} className="rounded-lg border border-border bg-surface p-6">
               <h3 className="font-display text-lg font-semibold text-signal-orange">{f.title}</h3>

@@ -179,7 +179,7 @@ export default function OnboardingPage() {
         {step === "start" && (
           <form onSubmit={handleStart} className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              I can take you from a few answers to a private ArcLink vessel with a weapons-grade agent, SOTA model rails, memory, tools, and deployment health. Stripe collects email securely at checkout.
+              I can take you from a few answers to a private AI agent of your own — with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects your email securely at checkout. No technical setup on your end.
             </p>
             <button
               type="submit"
@@ -213,7 +213,7 @@ export default function OnboardingPage() {
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Saving..." : "Paint The Hatch"}
+              {loading ? "Saving..." : "Save & Continue"}
             </button>
           </form>
         )}

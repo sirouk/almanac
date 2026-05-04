@@ -707,11 +707,13 @@ def read_user_provisioning_status_api(
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
     target_user = str(session["user_id"] or "")
     dashboard = read_arclink_user_dashboard(conn, user_id=target_user, deployment_id=deployment_id)
+    from arclink_product import launch_phrase  # local import to avoid cycle
     deployments = []
     for dep in dashboard.get("deployments", []):
         deployments.append({
             "deployment_id": dep["deployment_id"],
             "status": dep["status"],
+            "launch_phrase": launch_phrase(str(dep.get("status") or "")),
             "service_health": dep.get("service_health", []),
             "recent_events": dep.get("recent_events", []),
         })

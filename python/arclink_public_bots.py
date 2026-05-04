@@ -17,7 +17,7 @@ from arclink_onboarding import (
     open_arclink_onboarding_checkout,
 )
 from arclink_product import base_domain as default_base_domain
-from arclink_product import chutes_default_model
+from arclink_product import chutes_default_model, launch_phrase
 
 
 ARCLINK_PUBLIC_BOT_CHANNELS = frozenset({"telegram", "discord"})
@@ -556,15 +556,14 @@ def _need_finished_onboarding_reply() -> str:
 
 def _deployment_not_ready_reply(deployment: Mapping[str, Any]) -> str:
     status = str(deployment.get("status") or "unknown").strip()
+    phrase = launch_phrase(status)
     if status == "entitlement_required":
         return (
-            "Your pod is held in reserve. Stripe has not cleared the handoff yet — send `checkout` and I will reopen the gate."
+            f"{phrase} Stripe has not cleared the handoff yet — send `checkout` and I will reopen the gate."
         )
     if status == "provisioning_failed":
-        return (
-            "I found your pod, but the hull took on water during provisioning. An operator is needed before I can run that lane safely."
-        )
-    return f"I found your pod in `{status}`. I will move when it reaches active — not before."
+        return f"{phrase} I'll come back to you on this same channel the moment the lane is safe again."
+    return f"{phrase} I will move when it reaches active — not before."
 
 
 def _record_bot_action(
@@ -1156,15 +1155,26 @@ def handle_arclink_public_bot_turn(
         )
     if command in {"status", "/status"}:
         context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        active_session = context_session or session
         deployment_label = _agent_label(deployment or {}, index=0) if deployment else ""
+        # Pick the most informative phrase: deployment status outranks session
+        # status once a deployment exists (it's closer to the user's reality).
+        live_status_code = str((deployment or {}).get("status") or active_session.get("status") or "")
+        phrase = launch_phrase(live_status_code)
+        lines = [
+            f"Reading the board.\n\n{phrase}",
+        ]
+        if deployment_label:
+            lines.append(f"Agent at the helm: {deployment_label}.")
+        # Operator-grade trailer for power users — small, dim, never leading.
+        lines.append(
+            f"\n_session `{active_session['session_id']}` · state `{live_status_code or 'unknown'}` · "
+            f"step `{active_session.get('current_step') or 'started'}`_"
+        )
         return _reply(
-            context_session or session,
+            active_session,
             action="show_status",
-            reply=(
-                f"Reading the board. Session `{(context_session or session)['session_id']}` is `{(context_session or session)['status']}`. "
-                f"Launch step: `{(context_session or session)['current_step'] or 'started'}`."
-                + (f"\nAgent at the helm: {deployment_label}." if deployment_label else "")
-            ),
+            reply="\n".join(lines),
             buttons=(
                 _button("Show My Crew", command="/agents", style="secondary"),
                 _button("Hire My First Agent", command="/checkout", style="secondary"),

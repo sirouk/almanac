@@ -220,6 +220,8 @@ NEXTCLOUD_ROTATE_ADMIN_PASSWORD="${NEXTCLOUD_ROTATE_ADMIN_PASSWORD:-}"
 NEXTCLOUD_ROTATE_ASSUME_YES="${NEXTCLOUD_ROTATE_ASSUME_YES:-0}"
 ARCLINK_DEPLOY_OPERATION_TTL_SECONDS="${ARCLINK_DEPLOY_OPERATION_TTL_SECONDS:-21600}"
 ARCLINK_DEPLOY_OPERATION_MARKER=""
+ARCLINK_DEPLOY_OPERATION_LOCK_FILE=""
+ARCLINK_DEPLOY_OPERATION_LOCK_FD=""
 
 arclink_deploy_stable_copy_cleanup() {
   if [[ "${ARCLINK_DEPLOY_STABLE_COPY:-0}" == "1" && "${ARCLINK_DEPLOY_STABLE_OWNER_PID:-}" == "$$" ]]; then
@@ -2547,6 +2549,20 @@ begin_deploy_operation() {
 
   marker="$state_dir/arclink-deploy-operation.json"
   mkdir -p "$state_dir" 2>/dev/null || return 0
+  if command -v flock >/dev/null 2>&1; then
+    ARCLINK_DEPLOY_OPERATION_LOCK_FILE="$state_dir/arclink-deploy-operation.lock"
+    exec {ARCLINK_DEPLOY_OPERATION_LOCK_FD}>"$ARCLINK_DEPLOY_OPERATION_LOCK_FILE"
+    if ! flock -n "$ARCLINK_DEPLOY_OPERATION_LOCK_FD"; then
+      echo "Another ArcLink deploy operation is already running for $state_dir." >&2
+      echo "If you are certain it is stale, stop the old deploy process before retrying." >&2
+      eval "exec ${ARCLINK_DEPLOY_OPERATION_LOCK_FD}>&-"
+      ARCLINK_DEPLOY_OPERATION_LOCK_FD=""
+      ARCLINK_DEPLOY_OPERATION_LOCK_FILE=""
+      return 1
+    fi
+  else
+    echo "Warning: flock is unavailable; ArcLink deploy operation lock is disabled." >&2
+  fi
   if python3 - "$marker" "$operation" "$$" "$ARCLINK_DEPLOY_OPERATION_TTL_SECONDS" <<'PY'
 import json
 import sys
@@ -2575,6 +2591,11 @@ finish_deploy_operation() {
   if [[ -n "${ARCLINK_DEPLOY_OPERATION_MARKER:-}" ]]; then
     rm -f "$ARCLINK_DEPLOY_OPERATION_MARKER"
     ARCLINK_DEPLOY_OPERATION_MARKER=""
+  fi
+  if [[ -n "${ARCLINK_DEPLOY_OPERATION_LOCK_FD:-}" ]]; then
+    eval "exec ${ARCLINK_DEPLOY_OPERATION_LOCK_FD}>&-"
+    ARCLINK_DEPLOY_OPERATION_LOCK_FD=""
+    ARCLINK_DEPLOY_OPERATION_LOCK_FILE=""
   fi
 }
 
@@ -6988,7 +7009,7 @@ run_notion_ssot_setup() {
   echo "     click Show and then copy the key."
   echo "  9) In that integration, open Manage page access and grant access to the"
   echo "     parent page or Teamspace root ArcLink should live under."
-  echo "     New child pages and databases under that granted subtree inherit"
+  echo "     new child pages and databases under that granted subtree inherit"
   echo "     access automatically."
   echo
   echo "ArcLink will use the page you paste below as its shared Notion home and"

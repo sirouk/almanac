@@ -102,6 +102,15 @@ def test_executor_mutating_operations_fail_closed_without_live_flag() -> None:
     print("PASS test_executor_mutating_operations_fail_closed_without_live_flag")
 
 
+def test_runner_stdout_preserves_compose_ps_json() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_runner_stdout_test")
+    json_lines = "\n".join(json.dumps({"Service": f"svc_{idx}", "State": "running"}) for idx in range(300))
+    ordinary = "x" * 3000
+    expect(mod._runner_stdout(("ps", "--all", "--format", "json"), json_lines) == json_lines, "compose ps JSON must not be truncated")
+    expect(mod._runner_stdout(("up", "-d"), ordinary) == ordinary[-2000:], "ordinary command output should stay bounded")
+    print("PASS test_runner_stdout_preserves_compose_ps_json")
+
+
 def test_secret_resolvers_validate_refs_and_hide_material() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_secret_resolver_test")
     secret_ref = "secret://arclink/nextcloud/dep_1/db-password"
@@ -774,6 +783,7 @@ def test_fake_docker_compose_lifecycle_operations() -> None:
 
 def main() -> int:
     test_executor_mutating_operations_fail_closed_without_live_flag()
+    test_runner_stdout_preserves_compose_ps_json()
     test_secret_resolvers_validate_refs_and_hide_material()
     test_fake_executor_consumes_rendered_intent_without_secret_leakage()
     test_fake_docker_compose_adapter_plans_paths_and_resumes_partial_apply()
@@ -793,7 +803,7 @@ def main() -> int:
     test_injectable_docker_runner_receives_commands()
     test_live_executor_requires_docker_runner()
     test_fake_docker_compose_lifecycle_operations()
-    print("PASS all 20 ArcLink executor tests")
+    print("PASS all 21 ArcLink executor tests")
     return 0
 
 

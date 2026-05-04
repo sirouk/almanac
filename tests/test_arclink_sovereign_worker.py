@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 import tempfile
+import json
 from pathlib import Path
 
 from arclink_test_helpers import expect, load_module
@@ -92,6 +93,85 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     print("PASS test_fake_sovereign_worker_applies_ready_deployment")
 
 
+class AnySecretResolver:
+    def __init__(self, executor_mod):
+        self.executor_mod = executor_mod
+
+    def materialize(self, secret_ref: str, target_path: str):
+        return self.executor_mod.ResolvedSecretFile(secret_ref=secret_ref, target_path=target_path)
+
+
+def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_compose_ps")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_compose_ps")
+    import arclink_executor as executor_mod
+
+    class ComposePsRunner(executor_mod.FakeDockerRunner):
+        def __init__(self, stdout: str):
+            super().__init__()
+            self.stdout = stdout
+
+        def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+            self.runs.append(
+                {
+                    "args": args,
+                    "project_name": project_name,
+                    "env_file": env_file,
+                    "compose_file": compose_file,
+                }
+            )
+            if tuple(args) == ("ps", "--all", "--format", "json"):
+                return {"status": "ok", "stdout": self.stdout}
+            return {"status": "ok", "stdout": ""}
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    rows = [
+        {"Service": "dashboard", "State": "running", "Health": "", "Status": "Up 1 second", "Name": "dashboard-1", "Project": "p"},
+        {"Service": "nextcloud", "State": "running", "Health": "healthy", "Status": "Up 1 second (healthy)", "Name": "nextcloud-1", "Project": "p"},
+        {"Service": "code-server", "State": "running", "Health": "starting", "Status": "Up 1 second (health: starting)", "Name": "code-1", "Project": "p"},
+        {"Service": "managed-context-install", "State": "exited", "Health": "", "ExitCode": 0, "Status": "Exited (0)", "Name": "managed-1", "Project": "p"},
+    ]
+    runner = ComposePsRunner("\n".join(json.dumps(row) for row in rows))
+    executor = executor_mod.ArcLinkExecutor(
+        config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+        secret_resolver=AnySecretResolver(executor_mod),
+        docker_runner=runner,
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                },
+            }
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+
+    expect(results[0]["status"] == "applied", str(results))
+    statuses = {
+        row["service_name"]: row["status"]
+        for row in conn.execute("SELECT service_name, status FROM arclink_service_health").fetchall()
+    }
+    expect(statuses["dashboard"] == "healthy", str(statuses))
+    expect(statuses["nextcloud"] == "healthy", str(statuses))
+    expect(statuses["code-server"] == "starting", str(statuses))
+    expect(statuses["managed-context-install"] == "healthy", str(statuses))
+    expect(statuses["notification-delivery"] == "missing", str(statuses))
+    expect(("ps", "--all", "--format", "json") in [tuple(run["args"]) for run in runner.runs], str(runner.runs))
+    print("PASS test_live_sovereign_worker_reconciles_compose_ps_health")
+
+
 def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_tailscale")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailscale")
@@ -177,8 +257,9 @@ def test_notion_webhook_secret_is_generated_without_notion_token() -> None:
 
 if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
+    test_live_sovereign_worker_reconciles_compose_ps_health()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
     test_notion_webhook_secret_is_generated_without_notion_token()
-    print("\nAll 5 Sovereign worker tests passed.")
+    print("\nAll 6 Sovereign worker tests passed.")

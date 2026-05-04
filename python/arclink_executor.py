@@ -271,7 +271,7 @@ class SubprocessDockerComposeRunner:
         proc = subprocess.run(cmd, check=False, text=True, capture_output=True)
         if proc.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("docker compose", proc.stderr or proc.stdout))
-        return {"status": "ok", "returncode": proc.returncode, "stdout": proc.stdout[-2000:]}
+        return {"status": "ok", "returncode": proc.returncode, "stdout": _runner_stdout(args, proc.stdout)}
 
 
 @dataclass(frozen=True)
@@ -333,7 +333,13 @@ class SshDockerComposeRunner:
         )
         if run.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("ssh docker compose", run.stderr or run.stdout))
-        return {"status": "ok", "returncode": run.returncode, "stdout": run.stdout[-2000:], "worker_host": self.host}
+        return {"status": "ok", "returncode": run.returncode, "stdout": _runner_stdout(args, run.stdout), "worker_host": self.host}
+
+
+def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:
+    if "ps" in args and "json" in args:
+        return stdout
+    return stdout[-2000:]
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,7 @@ from arclink_executor import (
     CloudflareDnsApplyRequest,
     CloudflareDnsApplyResult,
     DockerComposeApplyRequest,
+    DockerComposeApplyResult,
     FakeSecretResolver,
     FileMaterializingSecretResolver,
     ResolvedSecretFile,
@@ -348,12 +349,12 @@ def _apply_deployment(
             idempotency_key=f"arclink:sovereign:compose:{deployment_id}",
         )
     )
-    service_status = "healthy" if selected_executor.config.adapter_name == "fake" else "starting"
-    _record_service_status(
+    _record_service_status_after_compose(
         conn,
         deployment_id=deployment_id,
-        status=service_status,
-        detail={"job_id": str(job["job_id"]), "executor": selected_executor.config.adapter_name},
+        job_id=str(job["job_id"]),
+        executor=selected_executor,
+        docker_result=docker_result,
     )
     append_arclink_event(
         conn,
@@ -485,6 +486,140 @@ def _record_service_status(
 ) -> None:
     for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:
         upsert_arclink_service_health(conn, deployment_id=deployment_id, service_name=service_name, status=status, detail=detail)
+
+
+def _record_service_status_after_compose(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    job_id: str,
+    executor: ArcLinkExecutor,
+    docker_result: DockerComposeApplyResult,
+) -> None:
+    detail_base = {"job_id": job_id, "executor": executor.config.adapter_name}
+    if executor.config.adapter_name == "fake":
+        _record_service_status(conn, deployment_id=deployment_id, status="healthy", detail=detail_base)
+        return
+    if executor.docker_runner is None:
+        _record_service_status(
+            conn,
+            deployment_id=deployment_id,
+            status="starting",
+            detail={**detail_base, "reconcile_error": "docker_runner_not_available"},
+        )
+        return
+    try:
+        ps_result = executor.docker_runner.run(
+            ("ps", "--all", "--format", "json"),
+            project_name=docker_result.project_name,
+            env_file=docker_result.env_file,
+            compose_file=docker_result.compose_file,
+        )
+        rows = _parse_docker_compose_ps_json(str(ps_result.get("stdout") or ""))
+        statuses = _docker_compose_service_statuses(rows)
+    except Exception as exc:  # noqa: BLE001 - service health reconciliation must not undo a successful apply
+        _record_service_status(
+            conn,
+            deployment_id=deployment_id,
+            status="starting",
+            detail={**detail_base, "reconcile_error": _safe_error(exc)},
+        )
+        return
+
+    for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:
+        service = statuses.get(service_name)
+        if service is None:
+            upsert_arclink_service_health(
+                conn,
+                deployment_id=deployment_id,
+                service_name=service_name,
+                status="missing",
+                detail={**detail_base, "source": "docker_compose_ps", "project": docker_result.project_name},
+            )
+            continue
+        detail = {
+            **detail_base,
+            "source": "docker_compose_ps",
+            "project": service.get("project") or docker_result.project_name,
+            "container": service.get("container") or "",
+            "state": service.get("state") or "",
+            "health": service.get("health") or "",
+            "exit_code": service.get("exit_code"),
+            "status_text": service.get("status_text") or "",
+        }
+        upsert_arclink_service_health(
+            conn,
+            deployment_id=deployment_id,
+            service_name=service_name,
+            status=str(service["status"]),
+            detail=detail,
+        )
+
+
+def _parse_docker_compose_ps_json(stdout: str) -> list[dict[str, Any]]:
+    text = str(stdout or "").strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, list):
+            return [dict(item) for item in payload if isinstance(item, Mapping)]
+        if isinstance(payload, Mapping):
+            return [dict(payload)]
+    except json.JSONDecodeError:
+        pass
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ArcLinkSovereignWorkerError(f"failed to parse docker compose ps JSON line: {exc}") from exc
+        if isinstance(payload, Mapping):
+            rows.append(dict(payload))
+    return rows
+
+
+def _docker_compose_service_statuses(rows: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        service_name = str(row.get("Service") or row.get("service") or "").strip()
+        if not service_name:
+            continue
+        state = str(row.get("State") or row.get("state") or "").strip().lower()
+        health = str(row.get("Health") or row.get("health") or "").strip().lower()
+        exit_code = row.get("ExitCode", row.get("exit_code"))
+        status = _docker_compose_row_status(service_name=service_name, state=state, health=health, exit_code=exit_code)
+        statuses[service_name] = {
+            "status": status,
+            "project": str(row.get("Project") or row.get("project") or ""),
+            "container": str(row.get("Name") or row.get("Names") or row.get("ID") or ""),
+            "state": state,
+            "health": health,
+            "exit_code": exit_code,
+            "status_text": str(row.get("Status") or row.get("status") or ""),
+        }
+    return statuses
+
+
+def _docker_compose_row_status(*, service_name: str, state: str, health: str, exit_code: Any) -> str:
+    if state == "running":
+        if health == "unhealthy":
+            return "unhealthy"
+        if health == "starting":
+            return "starting"
+        return "healthy"
+    if state == "exited":
+        if service_name == "managed-context-install" and str(exit_code) == "0":
+            return "healthy"
+        return "failed"
+    if state in {"created", "restarting"}:
+        return "starting"
+    if state in {"paused", "dead", "removing"}:
+        return "unhealthy"
+    return "missing"
 
 
 def _mark_deployment_status(conn: sqlite3.Connection, *, deployment_id: str, status: str) -> None:

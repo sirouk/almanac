@@ -10,10 +10,11 @@ from typing import Any, Mapping
 from arclink_api_auth import check_arclink_rate_limit
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe
-from arclink_control import append_arclink_event, utc_now_iso
+from arclink_control import append_arclink_event, utc_after_seconds_iso, utc_now_iso
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
     create_or_resume_arclink_onboarding_session,
+    handoff_arclink_onboarding_channel,
     open_arclink_onboarding_checkout,
 )
 from arclink_product import base_domain as default_base_domain
@@ -45,9 +46,15 @@ ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents"
 ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS = frozenset(
     {"/add-agent", "/add_agent", "add-agent", "add agent", "hire another agent", "add another agent"}
 )
+ARCLINK_PUBLIC_BOT_PAIR_CHANNEL_COMMANDS = frozenset(
+    {"/pair-channel", "/pair_channel", "pair-channel", "pair_channel", "pair channel", "pair"}
+)
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_contacted"})
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
+ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+PAIR_CODE_TTL_SECONDS = 10 * 60
 
 
 @dataclass(frozen=True)
@@ -134,6 +141,20 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         telegram_command="config_backup",
         discord_command="config-backup",
         description="Configure private pod backup",
+    ),
+    ArcLinkPublicBotAction(
+        key="pair_channel",
+        telegram_command="pair_channel",
+        discord_command="pair-channel",
+        description="Pair Telegram and Discord to the same ArcLink account",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "code",
+                "description": "Six-character code from Raven on the other channel",
+                "required": False,
+            },
+        ),
     ),
     ArcLinkPublicBotAction(
         key="cancel",
@@ -335,6 +356,31 @@ def _command_value(message: str, command: str, names: tuple[str, ...]) -> str | 
         if command.startswith(prefix):
             return message[len(prefix):].strip()
     return None
+
+
+def _pair_channel_value(message: str, command: str) -> str | None:
+    if command in ARCLINK_PUBLIC_BOT_PAIR_CHANNEL_COMMANDS:
+        return ""
+    return _command_value(
+        message,
+        command,
+        (
+            "/pair-channel",
+            "/pair_channel",
+            "pair-channel",
+            "pair_channel",
+            "pair channel",
+            "pair",
+        ),
+    )
+
+
+def _normalize_pair_code(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", str(value or "")).upper()
+
+
+def _new_pair_code() -> str:
+    return "".join(secrets.choice(PAIR_CODE_ALPHABET) for _ in range(6))
 
 
 def _check_public_bot_rate_limit(conn: sqlite3.Connection, *, channel: str, channel_identity: str) -> None:
@@ -590,6 +636,220 @@ def _record_bot_action(
         subject_id=deployment_id,
         event_type=f"public_bot:{action}",
         metadata=payload,
+    )
+
+
+def _create_pair_channel_code(
+    conn: sqlite3.Connection,
+    *,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+) -> tuple[str, str]:
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        raise ArcLinkPublicBotError("pair-channel requires an onboarding session")
+    now = utc_now_iso()
+    expires_at = utc_after_seconds_iso(PAIR_CODE_TTL_SECONDS)
+    conn.execute(
+        """
+        UPDATE arclink_channel_pairing_codes
+        SET status = 'superseded'
+        WHERE source_session_id = ?
+          AND status = 'open'
+        """,
+        (session_id,),
+    )
+    for _ in range(24):
+        code = _new_pair_code()
+        try:
+            conn.execute(
+                """
+                INSERT INTO arclink_channel_pairing_codes (
+                  code, source_session_id, source_channel, source_channel_identity,
+                  user_id, deployment_id, status, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                """,
+                (
+                    code,
+                    session_id,
+                    str(session.get("channel") or ""),
+                    str(session.get("channel_identity") or ""),
+                    str((deployment or {}).get("user_id") or session.get("user_id") or ""),
+                    str((deployment or {}).get("deployment_id") or session.get("deployment_id") or ""),
+                    now,
+                    expires_at,
+                ),
+            )
+            conn.commit()
+            return code, expires_at
+        except sqlite3.IntegrityError:
+            continue
+    raise ArcLinkPublicBotError("could not mint an ArcLink pair-channel code")
+
+
+def _pair_channel_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    code_value: str,
+) -> ArcLinkPublicBotTurn:
+    clean_code = _normalize_pair_code(code_value)
+    if not clean_code:
+        code, expires_at = _create_pair_channel_code(conn, session=session, deployment=deployment)
+        updated = _update_session_metadata(
+            conn,
+            session_id=str(session["session_id"]),
+            updates={
+                "public_bot_workflow": "pair_channel",
+                "pair_channel_code": code,
+                "pair_channel_expires_at": expires_at,
+            },
+        )
+        live_note = (
+            "If your pod is already online, the other channel gets the same ArcLink identity, crew, tools, vault, Notion lane, and system status. "
+            "The chat session stays separate; the vessel underneath is the same."
+            if deployment
+            else "If you are still prelaunch, the other channel joins this same launch path."
+        )
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="pair_channel_code",
+            reply=(
+                "Pairing lane open.\n\n"
+                f"On the other channel, tell Raven: `/pair-channel {code}`\n\n"
+                f"This code expires in 10 minutes. {live_note}"
+            ),
+            session=updated,
+            deployment=deployment,
+            buttons=(
+                _button("Show My Crew", command="/agents", style="secondary"),
+                _button("Run Systems Check", command="/status", style="secondary"),
+            ),
+        )
+
+    if not ARCLINK_PUBLIC_BOT_PAIR_CODE_RE.fullmatch(clean_code):
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="pair_channel_invalid_code",
+            reply="That pairing code does not look right. Open `/pair-channel` on the other channel and send me the six-character code it gives you.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Try Again", command="/pair-channel", style="secondary"),),
+        )
+
+    row = conn.execute(
+        """
+        SELECT *
+        FROM arclink_channel_pairing_codes
+        WHERE code = ?
+          AND status = 'open'
+        """,
+        (clean_code,),
+    ).fetchone()
+    now = utc_now_iso()
+    if row is None or str(row["expires_at"] or "") < now:
+        if row is not None:
+            conn.execute("UPDATE arclink_channel_pairing_codes SET status = 'expired' WHERE code = ?", (clean_code,))
+            conn.commit()
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="pair_channel_expired",
+            reply="That pairing code has gone cold. Open `/pair-channel` on the first channel and I will mint a fresh one.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Open Pairing", command="/pair-channel", style="secondary"),),
+        )
+    source_channel = str(row["source_channel"] or "")
+    source_identity = str(row["source_channel_identity"] or "")
+    if source_channel == channel and source_identity == channel_identity:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="pair_channel_same_channel",
+            reply="You are holding that code in the channel that minted it. Take it to the other channel and I will bridge the identity there.",
+            session=session,
+            deployment=deployment,
+        )
+
+    target = handoff_arclink_onboarding_channel(
+        conn,
+        source_session_id=str(row["source_session_id"]),
+        target_channel=channel,
+        target_channel_identity=channel_identity,
+    )
+    source = conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (str(row["source_session_id"]),)).fetchone()
+    source_meta = _metadata(dict(source or {}))
+    target_updates: dict[str, Any] = {
+        "paired_from_session_id": str(row["source_session_id"]),
+        "paired_from_channel": source_channel,
+        "paired_from_channel_identity": source_identity,
+        "paired_at": now,
+    }
+    active_deployment_id = str(source_meta.get("active_deployment_id") or row["deployment_id"] or target.get("deployment_id") or "")
+    if active_deployment_id:
+        target_updates["active_deployment_id"] = active_deployment_id
+    target = _update_session_metadata(
+        conn,
+        session_id=str(target["session_id"]),
+        updates=target_updates,
+        clear=("public_bot_workflow", "pair_channel_code", "pair_channel_expires_at"),
+    )
+    _update_session_metadata(
+        conn,
+        session_id=str(row["source_session_id"]),
+        updates={
+            "paired_to_session_id": str(target["session_id"]),
+            "paired_to_channel": channel,
+            "paired_to_channel_identity": channel_identity,
+            "paired_at": now,
+        },
+        clear=("public_bot_workflow", "pair_channel_code", "pair_channel_expires_at"),
+    )
+    conn.execute(
+        """
+        UPDATE arclink_channel_pairing_codes
+        SET status = 'claimed',
+            claimed_session_id = ?,
+            claimed_channel = ?,
+            claimed_channel_identity = ?,
+            claimed_at = ?
+        WHERE code = ?
+        """,
+        (str(target["session_id"]), channel, channel_identity, now, clean_code),
+    )
+    conn.commit()
+    linked_deployment = _deployment_for_session(conn, target)
+    if linked_deployment:
+        _record_bot_action(
+            conn,
+            deployment=linked_deployment,
+            action="pair_channel_claimed",
+            channel=channel,
+            channel_identity=channel_identity,
+            metadata={"source_channel": source_channel, "target_session_id": str(target["session_id"])},
+        )
+    buttons: list[ArcLinkPublicBotButton] = [_button("Show My Crew", command="/agents", style="secondary")]
+    access = _deployment_access(linked_deployment or {}) if linked_deployment else {}
+    if access.get("dashboard"):
+        buttons.insert(0, _button("Open Helm", url=str(access["dashboard"])))
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="pair_channel_claimed",
+        reply=(
+            "Channels paired.\n\n"
+            "Same ArcLink identity, same crew, same tools, same vault, same Notion rail. "
+            "Telegram and Discord keep separate chat threads, but Raven is now looking at the same vessel underneath."
+        ),
+        session=target,
+        deployment=linked_deployment,
+        buttons=tuple(buttons),
     )
 
 
@@ -1026,7 +1286,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/cancel`.\n\n"
+            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/pair_channel`, `/cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -1035,6 +1295,7 @@ def _help_reply(
             _button("Show My Crew", command="/agents", style="secondary"),
             _button("Wire Notion", command="/connect_notion", style="secondary"),
             _button("Set Up Backup", command="/config_backup", style="secondary"),
+            _button("Pair Channel", command="/pair-channel", style="secondary"),
         ),
     )
 
@@ -1074,6 +1335,25 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             session=session,
             deployment=deployment,
+        )
+
+    pair_value = _pair_channel_value(message, command)
+    if pair_value is not None:
+        session = create_or_resume_arclink_onboarding_session(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            selected_model_id=chutes_default_model({}),
+            metadata=metadata,
+        )
+        context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _pair_channel_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=context_session or session,
+            deployment=deployment,
+            code_value=pair_value,
         )
 
     if command in ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS:

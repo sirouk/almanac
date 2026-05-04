@@ -64,6 +64,14 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
     }
     parsed_plan = dc.parse_discord_interaction(plan)
     expect(parsed_plan["text"] == "plan operator", str(parsed_plan))
+    pair = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "pair-channel", "options": [{"name": "code", "value": "AB12CD"}]},
+    }
+    parsed_pair = dc.parse_discord_interaction(pair)
+    expect(parsed_pair["text"] == "/pair-channel AB12CD", str(parsed_pair))
     component = {
         "type": 3,
         "channel_id": "ch_1",
@@ -229,7 +237,7 @@ def test_discord_registers_public_bot_actions() -> None:
     expect(calls[0]["path"] == "/applications/app123/commands", str(calls[0]))
     expect(calls[0]["method"] == "PUT", str(calls[0]))
     names = {item["name"] for item in calls[0]["payload"]}
-    expect({"arclink", "connect-notion", "config-backup", "agents", "name", "plan"} <= names, str(names))
+    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "agents", "name", "plan"} <= names, str(names))
     expect("email" not in names, str(names))
     expect(result["scope"] == "global", str(result))
     expect(result["result_count"] == len(calls[0]["payload"]), str(result))

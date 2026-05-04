@@ -25,7 +25,7 @@ def seed_ready_deployment(control, conn):
         display_name="User One",
         entitlement_state="paid",
     )
-    return control.reserve_arclink_deployment_prefix(
+    deployment = control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
         user_id="user_1",
@@ -33,6 +33,23 @@ def seed_ready_deployment(control, conn):
         base_domain="example.test",
         status="provisioning_ready",
     )
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO arclink_onboarding_sessions (
+          session_id, channel, channel_identity, status, current_step,
+          email_hint, display_name_hint, selected_plan_id, selected_model_id,
+          user_id, deployment_id, checkout_state, metadata_json, created_at, updated_at
+        ) VALUES (
+          'onb_worker_1', 'telegram', 'tg:100', 'provisioning_ready', 'provisioning_requested',
+          'user@example.test', 'User One', 'starter', 'moonshotai/Kimi-K2.6-TEE',
+          'user_1', 'dep_1', 'paid', '{}', ?, ?
+        )
+        """,
+        (now, now),
+    )
+    conn.commit()
+    return deployment
 
 
 def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
@@ -89,7 +106,23 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     health_statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
     expect(health_statuses == {"healthy"}, str(health_statuses))
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
-    expect({"sovereign_provisioning_started", "sovereign_pod_applied", "user_handoff_ready"} <= event_types, str(event_types))
+    expect({"sovereign_provisioning_started", "sovereign_pod_applied", "user_handoff_ready", "public_bot:vessel_online_ping_queued"} <= event_types, str(event_types))
+    notification = conn.execute(
+        """
+        SELECT target_kind, target_id, channel_kind, message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-bot-user'
+          AND channel_kind = 'telegram'
+        """
+    ).fetchone()
+    expect(notification is not None, "expected vessel-online ping to be queued")
+    expect(notification["target_id"] == "100", str(dict(notification)))
+    expect("Vessel online" in notification["message"], str(notification["message"]))
+    expect("Hermes:" in notification["message"], str(notification["message"]))
+    extra = json.loads(notification["extra_json"])
+    expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
+    session = conn.execute("SELECT status, current_step FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
+    expect(session["status"] == "first_contacted" and session["current_step"] == "first_agent_contact", str(dict(session)))
     print("PASS test_fake_sovereign_worker_applies_ready_deployment")
 
 

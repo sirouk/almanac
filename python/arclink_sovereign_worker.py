@@ -26,6 +26,7 @@ from arclink_control import (
     append_arclink_event,
     connect_db,
     create_arclink_provisioning_job,
+    queue_notification,
     transition_arclink_provisioning_job,
     upsert_arclink_service_health,
     utc_now_iso,
@@ -51,6 +52,7 @@ from arclink_provisioning import (
     render_arclink_provisioning_intent,
 )
 from arclink_adapters import DnsRecord
+from arclink_onboarding import record_arclink_onboarding_first_agent_contact
 
 
 class ArcLinkSovereignWorkerError(RuntimeError):
@@ -254,6 +256,11 @@ def process_sovereign_deployment(
         result = _apply_deployment(conn, deployment=deployment, job=job, worker=worker, executor=executor)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
         _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
+        _queue_vessel_online_notifications(
+            conn,
+            deployment_id=deployment_id,
+            urls=result.get("urls", {}),
+        )
         append_arclink_event(
             conn,
             subject_kind="deployment",
@@ -620,6 +627,151 @@ def _docker_compose_row_status(*, service_name: str, state: str, health: str, ex
     if state in {"paused", "dead", "removing"}:
         return "unhealthy"
     return "missing"
+
+
+def _public_bot_target_for_session(session: Mapping[str, Any]) -> tuple[str, str] | None:
+    channel = str(session.get("channel") or "").strip().lower()
+    identity = str(session.get("channel_identity") or "").strip()
+    if channel == "telegram":
+        return "telegram", identity[3:].strip() if identity.lower().startswith("tg:") else identity
+    if channel == "discord":
+        return "discord", identity[len("discord:"):].strip() if identity.lower().startswith("discord:") else identity
+    return None
+
+
+def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
+    dashboard = str(urls.get("dashboard") or "").strip()
+    files = str(urls.get("files") or "").strip()
+    code = str(urls.get("code") or "").strip()
+    hermes = str(urls.get("hermes") or "").strip()
+    lines = [
+        "Vessel online.",
+        "",
+        "I'm Raven. Your ArcLink pod is awake: private agent, files, code, memory, and deployment health are lit.",
+        "",
+    ]
+    for label, url in (
+        ("Helm", dashboard),
+        ("Files", files),
+        ("Code", code),
+        ("Hermes", hermes),
+    ):
+        if url:
+            lines.append(f"{label}: {url}")
+    lines.extend(
+        [
+            "",
+            "Use /agents for your crew, /connect_notion for Notion, /config_backup for private backups, or /pair-channel to bring this same ArcLink identity onto another channel.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _vessel_online_actions(*, urls: Mapping[str, Any]) -> dict[str, Any]:
+    dashboard = str(urls.get("dashboard") or "").strip()
+    telegram_row: list[dict[str, str]] = []
+    discord_buttons: list[dict[str, Any]] = []
+    if dashboard:
+        telegram_row.append({"text": "Open Helm", "url": dashboard})
+        discord_buttons.append({"type": 2, "label": "Open Helm", "style": 5, "url": dashboard})
+    telegram_row.extend(
+        [
+            {"text": "Show My Crew", "callback_data": "arclink:/agents"},
+            {"text": "Pair Channel", "callback_data": "arclink:/pair-channel"},
+        ]
+    )
+    discord_buttons.extend(
+        [
+            {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
+            {"type": 2, "label": "Pair Channel", "style": 2, "custom_id": "arclink:/pair-channel"},
+        ]
+    )
+    return {
+        "telegram_reply_markup": {"inline_keyboard": [telegram_row[:2], telegram_row[2:]] if len(telegram_row) > 2 else [telegram_row]},
+        "discord_components": [{"type": 1, "components": discord_buttons[:5]}],
+    }
+
+
+def _queue_vessel_online_notifications(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    urls: Mapping[str, Any],
+) -> int:
+    existing = conn.execute(
+        """
+        SELECT 1
+        FROM arclink_events
+        WHERE subject_kind = 'deployment'
+          AND subject_id = ?
+          AND event_type = 'public_bot:vessel_online_ping_queued'
+        LIMIT 1
+        """,
+        (deployment_id,),
+    ).fetchone()
+    if existing is not None:
+        return 0
+    deployment = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
+    if deployment is None:
+        return 0
+    user_id = str(deployment["user_id"] or "").strip()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_onboarding_sessions
+        WHERE channel IN ('telegram', 'discord')
+          AND channel_identity != ''
+          AND (
+            deployment_id = ?
+            OR (? != '' AND user_id = ?)
+          )
+        ORDER BY
+          CASE WHEN deployment_id = ? THEN 0 ELSE 1 END,
+          updated_at DESC,
+          created_at DESC,
+          session_id DESC
+        """,
+        (deployment_id, user_id, user_id, deployment_id),
+    ).fetchall()
+    seen: set[tuple[str, str]] = set()
+    queued = 0
+    message = _vessel_online_message(urls=urls)
+    extra = _vessel_online_actions(urls=urls)
+    for row in rows:
+        session = dict(row)
+        target = _public_bot_target_for_session(session)
+        if target is None:
+            continue
+        channel, target_id = target
+        if not target_id or "#" in target_id:
+            continue
+        key = (channel, target_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        queue_notification(
+            conn,
+            target_kind="public-bot-user",
+            target_id=target_id,
+            channel_kind=channel,
+            message=message,
+            extra=extra,
+        )
+        record_arclink_onboarding_first_agent_contact(
+            conn,
+            session_id=str(session["session_id"]),
+            channel=str(session["channel"]),
+            channel_identity=str(session["channel_identity"]),
+        )
+        queued += 1
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="public_bot:vessel_online_ping_queued",
+        metadata={"notification_count": queued, "channels": sorted({channel for channel, _ in seen})},
+    )
+    return queued
 
 
 def _mark_deployment_status(conn: sqlite3.Connection, *, deployment_id: str, status: str) -> None:

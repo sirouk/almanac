@@ -313,15 +313,8 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     if row is None:
         return None
     channel = str(row["channel"] or "").strip().lower()
-    chat_id = str(row["channel_identity"] or "").strip()
-    if channel != "telegram":
-        # Discord DM delivery requires opening a DM channel via the Discord
-        # API; that lands in a follow-up slice. Web users are surfaced via the
-        # checkout success page (different slice).
-        logger.info(
-            "paid_ping_skipped channel=%s user_id=%s reason=delivery_not_implemented request_id=%s",
-            channel, user_id, request_id,
-        )
+    target_id = _public_bot_target_id(channel=channel, channel_identity=str(row["channel_identity"] or ""))
+    if channel not in {"telegram", "discord"} or not target_id:
         return None
     name = str(row["display_name_hint"] or "").strip()
     greeting = f"Captain {name}, " if name else ""
@@ -333,15 +326,47 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     nid = queue_notification(
         conn,
         target_kind="public-bot-user",
-        target_id=chat_id,
+        target_id=target_id,
         channel_kind=channel,
         message=message,
+        extra=_public_bot_ping_actions(),
     )
     logger.info(
         "paid_ping_queued user_id=%s channel=%s notification_id=%d request_id=%s",
         user_id, channel, nid, request_id,
     )
     return nid
+
+
+def _public_bot_target_id(*, channel: str, channel_identity: str) -> str:
+    value = str(channel_identity or "").strip()
+    if channel == "telegram" and value.lower().startswith("tg:"):
+        return value[3:].strip()
+    if channel == "discord" and value.lower().startswith("discord:"):
+        return value[len("discord:"):].strip()
+    return value
+
+
+def _public_bot_ping_actions() -> dict[str, Any]:
+    return {
+        "telegram_reply_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "Run Systems Check", "callback_data": "arclink:/status"},
+                    {"text": "Show My Crew", "callback_data": "arclink:/agents"},
+                ],
+            ],
+        },
+        "discord_components": [
+            {
+                "type": 1,
+                "components": [
+                    {"type": 2, "label": "Run Systems Check", "style": 2, "custom_id": "arclink:/status"},
+                    {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
+                ],
+            }
+        ],
+    }
 
 
 def _handle_admin_login(

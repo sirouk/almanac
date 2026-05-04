@@ -112,6 +112,124 @@ def test_discord_operator_delivery_supports_channel_ids() -> None:
             os.environ.update(old_env)
 
 
+def test_public_bot_user_delivery_supports_telegram_and_discord_dm() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_public_bot_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_public_bot_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+                "DISCORD_BOT_TOKEN": "discord-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            telegram_calls: list[dict[str, object]] = []
+            discord_dm_calls: list[dict[str, str]] = []
+            discord_send_calls: list[dict[str, object]] = []
+
+            def fake_telegram(*, bot_token, chat_id, text, reply_markup=None, parse_mode=""):
+                telegram_calls.append(
+                    {
+                        "bot_token": bot_token,
+                        "chat_id": chat_id,
+                        "text": text,
+                        "reply_markup": reply_markup,
+                        "parse_mode": parse_mode,
+                    }
+                )
+                return {"ok": True}
+
+            def fake_dm(*, bot_token: str, recipient_id: str) -> dict[str, str]:
+                discord_dm_calls.append({"bot_token": bot_token, "recipient_id": recipient_id})
+                return {"id": "dm_456"}
+
+            def fake_discord_send(*, bot_token: str, channel_id: str, text: str, components=None) -> dict[str, str]:
+                discord_send_calls.append(
+                    {
+                        "bot_token": bot_token,
+                        "channel_id": channel_id,
+                        "text": text,
+                        "components": components,
+                    }
+                )
+                return {"id": "msg_1"}
+
+            delivery.telegram_send_message = fake_telegram
+            delivery.discord_create_dm_channel = fake_dm
+            delivery.discord_send_message = fake_discord_send
+            telegram_error = delivery.deliver_row(
+                cfg,
+                {
+                    "target_kind": "public-bot-user",
+                    "target_id": "tg:123",
+                    "channel_kind": "telegram",
+                    "message": "Vessel online.",
+                    "extra_json": json.dumps(
+                        {
+                            "telegram_reply_markup": {"inline_keyboard": [[{"text": "Show My Crew", "callback_data": "arclink:/agents"}]]},
+                            "telegram_parse_mode": "Markdown",
+                        }
+                    ),
+                },
+            )
+            discord_error = delivery.deliver_row(
+                cfg,
+                {
+                    "target_kind": "public-bot-user",
+                    "target_id": "discord:456",
+                    "channel_kind": "discord",
+                    "message": "Vessel online.",
+                    "extra_json": json.dumps(
+                        {
+                            "discord_components": [
+                                {
+                                    "type": 1,
+                                    "components": [
+                                        {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"}
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                },
+            )
+            expect(telegram_error is None, str(telegram_error))
+            expect(discord_error is None, str(discord_error))
+            expect(telegram_calls[0]["bot_token"] == "telegram-public-token", str(telegram_calls))
+            expect(telegram_calls[0]["chat_id"] == "123", str(telegram_calls))
+            expect(telegram_calls[0]["reply_markup"], str(telegram_calls))
+            expect(discord_dm_calls == [{"bot_token": "discord-public-token", "recipient_id": "456"}], str(discord_dm_calls))
+            expect(discord_send_calls[0]["channel_id"] == "dm_456", str(discord_send_calls))
+            expect(discord_send_calls[0]["components"], str(discord_send_calls))
+            print("PASS test_public_bot_user_delivery_supports_telegram_and_discord_dm")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -185,8 +303,9 @@ def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
 
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
+    test_public_bot_user_delivery_supports_telegram_and_discord_dm()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
-    print("PASS all 2 notification delivery regression tests")
+    print("PASS all 3 notification delivery regression tests")
     return 0
 
 

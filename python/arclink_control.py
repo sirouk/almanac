@@ -1142,6 +1142,22 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS arclink_channel_pairing_codes (
+          code TEXT PRIMARY KEY,
+          source_session_id TEXT NOT NULL,
+          source_channel TEXT NOT NULL,
+          source_channel_identity TEXT NOT NULL,
+          user_id TEXT NOT NULL DEFAULT '',
+          deployment_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          claimed_session_id TEXT NOT NULL DEFAULT '',
+          claimed_channel TEXT NOT NULL DEFAULT '',
+          claimed_channel_identity TEXT NOT NULL DEFAULT '',
+          claimed_at TEXT NOT NULL DEFAULT ''
+        );
+
         CREATE TABLE IF NOT EXISTS arclink_action_intents (
           action_id TEXT PRIMARY KEY,
           admin_id TEXT NOT NULL,
@@ -1384,6 +1400,19 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_events_subject_created
         ON arclink_events (subject_kind, subject_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_channel_pairing_codes_source
+        ON arclink_channel_pairing_codes (source_session_id, status, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_channel_pairing_codes_claimed
+        ON arclink_channel_pairing_codes (claimed_session_id, claimed_at)
+        WHERE claimed_session_id != ''
         """
     )
     conn.execute(

@@ -149,12 +149,13 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     telegram_names = {item["command"] for item in telegram}
     expect("connect_notion" in telegram_names, str(telegram))
     expect("config_backup" in telegram_names, str(telegram))
+    expect("pair_channel" in telegram_names, str(telegram))
     expect("connect-notion" not in telegram_names, str(telegram))
     expect("config-backup" not in telegram_names, str(telegram))
 
     discord = bots.arclink_public_bot_discord_application_commands()
     discord_names = {item["name"] for item in discord}
-    expect({"arclink", "connect-notion", "config-backup", "agents", "name", "plan"} <= discord_names, str(discord_names))
+    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "agents", "name", "plan"} <= discord_names, str(discord_names))
     expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"starter", "operator", "scale"}, str(plan))
@@ -405,6 +406,76 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     print("PASS test_public_bot_agents_roster_add_agent_and_switch_are_account_aware")
 
 
+def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_pair_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_pair_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-pair")
+
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/pair-channel",
+    )
+    expect(opened.action == "pair_channel_code", str(opened))
+    code_row = conn.execute(
+        """
+        SELECT code, status, source_session_id, source_channel, source_channel_identity
+        FROM arclink_channel_pairing_codes
+        WHERE source_session_id = ?
+        """,
+        (seeded["session_id"],),
+    ).fetchone()
+    expect(code_row is not None and code_row["status"] == "open", str(dict(code_row or {})))
+    code = str(code_row["code"])
+    expect(f"/pair-channel {code}" in opened.reply, opened.reply)
+
+    claimed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:99",
+        text=f"/pair-channel {code}",
+    )
+    expect(claimed.action == "pair_channel_claimed", str(claimed))
+    expect(claimed.user_id == seeded["user_id"], str(claimed))
+    expect(claimed.deployment_id == seeded["deployment_id"], str(claimed))
+    expect("Same ArcLink identity" in claimed.reply, claimed.reply)
+    target = conn.execute(
+        """
+        SELECT session_id, user_id, deployment_id, metadata_json
+        FROM arclink_onboarding_sessions
+        WHERE channel = 'discord'
+          AND channel_identity = 'discord:99'
+        """
+    ).fetchone()
+    expect(target is not None, "expected paired Discord session")
+    expect(target["user_id"] == seeded["user_id"], str(dict(target)))
+    expect(target["deployment_id"] == seeded["deployment_id"], str(dict(target)))
+    metadata = json.loads(target["metadata_json"])
+    expect(metadata.get("paired_from_session_id") == seeded["session_id"], str(metadata))
+    status = conn.execute("SELECT status, claimed_session_id FROM arclink_channel_pairing_codes WHERE code = ?", (code,)).fetchone()
+    expect(status["status"] == "claimed" and status["claimed_session_id"] == target["session_id"], str(dict(status)))
+
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:99",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    expect("Your ArcLink crew" in roster.reply, roster.reply)
+    notion = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:99",
+        text="/connect-notion",
+    )
+    expect(notion.action == "connect_notion", str(notion))
+    expect("/u/arc-pair/notion/webhook" in notion.reply, notion.reply)
+    print("PASS test_public_bot_pair_channel_links_account_across_telegram_and_discord")
+
+
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_action_catalog_has_real_platform_commands()
@@ -414,7 +485,8 @@ def main() -> int:
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
-    print("PASS all 8 ArcLink public bot tests")
+    test_public_bot_pair_channel_links_account_across_telegram_and_discord()
+    print("PASS all 9 ArcLink public bot tests")
     return 0
 
 

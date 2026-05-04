@@ -957,6 +957,73 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
     print("PASS test_stripe_webhook_queues_paid_ping_for_telegram_user")
 
 
+def test_stripe_webhook_queues_paid_ping_for_discord_user() -> None:
+    """Discord users get the same paid-ping surface; notification delivery opens
+    the DM later, but the webhook must enqueue the platform-specific row.
+    """
+    import time as _time
+    control = load_module("arclink_control.py", "arclink_control_hosted_paid_ping_discord_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_paid_ping_discord_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_paid_ping_discord_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_paid_ping_discord_test")
+    conn = memory_db(control)
+    secret = "whsec_test_paidping_discord"
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_WEBHOOK_SECRET": secret,
+    })
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="discord",
+        channel_identity="discord:555777",
+        session_id="onb_paidping_discord",
+        display_name_hint="Raven Buyer",
+        selected_plan_id="starter",
+        selected_model_id="model-test",
+    )
+    prepared = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=session["session_id"],
+        base_domain="example.test",
+        prefix="paidping-dc",
+    )
+    event_payload = json.dumps({
+        "id": "evt_paidping_discord_1",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_paidping_discord_1",
+                "customer": "cus_paidping_discord_1",
+                "subscription": "sub_paidping_discord_1",
+                "client_reference_id": prepared["user_id"],
+                "metadata": {"arclink_onboarding_session_id": session["session_id"]},
+            }
+        },
+    })
+    signature = adapters.sign_stripe_webhook(event_payload, secret, timestamp=int(_time.time()))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload, config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    row = conn.execute(
+        """
+        SELECT target_kind, target_id, channel_kind, message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-bot-user'
+          AND channel_kind = 'discord'
+          AND target_id = '555777'
+        """
+    ).fetchone()
+    expect(row is not None, "expected a paid-ping queued for the Discord user")
+    expect("payment cleared" in str(row["message"]).lower(), str(row["message"]))
+    extra = json.loads(row["extra_json"])
+    expect("discord_components" in extra, str(extra))
+    print("PASS test_stripe_webhook_queues_paid_ping_for_discord_user")
+
+
 def test_stripe_webhook_processes_entitlement_transition() -> None:
     import time as _time
     control = load_module("arclink_control.py", "arclink_control_hosted_whprocess_test")
@@ -1841,6 +1908,7 @@ def main() -> int:
     test_admin_logout_clears_cookies_and_revokes_session()
     test_stripe_webhook_processes_entitlement_transition()
     test_stripe_webhook_queues_paid_ping_for_telegram_user()
+    test_stripe_webhook_queues_paid_ping_for_discord_user()
     test_telegram_webhook_route()
     test_telegram_webhook_sends_reply_when_transport_is_available()
     test_telegram_webhook_acknowledges_button_callbacks()
@@ -1864,7 +1932,7 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
     test_admin_scale_operations_requires_auth_and_returns_snapshot()
-    print("PASS all 47 ArcLink hosted API tests")
+    print("PASS all 48 ArcLink hosted API tests")
     return 0
 
 

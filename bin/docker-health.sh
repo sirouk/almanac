@@ -79,7 +79,17 @@ check_optional_tcp() {
   local host="$1"
   local port="$2"
   local label="$3"
-  if python3 - "$host" "$port" <<'PY' >/dev/null 2>&1
+  if tcp_accepts "$host" "$port"; then
+    pass "$label accepts TCP connections"
+  else
+    warn "$label could not be reached at $host:$port"
+  fi
+}
+
+tcp_accepts() {
+  local host="$1"
+  local port="$2"
+  python3 - "$host" "$port" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 
@@ -88,11 +98,23 @@ port = int(sys.argv[2])
 with socket.create_connection((host, port), timeout=5):
     pass
 PY
-  then
-    pass "$label accepts TCP connections"
-  else
-    warn "$label could not be reached at $host:$port"
+}
+
+check_optional_tcp_with_fallback() {
+  local primary_host="$1"
+  local primary_port="$2"
+  local fallback_host="$3"
+  local fallback_port="$4"
+  local label="$5"
+  if tcp_accepts "$primary_host" "$primary_port"; then
+    pass "$label accepts TCP connections at $primary_host:$primary_port"
+    return
   fi
+  if tcp_accepts "$fallback_host" "$fallback_port"; then
+    pass "$label accepts TCP connections at $fallback_host:$fallback_port"
+    return
+  fi
+  warn "$label could not be reached at $primary_host:$primary_port or $fallback_host:$fallback_port"
 }
 
 check_dir "$ARCLINK_PRIV_DIR" "Docker private state"
@@ -105,7 +127,7 @@ check_dir "$ARCLINK_NOTION_INDEX_MARKDOWN_DIR" "Docker Notion index markdown"
 check_http "http://arclink-mcp:8282/health" "ArcLink MCP"
 check_http "http://notion-webhook:8283/health" "Notion webhook"
 check_http_with_host "http://nextcloud/status.php" "localhost" "Nextcloud"
-check_optional_tcp "host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}" "qmd MCP published host port"
+check_optional_tcp_with_fallback "qmd-mcp" "${QMD_MCP_CONTAINER_PORT:-8181}" "host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}" "qmd MCP runtime port"
 check_tcp "postgres" "5432" "Postgres"
 check_tcp "redis" "6379" "Redis"
 

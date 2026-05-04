@@ -28,7 +28,7 @@ from arclink_control import (
     mark_notification_delivered,
     mark_notification_error,
 )
-from arclink_discord import discord_send_message
+from arclink_discord import discord_create_dm_channel, discord_send_message
 from arclink_http import http_request
 from arclink_telegram import telegram_send_message
 
@@ -78,6 +78,30 @@ def deliver_discord_channel(
         discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown discord delivery error"
+    return None
+
+
+def deliver_discord_user(
+    message: str,
+    *,
+    bot_token: str,
+    user_id: str,
+    components: list[dict[str, Any]] | None = None,
+) -> str | None:
+    if not bot_token:
+        return "DISCORD_BOT_TOKEN is not configured"
+    if not user_id:
+        return "discord user_id is empty"
+    if not user_id.isdigit():
+        return f"discord user_id must be numeric, got {user_id[:60]!r}"
+    try:
+        dm = discord_create_dm_channel(bot_token=bot_token, recipient_id=user_id)
+        channel_id = str(dm.get("id") or "").strip()
+        if not channel_id:
+            return "discord DM channel response did not include an id"
+        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc).strip() or "unknown discord user delivery error"
     return None
 
 
@@ -170,6 +194,14 @@ def _operator_platform(cfg: Config, row: dict[str, Any]) -> str:
     return (cfg.operator_notify_platform or "tui-only").lower()
 
 
+def _strip_public_channel_prefix(target_id: str, prefix: str) -> str:
+    value = str(target_id or "").strip()
+    marker = f"{prefix}:"
+    if value.lower().startswith(marker):
+        return value[len(marker):].strip()
+    return value
+
+
 def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
     target_kind = (row.get("target_kind") or "").lower()
     extra_raw = str(row.get("extra_json") or "").strip()
@@ -229,12 +261,12 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
 
     if target_kind == "public-bot-user":
         # Outbound from Raven back to a paying/onboarding user on their original
-        # public channel. target_id is the chat_id (Telegram) for now; channel_kind
-        # picks the platform. TELEGRAM_BOT_TOKEN is the public bot's token.
+        # public channel. target_id may be raw ("123") or normalized
+        # ("tg:123"/"discord:123"); channel_kind picks the platform.
         channel_kind = (row.get("channel_kind") or "").lower()
         if channel_kind == "telegram":
             bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
-            chat_id = str(row.get("target_id") or "")
+            chat_id = _strip_public_channel_prefix(str(row.get("target_id") or ""), "tg")
             if not bot_token:
                 return "TELEGRAM_BOT_TOKEN is not configured"
             if not chat_id:
@@ -249,6 +281,22 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
                 chat_id=chat_id,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
+            )
+        if channel_kind == "discord":
+            bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
+            user_id = _strip_public_channel_prefix(str(row.get("target_id") or ""), "discord")
+            if not bot_token:
+                return "DISCORD_BOT_TOKEN is not configured"
+            if not user_id:
+                return "public-bot-user discord delivery requires target_id"
+            discord_components = extra.get("discord_components")
+            if not isinstance(discord_components, list):
+                discord_components = None
+            return deliver_discord_user(
+                row["message"],
+                bot_token=bot_token,
+                user_id=user_id,
+                components=discord_components,
             )
         return f"public-bot-user delivery for channel_kind={channel_kind!r} not implemented yet"
 

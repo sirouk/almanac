@@ -421,6 +421,49 @@ def process_stripe_webhook(
             raise ArcLinkEntitlementError("Stripe webhook did not include an ArcLink user id")
         entitlement_state = _entitlement_for_stripe_event(event_type, obj)
 
+        # Email-driven user merge: a single human can show up under multiple
+        # user_ids (e.g. they started on Telegram earlier under one user_id,
+        # then onboarded again on web under a fresh user_id). Stripe always
+        # carries the canonical email. If that email already belongs to a
+        # different user_id, treat that existing user_id as the real human
+        # and re-point this webhook's mutations there. Without this, the
+        # email unique index throws and the webhook fails.
+        stripe_customer_email = _stripe_customer_email(obj)
+        if stripe_customer_email:
+            existing_email_user = conn.execute(
+                "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?) AND user_id != ?",
+                (stripe_customer_email, user_id),
+            ).fetchone()
+            if existing_email_user is not None:
+                merged_user_id = str(existing_email_user["user_id"] or "").strip()
+                if merged_user_id:
+                    # Re-point any deployment owned by the duplicate user_id to
+                    # the canonical email-bound user_id. This is safe because
+                    # the duplicate was created mid-funnel and has not been
+                    # paid for under any other identity.
+                    conn.execute(
+                        "UPDATE arclink_deployments SET user_id = ? WHERE user_id = ?",
+                        (merged_user_id, user_id),
+                    )
+                    conn.execute(
+                        "UPDATE arclink_onboarding_sessions SET user_id = ? WHERE user_id = ?",
+                        (merged_user_id, user_id),
+                    )
+                    append_arclink_event(
+                        conn,
+                        subject_kind="user",
+                        subject_id=merged_user_id,
+                        event_type="stripe_user_merged",
+                        metadata={
+                            "merged_from_user_id": user_id,
+                            "stripe_customer_email": stripe_customer_email,
+                            "stripe_event_id": event_id,
+                            "stripe_event_type": event_type,
+                        },
+                        commit=False,
+                    )
+                    user_id = merged_user_id
+
         if subscription_id:
             mirror_status = entitlement_state if event_type == "invoice.payment_failed" else str(obj.get("status") or entitlement_state)
             upsert_arclink_subscription_mirror(
@@ -434,7 +477,6 @@ def process_stripe_webhook(
                 raw=obj,
                 commit=False,
             )
-        stripe_customer_email = _stripe_customer_email(obj)
         if stripe_customer_email:
             upsert_arclink_user(
                 conn,

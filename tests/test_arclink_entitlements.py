@@ -676,6 +676,90 @@ def test_subscription_deleted_cancels_entitlement_and_audits() -> None:
     print("PASS test_subscription_deleted_cancels_entitlement_and_audits")
 
 
+def test_stripe_webhook_merges_users_when_email_matches_existing_account() -> None:
+    """A single human can show up under multiple user_ids: e.g. they started
+    on Telegram earlier under one user_id (with their email captured), then
+    onboarded again on web under a fresh user_id (without an email). When
+    Stripe webhook arrives carrying the canonical email, the webhook must
+    re-bind to the existing email-owning user_id and re-point any deployment
+    rather than crashing on the email unique constraint.
+    """
+    control = load_module("arclink_control.py", "arclink_control_entitlement_merge_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_merge_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_merge_test")
+    conn = memory_db(control)
+
+    secret = "whsec_test_merge"
+    # Pre-existing email-owning user (from an earlier Telegram session).
+    control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_existing_email",
+        email="captain@example.test",
+        entitlement_state="none",
+    )
+    # Fresh web-onboarding user_id (no email yet) plus a reserved deployment.
+    control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_fresh_web",
+        entitlement_state="none",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_fresh_web",
+        user_id="arcusr_fresh_web",
+        prefix="freshweb",
+        status="entitlement_required",
+    )
+
+    # Stripe webhook carries the canonical email and references the fresh web user_id.
+    payload = json.dumps({
+        "id": "evt_merge_1",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_merge_1",
+            "customer": "cus_merge_1",
+            "subscription": "sub_merge_1",
+            "client_reference_id": "arcusr_fresh_web",
+            "customer_details": {"email": "captain@example.test"},
+            "metadata": {"arclink_user_id": "arcusr_fresh_web"},
+        }},
+    }, sort_keys=True)
+    sig = adapters.sign_stripe_webhook(payload, secret)
+
+    result = entitlements.process_stripe_webhook(conn, payload=payload, signature=sig, secret=secret)
+    expect(result.user_id == "arcusr_existing_email", f"expected merge into existing email user, got {result.user_id}")
+    expect(result.entitlement_state == "paid", f"expected paid, got {result.entitlement_state}")
+
+    # The existing user now owns the deployment.
+    dep = conn.execute(
+        "SELECT user_id, status FROM arclink_deployments WHERE deployment_id = 'arcdep_fresh_web'"
+    ).fetchone()
+    expect(dep["user_id"] == "arcusr_existing_email", f"deployment user_id not re-pointed: {dep['user_id']}")
+
+    # Existing user has its entitlement flipped and email preserved.
+    user = conn.execute(
+        "SELECT email, entitlement_state FROM arclink_users WHERE user_id = 'arcusr_existing_email'"
+    ).fetchone()
+    expect(user["email"] == "captain@example.test", f"existing user email lost: {user['email']}")
+    expect(user["entitlement_state"] == "paid", f"existing user entitlement: {user['entitlement_state']}")
+
+    # The fresh web user_id stays in the table (no orphan rows produced) but
+    # has no deployment any more.
+    fresh_dep = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_deployments WHERE user_id = 'arcusr_fresh_web'"
+    ).fetchone()
+    expect(fresh_dep["c"] == 0, f"expected no deployments left under fresh web user, got {fresh_dep['c']}")
+
+    # An audit-style event records the merge for operators.
+    merge_event = conn.execute(
+        "SELECT subject_id, metadata_json FROM arclink_events WHERE event_type = 'stripe_user_merged' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    expect(merge_event is not None, "expected stripe_user_merged event")
+    expect(merge_event["subject_id"] == "arcusr_existing_email", str(merge_event["subject_id"]))
+
+    print("PASS test_stripe_webhook_merges_users_when_email_matches_existing_account")
+
+
 def test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_drift_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_drift_test")
@@ -739,6 +823,7 @@ def main() -> int:
     test_subscription_created_sets_paid_and_mirrors_subscription()
     test_subscription_deleted_cancels_entitlement_and_audits()
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
+    test_stripe_webhook_merges_users_when_email_matches_existing_account()
     print("PASS all 18 ArcLink entitlement tests")
     return 0
 

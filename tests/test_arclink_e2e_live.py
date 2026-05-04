@@ -46,7 +46,11 @@ def _skip_unless(cond: bool, reason: str):
 
 
 def _read_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
-    req = urlrequest.Request(url, headers=dict(headers or {}))
+    request_headers = {
+        "User-Agent": "DiscordBot (https://arclink.online, 0.1) Python/3",
+        **dict(headers or {}),
+    }
+    req = urlrequest.Request(url, headers=request_headers)
     with urlrequest.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
-from arclink_adapters import StripeWebhookError, resolve_stripe_client
+from arclink_adapters import FakeStripeClient, StripeWebhookError, resolve_stripe_client
 from arclink_control import Config, connect_db, queue_notification
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (

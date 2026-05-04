@@ -1,11 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { ErrorAlert } from "@/components/ui";
 
 type Step = "start" | "questions" | "checkout" | "done";
+
+const RESUME_KEY = "arclink_onboarding_resume";
+
+type ResumeState = {
+  step: Step;
+  sessionId: string;
+  name: string;
+  checkoutUrl: string;
+};
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
@@ -15,6 +24,46 @@ export default function OnboardingPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState("");
+  const [resumed, setResumed] = useState(false);
+
+  // Restore mid-flow state on refresh / Stripe cancel return.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(RESUME_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<ResumeState>;
+      if (parsed.sessionId) setSessionId(parsed.sessionId);
+      if (parsed.name) setName(parsed.name);
+      if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
+      if (parsed.step && parsed.step !== "start") {
+        setStep(parsed.step);
+        setResumed(true);
+      }
+    } catch {
+      // Stale or corrupt — ignore and start fresh.
+    }
+  }, []);
+
+  // Persist mid-flow state so a refresh, tab close, or Stripe cancel does not
+  // wipe the runner. We never persist the start step (no progress yet).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (step === "start") return;
+    const snapshot: ResumeState = { step, sessionId, name, checkoutUrl };
+    try {
+      window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
+    } catch {
+      // localStorage quota or disabled — drop silently.
+    }
+  }, [step, sessionId, name, checkoutUrl]);
+
+  function clearResume() {
+    try {
+      window.localStorage.removeItem(RESUME_KEY);
+    } catch {
+      // ignore
+    }
+  }
 
   function webContactId() {
     const key = "arclink_web_contact_id";
@@ -74,8 +123,8 @@ export default function OnboardingPage() {
     try {
       const res = await api.openCheckout({
         session_id: sessionId,
-        success_url: window.location.origin + "/dashboard",
-        cancel_url: window.location.origin + "/onboarding",
+        success_url: window.location.origin + "/dashboard?session=" + encodeURIComponent(sessionId),
+        cancel_url: window.location.origin + "/onboarding?resume=1",
       });
       if (res.status === 200) {
         const session = (res.data as Record<string, Record<string, string>>).session;
@@ -120,6 +169,12 @@ export default function OnboardingPage() {
         </h1>
 
         {error && <ErrorAlert message={error} className="mt-4" />}
+
+        {resumed && step !== "start" && step !== "done" && (
+          <p className="mt-4 rounded border border-border bg-carbon/60 px-3 py-2 text-xs text-soft-white/70">
+            Welcome back. I held your place — pick up where you left off.
+          </p>
+        )}
 
         {step === "start" && (
           <form onSubmit={handleStart} className="mt-6 space-y-4">
@@ -187,6 +242,7 @@ export default function OnboardingPage() {
                 </p>
                 <a
                   href={checkoutUrl}
+                  onClick={clearResume}
                   className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
                 >
                   Complete The Hire

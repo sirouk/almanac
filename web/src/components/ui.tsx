@@ -1,14 +1,18 @@
 export function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase();
-  const color =
+  const tone =
     ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready"].includes(normalized)
-      ? "text-neon-green"
+      ? "border-neon-green/30 bg-neon-green/10 text-neon-green"
       : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned", "pending run", "pending credentialed run"].includes(normalized)
-        ? "text-yellow-400"
+        ? "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
         : ["unknown", "not_configured", "not configured", "missing"].includes(normalized)
-          ? "text-soft-white/40"
-        : "text-red-400";
-  return <span className={`text-xs font-semibold uppercase ${color}`}>{status.replaceAll("_", " ")}</span>;
+          ? "border-soft-white/15 bg-soft-white/5 text-soft-white/50"
+        : "border-red-400/30 bg-red-500/10 text-red-300";
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${tone}`}>
+      {status.replaceAll("_", " ")}
+    </span>
+  );
 }
 
 export function ErrorAlert({ message, className }: { message: string; className?: string }) {

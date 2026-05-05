@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
@@ -150,10 +151,14 @@ export default function OnboardingPage() {
       </Link>
 
       <div className="w-full max-w-md rounded-lg border border-border bg-surface p-8">
-        <img
+        <Image
           src="/brand/raven/raven_pfp.webp"
           alt=""
+          width={64}
+          height={64}
           className="mb-5 h-16 w-16 rounded-full border border-border object-cover"
+          unoptimized
+          priority
         />
         <p className="mb-2 text-xs uppercase tracking-[0.22em] text-soft-white/40">
           {step === "start" && "Step 1 of 4 - First contact"}

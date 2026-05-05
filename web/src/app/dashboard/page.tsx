@@ -39,7 +39,7 @@ interface Deployment {
 interface UserData {
   user?: { user_id: string; email: string; display_name: string };
   deployments?: Deployment[];
-  entitlement?: { state: string };
+  entitlement?: { state: string; updated_at?: string };
 }
 
 interface ProvisioningDeployment {
@@ -57,6 +57,28 @@ interface BillingData {
 
 type Tab = "overview" | "billing" | "provisioning" | "services" | "vault" | "bots" | "model" | "memory" | "security" | "support";
 const ALL_TABS: Tab[] = ["overview", "billing", "provisioning", "services", "vault", "bots", "model", "memory", "security", "support"];
+
+function isGoodStatus(status = "") {
+  return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "running"].includes(status.toLowerCase());
+}
+
+function healthSummary(deployments: Deployment[] = []) {
+  const services = deployments.flatMap((deployment) => deployment.service_health || []);
+  const healthy = services.filter((service) => isGoodStatus(service.status)).length;
+  const attention = services.filter((service) => service.status && !isGoodStatus(service.status)).length;
+  return { total: services.length, healthy, attention };
+}
+
+function deploymentTitle(dep: Deployment) {
+  return dep.hostname || (dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : dep.deployment_id);
+}
+
+function formatDate(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
 
 export default function DashboardPage() {
   const [data, setData] = useState<UserData | null>(null);
@@ -103,30 +125,40 @@ export default function DashboardPage() {
     );
   }
 
+  const deployments = data?.deployments ?? [];
+  const activeDeployment = deployments[0];
+  const health = healthSummary(deployments);
+  const entitlementState = data?.entitlement?.state || billing?.entitlement?.state || "unknown";
+
   return (
-    <div className="flex min-h-screen flex-col">
-      {/* Top bar */}
-      <nav className="flex items-center justify-between border-b border-border px-6 py-4">
-        <Link href="/" className="font-display text-lg font-bold tracking-wide">
-          <span className="text-signal-orange">ARC</span>LINK
+    <div className="flex min-h-screen flex-col bg-jet/70">
+      <nav className="sticky top-0 z-20 flex items-center justify-between border-b border-border/80 bg-jet/90 px-4 py-3 backdrop-blur md:px-6">
+        <Link href="/" className="flex items-center gap-3 font-display tracking-wide">
+          <span className="flex h-9 w-9 items-center justify-center border border-signal-orange/40 bg-signal-orange/10 text-sm font-bold text-signal-orange">R</span>
+          <span className="text-lg font-bold"><span className="text-signal-orange">ARC</span>LINK</span>
+          <span className="hidden rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] uppercase tracking-wide text-soft-white/45 sm:inline-flex">User console</span>
         </Link>
-        <div className="flex items-center gap-4 text-sm">
-          {data?.user && <span className="text-soft-white/60">{data.user.email}</span>}
-          <Link href="/admin" className="text-soft-white/40 hover:text-soft-white">Admin</Link>
-          <button onClick={handleLogout} className="text-soft-white/40 hover:text-red-400">Sign Out</button>
+        <div className="flex items-center gap-3 text-sm">
+          {data?.user && <span className="hidden text-soft-white/50 md:inline">{data.user.email}</span>}
+          <Link href="/admin" className="rounded border border-border px-3 py-1.5 text-soft-white/55 transition hover:border-signal-orange/50 hover:text-soft-white">Admin</Link>
+          <button onClick={handleLogout} className="rounded border border-border px-3 py-1.5 text-soft-white/55 transition hover:border-red-400/50 hover:text-red-300">Sign Out</button>
         </div>
       </nav>
 
       <div className="flex flex-1">
-        {/* Sidebar */}
-        <aside className="hidden w-56 shrink-0 border-r border-border p-4 md:block">
+        <aside className="hidden w-64 shrink-0 border-r border-border/70 bg-carbon/35 p-4 md:block">
+          <div className="mb-5 border border-border bg-surface/70 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-soft-white/35">Vessel</p>
+            <p className="mt-1 truncate font-display text-sm font-semibold">{activeDeployment ? deploymentTitle(activeDeployment) : "No active vessel"}</p>
+            <div className="mt-3"><StatusBadge status={activeDeployment?.status || "standby"} /></div>
+          </div>
           <nav className="space-y-1">
             {ALL_TABS.map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`block w-full rounded px-3 py-2 text-left text-sm capitalize transition ${
-                  activeTab === tab ? "bg-surface text-signal-orange" : "text-soft-white/60 hover:text-soft-white"
+                className={`block w-full border px-3 py-2 text-left text-sm capitalize transition ${
+                  activeTab === tab ? "border-signal-orange/50 bg-signal-orange/10 text-signal-orange" : "border-transparent text-soft-white/55 hover:border-border hover:bg-surface/70 hover:text-soft-white"
                 }`}
               >
                 {tab}
@@ -135,20 +167,42 @@ export default function DashboardPage() {
           </nav>
         </aside>
 
-        {/* Main */}
-        <main className="flex-1 overflow-x-hidden p-6">
+        <main className="flex-1 overflow-x-hidden p-4 md:p-6">
           {error && (
             <ErrorAlert message={error} className="mb-6 py-3" />
           )}
 
-          {/* Mobile tab bar - scrollable to fit all tabs */}
+          <section className="mb-6 border border-border/80 bg-surface/85 p-4 shadow-2xl shadow-black/30 md:p-6">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-signal-orange">Raven console</p>
+                <h1 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">
+                  {data?.user?.display_name || "ArcLink Operator"}
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-soft-white/60">
+                  Your private agent workspace, service links, model lane, memory rail, billing state, and launch health in one place.
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-right sm:min-w-[26rem]">
+                <ConsoleMetric label="Agents" value={deployments.length} />
+                <ConsoleMetric label="Services" value={health.total} />
+                <ConsoleMetric label="Attention" value={health.attention} tone={health.attention ? "warn" : "good"} />
+              </div>
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <SignalPanel label="Account" value={entitlementState} />
+              <SignalPanel label="Primary vessel" value={activeDeployment ? deploymentTitle(activeDeployment) : "Not launched"} />
+              <SignalPanel label="Service posture" value={`${health.healthy}/${health.total || 0} healthy`} good={health.attention === 0 && health.total > 0} />
+            </div>
+          </section>
+
           <div className="mb-6 flex gap-2 overflow-x-auto md:hidden">
             {ALL_TABS.map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`shrink-0 rounded px-3 py-1 text-xs capitalize ${
-                  activeTab === tab ? "bg-signal-orange text-jet" : "bg-surface text-soft-white/60"
+                className={`shrink-0 border px-3 py-1.5 text-xs capitalize ${
+                  activeTab === tab ? "border-signal-orange bg-signal-orange text-jet" : "border-border bg-surface text-soft-white/60"
                 }`}
               >
                 {tab}
@@ -158,39 +212,20 @@ export default function DashboardPage() {
 
           {activeTab === "overview" && data && (
             <div className="space-y-6">
-              <h1 className="font-display text-2xl font-bold">Dashboard</h1>
-              {data.entitlement && (
-                <div className="rounded-lg border border-border bg-surface p-4">
-                  <span className="text-sm text-soft-white/60">Entitlement: </span>
-                  <StatusBadge status={data.entitlement.state} />
-                </div>
-              )}
+              <SectionHeader title="Mission Overview" eyebrow="Current state" detail="Raven keeps the launch board human-readable while the raw service signals remain visible below." />
+              <div className="grid gap-4 lg:grid-cols-3">
+                <InfoPanel title="Entitlement" value={data.entitlement?.state || "unknown"} detail={data.entitlement?.updated_at ? `Updated ${formatDate(data.entitlement.updated_at)}` : "Billing signal from ArcLink control."} />
+                <InfoPanel title="Primary Agent" value={activeDeployment ? deploymentTitle(activeDeployment) : "Not launched"} detail={activeDeployment?.deployment_id || "Start launch to create the first private workspace."} />
+                <InfoPanel title="Service Health" value={`${health.healthy}/${health.total || 0}`} detail={health.attention ? `${health.attention} service signals need attention.` : "All reported services are clear."} />
+              </div>
               {data.deployments?.map((dep) => (
-                <div key={dep.deployment_id} className="rounded-lg border border-border bg-surface p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-display font-semibold">{dep.hostname || dep.deployment_id}</h3>
-                      <p className="text-xs text-soft-white/40">{dep.deployment_id}</p>
-                    </div>
-                    <StatusBadge status={dep.status || "unknown"} />
-                  </div>
-                  {dep.service_health && dep.service_health.length > 0 && (
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {dep.service_health.map((svc, i) => (
-                        <div key={i} className="rounded bg-carbon px-2 py-1 text-xs">
-                          <span className="text-soft-white/60">{svc.service_name}: </span>
-                          <StatusBadge status={svc.status || "unknown"} />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <DeploymentOverview key={dep.deployment_id} dep={dep} />
               ))}
               {(!data.deployments || data.deployments.length === 0) && (
-                <div className="rounded-lg border border-border bg-surface p-6 text-center text-soft-white/40">
+                <div className="border border-border bg-surface/80 p-6 text-center text-soft-white/45">
                   No deployments yet.{" "}
                   <Link href="/onboarding" className="text-signal-orange hover:underline">
-                    Start one →
+                    Start launch
                   </Link>
                 </div>
               )}
@@ -497,10 +532,92 @@ export default function DashboardPage() {
   );
 }
 
+function SectionHeader({ title, eyebrow, detail }: { title: string; eyebrow?: string; detail?: string }) {
+  return (
+    <div>
+      {eyebrow && <p className="text-xs uppercase tracking-[0.22em] text-signal-orange">{eyebrow}</p>}
+      <h2 className="mt-1 font-display text-2xl font-bold">{title}</h2>
+      {detail && <p className="mt-2 max-w-3xl text-sm leading-6 text-soft-white/55">{detail}</p>}
+    </div>
+  );
+}
+
+function ConsoleMetric({ label, value, tone = "neutral" }: { label: string; value: number | string; tone?: "neutral" | "good" | "warn" }) {
+  const color = tone === "good" ? "text-neon-green" : tone === "warn" ? "text-yellow-300" : "text-soft-white";
+  return (
+    <div className="border border-border bg-carbon/70 px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wide text-soft-white/35">{label}</p>
+      <p className={`font-display text-2xl font-bold ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+function SignalPanel({ label, value, good }: { label: string; value: string; good?: boolean }) {
+  return (
+    <div className="border border-border bg-carbon/70 p-3">
+      <p className="text-[10px] uppercase tracking-wide text-soft-white/35">{label}</p>
+      <p className={`mt-1 truncate text-sm font-semibold ${good ? "text-neon-green" : "text-soft-white"}`}>{value}</p>
+    </div>
+  );
+}
+
+function InfoPanel({ title, value, detail }: { title: string; value: string; detail?: string }) {
+  return (
+    <div className="border border-border bg-surface/80 p-4">
+      <p className="text-xs uppercase tracking-[0.18em] text-soft-white/35">{title}</p>
+      <p className="mt-3 font-display text-2xl font-semibold">{value.replaceAll("_", " ")}</p>
+      {detail && <p className="mt-2 text-xs leading-5 text-soft-white/45">{detail}</p>}
+    </div>
+  );
+}
+
+function DeploymentOverview({ dep }: { dep: Deployment }) {
+  const services = dep.service_health || [];
+  const urls = dep.access?.urls || {};
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Private vessel</p>
+          <h3 className="mt-1 truncate font-display text-xl font-semibold">{deploymentTitle(dep)}</h3>
+          <p className="mt-1 break-all font-mono text-xs text-soft-white/35">{dep.deployment_id}</p>
+        </div>
+        <StatusBadge status={dep.status || "unknown"} />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {services.length ? services.map((svc, i) => (
+            <div key={`${svc.service_name}-${i}`} className="border border-border/70 bg-carbon/80 p-2">
+              <p className="truncate text-xs text-soft-white/50">{svc.service_name}</p>
+              <div className="mt-2"><StatusBadge status={svc.status || "unknown"} /></div>
+              {svc.checked_at && <p className="mt-1 truncate text-[10px] text-soft-white/30">{formatDate(svc.checked_at)}</p>}
+            </div>
+          )) : (
+            <p className="col-span-full text-sm text-soft-white/40">No service health signals yet.</p>
+          )}
+        </div>
+        <div className="border border-border/70 bg-carbon/80 p-3">
+          <p className="text-xs uppercase tracking-wide text-soft-white/35">Access</p>
+          <div className="mt-3 grid gap-2">
+            {Object.entries(urls).length ? Object.entries(urls).map(([key, value]) => (
+              <a key={key} href={value} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between border border-border bg-jet/45 px-3 py-2 text-sm text-soft-white/75 transition hover:border-signal-orange/60 hover:text-signal-orange">
+                <span className="capitalize">{key.replaceAll("_", " ")}</span>
+                <span className="text-xs text-soft-white/35">open</span>
+              </a>
+            )) : (
+              <p className="text-sm text-soft-white/40">Links appear once provisioning completes.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeploymentCard({ dep, children }: { dep: { deployment_id: string; hostname?: string }; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <h3 className="font-display font-semibold mb-3">{dep.hostname || dep.deployment_id}</h3>
+    <div className="border border-border bg-surface/85 p-4">
+      <h3 className="mb-3 font-display font-semibold">{dep.hostname || dep.deployment_id}</h3>
       {children}
     </div>
   );

@@ -206,7 +206,7 @@ test.describe("Route smoke", () => {
   test("/onboarding renders start step", async ({ page }) => {
     await page.goto("/onboarding");
     await expect(page.locator("text=I'm Raven")).toBeVisible();
-    await expect(page.locator("text=Stripe collects email securely")).toBeVisible();
+    await expect(page.locator("text=No technical setup on your end")).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toBeVisible();
     // Fake adapter notice present
     await expect(page.locator("text=Fake adapters")).toBeVisible();
@@ -215,14 +215,14 @@ test.describe("Route smoke", () => {
   test("/dashboard renders with mocked data", async ({ page }) => {
     await mockApi(page);
     await page.goto("/dashboard");
-    await expect(page.locator("text=Dashboard").first()).toBeVisible();
-    await expect(page.locator("text=test.arclink.online").first()).toBeVisible();
+    await expect(page.locator("text=Raven console").first()).toBeVisible();
+    await expect(page.locator("main").getByText("test.arclink.online").first()).toBeVisible();
   });
 
   test("/admin renders with mocked data", async ({ page }) => {
     await mockApi(page);
     await page.goto("/admin");
-    await expect(page.locator("text=Admin Overview").first()).toBeVisible();
+    await expect(page.locator("text=ArcLink Global Operations").first()).toBeVisible();
   });
 });
 
@@ -349,7 +349,7 @@ test.describe("Mobile layout", () => {
     if (testInfo.project.name !== "mobile") test.skip();
     await mockApi(page);
     await page.goto("/dashboard");
-    await expect(page.locator("text=Dashboard").first()).toBeVisible();
+    await expect(page.locator("text=Raven console").first()).toBeVisible();
     // Mobile tab bar should be visible, sidebar hidden
     const mobileTabs = page.locator(".md\\:hidden").first();
     await expect(mobileTabs).toBeVisible();
@@ -359,7 +359,7 @@ test.describe("Mobile layout", () => {
     if (testInfo.project.name !== "mobile") test.skip();
     await mockApi(page);
     await page.goto("/admin");
-    await expect(page.locator("text=Admin Overview").first()).toBeVisible();
+    await expect(page.locator("text=ArcLink Global Operations").first()).toBeVisible();
     // No horizontal scrollbar on main content
     const mainWidth = await page.locator("main").evaluate((el) => el.scrollWidth <= el.clientWidth + 2);
     expect(mainWidth).toBe(true);
@@ -383,7 +383,7 @@ test.describe("Dashboard tabs", () => {
   test("all user dashboard tabs render content", async ({ page }) => {
     await mockApi(page);
     await page.goto("/dashboard");
-    await expect(page.locator("text=Dashboard").first()).toBeVisible();
+    await expect(page.locator("text=Raven console").first()).toBeVisible();
 
     const tabs = ["billing", "provisioning", "services", "vault", "bots", "model", "memory", "security", "support"];
     for (const tab of tabs) {
@@ -395,7 +395,7 @@ test.describe("Dashboard tabs", () => {
   test("admin dashboard tabs render content", async ({ page }) => {
     await mockApi(page);
     await page.goto("/admin");
-    await expect(page.locator("text=Admin Overview").first()).toBeVisible();
+    await expect(page.locator("text=ArcLink Global Operations").first()).toBeVisible();
 
     const tabs = ["users", "deployments", "health", "provisioning", "dns", "payments", "audit", "actions", "sessions", "provider", "reconciliation"];
     for (const tab of tabs) {
@@ -416,7 +416,7 @@ test.describe("Onboarding flow", () => {
 
     // Step 1: Start without collecting email in ArcLink chat/form
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Name On The Hatch")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Name On The Hatch" })).toBeVisible();
 
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");

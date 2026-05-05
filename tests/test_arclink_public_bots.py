@@ -593,7 +593,7 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
     """The /start greeting must address the user by the name we picked up
     from the channel profile (Telegram first_name, Discord global_name) and
     offer exactly two buttons: Take Me Aboard and Update Name. No "systems
-    check" button on the cold-open greeting — that has nothing to read yet.
+    check" button on the cold-open greeting. That has nothing to read yet.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_greet_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_greet_test")

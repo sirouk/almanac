@@ -25,6 +25,22 @@ interface HealthEntry {
   last_check_at?: string;
 }
 
+function isGoodStatus(status = "") {
+  return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "clear", "succeeded", "running"].includes(status.toLowerCase());
+}
+
+function statusCounts(rows: Record<string, string>[] = []) {
+  return rows.reduce<Record<string, number>>((acc, row) => {
+    const status = String(row.status || "unknown");
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function formatLabel(value: string) {
+  return value.replaceAll("_", " ");
+}
+
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [data, setData] = useState<AdminData | null>(null);
@@ -70,52 +86,85 @@ export default function AdminPage() {
   }, [tab]);
 
   const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
+  const deploymentCounts = statusCounts(data?.deployments || []);
+  const failureCount = data?.recent_failures?.length || 0;
+  const queuedActions = data?.sections?.find((section) => section.section === "queued_actions")?.counts?.queued || 0;
+  const readySections = data?.sections?.filter((section) => isGoodStatus(section.status)).length || 0;
+  const totalSections = data?.sections?.length || 0;
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <nav className="flex items-center justify-between border-b border-border px-6 py-4">
-        <Link href="/" className="font-display text-lg font-bold tracking-wide">
-          <span className="text-signal-orange">ARC</span>LINK
-          <span className="ml-2 text-xs text-soft-white/40">Admin</span>
+    <div className="flex min-h-screen flex-col bg-jet/70">
+      <nav className="sticky top-0 z-20 flex items-center justify-between border-b border-border/80 bg-jet/90 px-4 py-3 backdrop-blur md:px-6">
+        <Link href="/" className="flex items-center gap-3 font-display tracking-wide">
+          <span className="flex h-9 w-9 items-center justify-center border border-signal-orange/40 bg-signal-orange/10 text-sm font-bold text-signal-orange">A</span>
+          <span className="text-lg font-bold"><span className="text-signal-orange">ARC</span>LINK</span>
+          <span className="hidden rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] uppercase tracking-wide text-soft-white/45 sm:inline-flex">Admin</span>
         </Link>
-        <div className="flex items-center gap-4 text-sm">
-          <Link href="/dashboard" className="text-soft-white/40 hover:text-soft-white">User Dashboard</Link>
-          <button onClick={handleLogout} className="text-soft-white/40 hover:text-red-400">Sign Out</button>
+        <div className="flex items-center gap-3 text-sm">
+          <Link href="/dashboard" className="rounded border border-border px-3 py-1.5 text-soft-white/55 transition hover:border-signal-orange/50 hover:text-soft-white">User Console</Link>
+          <button onClick={handleLogout} className="rounded border border-border px-3 py-1.5 text-soft-white/55 transition hover:border-red-400/50 hover:text-red-300">Sign Out</button>
         </div>
       </nav>
 
       <div className="flex flex-1">
-        {/* Sidebar */}
-        <aside className="hidden w-56 shrink-0 border-r border-border p-4 md:block">
+        <aside className="hidden w-64 shrink-0 border-r border-border/70 bg-carbon/35 p-4 md:block">
+          <div className="mb-5 border border-border bg-surface/70 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-soft-white/35">Global operations</p>
+            <p className="mt-1 font-display text-sm font-semibold">{readySections}/{totalSections || 0} sections ready</p>
+            <div className="mt-3"><StatusBadge status={failureCount ? "attention" : "ready"} /></div>
+          </div>
           <nav className="space-y-1">
             {tabs.map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={`block w-full rounded px-3 py-2 text-left text-sm capitalize transition ${
-                  tab === t ? "bg-surface text-signal-orange" : "text-soft-white/60 hover:text-soft-white"
+                className={`block w-full border px-3 py-2 text-left text-sm capitalize transition ${
+                  tab === t ? "border-signal-orange/50 bg-signal-orange/10 text-signal-orange" : "border-transparent text-soft-white/55 hover:border-border hover:bg-surface/70 hover:text-soft-white"
                 }`}
               >
-                {t}
+                {formatLabel(t)}
               </button>
             ))}
           </nav>
         </aside>
 
-        <main className="flex-1 overflow-x-hidden p-6">
+        <main className="flex-1 overflow-x-hidden p-4 md:p-6">
           {error && <ErrorAlert message={error} className="mb-6 py-3" />}
 
-          {/* Mobile tabs */}
-          <div className="mb-6 flex flex-wrap gap-2 md:hidden">
+          <section className="mb-6 border border-border/80 bg-surface/85 p-4 shadow-2xl shadow-black/30 md:p-6">
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-signal-orange">Operator bridge</p>
+                <h1 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">ArcLink Global Operations</h1>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-soft-white/60">
+                  Users, billing, provisioning, DNS, bot lanes, provider state, audit trails, and fleet readiness in one control surface.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:min-w-[34rem]">
+                <BridgeMetric label="Users" value={data?.users?.length ?? 0} />
+                <BridgeMetric label="Deployments" value={data?.deployments?.length ?? 0} />
+                <BridgeMetric label="Queued" value={queuedActions} tone={queuedActions ? "warn" : "neutral"} />
+                <BridgeMetric label="Failures" value={failureCount} tone={failureCount ? "warn" : "good"} />
+              </div>
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-4">
+              <BridgeSignal label="Active" value={String(deploymentCounts.active || 0)} />
+              <BridgeSignal label="Provisioning" value={String(deploymentCounts.provisioning || 0)} />
+              <BridgeSignal label="Entitled users" value={String(data?.users?.filter((user) => user.entitlement_state === "paid").length || 0)} />
+              <BridgeSignal label="Admin sessions" value={String(data?.active_sessions?.admin ?? 0)} />
+            </div>
+          </section>
+
+          <div className="mb-6 flex gap-2 overflow-x-auto md:hidden">
             {tabs.map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={`rounded px-3 py-1 text-xs capitalize ${
-                  tab === t ? "bg-signal-orange text-jet" : "bg-surface text-soft-white/60"
+                className={`shrink-0 border px-3 py-1.5 text-xs capitalize ${
+                  tab === t ? "border-signal-orange bg-signal-orange text-jet" : "border-border bg-surface text-soft-white/60"
                 }`}
               >
-                {t}
+                {formatLabel(t)}
               </button>
             ))}
           </div>
@@ -123,15 +172,26 @@ export default function AdminPage() {
           {/* Overview */}
           {tab === "overview" && data && (
             <div className="space-y-6">
-              <h1 className="font-display text-2xl font-bold">Admin Overview</h1>
+              <SectionHeader title="Operations Overview" eyebrow="Live read model" detail="Every tile below is backed by the admin dashboard API. The raw rows remain available in their tabs for audit and recovery work." />
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <StatCard label="Users" value={data.users?.length ?? 0} />
-                <StatCard label="Deployments" value={data.deployments?.length ?? 0} />
-                <StatCard label="User Sessions" value={data.active_sessions?.user ?? 0} />
-                <StatCard label="Admin Sessions" value={data.active_sessions?.admin ?? 0} />
+                <StatCard label="Users" value={data.users?.length ?? 0} detail="Known accounts" />
+                <StatCard label="Deployments" value={data.deployments?.length ?? 0} detail="All visible pods" />
+                <StatCard label="User Sessions" value={data.active_sessions?.user ?? 0} detail="Active sessions" />
+                <StatCard label="Admin Sessions" value={data.active_sessions?.admin ?? 0} detail="Active operators" />
+              </div>
+              {data.sections?.length ? (
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {data.sections.map((section) => (
+                    <SectionCard key={section.section} data={data} section={section.section} />
+                  ))}
+                </div>
+              ) : null}
+              <div className="grid gap-4 xl:grid-cols-2">
+                <DataRail title="Recent deployments" rows={(data.deployments || []).slice(0, 6)} primary="deployment_id" secondary="user_id" statusKey="status" empty="No deployments recorded." />
+                <DataRail title="Recent users" rows={(data.users || []).slice(0, 6)} primary="email" secondary="user_id" statusKey="entitlement_state" empty="No users recorded." />
               </div>
               {data.recent_failures && data.recent_failures.length > 0 && (
-                <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4">
+                <div className="border border-red-500/30 bg-red-950/20 p-4">
                   <h3 className="font-display font-semibold text-red-400">Recent Failures</h3>
                   <ul className="mt-2 space-y-1 text-sm text-red-300">
                     {data.recent_failures.map((f, i) => (
@@ -663,25 +723,93 @@ function SectionCard({ data, section }: { data: AdminData; section: string }) {
   const sec = data.sections?.find((s) => s.section === section);
   if (!sec) return <p className="text-soft-white/40">No data for {section}.</p>;
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
+    <div className="border border-border bg-surface/85 p-4">
       <div className="flex items-center justify-between">
         <h3 className="font-display font-semibold">{sec.label}</h3>
         <StatusBadge status={sec.status} />
       </div>
-      <div className="mt-2 flex flex-wrap gap-4 text-sm text-soft-white/60">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {Object.entries(sec.counts).map(([k, v]) => (
-          <span key={k}>{k.replace(/_/g, " ")}: <span className="text-soft-white">{v}</span></span>
+          <div key={k} className="border border-border/70 bg-carbon/70 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-soft-white/35">{formatLabel(k)}</p>
+            <p className="mt-1 font-display text-lg font-semibold">{v}</p>
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function SectionHeader({ title, eyebrow, detail }: { title: string; eyebrow?: string; detail?: string }) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <p className="text-sm text-soft-white/60">{label}</p>
-      <p className="mt-1 font-display text-2xl font-bold">{value}</p>
+    <div>
+      {eyebrow && <p className="text-xs uppercase tracking-[0.22em] text-signal-orange">{eyebrow}</p>}
+      <h2 className="mt-1 font-display text-2xl font-bold">{title}</h2>
+      {detail && <p className="mt-2 max-w-3xl text-sm leading-6 text-soft-white/55">{detail}</p>}
+    </div>
+  );
+}
+
+function BridgeMetric({ label, value, tone = "neutral" }: { label: string; value: number | string; tone?: "neutral" | "good" | "warn" }) {
+  const color = tone === "good" ? "text-neon-green" : tone === "warn" ? "text-yellow-300" : "text-soft-white";
+  return (
+    <div className="border border-border bg-carbon/70 px-3 py-2 text-right">
+      <p className="text-[10px] uppercase tracking-wide text-soft-white/35">{label}</p>
+      <p className={`font-display text-2xl font-bold ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+function BridgeSignal({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border border-border bg-carbon/70 p-3">
+      <p className="text-[10px] uppercase tracking-wide text-soft-white/35">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-soft-white">{value}</p>
+    </div>
+  );
+}
+
+function StatCard({ label, value, detail }: { label: string; value: number; detail?: string }) {
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <p className="text-xs uppercase tracking-[0.18em] text-soft-white/35">{label}</p>
+      <p className="mt-3 font-display text-3xl font-bold">{value}</p>
+      {detail && <p className="mt-2 text-xs text-soft-white/40">{detail}</p>}
+    </div>
+  );
+}
+
+function DataRail({
+  title,
+  rows,
+  primary,
+  secondary,
+  statusKey,
+  empty,
+}: {
+  title: string;
+  rows: Record<string, string>[];
+  primary: string;
+  secondary: string;
+  statusKey: string;
+  empty: string;
+}) {
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <h3 className="font-display font-semibold">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {rows.length ? rows.map((row, i) => (
+          <div key={i} className="flex items-center justify-between gap-3 border border-border/70 bg-carbon/70 px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate font-mono text-xs text-soft-white/80">{row[primary] || "unknown"}</p>
+              <p className="truncate text-xs text-soft-white/35">{row[secondary] || ""}</p>
+            </div>
+            <StatusBadge status={row[statusKey] || "unknown"} />
+          </div>
+        )) : (
+          <p className="text-sm text-soft-white/40">{empty}</p>
+        )}
+      </div>
     </div>
   );
 }

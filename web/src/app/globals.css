@@ -18,3 +18,25 @@ body {
   color: var(--color-soft-white);
   font-family: var(--font-body);
 }
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  content: "";
+  background:
+    linear-gradient(rgba(251, 80, 5, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(251, 80, 5, 0.035) 1px, transparent 1px),
+    linear-gradient(135deg, rgba(251, 80, 5, 0.08), transparent 32%, rgba(32, 117, 254, 0.05) 72%, transparent),
+    var(--color-jet);
+  background-size: 44px 44px, 44px 44px, auto, auto;
+}
+
+::selection {
+  background: rgba(251, 80, 5, 0.35);
+}
+
+* {
+  scrollbar-color: rgba(251, 80, 5, 0.55) rgba(24, 24, 23, 0.8);
+}

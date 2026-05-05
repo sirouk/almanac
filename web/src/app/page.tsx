@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 
 export default function Home() {
@@ -38,11 +39,17 @@ export default function Home() {
           private ArcLink vessel: an agent, model access, memory, retrieval, files, code tools,
           bot channels, and live deployment health. First agent $35/month.
         </p>
-        <img
-          src="/brand/raven/raven_hero.webp"
-          alt=""
-          className="mt-8 h-auto w-full max-w-2xl border border-border object-contain"
-        />
+        <div className="relative mt-8 aspect-[16/9] w-full max-w-2xl border border-border">
+          <Image
+            src="/brand/raven/raven_hero.webp"
+            alt=""
+            fill
+            sizes="(max-width: 768px) 100vw, 672px"
+            className="object-contain"
+            unoptimized
+            priority
+          />
+        </div>
         <div className="mt-10 flex flex-wrap justify-center gap-4">
           <Link
             href="/onboarding"

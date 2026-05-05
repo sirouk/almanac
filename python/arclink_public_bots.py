@@ -1591,7 +1591,7 @@ def handle_arclink_public_bot_turn(
             reply="Keep your email out of comms. Stripe collects it at checkout, and only there. Send `/name Your Name` and I will put your name on the workspace.",
         )
     if command in {"name", "/name"}:
-        # Bare /name (or the Update Name button) — prompt the user to set one
+        # Bare /name (or the Update Name button) prompts the user to set one.
         # rather than blanking out the captured display name.
         current = str(session.get("display_name_hint") or "").strip()
         current_line = f"\n\n_Currently on the hatch: {current}_" if current else ""

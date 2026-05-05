@@ -2020,9 +2020,16 @@ def test_write_answers_file_persists_host_dependency_choices() -> None:
 def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
     expect("deploy.sh control install" in text, "expected Sovereign Control Node install command in deploy usage")
+    expect("deploy.sh control backup" in text, "expected Sovereign Control Node runtime backup command in deploy usage")
+    expect("deploy.sh control reset-runtime" in text, "expected Sovereign Control Node runtime reset command in deploy usage")
     expect("ArcLink Sovereign Control Node control center" in text, "expected Sovereign Control Node submenu")
+    expect("Backup runtime state and generated pod data" in text, "expected Sovereign submenu to expose runtime backup")
+    expect("Reset test/client runtime data after backup" in text, "expected Sovereign submenu to expose guarded runtime reset")
     expect('MODE="control"' in text and 'CONTROL_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to control submenu")
     expect("run_control_install_flow()" in text, "expected idempotent control install flow")
+    expect("run_control_runtime_backup()" in text, "expected first-class control runtime backup flow")
+    expect("run_control_runtime_reset()" in text, "expected first-class control runtime reset flow")
+    expect("ARCLINK_CONFIRM_RUNTIME_RESET=RESET" in text, "expected non-interactive reset confirmation guard")
     expect("collect_control_install_answers()" in text, "expected control-node provider configuration flow")
     expect("ArcLink ingress mode (domain/tailscale)" in text, "expected control install to ask for domain or Tailscale ingress")
     expect("publish_control_tailscale_ingress()" in text, "expected control install to publish Dockerized control surfaces through Tailscale")
@@ -2049,6 +2056,30 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("run_arclink_docker health" in text, "expected Docker install flow to run health")
     expect("run_arclink_docker live-smoke" in text, "expected Docker install flow to run live agent smoke")
     print("PASS test_deploy_sh_exposes_docker_control_center")
+
+
+def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
+    text = DEPLOY_SH.read_text()
+    reset = extract(text, "run_control_runtime_reset() {", "control_command_from_mode() {")
+    backup = extract(text, "create_control_runtime_backup() {", "run_control_runtime_backup() {")
+    expect("create_control_runtime_backup" in reset, "expected reset to create a backup before clearing data")
+    expect(
+        reset.index("create_control_runtime_backup") < reset.index("reset_control_runtime_database"),
+        "expected reset to back up before touching the database",
+    )
+    expect("confirm_control_runtime_reset" in reset, "expected reset to require confirmation")
+    expect("ARCLINK_CONFIRM_RUNTIME_RESET" in text, "expected reset to support explicit non-interactive confirmation")
+    expect("Type RESET to continue" in text, "expected reset prompt to require a typed acknowledgement")
+    expect("down --remove-orphans --volumes" in text, "expected reset to remove generated pod stacks and named volumes")
+    expect("/arcdata/deployments" in text, "expected reset to remove generated pod state")
+    expect("arclink-priv.tgz" in backup, "expected backup to snapshot private state")
+    expect("arcdata-deployments.tgz" in backup, "expected backup to snapshot generated pod data")
+    expect("arclink_channel_pairing_codes" in text, "expected reset to clear channel pairing codes")
+    expect("arclink_users" in text, "expected reset to clear client users")
+    expect("arclink_deployments" in text, "expected reset to clear deployments")
+    expect("DELETE FROM arclink_admins" not in text, "reset must not delete admin accounts")
+    expect("DELETE FROM arclink_fleet_hosts" not in text, "reset must not delete fleet hosts")
+    print("PASS test_control_runtime_reset_is_backup_first_and_guarded")
 
 
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
@@ -3084,6 +3115,7 @@ def main() -> int:
         test_collect_install_answers_records_missing_host_dependency_choices,
         test_write_answers_file_persists_host_dependency_choices,
         test_deploy_sh_exposes_docker_control_center,
+        test_control_runtime_reset_is_backup_first_and_guarded,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,

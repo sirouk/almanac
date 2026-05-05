@@ -469,6 +469,8 @@ Usage:
   deploy.sh control upgrade
   deploy.sh control health
   deploy.sh control ports
+  deploy.sh control backup
+  deploy.sh control reset-runtime
   deploy.sh install
   deploy.sh upgrade
   deploy.sh notion-ssot
@@ -493,6 +495,8 @@ Sovereign Control Node:
   deploy.sh control ports
   deploy.sh control logs [SERVICE]
   deploy.sh control ps
+  deploy.sh control backup          # private backup of control DB, private state, and generated pods
+  deploy.sh control reset-runtime   # backup, then clear customer/test runtime data and generated pods
 
 Shared Host Docker control center:
   deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
@@ -525,6 +529,8 @@ Control and Docker shortcut aliases:
   deploy.sh control-reconfigure
   deploy.sh control-health
   deploy.sh control-ports
+  deploy.sh control-backup
+  deploy.sh control-reset-runtime
   deploy.sh docker-install
   deploy.sh docker-upgrade
   deploy.sh docker-reconfigure
@@ -578,7 +584,7 @@ while [[ $# -gt 0 ]]; do
       CONTROL_DEPLOY_ARGS=("$@")
       break
       ;;
-    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-teardown|control-write-config|control-remove)
+    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-teardown|control-write-config|control-remove)
       MODE="$1"
       shift
       CONTROL_DEPLOY_ARGS=("$@")
@@ -1146,6 +1152,8 @@ Usage:
   deploy.sh control ports
   deploy.sh control logs [SERVICE]
   deploy.sh control health
+  deploy.sh control backup          # backup control DB, private state, and generated pods
+  deploy.sh control reset-runtime   # backup, then clear customer/test runtime data
   deploy.sh control provision-once # run one provisioner batch now
 
 Shortcut aliases:
@@ -1154,6 +1162,8 @@ Shortcut aliases:
   deploy.sh control-reconfigure
   deploy.sh control-health
   deploy.sh control-ports
+  deploy.sh control-backup
+  deploy.sh control-reset-runtime
 EOF
 }
 
@@ -1265,9 +1275,11 @@ ArcLink Sovereign Control Node control center
   5) Show control node ports
   6) Show control node service state
   7) Show control node logs
-  8) Stop control node stack
-  9) Teardown control node stack and named volumes
- 10) Exit
+  8) Backup runtime state and generated pod data
+  9) Reset test/client runtime data after backup
+ 10) Stop control node stack
+ 11) Teardown control node stack and named volumes
+ 12) Exit
 EOF
 
   while true; do
@@ -1280,10 +1292,12 @@ EOF
       5) CONTROL_DEPLOY_COMMAND="ports"; return 0 ;;
       6) CONTROL_DEPLOY_COMMAND="ps"; return 0 ;;
       7) CONTROL_DEPLOY_COMMAND="logs"; return 0 ;;
-      8) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
-      9) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
-      10) exit 0 ;;
-      *) echo "Please choose 1 through 10." ;;
+      8) CONTROL_DEPLOY_COMMAND="backup"; return 0 ;;
+      9) CONTROL_DEPLOY_COMMAND="reset-runtime"; return 0 ;;
+      10) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
+      11) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
+      12) exit 0 ;;
+      *) echo "Please choose 1 through 12." ;;
     esac
   done
 }
@@ -8956,6 +8970,396 @@ run_control_reconfigure_flow() {
   run_arclink_docker ports
 }
 
+control_host_priv_dir() {
+  load_docker_runtime_config
+  printf '%s\n' "${ARCLINK_DOCKER_HOST_PRIV_DIR:-$BOOTSTRAP_DIR/arclink-priv}"
+}
+
+control_host_db_path() {
+  local host_priv="" container_priv="" db_path=""
+
+  load_docker_runtime_config
+  host_priv="${ARCLINK_DOCKER_HOST_PRIV_DIR:-$BOOTSTRAP_DIR/arclink-priv}"
+  container_priv="${ARCLINK_DOCKER_CONTAINER_PRIV_DIR:-/home/arclink/arclink/arclink-priv}"
+  db_path="${ARCLINK_DB_PATH:-$container_priv/state/arclink-control.sqlite3}"
+
+  case "$db_path" in
+    "$container_priv"/*)
+      printf '%s/%s\n' "$host_priv" "${db_path#"$container_priv"/}"
+      ;;
+    /home/arclink/arclink/arclink-priv/*)
+      printf '%s/%s\n' "$host_priv" "${db_path#/home/arclink/arclink/arclink-priv/}"
+      ;;
+    /*)
+      printf '%s\n' "$db_path"
+      ;;
+    *)
+      printf '%s/%s\n' "$host_priv" "$db_path"
+      ;;
+  esac
+}
+
+new_control_runtime_backup_dir() {
+  local host_priv="" root="" stamp="" target="" suffix="0"
+
+  host_priv="$(control_host_priv_dir)"
+  root="$host_priv/state/reset-backups"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  target="$root/$stamp"
+  while [[ -e "$target" ]]; do
+    suffix=$((suffix + 1))
+    target="$root/$stamp-$suffix"
+  done
+  printf '%s\n' "$target"
+}
+
+create_control_runtime_backup() {
+  local backup_dir="$1"
+  local host_priv="" db_path="" counts_path="" db_backup="" inventory_path=""
+  local arcdata_root="/arcdata/deployments"
+  local tar_rc="0"
+
+  host_priv="$(control_host_priv_dir)"
+  db_path="$(control_host_db_path)"
+  counts_path="$backup_dir/table-counts.tsv"
+  db_backup="$backup_dir/arclink-control.sqlite3"
+  inventory_path="$backup_dir/docker-containers.jsonl"
+
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir" 2>/dev/null || true
+
+  cat >"$backup_dir/README.txt" <<EOF
+ArcLink Sovereign runtime backup
+Created: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+This backup can contain private keys, provider credentials, user files,
+pod data, and webhook state. Keep it private.
+
+Contents:
+  arclink-control.sqlite3      Consistent SQLite backup of the control DB when present
+  table-counts.tsv            Table row counts at backup time
+  arclink-priv.tgz            Private config/state/vault snapshot, excluding reset-backups
+  arcdata-deployments.tgz     Generated Sovereign pod data when present
+  docker-containers.jsonl      Docker container inventory when Docker is available
+EOF
+
+  python3 - "$db_path" "$db_backup" "$counts_path" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+backup_path = Path(sys.argv[2])
+counts_path = Path(sys.argv[3])
+
+if not db_path.exists():
+    counts_path.write_text("database\tmissing\n", encoding="utf-8")
+    raise SystemExit(0)
+
+src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+try:
+    dst = sqlite3.connect(str(backup_path))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+    rows = []
+    tables = [
+        row[0]
+        for row in src.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    ]
+    for table in tables:
+        quoted = '"' + table.replace('"', '""') + '"'
+        count = src.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
+        rows.append(f"{table}\t{count}")
+    counts_path.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
+finally:
+    src.close()
+PY
+
+  if command -v docker >/dev/null 2>&1; then
+    docker ps -a --format '{{json .}}' >"$inventory_path" 2>/dev/null || true
+  fi
+
+  if [[ -d "$host_priv" ]]; then
+    set +e
+    tar -czf "$backup_dir/arclink-priv.tgz" \
+      --exclude='arclink-priv/state/reset-backups' \
+      -C "$BOOTSTRAP_DIR" arclink-priv
+    tar_rc=$?
+    set -e
+    if [[ "$tar_rc" -eq 1 ]]; then
+      echo "Warning: private state changed during backup; kept live snapshot and consistent DB backup." >&2
+    elif [[ "$tar_rc" -ne 0 ]]; then
+      return "$tar_rc"
+    fi
+  fi
+
+  if [[ -d "$arcdata_root" ]] && find "$arcdata_root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+    set +e
+    tar -czf "$backup_dir/arcdata-deployments.tgz" -C /arcdata deployments
+    tar_rc=$?
+    set -e
+    if [[ "$tar_rc" -eq 1 ]]; then
+      echo "Warning: generated pod data changed during backup; kept live snapshot and consistent DB backup." >&2
+    elif [[ "$tar_rc" -ne 0 ]]; then
+      return "$tar_rc"
+    fi
+  fi
+
+  chmod -R go-rwx "$backup_dir" 2>/dev/null || true
+  echo "ArcLink Sovereign runtime backup written to: $backup_dir"
+}
+
+run_control_runtime_backup() {
+  local state_dir="$BOOTSTRAP_DIR/arclink-priv/state"
+  local backup_dir=""
+
+  begin_deploy_operation "control-backup" "$state_dir"
+  trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
+
+  backup_dir="$(new_control_runtime_backup_dir)"
+  create_control_runtime_backup "$backup_dir"
+
+  finish_deploy_operation
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
+}
+
+confirm_control_runtime_reset() {
+  local answer=""
+
+  if [[ "${ARCLINK_CONFIRM_RUNTIME_RESET:-}" == "RESET" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "Refusing runtime reset without interactive confirmation." >&2
+    echo "Set ARCLINK_CONFIRM_RUNTIME_RESET=RESET to run non-interactively." >&2
+    return 1
+  fi
+
+  cat <<'EOF'
+ArcLink Sovereign runtime reset
+
+This will back up first, then clear customer/test runtime data:
+  - public Raven onboarding sessions and channel pairing codes
+  - users, subscriptions, deployments, provisioning jobs, service health
+  - generated Sovereign pod containers, named volumes, and /arcdata/deployments entries
+  - notification, webhook, audit, action, rate-limit, and event rows
+
+It preserves:
+  - deploy config, provider credentials, fleet hosts, admin accounts, and source checkout
+
+Type RESET to continue.
+EOF
+  read -r -p "Confirm reset [RESET]: " answer
+  [[ "$answer" == "RESET" ]]
+}
+
+stop_control_runtime_writers() {
+  local -a containers=(
+    arclink-control-api-1
+    arclink-control-provisioner-1
+    arclink-control-web-1
+    arclink-notification-delivery-1
+    arclink-health-watch-1
+    arclink-agent-supervisor-1
+  )
+
+  if command -v docker >/dev/null 2>&1; then
+    docker stop "${containers[@]}" >/dev/null 2>&1 || true
+  fi
+}
+
+remove_control_generated_pods() {
+  local compose_file="" deployment_dir="" project="" container_names=""
+  local -a compose_files=()
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -d /arcdata/deployments ]]; then
+    while IFS= read -r compose_file; do
+      compose_files+=("$compose_file")
+    done < <(find /arcdata/deployments -mindepth 2 -maxdepth 4 -type f \( -name compose.yaml -o -name docker-compose.yaml \) 2>/dev/null | sort -u)
+  fi
+
+  for compose_file in "${compose_files[@]}"; do
+    project="$(docker ps -a --filter "label=com.docker.compose.project.config_files=$compose_file" --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | head -n 1)"
+    if [[ -z "$project" ]]; then
+      deployment_dir="$(basename "$(dirname "$(dirname "$compose_file")")")"
+      project="arclink-${deployment_dir%%-*}"
+    fi
+    echo "Stopping generated pod stack: $project"
+    docker compose -p "$project" -f "$compose_file" down --remove-orphans --volumes >/dev/null 2>&1 || true
+  done
+
+  container_names="$(docker ps -a --filter 'name=arclink-arcdep_' --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')"
+  if [[ -n "$container_names" ]]; then
+    # shellcheck disable=SC2086
+    docker rm -f $container_names >/dev/null 2>&1 || true
+  fi
+
+  if [[ -d /arcdata/deployments ]]; then
+    find /arcdata/deployments -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' \) -exec rm -rf {} +
+  fi
+}
+
+reset_control_runtime_database() {
+  local db_path="$1"
+
+  if [[ ! -f "$db_path" ]]; then
+    echo "Control database not found, skipping row reset: $db_path"
+    return 0
+  fi
+
+  python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+tables = [
+    "arclink_channel_pairing_codes",
+    "arclink_onboarding_events",
+    "arclink_onboarding_sessions",
+    "arclink_user_sessions",
+    "arclink_subscriptions",
+    "arclink_service_health",
+    "arclink_provisioning_jobs",
+    "arclink_deployment_placements",
+    "arclink_deployments",
+    "arclink_dns_records",
+    "arclink_events",
+    "arclink_audit_log",
+    "arclink_webhook_events",
+    "notification_outbox",
+    "arclink_action_attempts",
+    "arclink_action_intents",
+    "arclink_rollouts",
+    "rate_limits",
+    "agents",
+    "agent_identity",
+    "agent_vault_subscriptions",
+    "bootstrap_requests",
+    "bootstrap_tokens",
+    "onboarding_sessions",
+    "onboarding_update_failures",
+    "operator_actions",
+    "notion_identity_claims",
+    "notion_identity_overrides",
+    "notion_index_documents",
+    "notion_retrieval_audit",
+    "notion_webhook_events",
+    "ssot_access_audit",
+    "ssot_pending_writes",
+    "memory_synthesis_cards",
+    "refresh_jobs",
+    "arclink_users",
+]
+
+def quote(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+conn = sqlite3.connect(str(db_path))
+try:
+    existing = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN IMMEDIATE")
+    cleared = []
+    for table in tables:
+        if table in existing:
+            conn.execute(f"DELETE FROM {quote(table)}")
+            cleared.append(table)
+    if "sqlite_sequence" in existing and cleared:
+        placeholders = ",".join("?" for _ in cleared)
+        conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", cleared)
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("VACUUM")
+    print("Cleared runtime tables: " + (", ".join(cleared) if cleared else "none"))
+finally:
+    conn.close()
+PY
+}
+
+print_control_runtime_counts() {
+  local db_path="$1"
+
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+
+  python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+tables = [
+    "arclink_users",
+    "arclink_onboarding_sessions",
+    "arclink_deployments",
+    "arclink_subscriptions",
+    "arclink_provisioning_jobs",
+    "arclink_channel_pairing_codes",
+    "notification_outbox",
+]
+conn = sqlite3.connect(db_path)
+try:
+    existing = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in tables:
+        if table in existing:
+            quoted = '"' + table.replace('"', '""') + '"'
+            count = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
+            print(f"{table}={count}")
+finally:
+    conn.close()
+PY
+}
+
+run_control_runtime_reset() {
+  local state_dir="$BOOTSTRAP_DIR/arclink-priv/state"
+  local backup_dir="" db_path=""
+
+  confirm_control_runtime_reset
+
+  begin_deploy_operation "control-reset-runtime" "$state_dir"
+  trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
+
+  backup_dir="$(new_control_runtime_backup_dir)"
+  create_control_runtime_backup "$backup_dir"
+
+  db_path="$(control_host_db_path)"
+  echo "Stopping control-plane writers before reset..."
+  stop_control_runtime_writers
+  echo "Stopping and removing generated Sovereign pod stacks..."
+  remove_control_generated_pods
+  echo "Clearing customer/test runtime rows from control database..."
+  reset_control_runtime_database "$db_path"
+  echo "Runtime counts after reset:"
+  print_control_runtime_counts "$db_path"
+
+  echo "Restarting Dockerized Sovereign Control Node..."
+  run_arclink_docker up
+  load_docker_runtime_config
+  publish_control_tailscale_ingress
+  register_control_public_bot_actions
+  run_arclink_docker record-release
+  run_arclink_docker ports
+  run_arclink_docker health
+
+  echo "ArcLink Sovereign runtime reset complete."
+  echo "Backup kept at: $backup_dir"
+
+  finish_deploy_operation
+  trap 'arclink_deploy_stable_copy_cleanup' EXIT
+}
+
 control_command_from_mode() {
   case "$1" in
     control-install) printf '%s\n' "install" ;;
@@ -8970,6 +9374,8 @@ control_command_from_mode() {
     control-ports) printf '%s\n' "ports" ;;
     control-logs) printf '%s\n' "logs" ;;
     control-health) printf '%s\n' "health" ;;
+    control-backup) printf '%s\n' "backup" ;;
+    control-reset-runtime) printf '%s\n' "reset-runtime" ;;
     control-provision-once) printf '%s\n' "provision-once" ;;
     control-teardown) printf '%s\n' "teardown" ;;
     control-write-config) printf '%s\n' "write-config" ;;
@@ -9005,6 +9411,12 @@ run_control_deploy_flow() {
       ;;
     reconfigure)
       run_control_reconfigure_flow
+      ;;
+    backup)
+      run_control_runtime_backup
+      ;;
+    reset-runtime)
+      run_control_runtime_reset
       ;;
     bootstrap|write-config|config|build|up|down|ps|ports|logs|health|record-release|provision-once|teardown|remove)
       run_arclink_docker "$command" ${CONTROL_DEPLOY_ARGS[@]+"${CONTROL_DEPLOY_ARGS[@]}"}
@@ -9152,7 +9564,7 @@ if [[ -z "$MODE" || "$MODE" == "menu" ]]; then
 fi
 
 case "$MODE" in
-  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-teardown|control-write-config|control-remove)
+  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-teardown|control-write-config|control-remove)
     run_control_deploy_flow
     ;;
   docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)

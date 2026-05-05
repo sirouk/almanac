@@ -485,17 +485,71 @@ def _deployments_for_user(conn: sqlite3.Connection, user_id: str) -> list[dict[s
     return [dict(row) for row in rows]
 
 
-def _agent_label(deployment: Mapping[str, Any], *, index: int = 0) -> str:
+def _agent_label(
+    deployment: Mapping[str, Any],
+    *,
+    index: int = 0,
+    conn: sqlite3.Connection | None = None,
+) -> str:
+    """Pick the friendliest available label for this deployment.
+
+    Order of preference:
+    1. Explicit metadata.agent_name / metadata.display_name
+    2. The user's onboarding display_name_hint (the name they actually picked).
+       If that user has multiple pods sharing the same display name, append a
+       short prefix tail like "#69f2" so they're distinguishable in the roster.
+    3. Explicit agent_id
+    4. A clean "Agent #<prefix-tail>" rather than the cryptic Title-Cased hash
+    5. "Agent N" as a last resort.
+    """
     metadata = _metadata(deployment)
     candidate = str(metadata.get("agent_name") or metadata.get("display_name") or "").strip()
     if candidate:
         return candidate[:40]
+
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    user_id = str(deployment.get("user_id") or "").strip()
+    if conn is not None:
+        row = None
+        if deployment_id:
+            row = conn.execute(
+                "SELECT display_name_hint FROM arclink_onboarding_sessions "
+                "WHERE deployment_id = ? AND display_name_hint != '' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (deployment_id,),
+            ).fetchone()
+        if row is None and user_id:
+            row = conn.execute(
+                "SELECT display_name_hint FROM arclink_onboarding_sessions "
+                "WHERE user_id = ? AND display_name_hint != '' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        if row is not None:
+            display_name = str(row["display_name_hint"] or "").strip()
+            if display_name:
+                tail = ""
+                if user_id:
+                    others = conn.execute(
+                        "SELECT COUNT(*) AS c FROM arclink_deployments "
+                        "WHERE user_id = ? AND deployment_id != ?",
+                        (user_id, deployment_id),
+                    ).fetchone()
+                    if others and others["c"] > 0:
+                        prefix = str(deployment.get("prefix") or "")
+                        prefix_tail = prefix.rsplit("-", 1)[-1][:4]
+                        if prefix_tail:
+                            tail = f" #{prefix_tail}"
+                return (display_name + tail)[:40]
+
     agent_id = str(deployment.get("agent_id") or "").strip()
     if agent_id:
         return agent_id[:40]
     prefix = str(deployment.get("prefix") or "").strip()
     if prefix:
-        return prefix.replace("arc-", "").replace("-", " ").title()[:40]
+        prefix_tail = prefix.rsplit("-", 1)[-1][:8]
+        if prefix_tail:
+            return f"Agent #{prefix_tail}"
     return f"Agent {index + 1}"
 
 
@@ -591,6 +645,50 @@ def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
 def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
     dashboard_url = str(_deployment_access(deployment).get("dashboard") or "").rstrip("/")
     return f"{dashboard_url}/notion/webhook" if dashboard_url else ""
+
+
+def _aboard_freeform_reply(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any],
+    conn: sqlite3.Connection | None = None,
+) -> ArcLinkPublicBotTurn:
+    """Routing law: once a user has a live pod, freeform messages on this
+    channel belong to their private agent on the Helm — not to Raven. Raven
+    keeps slash commands; everything else is a clear handoff with the helm
+    URL and a short slash-command map for the times the user wanted Raven.
+    """
+    label = _agent_label(deployment, index=0, conn=conn)
+    access = _deployment_access(deployment)
+    helm = str(access.get("dashboard") or "").rstrip("/")
+    lines = [
+        f"I'm Raven — onboarding only. Your agent **{label}** is awake on the helm, and freeform messages on this channel reach me, not it.",
+        "",
+        "Open the helm to talk to your agent directly:" if helm else "Open the helm to talk to your agent directly.",
+    ]
+    if helm:
+        lines.append(helm)
+    lines.append("")
+    lines.append(
+        "If you wanted to call me back, the slash commands still route here: `/help`, `/agents`, `/status`, "
+        "`/connect_notion`, `/config_backup`, `/pair-channel`."
+    )
+    buttons: list[ArcLinkPublicBotButton] = []
+    if helm:
+        buttons.append(_button("Open Helm", url=helm))
+    buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
+    buttons.append(_button("Run Systems Check", command="/status", style="secondary"))
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="aboard_freeform",
+        reply="\n".join(lines),
+        session=session,
+        deployment=deployment,
+        buttons=tuple(buttons),
+    )
 
 
 def _need_finished_onboarding_reply() -> str:
@@ -994,7 +1092,7 @@ def _agents_reply(
         "",
     ]
     for index, item in enumerate(deployments):
-        label = _agent_label(item, index=index)
+        label = _agent_label(item, index=index, conn=conn)
         status = str(item.get("status") or "unknown")
         marker = "active" if str(item.get("deployment_id") or "") == active_id else status
         lines.append(f"- {label}: {marker}")
@@ -1029,7 +1127,7 @@ def _switch_agent_reply(
     deployments = _deployments_for_user(conn, str(deployment.get("user_id") or ""))
     requested = str(requested_slug or "").strip().lower()
     for index, item in enumerate(deployments):
-        label = _agent_label(item, index=index)
+        label = _agent_label(item, index=index, conn=conn)
         if requested in {_agent_slug(label), _agent_slug(str(item.get("prefix") or "")), _agent_slug(str(item.get("agent_id") or ""))}:
             updated = _update_session_metadata(
                 conn,
@@ -1411,6 +1509,20 @@ def handle_arclink_public_bot_turn(
             deployment=deployment,
         )
 
+    # Routing law: if the user is already aboard with a live pod, every
+    # remaining branch below this point would re-trigger onboarding copy
+    # ("Stripe collects your email", "Send /name Your Name") that makes no
+    # sense for a paying customer. Hand them a clean Helm pointer instead.
+    aboard_session, aboard_deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+    if aboard_deployment and str(aboard_deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return _aboard_freeform_reply(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=aboard_session,
+            deployment=aboard_deployment,
+            conn=conn,
+        )
+
     session = create_or_resume_arclink_onboarding_session(
         conn,
         channel=clean_channel,
@@ -1436,7 +1548,7 @@ def handle_arclink_public_bot_turn(
     if command in {"status", "/status"}:
         context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         active_session = context_session or session
-        deployment_label = _agent_label(deployment or {}, index=0) if deployment else ""
+        deployment_label = _agent_label(deployment or {}, index=0, conn=conn) if deployment else ""
         # Pick the most informative phrase: deployment status outranks session
         # status once a deployment exists (it's closer to the user's reality).
         live_status_code = str((deployment or {}).get("status") or active_session.get("status") or "")

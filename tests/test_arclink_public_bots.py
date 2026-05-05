@@ -486,8 +486,106 @@ def main() -> int:
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
-    print("PASS all 9 ArcLink public bot tests")
+    test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
+    test_public_bot_agent_label_uses_user_display_name()
+    print("PASS all 11 ArcLink public bot tests")
     return 0
+
+
+def test_public_bot_aboard_freeform_routes_to_helm_not_onboarding() -> None:
+    """Routing law: once a user has a live pod, freeform messages and even
+    /start re-triggers must NOT spit onboarding copy. They must hand the user
+    a clean Helm pointer with the slash-command map for calling Raven back.
+    """
+    control = load_module("arclink_control.py", "arclink_control_public_bot_aboard_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_aboard_test")
+    conn = memory_db(control)
+    seed_active_public_bot_deployment(
+        control, conn,
+        channel="telegram", channel_identity="tg:99",
+        prefix="arc-c7dbf98030b3",
+    )
+
+    # Freeform "hey there" from an aboard user must get the routing-law reply.
+    freeform = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="hey there")
+    expect(freeform.action == "aboard_freeform", f"expected aboard_freeform got {freeform.action}")
+    expect("onboarding only" in freeform.reply.lower(), freeform.reply)
+    expect("Stripe collects" not in freeform.reply, "must not show onboarding copy to a paid user")
+    expect("Send `/name" not in freeform.reply, "must not prompt for /name to a paid user")
+    expect(any(b.label == "Open Helm" and b.url for b in freeform.buttons), "expected Open Helm URL button")
+    expect(any(b.command == "/agents" for b in freeform.buttons), "expected Show My Crew button")
+
+    # /start re-trigger from an aboard user gets the same routing-law reply,
+    # NOT the onboarding "Stripe collects your email" prompt.
+    restart = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/start")
+    expect(restart.action == "aboard_freeform", f"expected aboard_freeform on /start re-trigger, got {restart.action}")
+    expect("Stripe collects" not in restart.reply, "/start re-trigger leaked onboarding copy")
+
+    # Slash commands still call Raven back: /agents must still show the crew.
+    crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/agents")
+    expect(crew.action == "show_agents", str(crew.action))
+
+    # /help on an aboard user goes to the postlaunch control panel.
+    helped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/help")
+    expect("Bridge is open" in helped.reply, helped.reply)
+
+    print("PASS test_public_bot_aboard_freeform_routes_to_helm_not_onboarding")
+
+
+def test_public_bot_agent_label_uses_user_display_name() -> None:
+    """Agent labels must use the user's chosen display name, not the cryptic
+    Title-Cased prefix hash. When a user has multiple pods sharing the same
+    name, append a short prefix tail like '#69f2' so they're distinguishable.
+    """
+    control = load_module("arclink_control.py", "arclink_control_public_bot_label_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_label_test")
+    conn = memory_db(control)
+
+    # First pod with display_name_hint = "Chris"
+    seed = seed_active_public_bot_deployment(
+        control, conn,
+        channel="telegram", channel_identity="tg:777",
+        prefix="arc-c7dbf98030b3",
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET display_name_hint = 'Chris' WHERE deployment_id = ?",
+        (seed["deployment_id"],),
+    )
+    conn.commit()
+
+    crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:777", text="/agents")
+    expect("Chris" in crew.reply, f"expected user's name in roster, got: {crew.reply}")
+    expect("C7Dbf98030B3" not in crew.reply, "must not show cryptic Title-Cased prefix hash as label")
+
+    # Add a second pod under the same user → both should be distinguished
+    # with the prefix tail like "#9805".
+    second_dep = "arcdep_second"
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id=second_dep,
+        user_id=seed["user_id"],
+        prefix="arc-69f25807d6ab",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={"ingress_mode": "tailscale", "tailscale_dns_name": "control.example.ts.net"},
+    )
+    conn.execute(
+        "INSERT INTO arclink_onboarding_sessions (session_id, channel, channel_identity, status, current_step, "
+        "email_hint, display_name_hint, selected_plan_id, selected_model_id, user_id, deployment_id, checkout_state, metadata_json, created_at, updated_at) "
+        "VALUES (?, 'web', ?, 'first_contacted', 'first_agent_contact', '', 'Chris', 'starter', 'moonshotai/Kimi-K2.6-TEE', ?, ?, 'paid', '{}', ?, ?)",
+        (
+            "onb_second", "web:second",
+            seed["user_id"], second_dep,
+            control.utc_now_iso(), control.utc_now_iso(),
+        ),
+    )
+    conn.commit()
+
+    crew2 = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:777", text="/agents")
+    # Both names appear; at least one carries a #tail to disambiguate.
+    expect(crew2.reply.count("Chris") >= 2, f"expected two Chris entries, got: {crew2.reply}")
+    expect("#" in crew2.reply, f"expected disambiguator suffix, got: {crew2.reply}")
+    print("PASS test_public_bot_agent_label_uses_user_display_name")
 
 
 if __name__ == "__main__":

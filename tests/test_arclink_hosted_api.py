@@ -14,7 +14,7 @@ def seed_paid_deployment(control, onboarding, conn):
         session_id="onb_hosted",
         email_hint="hosted-user@example.test",
         display_name_hint="Hosted User",
-        selected_plan_id="starter",
+        selected_plan_id="sovereign",
         selected_model_id="model-hosted",
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
@@ -45,7 +45,7 @@ def test_public_onboarding_routes_work_without_session_auth() -> None:
         method="POST",
         path="/api/v1/onboarding/start",
         headers={},
-        body=json.dumps({"channel": "web", "email": "new@example.test", "plan_id": "starter"}),
+        body=json.dumps({"channel": "web", "email": "new@example.test", "plan_id": "sovereign"}),
         config=config,
     )
     expect(status == 201, f"expected 201 got {status}: {payload}")
@@ -671,7 +671,7 @@ def test_public_onboarding_checkout_route() -> None:
         method="POST",
         path="/api/v1/onboarding/start",
         headers={},
-        body=json.dumps({"channel": "web", "email": "checkout@example.test", "plan_id": "starter"}),
+        body=json.dumps({"channel": "web", "email": "checkout@example.test", "plan_id": "sovereign"}),
         config=config,
     )
     expect(status == 201, f"expected 201 got {status}")
@@ -724,7 +724,7 @@ def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
         method="POST",
         path="/api/v1/onboarding/start",
         headers={},
-        body=json.dumps({"channel": "web", "email": "live-resolve@example.test", "plan_id": "starter"}),
+        body=json.dumps({"channel": "web", "email": "live-resolve@example.test", "plan_id": "sovereign"}),
         config=config,
     )
     expect(status == 201, f"expected 201 got {status}: {payload}")
@@ -899,7 +899,7 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
         channel_identity="987654321",
         session_id="onb_paidping",
         display_name_hint="Hera",
-        selected_plan_id="starter",
+        selected_plan_id="sovereign",
         selected_model_id="model-test",
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
@@ -978,7 +978,7 @@ def test_stripe_webhook_queues_paid_ping_for_discord_user() -> None:
         channel_identity="discord:555777",
         session_id="onb_paidping_discord",
         display_name_hint="Raven Buyer",
-        selected_plan_id="starter",
+        selected_plan_id="sovereign",
         selected_model_id="model-test",
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
@@ -1716,7 +1716,7 @@ def test_onboarding_payload_validation_rejects_missing_fields() -> None:
     # checkout without session_id -> error
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/onboarding/checkout",
-        headers={}, body=json.dumps({"price_id": "price_starter"}), config=config,
+        headers={}, body=json.dumps({"price_id": "price_sovereign"}), config=config,
     )
     expect(status in (400, 401), f"expected 400/401 got {status}: {payload}")
 

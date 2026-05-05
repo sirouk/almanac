@@ -93,8 +93,12 @@ class HostedApiConfig:
         self.stripe_webhook_secret: str = str(e.get("STRIPE_WEBHOOK_SECRET", "")).strip()
         self.log_level: str = str(e.get("ARCLINK_LOG_LEVEL", "INFO")).strip().upper()
         self.default_price_id: str = str(
-            e.get("ARCLINK_FIRST_AGENT_PRICE_ID") or e.get("ARCLINK_DEFAULT_PRICE_ID", "price_arclink_starter")
+            e.get("ARCLINK_SOVEREIGN_PRICE_ID")
+            or e.get("ARCLINK_FIRST_AGENT_PRICE_ID")
+            or e.get("ARCLINK_DEFAULT_PRICE_ID", "price_arclink_sovereign")
         ).strip()
+        self.sovereign_price_id: str = str(e.get("ARCLINK_SOVEREIGN_PRICE_ID") or self.default_price_id).strip()
+        self.scale_price_id: str = str(e.get("ARCLINK_SCALE_PRICE_ID", "")).strip()
         self.additional_agent_price_id: str = str(e.get("ARCLINK_ADDITIONAL_AGENT_PRICE_ID", "")).strip()
 
 
@@ -203,7 +207,7 @@ def _handle_public_onboarding_start(
         channel_identity=str(body.get("channel_identity") or body.get("email") or ""),
         email_hint=str(body.get("email") or ""),
         display_name_hint=str(body.get("display_name") or ""),
-        selected_plan_id=str(body.get("plan_id") or "starter"),
+        selected_plan_id=str(body.get("plan_id") or "sovereign"),
         selected_model_id=str(body.get("model_id") or ""),
         metadata=body.get("metadata"),
     )
@@ -236,11 +240,17 @@ def _handle_public_onboarding_checkout(
     config: HostedApiConfig,
     stripe_client: Any,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    session_id = str(body.get("session_id") or "")
+    session_row = conn.execute("SELECT selected_plan_id FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    selected_plan_id = str((dict(session_row) if session_row is not None else {}).get("selected_plan_id") or body.get("plan_id") or "").strip().lower()
+    price_id = str(body.get("price_id") or config.default_price_id)
+    if selected_plan_id == "scale" and config.scale_price_id:
+        price_id = config.scale_price_id
     result = open_public_onboarding_checkout_api(
         conn,
-        session_id=str(body.get("session_id") or ""),
+        session_id=session_id,
         stripe_client=stripe_client,
-        price_id=str(body.get("price_id") or config.default_price_id),
+        price_id=price_id,
         success_url=str(body.get("success_url") or ""),
         cancel_url=str(body.get("cancel_url") or ""),
         base_domain=config.base_domain,
@@ -645,6 +655,7 @@ def _handle_telegram_webhook(
         conn, body,
         stripe_client=stripe_client,
         price_id=config.default_price_id,
+        scale_price_id=config.scale_price_id,
         additional_agent_price_id=config.additional_agent_price_id,
         base_domain=config.base_domain,
     )
@@ -716,6 +727,7 @@ def _handle_discord_webhook(
             config=dc,
             stripe_client=stripe_client,
             price_id=config.default_price_id,
+            scale_price_id=config.scale_price_id,
             additional_agent_price_id=config.additional_agent_price_id,
             base_domain=config.base_domain,
         )

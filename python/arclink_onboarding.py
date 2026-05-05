@@ -133,6 +133,11 @@ def _stable_prefix(session_id: str) -> str:
     return f"arc-{hashlib.sha256(session_id.encode('utf-8')).hexdigest()[:12]}"
 
 
+def _plan_agent_count(plan_id: str) -> int:
+    clean = str(plan_id or "").strip().lower()
+    return 3 if clean == "scale" else 1
+
+
 def _active_session_row(conn: sqlite3.Connection, *, channel: str, channel_identity: str) -> sqlite3.Row | None:
     placeholders = ",".join("?" for _ in ARCLINK_ONBOARDING_ACTIVE_STATUSES)
     return conn.execute(
@@ -360,6 +365,8 @@ def prepare_arclink_onboarding_deployment(
         or (str(existing_user["user_id"] or "") if existing_user is not None else "")
         or _stable_id("arcusr", session_id, length=18)
     )
+    selected_plan_id = str(session.get("selected_plan_id") or "").strip()
+    agent_count = _plan_agent_count(selected_plan_id)
     deployment_id = str(session.get("deployment_id") or "") or _stable_id("arcdep", session_id, length=18)
     upsert_arclink_user(
         conn,
@@ -367,20 +374,28 @@ def prepare_arclink_onboarding_deployment(
         email=email_hint,
         display_name=str(session.get("display_name_hint") or ""),
     )
-    existing = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
-    if existing is None:
+    deployment_ids = [deployment_id]
+    deployment_ids.extend(_stable_id("arcdep", session_id, f"agent:{idx}", length=18) for idx in range(2, agent_count + 1))
+    for idx, current_deployment_id in enumerate(deployment_ids, start=1):
+        existing = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (current_deployment_id,)).fetchone()
+        if existing is not None:
+            continue
+        prefix_seed = session_id if idx == 1 else f"{session_id}:agent:{idx}"
         reserve_arclink_deployment_prefix(
             conn,
-            deployment_id=deployment_id,
+            deployment_id=current_deployment_id,
             user_id=user_id,
-            prefix=prefix or _stable_prefix(session_id),
+            prefix=(prefix if idx == 1 else "") or _stable_prefix(prefix_seed),
             base_domain=base_domain,
             status="entitlement_required",
             metadata={
                 "onboarding_session_id": session_id,
                 "onboarding_channel": str(session.get("channel") or ""),
-                "selected_plan_id": str(session.get("selected_plan_id") or ""),
+                "selected_plan_id": selected_plan_id,
                 "selected_model_id": str(session.get("selected_model_id") or ""),
+                "bundle_agent_count": agent_count,
+                "bundle_agent_index": idx,
+                "bundle_primary_deployment_id": deployment_id,
             },
         )
     session = _update_session(
@@ -401,6 +416,7 @@ def open_arclink_onboarding_checkout(
     success_url: str,
     cancel_url: str,
     base_domain: str = "",
+    line_items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     session = prepare_arclink_onboarding_deployment(conn, session_id=session_id, base_domain=base_domain)
     if str(session.get("checkout_session_id") or "") and str(session.get("checkout_state") or "") in {"open", "paid"}:
@@ -424,6 +440,7 @@ def open_arclink_onboarding_checkout(
             "arclink_purchase_kind": purchase_kind,
             "arclink_plan_id": selected_plan_id,
         },
+        line_items=line_items,
     )
     session = _update_session(
         conn,

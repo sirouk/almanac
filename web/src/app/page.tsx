@@ -19,7 +19,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"
           >
-            Start Launch
+            Take Me Aboard
           </Link>
         </div>
       </nav>
@@ -36,8 +36,8 @@ export default function Home() {
         </h1>
         <p className="mt-6 max-w-xl text-lg text-soft-white/70">
           Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your
-          private ArcLink vessel: an agent, model access, memory, retrieval, files, code tools,
-          bot channels, and live deployment health. First agent $35/month.
+          private ArcLink vessel. Sovereign brings one agent plus ArcLink systems for $99/month.
+          Scale brings three agents, ArcLink systems, and Federation for $179/month.
         </p>
         <div className="relative mt-8 aspect-[16/9] w-full max-w-2xl border border-border">
           <Image
@@ -55,7 +55,7 @@ export default function Home() {
             href="/onboarding"
             className="rounded bg-signal-orange px-6 py-3 text-base font-semibold text-jet transition hover:opacity-90"
           >
-            Hire My First Agent
+            Choose My Vessel
           </Link>
           <Link
             href="/dashboard"
@@ -74,7 +74,7 @@ export default function Home() {
         <div className="mx-auto mb-10 max-w-3xl text-center">
           <h2 className="font-display text-2xl font-semibold sm:text-3xl">What boards aboard your vessel</h2>
           <p className="mt-3 text-sm text-soft-white/60">
-            Every pod ships fully wired. No infrastructure homework, no cobbled stack - Raven brings the hull online and hands you the helm.
+            Every vessel ships fully wired. No infrastructure homework, no cobbled stack - Raven brings the hull online and hands you the helm.
           </p>
         </div>
         <div className="mx-auto grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-3">

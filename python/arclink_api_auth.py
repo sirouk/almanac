@@ -554,7 +554,7 @@ def start_public_onboarding_api(
     channel_identity: str,
     email_hint: str = "",
     display_name_hint: str = "",
-    selected_plan_id: str = "starter",
+    selected_plan_id: str = "sovereign",
     selected_model_id: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
@@ -616,6 +616,7 @@ def open_public_onboarding_checkout_api(
     success_url: str,
     cancel_url: str,
     base_domain: str = "",
+    line_items: list[dict[str, Any]] | None = None,
 ) -> ArcLinkApiResponse:
     _require_nonempty(session_id, "session_id")
     _require_nonempty(price_id, "price_id")
@@ -627,6 +628,7 @@ def open_public_onboarding_checkout_api(
         success_url=success_url,
         cancel_url=cancel_url,
         base_domain=base_domain,
+        line_items=line_items,
     )
     return ArcLinkApiResponse(status=200, payload={"session": session})
 

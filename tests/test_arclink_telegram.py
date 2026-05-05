@@ -39,11 +39,11 @@ def test_telegram_parse_update() -> None:
             "id": "cb_1",
             "from": {"id": 99},
             "message": {"chat": {"id": 42}},
-            "data": "arclink:/plan starter",
+            "data": "arclink:/plan sovereign",
         },
     })
     expect(callback is not None, "should parse callback")
-    expect(callback["text"] == "/plan starter", str(callback))
+    expect(callback["text"] == "/plan sovereign", str(callback))
     print("PASS test_telegram_parse_update")
 
 
@@ -86,7 +86,9 @@ def test_telegram_fake_transport_polling() -> None:
     )
     expect(len(transport.sent_messages) == 2, f"expected 2 replies, got {len(transport.sent_messages)}")
     expect("Raven" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
-    expect("Name painted on the hatch" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("Welcome aboard, Test Buyer" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("Sovereign - $99/month" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
+    expect("Scale - $179/month" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
     expect("reply_markup" in transport.sent_messages[1], str(transport.sent_messages[1]))
     print("PASS test_telegram_fake_transport_polling")
 

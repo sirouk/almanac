@@ -101,14 +101,14 @@ class TestStripeE2ELive(LiveE2EBase):
             body=json.dumps({
                 "channel": "web",
                 "email": "live-e2e@example.test",
-                "plan_id": "starter",
+                "plan_id": "sovereign",
             }),
             config=config,
         )
         self.assertEqual(status, 201, f"onboarding/start failed: {payload}")
         session_id = payload["session"]["session_id"]
 
-        price_id = _env("ARCLINK_TEST_PRICE_ID") or "price_arclink_starter"
+        price_id = _env("ARCLINK_TEST_PRICE_ID") or "price_arclink_sovereign"
         status, payload, _ = self.hosted.route_arclink_hosted_api(
             conn,
             method="POST",

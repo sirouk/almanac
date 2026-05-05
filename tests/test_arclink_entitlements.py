@@ -578,7 +578,7 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
     session = onboarding.create_or_resume_arclink_onboarding_session(
         conn, channel="web", channel_identity="checkout@example.test",
         session_id="onb_checkout", email_hint="checkout@example.test",
-        display_name_hint="Checkout User", selected_plan_id="starter",
+        display_name_hint="Checkout User", selected_plan_id="sovereign",
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
         conn, session_id=session["session_id"], base_domain="example.test", prefix="ck-test-1a2b",

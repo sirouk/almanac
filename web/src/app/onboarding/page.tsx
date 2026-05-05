@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ErrorAlert } from "@/components/ui";
 
 type Step = "start" | "questions" | "checkout" | "done";
+type PlanId = "sovereign" | "scale";
 
 const RESUME_KEY = "arclink_onboarding_resume";
 
@@ -14,13 +15,29 @@ type ResumeState = {
   step: Step;
   sessionId: string;
   name: string;
+  planId: PlanId;
   checkoutUrl: string;
+};
+
+const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; checkout: string }> = {
+  sovereign: {
+    name: "Sovereign",
+    price: "$99/month",
+    summary: "One private agent plus ArcLink systems.",
+    checkout: "Hire Sovereign - $99/month",
+  },
+  scale: {
+    name: "Scale",
+    price: "$179/month",
+    summary: "Three private agents, ArcLink systems, and Federation.",
+    checkout: "Hire Scale - $179/month",
+  },
 };
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
   const [name, setName] = useState("");
-  const [planId] = useState("starter");
+  const [planId, setPlanId] = useState<PlanId>("sovereign");
   const [sessionId, setSessionId] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -35,6 +52,7 @@ export default function OnboardingPage() {
       const parsed = JSON.parse(raw) as Partial<ResumeState>;
       if (parsed.sessionId) setSessionId(parsed.sessionId);
       if (parsed.name) setName(parsed.name);
+      if (parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
       if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
       if (parsed.step && parsed.step !== "start") {
         setStep(parsed.step);
@@ -50,13 +68,13 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (step === "start") return;
-    const snapshot: ResumeState = { step, sessionId, name, checkoutUrl };
+    const snapshot: ResumeState = { step, sessionId, name, planId, checkoutUrl };
     try {
       window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
     } catch {
       // localStorage quota or disabled - drop silently.
     }
-  }, [step, sessionId, name, checkoutUrl]);
+  }, [step, sessionId, name, planId, checkoutUrl]);
 
   function clearResume() {
     try {
@@ -75,12 +93,12 @@ export default function OnboardingPage() {
     return generated;
   }
 
-  async function handleStart(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleStart(nextPlanId: PlanId) {
     setError("");
+    setPlanId(nextPlanId);
     setLoading(true);
     try {
-      const res = await api.startOnboarding({ channel: "web", channel_identity: webContactId(), plan_id: planId });
+      const res = await api.startOnboarding({ channel: "web", channel_identity: webContactId(), plan_id: nextPlanId });
       if (res.status === 201 && res.data) {
         const session = (res.data as Record<string, Record<string, string>>).session;
         setSessionId(session.session_id);
@@ -167,9 +185,9 @@ export default function OnboardingPage() {
           {step === "done" && "Step 4 of 4 - Launch queue"}
         </p>
         <h1 className="font-display text-2xl font-bold">
-          {step === "start" && "I'm Raven"}
+          {step === "start" && "Choose Your Vessel"}
           {step === "questions" && "Name On The Hatch"}
-          {step === "checkout" && "Hire My First Agent"}
+          {step === "checkout" && `Hire ${PLAN_COPY[planId].name}`}
           {step === "done" && "Stripe Link Ready"}
         </h1>
 
@@ -182,18 +200,31 @@ export default function OnboardingPage() {
         )}
 
         {step === "start" && (
-          <form onSubmit={handleStart} className="mt-6 space-y-4">
+          <div className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              I can take you from a few answers to a private AI agent of your own - with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects your email securely at checkout. No technical setup on your end.
+              I can take you from a few answers to a private ArcLink vessel with agents, memory, files, code workspace, model access, and a live systems board already wired up.
             </p>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Opening..." : "Start Launch"}
-            </button>
-          </form>
+            <div className="grid gap-3">
+              <button
+                type="button"
+                onClick={() => handleStart("sovereign")}
+                disabled={loading}
+                className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
+              >
+                Sovereign - $99/month
+                <span className="mt-1 block text-xs font-normal text-jet/70">One agent plus ArcLink systems.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStart("scale")}
+                disabled={loading}
+                className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
+              >
+                Scale - $179/month
+                <span className="mt-1 block text-xs font-normal text-soft-white/60">Three agents, ArcLink systems, and Federation.</span>
+              </button>
+            </div>
+          </div>
         )}
 
         {step === "questions" && (
@@ -211,7 +242,7 @@ export default function OnboardingPage() {
               />
             </div>
             <p className="text-sm text-soft-white/40">
-              Starter puts your first ArcLink agent aboard for <span className="text-signal-orange">$35/month</span>. After launch, I can add more agents for $15/month each.
+              {PLAN_COPY[planId].name} is on deck at <span className="text-signal-orange">{PLAN_COPY[planId].price}</span>. {PLAN_COPY[planId].summary} Agent Deployment adds another agent for $50/month.
             </p>
             <button
               type="submit"
@@ -226,14 +257,14 @@ export default function OnboardingPage() {
         {step === "checkout" && (
           <div className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              I will hand you to Stripe, watch for confirmation, then move your first ArcLink agent from idea to launch queue.
+              I will hand you to Stripe, watch for confirmation, then move your {PLAN_COPY[planId].name} ArcLink vessel from idea to launch queue.
             </p>
             <button
               onClick={handleCheckout}
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Preparing..." : "Hire My First Agent - $35/mo"}
+              {loading ? "Preparing..." : PLAN_COPY[planId].checkout}
             </button>
           </div>
         )}
@@ -262,7 +293,7 @@ export default function OnboardingPage() {
                   href="/dashboard"
                   className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
                 >
-                  Open Dashboard →
+                  Open Dashboard
                 </Link>
               </>
             )}

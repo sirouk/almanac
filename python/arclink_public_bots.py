@@ -22,7 +22,14 @@ from arclink_product import chutes_default_model, launch_phrase
 
 
 ARCLINK_PUBLIC_BOT_CHANNELS = frozenset({"telegram", "discord"})
-ARCLINK_PUBLIC_BOT_PLANS = frozenset({"starter", "operator", "scale"})
+ARCLINK_PUBLIC_BOT_PLANS = frozenset({"sovereign", "scale"})
+ARCLINK_PUBLIC_BOT_PLAN_ALIASES = {
+    "starter": "sovereign",
+    "operator": "sovereign",
+    "sovereign": "sovereign",
+    "scale": "scale",
+}
+ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS = frozenset({"/packages", "packages", "plans", "take me aboard", "aboard"})
 ARCLINK_PUBLIC_BOT_TURN_LIMIT = 20
 ARCLINK_PUBLIC_BOT_RATE_WINDOW_SECONDS = 900
 ARCLINK_PUBLIC_BOT_CONNECT_NOTION_COMMANDS = frozenset(
@@ -55,6 +62,9 @@ ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIR_CODE_TTL_SECONDS = 10 * 60
+SOVEREIGN_MONTHLY_DOLLARS = 99
+SCALE_MONTHLY_DOLLARS = 179
+ADDITIONAL_AGENT_MONTHLY_DOLLARS = 50
 
 
 @dataclass(frozen=True)
@@ -103,7 +113,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="plan",
         telegram_command="plan",
         discord_command="plan",
-        description="Choose starter, operator, or scale",
+        description="Choose Sovereign or Scale",
         discord_options=(
             {
                 "type": 3,
@@ -111,8 +121,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
                 "description": "ArcLink plan",
                 "required": True,
                 "choices": [
-                    {"name": "Starter", "value": "starter"},
-                    {"name": "Operator", "value": "operator"},
+                    {"name": "Sovereign", "value": "sovereign"},
                     {"name": "Scale", "value": "scale"},
                 ],
             },
@@ -232,6 +241,25 @@ def _reply(
         user_id=str(session.get("user_id") or ""),
         deployment_id=str(session.get("deployment_id") or ""),
         buttons=buttons,
+    )
+
+
+def _package_prompt_reply(session: Mapping[str, Any], *, greeting: str = "") -> ArcLinkPublicBotTurn:
+    name = str(session.get("display_name_hint") or "").strip()
+    header = greeting or (f"Welcome aboard, {name}." if name else "Raven here. ArcLink is in range.")
+    return _reply(
+        session,
+        action="prompt_package",
+        reply=(
+            f"{header}\n\n"
+            f"Choose your ArcLink vessel.\n\n"
+            f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: one private agent plus ArcLink systems.\n"
+            f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: three agents, ArcLink systems, and Federation."
+        ),
+        buttons=(
+            _button(f"Sovereign - ${SOVEREIGN_MONTHLY_DOLLARS}/month", command="/plan sovereign"),
+            _button(f"Scale - ${SCALE_MONTHLY_DOLLARS}/month", command="/plan scale", style="secondary"),
+        ),
     )
 
 
@@ -356,6 +384,24 @@ def _command_value(message: str, command: str, names: tuple[str, ...]) -> str | 
         if command.startswith(prefix):
             return message[len(prefix):].strip()
     return None
+
+
+def _normalize_public_bot_plan(raw: str) -> str:
+    return ARCLINK_PUBLIC_BOT_PLAN_ALIASES.get(str(raw or "").strip().lower(), "")
+
+
+def _plan_label(plan: str) -> str:
+    return "Scale" if str(plan or "").strip().lower() == "scale" else "Sovereign"
+
+
+def _plan_agent_count(plan: str) -> int:
+    return 3 if str(plan or "").strip().lower() == "scale" else 1
+
+
+def _plan_checkout_label(plan: str) -> str:
+    if str(plan or "").strip().lower() == "scale":
+        return f"Hire Scale - ${SCALE_MONTHLY_DOLLARS}/month"
+    return f"Hire Sovereign - ${SOVEREIGN_MONTHLY_DOLLARS}/month"
 
 
 def _pair_channel_value(message: str, command: str) -> str | None:
@@ -679,7 +725,6 @@ def _aboard_freeform_reply(
     if helm:
         buttons.append(_button("Open Helm", url=helm))
     buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
-    buttons.append(_button("Run Systems Check", command="/status", style="secondary"))
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -1073,12 +1118,12 @@ def _agents_reply(
             channel_identity=channel_identity,
             action="agents_unavailable",
             reply=(
-                "No crew on your manifest yet. Say the word and I will bring your first agent aboard ArcLink for $35/month. "
-                "After that one is awake, the rest of the crew boards at $15/month each."
+                f"No crew on your manifest yet. Sovereign brings one agent aboard for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
+                f"Scale launches three agents with Federation for ${SCALE_MONTHLY_DOLLARS}/month."
             ),
             session=session,
             buttons=(
-                _button("Start Launch", command="/start"),
+                _button("Take Me Aboard", command="/packages"),
             ),
         )
     user_id = str(deployment.get("user_id") or session.get("user_id") or "").strip()
@@ -1099,9 +1144,13 @@ def _agents_reply(
         if str(item.get("deployment_id") or "") != active_id:
             buttons.append(_button(f"Take Helm: {label}", command=f"/agent-{_agent_slug(label)}"))
     if deployments:
-        buttons.append(_button("Add Another Agent - $15/mo", command="/add-agent"))
+        buttons.append(_button(f"Add Agent - ${ADDITIONAL_AGENT_MONTHLY_DOLLARS}/month", command="/add-agent"))
     if not buttons and deployments:
-        buttons.append(_button("Add Another Agent - $15/mo", command="/add-agent"))
+        buttons.append(_button(f"Add Agent - ${ADDITIONAL_AGENT_MONTHLY_DOLLARS}/month", command="/add-agent"))
+    if len(buttons) > 2:
+        add_buttons = [button for button in buttons if button.command == "/add-agent"]
+        helm_buttons = [button for button in buttons if button.command != "/add-agent"]
+        buttons = (helm_buttons[:1] + add_buttons[:1]) or buttons[:2]
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -1229,10 +1278,10 @@ def _add_agent_reply(
         extra_session,
         action="open_add_agent_checkout",
         reply=(
-            "A bay is open. Clear the $15/month handoff through Stripe and I will move the new pod into the launch queue with the rest of your crew."
+            f"A bay is open. Clear the ${ADDITIONAL_AGENT_MONTHLY_DOLLARS}/month Agent Deployment handoff through Stripe and I will move the new agent into the launch queue with the rest of your crew."
         ),
         buttons=(
-            _button("Hire Additional Agent", url=str(extra_session.get("checkout_url") or "")),
+            _button(f"Hire Agent - ${ADDITIONAL_AGENT_MONTHLY_DOLLARS}/month", url=str(extra_session.get("checkout_url") or "")),
             _button("Back To My Crew", command="/agents", style="secondary"),
         ),
     )
@@ -1270,10 +1319,44 @@ def _handle_active_workflow(
             session=updated,
             deployment=deployment,
             buttons=(
-                _button("Start Launch", command="/start"),
+                _button("Take Me Aboard", command="/packages"),
                 _button("Run Systems Check", command="/status", style="secondary"),
             ),
         )
+    if workflow == "name_update":
+        explicit_name = _command_value(message, command, ("name", "/name"))
+        if explicit_name is not None:
+            new_name = explicit_name.strip()
+        elif command in {"name", "/name"}:
+            new_name = ""
+        elif command.startswith("/"):
+            return None
+        else:
+            new_name = message.strip()
+        if not new_name:
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="prompt_name_input",
+                reply="I am listening. Send the name you want Raven to use, or send `cancel` to close this lane.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Cancel", command="/cancel", style="secondary"),),
+            )
+        updated = answer_arclink_onboarding_question(
+            conn,
+            session_id=str(session["session_id"]),
+            question_key="name",
+            answer_summary="display name captured",
+            display_name_hint=new_name,
+        )
+        updated = _update_session_metadata(
+            conn,
+            session_id=str(updated["session_id"]),
+            updates={},
+            clear=("public_bot_workflow",),
+        )
+        return _package_prompt_reply(updated, greeting=f"Welcome aboard, {new_name}.")
     if workflow == "connect_notion":
         if command in {"ready", "done", "verified", "complete"}:
             updated = _update_session_metadata(
@@ -1368,14 +1451,13 @@ def _help_reply(
             action="show_help",
             reply=(
                 "Comms are open.\n\n"
-                "I will keep this simple until your first pod is live. I can start your launch, set the Starter path, open checkout, or read the board.\n\n"
+                "I will keep this simple until your first vessel is live. I can help you pick Sovereign or Scale, open checkout, or read the board.\n\n"
                 "After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health."
             ),
             session=session,
             buttons=(
-                _button("Start Launch", command="/start"),
-                _button("Starter - $35/mo", command="/plan starter", style="secondary"),
-                _button("Run Systems Check", command="/status", style="secondary"),
+                _button("Take Me Aboard", command="/packages"),
+                _button("Update Name", command="/name", style="secondary"),
             ),
         )
     return _turn(
@@ -1392,8 +1474,6 @@ def _help_reply(
         buttons=(
             _button("Show My Crew", command="/agents", style="secondary"),
             _button("Wire Notion", command="/connect_notion", style="secondary"),
-            _button("Set Up Backup", command="/config_backup", style="secondary"),
-            _button("Pair Channel", command="/pair-channel", style="secondary"),
         ),
     )
 
@@ -1405,7 +1485,8 @@ def handle_arclink_public_bot_turn(
     channel_identity: str,
     text: str,
     stripe_client: Any | None = None,
-    price_id: str = "price_arclink_starter",
+    price_id: str = "price_arclink_sovereign",
+    scale_price_id: str = "",
     additional_agent_price_id: str = "",
     base_domain: str = "",
     metadata: Mapping[str, Any] | None = None,
@@ -1546,13 +1627,12 @@ def handle_arclink_public_bot_turn(
             action="prompt_name",
             reply=(
                 f"{greeting}\n\n"
-                "I bring your first private AI workspace online: an agent, memory, files, a code workspace, "
-                "model access, and a live systems board. No bot-building. No server chores.\n\n"
-                "Tap Take Me Aboard to start the launch path. Stripe collects your email securely at checkout. "
-                "Tap Update Name if you'd like to set a different display name first."
+                "I bring private agents online with memory, files, code workspace, model access, and a live systems board. "
+                "No bot-building. No server chores.\n\n"
+                "Tap Take Me Aboard to pick Sovereign or Scale. Tap Update Name and just tell me what to call you."
             ),
             buttons=(
-                _button("Take Me Aboard", command="/plan starter"),
+                _button("Take Me Aboard", command="/packages"),
                 _button("Update Name", command="/name", style="secondary"),
             ),
         )
@@ -1580,7 +1660,7 @@ def handle_arclink_public_bot_turn(
             reply="\n".join(lines),
             buttons=(
                 _button("Show My Crew", command="/agents", style="secondary"),
-                _button("Hire My First Agent", command="/checkout", style="secondary"),
+                _button("Choose Package", command="/packages", style="secondary"),
             ),
         )
     email = _command_value(message, command, ("email", "/email"))
@@ -1588,23 +1668,30 @@ def handle_arclink_public_bot_turn(
         return _reply(
             session,
             action="prompt_name",
-            reply="Keep your email out of comms. Stripe collects it at checkout, and only there. Send `/name Your Name` and I will put your name on the workspace.",
+            reply="Keep your email out of comms. Stripe collects it at checkout, and only there. Tap Update Name, then just send the name you want Raven to use.",
         )
+    if command in ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS:
+        return _package_prompt_reply(session)
     if command in {"name", "/name"}:
-        # Bare /name (or the Update Name button) prompts the user to set one.
-        # rather than blanking out the captured display name.
+        # Bare /name (or the Update Name button) opens a short listening lane.
+        # The next plain-text message becomes the display name.
         current = str(session.get("display_name_hint") or "").strip()
-        current_line = f"\n\n_Currently on the hatch: {current}_" if current else ""
+        current_line = f"\n\nCurrent name: {current}" if current else ""
+        session = _update_session_metadata(
+            conn,
+            session_id=str(session["session_id"]),
+            updates={"public_bot_workflow": "name_update", "name_update_requested_at": utc_now_iso()},
+        )
         return _reply(
             session,
             action="prompt_name_input",
             reply=(
-                "What name should I paint on the hatch?\n\n"
-                "Send `/name Your Name` and I will set it."
+                "What should I call you on the ArcLink manifest?\n\n"
+                "Send the name as plain text. I am listening."
                 f"{current_line}"
             ),
             buttons=(
-                _button("Take Me Aboard", command="/plan starter"),
+                _button("Cancel", command="/cancel", style="secondary"),
             ),
         )
     name = _command_value(message, command, ("name", "/name"))
@@ -1616,22 +1703,10 @@ def handle_arclink_public_bot_turn(
             answer_summary="display name captured",
             display_name_hint=name,
         )
-        return _reply(
-            session,
-            action="prompt_plan",
-            reply=(
-                "Name painted on the hatch. Now plot the course.\n\n"
-                "Starter brings your first ArcLink agent aboard for $35/month. After that pod is awake, the rest of the crew boards at $15/month each."
-            ),
-            buttons=(
-                _button("Starter Path - $35/mo", command="/plan starter"),
-                _button("Operator Path", command="/plan operator", style="secondary"),
-                _button("Scale Path", command="/plan scale", style="secondary"),
-            ),
-        )
+        return _package_prompt_reply(session, greeting=f"Welcome aboard, {name}.")
     plan_answer = _command_value(message, command, ("plan", "/plan"))
     if plan_answer is not None:
-        plan = plan_answer.strip().lower()
+        plan = _normalize_public_bot_plan(plan_answer)
         if plan not in ARCLINK_PUBLIC_BOT_PLANS:
             raise ArcLinkPublicBotError(f"unsupported ArcLink public bot plan: {plan or 'blank'}")
         session = answer_arclink_onboarding_question(
@@ -1642,36 +1717,56 @@ def handle_arclink_public_bot_turn(
             selected_plan_id=plan,
             selected_model_id=chutes_default_model({}),
         )
+        if plan == "scale":
+            plan_reply = (
+                "Scale is locked.\n\n"
+                f"Three agents, ArcLink systems, and Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
+                "Stripe handles the handoff, then I bring the vessel online and report back here."
+            )
+        else:
+            plan_reply = (
+                "Sovereign is locked.\n\n"
+                f"One private agent plus ArcLink systems for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
+                "Stripe handles the handoff, then I bring the vessel online and report back here."
+            )
         return _reply(
             session,
             action="prompt_checkout",
-            reply="Starter is locked. Tap Hire My First Agent. Stripe handles payment, then I move your pod into the launch queue and report back here when the vessel is online.",
+            reply=plan_reply,
             buttons=(
-                _button("Hire My First Agent - $35/mo", command="/checkout"),
-                _button("Change Course", command="/plan starter", style="secondary"),
+                _button(_plan_checkout_label(plan), command="/checkout"),
+                _button("Change Package", command="/packages", style="secondary"),
             ),
         )
     if command in {"checkout", "/checkout"}:
         if stripe_client is None:
             raise ArcLinkPublicBotError("checkout requires an injected Stripe client")
         root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
+        selected_plan = _normalize_public_bot_plan(str(session.get("selected_plan_id") or "sovereign"))
+        checkout_price_id = str(price_id or "").strip()
+        if selected_plan == "scale" and str(scale_price_id or "").strip():
+            checkout_price_id = str(scale_price_id or "").strip()
+        if selected_plan == "scale" and not str(scale_price_id or "").strip():
+            raise ArcLinkPublicBotError("Scale checkout requires ARCLINK_SCALE_PRICE_ID")
         session = open_arclink_onboarding_checkout(
             conn,
             session_id=str(session["session_id"]),
             stripe_client=stripe_client,
-            price_id=price_id,
+            price_id=checkout_price_id,
             success_url=f"{root}/checkout/success",
             cancel_url=f"{root}/checkout/cancel",
             base_domain=base_domain or default_base_domain({}),
         )
+        plan_label = _plan_label(selected_plan)
         return _reply(
             session,
             action="open_checkout",
             reply=(
-                "Checkout is open. Complete the Stripe handoff at the link below. The instant payment clears, I move your first ArcLink agent into the launch queue and the hull starts coming online around you."
+                f"{plan_label} checkout is open. Complete the Stripe handoff at the link below. "
+                "The instant payment clears, I move your ArcLink vessel into the launch queue and report back here."
             ),
             buttons=(
-                _button("Hire My First Agent", url=str(session.get("checkout_url") or "")),
+                _button(f"Hire {plan_label}", url=str(session.get("checkout_url") or "")),
                 _button("Run Systems Check", command="/status", style="secondary"),
             ),
         )
@@ -1680,11 +1775,10 @@ def handle_arclink_public_bot_turn(
         action="prompt_command",
             reply=(
                 "I read you. Raven on the line.\n\n"
-                "No command map needed yet. The early lanes stay few on purpose. From here I can start your launch, set the Starter path, or read the board. Once your agent is awake on ArcLink, the deeper controls surface as a clean checklist."
+                "No command map needed yet. The early lanes stay few on purpose. From here I can help you pick Sovereign or Scale, set your name, or read the board. Once your agent is awake on ArcLink, the deeper controls surface as a clean checklist."
             ),
         buttons=(
-            _button("Start Launch", command="/start"),
-            _button("Starter - $35/mo", command="/plan starter", style="secondary"),
-            _button("Run Systems Check", command="/status", style="secondary"),
+            _button("Take Me Aboard", command="/packages"),
+            _button("Update Name", command="/name", style="secondary"),
         ),
     )

@@ -20,7 +20,7 @@ The voice should feel like a cyberpunk systems engineer and launch guide: clear,
 - Explain what ArcLink does through action, not inventory.
 - Keep the mythic language grounded in concrete next steps.
 - Never make the user decode roleplay before they can act.
-- Keep pricing clear: first agent is $35/month; additional agents are $15/month each.
+- Keep pricing clear: Sovereign is $99/month, Scale is $179/month, and Agent Deployment is $50/month per additional agent.
 - Buttons should feel exciting while saying exactly what will happen.
 
 Strong:
@@ -33,8 +33,8 @@ Weak:
 
 ## Default Offer
 
-- First ArcLink agent: $35/month.
-- Additional ArcLink agents: $15/month each.
+- Sovereign: $99/month for one ArcLink agent plus ArcLink systems.
+- Agent Deployment: $50/month per additional agent.
 - Stripe Checkout collects customer email. Chat onboarding should not ask for email.
 - Chutes remains the baked-in primary inference rail unless the user brings another provider.
 
@@ -62,14 +62,14 @@ Hidden/account-state actions:
 
 Raven should prefer buttons over typed pseudo-actions whenever the platform supports them. Labels should be vivid, but each one must still explain the action:
 
-- `Start Launch` starts onboarding.
-- `Starter - $35/mo` chooses the starter path quickly.
-- `Hire My First Agent - $35/mo` opens first-agent checkout.
+- `Take Me Aboard` opens the Sovereign and Scale choice.
+- `Sovereign - $99/month` chooses the Sovereign path quickly.
+- `Hire Sovereign - $99/month` opens first-agent checkout.
 - `Show My Crew` opens the account-aware `/agents` roster.
-- `Add Another Agent - $15/mo` opens additional-agent checkout after the first deployment exists.
+- `Add Agent - $50/month` opens additional-agent checkout after the first deployment exists.
 - `Take Helm: {agent}` switches the active agent target.
 - `Run Systems Check` returns status for onboarding or the active pod.
-- `Open Comms` shows help.
+- `Update Name` asks for the user's preferred manifest name.
 - `Back To My Crew` returns to the agent roster.
 
 Telegram uses inline keyboard buttons. Discord uses message components. The command catalog remains intentionally small because global slash commands cannot reflect each individual account state.

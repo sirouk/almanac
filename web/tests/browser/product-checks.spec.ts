@@ -414,17 +414,17 @@ test.describe("Onboarding flow", () => {
     await mockApi(page);
     await page.goto("/onboarding");
 
-    // Step 1: Start without collecting email in ArcLink chat/form
-    await page.click('button[type="submit"]');
+    // Step 1: Pick the Sovereign vessel without collecting email in ArcLink chat/form
+    await page.click("text=Sovereign - $99/month");
     await expect(page.getByRole("heading", { name: "Name On The Hatch" })).toBeVisible();
 
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Hire My First Agent").first()).toBeVisible();
+    await expect(page.locator("text=Hire Sovereign").first()).toBeVisible();
 
     // Step 3: Checkout
-    await page.click("text=Hire My First Agent - $35/mo");
+    await page.click("text=Hire Sovereign - $99/month");
     await expect(page.locator("text=Complete The Hire").last()).toBeVisible();
   });
 });

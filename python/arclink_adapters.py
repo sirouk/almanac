@@ -29,6 +29,7 @@ class FakeStripeClient:
         client_reference_id: str = "",
         metadata: dict[str, str] | None = None,
         idempotency_key: str = "",
+        line_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if idempotency_key:
             digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:18]
@@ -39,6 +40,7 @@ class FakeStripeClient:
             "id": session_id,
             "user_id": user_id,
             "price_id": price_id,
+            "line_items": list(line_items or [{"price": price_id, "quantity": 1}]),
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,
@@ -83,11 +85,12 @@ class LiveStripeClient:
         client_reference_id: str = "",
         metadata: dict[str, str] | None = None,
         idempotency_key: str = "",
+        line_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         _stripe = self._stripe_module()
         params: dict[str, Any] = {
             "mode": "subscription",
-            "line_items": [{"price": price_id, "quantity": 1}],
+            "line_items": list(line_items or [{"price": price_id, "quantity": 1}]),
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,

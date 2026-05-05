@@ -45,7 +45,7 @@ def seed_paid_deployment(control, onboarding, conn):
         session_id="onb_api_auth",
         email_hint="api-user@example.test",
         display_name_hint="API User",
-        selected_plan_id="starter",
+        selected_plan_id="sovereign",
         selected_model_id="model-api",
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
@@ -114,7 +114,7 @@ def test_public_onboarding_api_rate_limits_and_reuses_shared_contract() -> None:
         channel="discord",
         channel_identity="discord:api-user",
         email_hint="bot-api@example.test",
-        selected_plan_id="starter",
+        selected_plan_id="sovereign",
     )
     answered = api.answer_public_onboarding_api(
         conn,
@@ -127,7 +127,7 @@ def test_public_onboarding_api_rate_limits_and_reuses_shared_contract() -> None:
         conn,
         session_id=started.payload["session"]["session_id"],
         stripe_client=stripe,
-        price_id="price_starter",
+        price_id="price_sovereign",
         success_url="https://example.test/success",
         cancel_url="https://example.test/cancel",
         base_domain="example.test",

@@ -313,7 +313,8 @@ def handle_discord_interaction(
     interaction: Mapping[str, Any],
     *,
     stripe_client: Any | None = None,
-    price_id: str = "price_arclink_starter",
+    price_id: str = "price_arclink_sovereign",
+    scale_price_id: str = "",
     additional_agent_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any] | None:
@@ -338,6 +339,7 @@ def handle_discord_interaction(
         text=parsed["text"],
         stripe_client=stripe_client,
         price_id=price_id,
+        scale_price_id=scale_price_id,
         additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
         display_name_hint=parsed.get("display_name", ""),
@@ -402,7 +404,8 @@ def handle_discord_webhook_request(
     timestamp: str,
     config: DiscordConfig,
     stripe_client: Any | None = None,
-    price_id: str = "price_arclink_starter",
+    price_id: str = "price_arclink_sovereign",
+    scale_price_id: str = "",
     additional_agent_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any]:
@@ -420,6 +423,7 @@ def handle_discord_webhook_request(
         conn, interaction,
         stripe_client=stripe_client,
         price_id=price_id,
+        scale_price_id=scale_price_id,
         additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
     )

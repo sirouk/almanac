@@ -60,10 +60,10 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
         "type": 2,
         "channel_id": "ch_1",
         "member": {"user": {"id": "u_1"}},
-        "data": {"name": "plan", "options": [{"name": "tier", "value": "operator"}]},
+        "data": {"name": "plan", "options": [{"name": "tier", "value": "scale"}]},
     }
     parsed_plan = dc.parse_discord_interaction(plan)
-    expect(parsed_plan["text"] == "plan operator", str(parsed_plan))
+    expect(parsed_plan["text"] == "plan scale", str(parsed_plan))
     pair = {
         "type": 2,
         "channel_id": "ch_1",
@@ -76,10 +76,10 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
         "type": 3,
         "channel_id": "ch_1",
         "member": {"user": {"id": "u_1"}},
-        "data": {"custom_id": "arclink:/plan starter"},
+        "data": {"custom_id": "arclink:/plan sovereign"},
     }
     parsed_component = dc.parse_discord_interaction(component)
-    expect(parsed_component["text"] == "/plan starter", str(parsed_component))
+    expect(parsed_component["text"] == "/plan sovereign", str(parsed_component))
     print("PASS test_discord_registered_action_command_options_parse_to_bot_contract")
 
 
@@ -98,7 +98,9 @@ def test_discord_message_event_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
-    expect("Name painted on the hatch" in result["data"]["content"], result["data"]["content"])
+    expect("Welcome aboard, Test Buyer" in result["data"]["content"], result["data"]["content"])
+    expect("Sovereign - $99/month" in str(result["data"].get("components", [])), str(result["data"]))
+    expect("Scale - $179/month" in str(result["data"].get("components", [])), str(result["data"]))
     print("PASS test_discord_message_event_through_bot_contract")
 
 
@@ -112,8 +114,8 @@ def test_discord_full_onboarding_flow() -> None:
 
     steps = [
         ("/start", "prompt_name"),
-        ("name Discord Bot", "prompt_plan"),
-        ("plan starter", "prompt_checkout"),
+        ("name Discord Bot", "prompt_package"),
+        ("plan sovereign", "prompt_checkout"),
     ]
     session_ids = set()
     for text, expected_action in steps:

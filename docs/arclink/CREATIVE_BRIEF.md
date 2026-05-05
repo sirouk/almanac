@@ -19,7 +19,7 @@ Some broader infrastructure items in the scope below are live foundations or pla
 | The agent runtime | Hermes | The agentic harness inside each pod: memory, skills, tools, reasoning loop. Each pod ships with a private Hermes. |
 | The retrieval rail | qmd vault | Vault index/retrieval over the user's files. |
 | The model rail | Chutes-first | SOTA inference default; BYOK lanes for Codex, Claude, and other providers preserved. |
-| The unit | Pod / Agent / Crew member | One Hermes instance plus its surrounding services. First pod $35/month; additional pods $15/month. |
+| The unit | Pod / Agent / Crew member | One Hermes instance plus its surrounding services. Sovereign is $99/month for one agent plus ArcLink systems. Scale is $179/month for three agents plus ArcLink systems and Federation. Agent Deployment is $50/month per additional agent. |
 
 Voice rule:
 
@@ -79,8 +79,9 @@ Sovereign Control Node scope:
 
 Pricing:
 
-- First agent: $35/month
-- Each additional agent: $15/month
+- Sovereign: $99/month
+- Scale: $179/month
+- Agent Deployment: $50/month per additional agent
 - Stripe collects email at checkout
 - Development/fake-adapter environments must clearly say no live charges
 
@@ -89,7 +90,7 @@ Pricing:
 Nav:
 
 ```text
-ARCLINK | Sign In | Start Launch
+ARCLINK | Sign In | Take Me Aboard
 ```
 
 Hero headline:
@@ -102,13 +103,13 @@ I'll bring ArcLink online.
 Hero body:
 
 ```text
-Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your private ArcLink vessel: an agent, model access, memory, retrieval, files, code tools, bot channels, and live deployment health. First agent $35/month.
+Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your private ArcLink vessel. Sovereign brings one agent plus ArcLink systems for $99/month. Scale brings three agents, ArcLink systems, and Federation for $179/month.
 ```
 
 Hero CTAs:
 
 ```text
-Hire My First Agent
+Choose My Vessel
 Open Dashboard
 ```
 
@@ -145,10 +146,11 @@ Start body:
 I can take you from a few answers to a private AI agent of your own with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects email securely at checkout.
 ```
 
-Start CTA:
+Package CTAs:
 
 ```text
-Start Launch
+Sovereign - $99/month
+Scale - $179/month
 ```
 
 Loading:
@@ -178,7 +180,7 @@ Your name or org
 Helper:
 
 ```text
-Starter puts your first ArcLink agent aboard for $35/month. After launch, I can add more agents for $15/month each.
+Sovereign brings one agent plus ArcLink systems for $99/month. Scale brings three agents plus ArcLink systems and Federation for $179/month. After launch, Agent Deployment adds another agent for $50/month.
 ```
 
 CTA:
@@ -196,7 +198,7 @@ Saving...
 Checkout heading:
 
 ```text
-Hire My First Agent
+Hire Sovereign
 ```
 
 Checkout body:
@@ -208,7 +210,7 @@ I will hand you to Stripe, watch for confirmation, then move your first ArcLink 
 CTA:
 
 ```text
-Hire My First Agent - $35/mo
+Hire Sovereign - $99/month
 ```
 
 Loading:
@@ -264,16 +266,16 @@ Triggered by `/start`, empty message, `start`, or `restart`.
 ```text
 Raven here. ArcLink is in range.
 
-Give me a name and choose your path. I will bring your first private AI workspace online with an agent, memory, files, code tools, model access, and a live systems board. No bot-building. No server chores.
+I bring private agents online with memory, files, code workspace, model access, and a live systems board. No bot-building. No server chores.
 
-Stripe collects your email at checkout. Send `/name Your Name`, or tap Starter when you are ready.
+Tap Take Me Aboard to pick Sovereign or Scale. Tap Update Name and just tell me what to call you.
 ```
 
 Buttons:
 
 ```text
-Starter - $35/mo
-Open Comms
+Take Me Aboard
+Update Name
 ```
 
 ### Help - Prelaunch
@@ -281,7 +283,7 @@ Open Comms
 ```text
 Comms are open.
 
-I will keep this simple until your first pod is live. I can start your launch, set the Starter path, open checkout, or read the board.
+I will keep this simple until your first vessel is live. I can help you pick Sovereign or Scale, open checkout, or read the board.
 
 After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health.
 ```
@@ -289,9 +291,8 @@ After launch, I reveal the working controls: your crew, Notion, private backups,
 Buttons:
 
 ```text
-Start Launch
-Starter - $35/mo
-Run Systems Check
+Take Me Aboard
+Update Name
 ```
 
 ### Unknown / Loose Message - Prelaunch
@@ -305,15 +306,14 @@ No command map needed yet. I can bring you aboard, help choose the first path, o
 Buttons:
 
 ```text
-Start Launch
-Starter - $35/mo
-Run Systems Check
+Take Me Aboard
+Update Name
 ```
 
 ### Email Attempted In Chat
 
 ```text
-I do not need your email in chat. Stripe handles that securely at checkout. Send `/name Your Name` and I will put your name on the workspace.
+I do not need your email in chat. Stripe handles that securely at checkout. Tap Update Name and tell me what to call you.
 ```
 
 ### Name Captured
@@ -321,30 +321,36 @@ I do not need your email in chat. Stripe handles that securely at checkout. Send
 Triggered by `/name <Your Name>`.
 
 ```text
-Name painted on the hatch. Now pick the path. Starter gets your first ArcLink agent aboard for $35/month; after that, I can add more agents for $15/month each.
+Welcome aboard, {Name}.
+
+Choose your ArcLink vessel.
+
+Sovereign is $99/month: one private agent plus ArcLink systems.
+Scale is $179/month: three agents, ArcLink systems, and Federation.
 ```
 
 Buttons:
 
 ```text
-Starter Path - $35/mo
-Operator Path
-Scale Path
+Sovereign - $99/month
+Scale - $179/month
 ```
 
 ### Plan Selected
 
-Triggered by `/plan starter`, `/plan operator`, or `/plan scale`.
+Triggered by `/plan sovereign` or `/plan scale`. `starter` and `operator` are accepted only as backward-compatible aliases and must not appear in public copy.
 
 ```text
-Starter is locked. Tap Hire My First Agent. Stripe handles payment, then I move your pod into the launch queue and report back here when the vessel is online.
+Sovereign is locked.
+
+One private agent plus ArcLink systems for $99/month. Stripe handles the handoff, then I bring the vessel online and report back here.
 ```
 
 Buttons:
 
 ```text
-Hire My First Agent - $35/mo
-Change Course
+Hire Sovereign - $99/month
+Change Package
 ```
 
 ### Checkout
@@ -358,7 +364,7 @@ Checkout is ready. Complete the Stripe handoff here; when payment clears, I move
 Buttons:
 
 ```text
-Hire My First Agent
+Hire Sovereign
 Run Systems Check
 ```
 
@@ -373,7 +379,7 @@ Buttons:
 
 ```text
 Show My Crew
-Hire My First Agent
+Hire Sovereign
 ```
 
 ## Postlaunch Raven Bot
@@ -413,19 +419,19 @@ Dynamic buttons:
 
 ```text
 Take Helm: {Agent Label}
-Add Another Agent - $15/mo
+Add Agent - $50/month
 ```
 
 ### No Agent Yet
 
 ```text
-I do not see your first agent yet. Give me the word and I will put one aboard ArcLink for $35/month. Once that pod is active, we can build a whole crew at $15/month each.
+I do not see your first agent yet. Choose Sovereign for $99/month or Scale for $179/month. Once a vessel is active, Agent Deployment adds agents for $50/month each.
 ```
 
 Button:
 
 ```text
-Start Launch
+Take Me Aboard
 ```
 
 ### Switch Agent
@@ -460,7 +466,7 @@ Show My Crew
 Triggered by `/add-agent`.
 
 ```text
-I have another bay open. Hire the additional agent for $15/month through Stripe, and I will move the new pod into the launch queue.
+I have another bay open. Hire Agent Deployment for $50/month through Stripe, and I will move the new agent into the launch queue.
 ```
 
 Buttons:
@@ -541,7 +547,7 @@ Nothing is lost. When you are ready, I can bring you back to the launch path or 
 Buttons:
 
 ```text
-Start Launch
+Take Me Aboard
 Run Systems Check
 ```
 
@@ -581,7 +587,7 @@ Registered public Telegram commands:
 | `/help` | Open the ArcLink action palette |
 | `/status` | Check onboarding or pod status |
 | `/name <display_name>` | Name your ArcLink workspace |
-| `/plan <starter\|operator\|scale>` | Choose starter, operator, or scale |
+| `/plan <sovereign\|operator\|scale>` | Choose sovereign, operator, or scale |
 | `/checkout` | Hire your first ArcLink agent |
 | `/agents` | Open your ArcLink crew manifest |
 | `/connect_notion` | Connect Notion to your live pod |
@@ -593,27 +599,24 @@ Hidden/account-state actions:
 
 | Action | Description |
 | --- | --- |
-| `/add-agent` | Hire an additional agent for $15/month |
+| `/add-agent` | Hire Agent Deployment for $50/month |
 | `/agent-<slug>` | Switch active agent |
 
-Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Starter, Operator, and Scale.
+Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Sovereign and Scale.
 
 Canonical button labels:
 
 ```text
-Start Launch
-Starter - $35/mo
-Open Comms
-Run Systems Check
-Starter Path - $35/mo
-Operator Path
-Scale Path
-Hire My First Agent - $35/mo
-Hire My First Agent
-Change Course
+Take Me Aboard
+Update Name
+Sovereign - $99/month
+Scale - $179/month
+Hire Sovereign - $99/month
+Hire Scale - $179/month
+Change Package
 Show My Crew
 Take Helm: {Agent Label}
-Add Another Agent - $15/mo
+Add Agent - $50/month
 Hire Additional Agent
 Back To My Crew
 Wire Notion

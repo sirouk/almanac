@@ -314,8 +314,11 @@ def handle_discord_interaction(
     *,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_sovereign",
+    founders_price_id: str = "price_arclink_founders",
     scale_price_id: str = "",
     additional_agent_price_id: str = "",
+    sovereign_agent_expansion_price_id: str = "",
+    scale_agent_expansion_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any] | None:
     """Process a Discord interaction through the shared bot contract.
@@ -339,8 +342,11 @@ def handle_discord_interaction(
         text=parsed["text"],
         stripe_client=stripe_client,
         price_id=price_id,
+        founders_price_id=founders_price_id,
         scale_price_id=scale_price_id,
         additional_agent_price_id=additional_agent_price_id,
+        sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
+        scale_agent_expansion_price_id=scale_agent_expansion_price_id,
         base_domain=base_domain,
         display_name_hint=parsed.get("display_name", ""),
     )
@@ -405,8 +411,11 @@ def handle_discord_webhook_request(
     config: DiscordConfig,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_sovereign",
+    founders_price_id: str = "price_arclink_founders",
     scale_price_id: str = "",
     additional_agent_price_id: str = "",
+    sovereign_agent_expansion_price_id: str = "",
+    scale_agent_expansion_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any]:
     """Handle an incoming Discord interaction webhook request.
@@ -421,11 +430,14 @@ def handle_discord_webhook_request(
     interaction = json.loads(body)
     result = handle_discord_interaction(
         conn, interaction,
-        stripe_client=stripe_client,
-        price_id=price_id,
-        scale_price_id=scale_price_id,
-        additional_agent_price_id=additional_agent_price_id,
-        base_domain=base_domain,
+            stripe_client=stripe_client,
+            price_id=price_id,
+            founders_price_id=founders_price_id,
+            scale_price_id=scale_price_id,
+            additional_agent_price_id=additional_agent_price_id,
+            sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
+            scale_agent_expansion_price_id=scale_agent_expansion_price_id,
+            base_domain=base_domain,
     )
     if result is None:
         return {"type": 1}  # ACK with PONG as safe fallback

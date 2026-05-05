@@ -41,7 +41,7 @@ from arclink_product import base_domain as default_base_domain
 from arclink_product import chutes_default_model
 
 
-DEFAULT_PRICE_ID = "price_arclink_sovereign"
+DEFAULT_PRICE_ID = "price_arclink_founders"
 GENERIC_REQUEST_ERROR = "Request blocked. Check input and try again."
 FAVICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -80,7 +80,7 @@ def seed_arclink_product_surface_fixture(conn: sqlite3.Connection, *, env: Mappi
         session_id="onb_surface_fixture",
         email_hint="fixture@arclink.local",
         display_name_hint="Fixture Operator",
-        selected_plan_id="sovereign",
+        selected_plan_id="founders",
         selected_model_id=chutes_default_model(env or {}),
         current_step="checkout",
         metadata={"fixture": "product_surface"},
@@ -353,7 +353,7 @@ def _home(conn: sqlite3.Connection, *, error: str = "") -> ArcLinkSurfaceRespons
     {error_html}
     <div><label>Email</label><input name="email" type="email" value="operator@example.test" required></div>
     <div><label>Name</label><input name="name" value="Operator"></div>
-    <div><label>Plan</label><select name="plan"><option value="sovereign">Sovereign</option><option value="scale">Scale</option></select></div>
+    <div><label>Plan</label><select name="plan"><option value="founders">Limited 100 Founders</option><option value="sovereign">Sovereign</option><option value="scale">Scale</option></select></div>
     <div><label>Model</label><input name="model" value="{escape(chutes_default_model({}))}"></div>
     <button type="submit">Start &gt;</button>
   </form>
@@ -408,7 +408,7 @@ def _session_page(conn: sqlite3.Connection, session_id: str, *, error: str = "")
     <form class="stack" method="post" action="/onboarding/{escape(session_id)}/answer">
       <div><label>Email</label><input name="email" value="{escape(session['email_hint'])}"></div>
       <div><label>Name</label><input name="name" value="{escape(session['display_name_hint'])}"></div>
-      <div><label>Plan</label><input name="plan" value="{escape(session['selected_plan_id'] or 'sovereign')}"></div>
+      <div><label>Plan</label><input name="plan" value="{escape(session['selected_plan_id'] or 'founders')}"></div>
       <div><label>Model</label><input name="model" value="{escape(session['selected_model_id'] or chutes_default_model({}))}"></div>
       <div class="actions"><button type="submit">Save Answers &gt;</button>{user_link}<a class="button secondary" href="/admin">Admin</a></div>
     </form>
@@ -579,7 +579,7 @@ def handle_arclink_product_surface_request(
                 channel_identity=email,
                 email_hint=email,
                 display_name_hint=_param(merged, "name"),
-                selected_plan_id=_param(merged, "plan", "sovereign"),
+                selected_plan_id=_param(merged, "plan", "founders"),
                 selected_model_id=_param(merged, "model", chutes_default_model(env)),
                 current_step="identity",
                 metadata={"surface": "local_web"},

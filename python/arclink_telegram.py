@@ -373,8 +373,11 @@ def handle_telegram_update(
     *,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_sovereign",
+    founders_price_id: str = "price_arclink_founders",
     scale_price_id: str = "",
     additional_agent_price_id: str = "",
+    sovereign_agent_expansion_price_id: str = "",
+    scale_agent_expansion_price_id: str = "",
     base_domain: str = "",
 ) -> dict[str, Any] | None:
     """Process a single Telegram update through the shared bot contract.
@@ -393,8 +396,11 @@ def handle_telegram_update(
         text=parsed["text"],
         stripe_client=stripe_client,
         price_id=price_id,
+        founders_price_id=founders_price_id,
         scale_price_id=scale_price_id,
         additional_agent_price_id=additional_agent_price_id,
+        sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
+        scale_agent_expansion_price_id=scale_agent_expansion_price_id,
         base_domain=base_domain,
         display_name_hint=parsed.get("display_name", ""),
     )
@@ -498,8 +504,11 @@ def run_telegram_polling(
     transport: FakeTelegramTransport | None = None,
     stripe_client: Any | None = None,
     price_id: str = "price_arclink_sovereign",
+    founders_price_id: str = "price_arclink_founders",
     scale_price_id: str = "",
     additional_agent_price_id: str = "",
+    sovereign_agent_expansion_price_id: str = "",
+    scale_agent_expansion_price_id: str = "",
     base_domain: str = "",
     max_iterations: int = 0,
 ) -> None:
@@ -533,8 +542,11 @@ def run_telegram_polling(
                     conn, update,
                     stripe_client=stripe_client,
                     price_id=price_id,
+                    founders_price_id=founders_price_id,
                     scale_price_id=scale_price_id,
                     additional_agent_price_id=additional_agent_price_id,
+                    sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
+                    scale_agent_expansion_price_id=scale_agent_expansion_price_id,
                     base_domain=base_domain,
                 )
                 if result:

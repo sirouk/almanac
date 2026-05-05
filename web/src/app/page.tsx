@@ -28,7 +28,7 @@ export default function Home() {
       <main className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
         <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs uppercase tracking-[0.18em] text-soft-white/60">
           <span className="h-1.5 w-1.5 rounded-full bg-signal-orange" aria-hidden />
-          Sovereign Cohort 001 - first 100 boarding
+          Limited 100 Founders - first 100 boarding
         </div>
         <h1 className="font-display text-4xl font-bold leading-tight sm:text-5xl md:text-6xl">
           I&apos;m Raven.<br />
@@ -36,8 +36,8 @@ export default function Home() {
         </h1>
         <p className="mt-6 max-w-xl text-lg text-soft-white/70">
           Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your
-          private ArcLink vessel. Sovereign brings one agent plus ArcLink systems for $99/month.
-          Scale brings three agents, ArcLink systems, and Federation for $179/month.
+          private ArcLink vessel. Founders is $149/month for Sovereign-equivalent access.
+          Sovereign is $199/month. Scale is $275/month with Federation.
         </p>
         <div className="relative mt-8 aspect-[16/9] w-full max-w-2xl border border-border">
           <Image

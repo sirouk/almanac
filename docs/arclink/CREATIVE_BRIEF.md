@@ -19,7 +19,7 @@ Some broader infrastructure items in the scope below are live foundations or pla
 | The agent runtime | Hermes | The agentic harness inside each pod: memory, skills, tools, reasoning loop. Each pod ships with a private Hermes. |
 | The retrieval rail | qmd vault | Vault index/retrieval over the user's files. |
 | The model rail | Chutes-first | SOTA inference default; BYOK lanes for Codex, Claude, and other providers preserved. |
-| The unit | Pod / Agent / Crew member | One Hermes instance plus its surrounding services. Sovereign is $99/month for one agent plus ArcLink systems. Scale is $179/month for three agents plus ArcLink systems and Federation. Agent Deployment is $50/month per additional agent. |
+| The unit | Pod / Agent / Crew member | One Hermes instance plus its surrounding services. Limited 100 Founders is $149/month for Sovereign-equivalent access. Sovereign is $199/month for one agent plus ArcLink systems. Scale is $275/month for three agents plus ArcLink systems and Federation. Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale. |
 
 Voice rule:
 
@@ -79,9 +79,10 @@ Sovereign Control Node scope:
 
 Pricing:
 
-- Sovereign: $99/month
-- Scale: $179/month
-- Agent Deployment: $50/month per additional agent
+- Limited 100 Founders: $149/month
+- Sovereign: $199/month
+- Scale: $275/month
+- Agentic Expansion: $99/month on Sovereign, $79/month on Scale
 - Stripe collects email at checkout
 - Development/fake-adapter environments must clearly say no live charges
 
@@ -180,7 +181,7 @@ Your name or org
 Helper:
 
 ```text
-Sovereign brings one agent plus ArcLink systems for $99/month. Scale brings three agents plus ArcLink systems and Federation for $179/month. After launch, Agent Deployment adds another agent for $50/month.
+Limited 100 Founders is $149/month for Sovereign-equivalent access. Sovereign brings one agent plus ArcLink systems for $199/month. Scale brings three agents plus ArcLink systems and Federation for $275/month. After launch, Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale.
 ```
 
 CTA:
@@ -198,7 +199,7 @@ Saving...
 Checkout heading:
 
 ```text
-Hire Sovereign
+Hire Founders
 ```
 
 Checkout body:
@@ -210,7 +211,7 @@ I will hand you to Stripe, watch for confirmation, then move your first ArcLink 
 CTA:
 
 ```text
-Hire Sovereign - $99/month
+Hire Founders - $149/month
 ```
 
 Loading:
@@ -343,13 +344,13 @@ Triggered by `/plan sovereign` or `/plan scale`. `starter` and `operator` are ac
 ```text
 Sovereign is locked.
 
-One private agent plus ArcLink systems for $99/month. Stripe handles the handoff, then I bring the vessel online and report back here.
+One private agent plus ArcLink systems for $199/month. Stripe handles the handoff, then I bring the vessel online and report back here.
 ```
 
 Buttons:
 
 ```text
-Hire Sovereign - $99/month
+Hire Sovereign - $199/month
 Change Package
 ```
 
@@ -364,7 +365,7 @@ Checkout is ready. Complete the Stripe handoff here; when payment clears, I move
 Buttons:
 
 ```text
-Hire Sovereign
+Hire Founders
 Run Systems Check
 ```
 
@@ -379,7 +380,7 @@ Buttons:
 
 ```text
 Show My Crew
-Hire Sovereign
+Hire Founders
 ```
 
 ## Postlaunch Raven Bot
@@ -419,13 +420,13 @@ Dynamic buttons:
 
 ```text
 Take Helm: {Agent Label}
-Add Agent - $50/month
+Add Agent
 ```
 
 ### No Agent Yet
 
 ```text
-I do not see your first agent yet. Choose Sovereign for $99/month or Scale for $179/month. Once a vessel is active, Agent Deployment adds agents for $50/month each.
+I do not see your first agent yet. Choose Founders for $149/month, Sovereign for $199/month, or Scale for $275/month. Once a vessel is active, Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale.
 ```
 
 Button:
@@ -466,7 +467,7 @@ Show My Crew
 Triggered by `/add-agent`.
 
 ```text
-I have another bay open. Hire Agent Deployment for $50/month through Stripe, and I will move the new agent into the launch queue.
+I have another bay open. Hire Agentic Expansion through Stripe, and I will move the new agent into the launch queue.
 ```
 
 Buttons:
@@ -599,24 +600,27 @@ Hidden/account-state actions:
 
 | Action | Description |
 | --- | --- |
-| `/add-agent` | Hire Agent Deployment for $50/month |
+| `/add-agent` | Hire Agentic Expansion for the active vessel |
 | `/agent-<slug>` | Switch active agent |
 
-Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Sovereign and Scale.
+Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Limited 100 Founders, Sovereign, and Scale.
 
 Canonical button labels:
 
 ```text
 Take Me Aboard
 Update Name
-Sovereign - $99/month
-Scale - $179/month
-Hire Sovereign - $99/month
-Hire Scale - $179/month
+Founders - $149/month
+Sovereign / Scale
+Sovereign - $199/month
+Scale - $275/month
+Hire Founders - $149/month
+Hire Sovereign - $199/month
+Hire Scale - $275/month
 Change Package
 Show My Crew
 Take Helm: {Agent Label}
-Add Agent - $50/month
+Add Agent
 Hire Additional Agent
 Back To My Crew
 Wire Notion

@@ -93,13 +93,25 @@ class HostedApiConfig:
         self.stripe_webhook_secret: str = str(e.get("STRIPE_WEBHOOK_SECRET", "")).strip()
         self.log_level: str = str(e.get("ARCLINK_LOG_LEVEL", "INFO")).strip().upper()
         self.default_price_id: str = str(
-            e.get("ARCLINK_SOVEREIGN_PRICE_ID")
+            e.get("ARCLINK_FOUNDERS_PRICE_ID")
+            or e.get("ARCLINK_DEFAULT_PRICE_ID")
+            or e.get("ARCLINK_SOVEREIGN_PRICE_ID")
             or e.get("ARCLINK_FIRST_AGENT_PRICE_ID")
-            or e.get("ARCLINK_DEFAULT_PRICE_ID", "price_arclink_sovereign")
+            or "price_arclink_founders"
         ).strip()
-        self.sovereign_price_id: str = str(e.get("ARCLINK_SOVEREIGN_PRICE_ID") or self.default_price_id).strip()
-        self.scale_price_id: str = str(e.get("ARCLINK_SCALE_PRICE_ID", "")).strip()
-        self.additional_agent_price_id: str = str(e.get("ARCLINK_ADDITIONAL_AGENT_PRICE_ID", "")).strip()
+        self.founders_price_id: str = str(e.get("ARCLINK_FOUNDERS_PRICE_ID") or self.default_price_id).strip()
+        self.sovereign_price_id: str = str(e.get("ARCLINK_SOVEREIGN_PRICE_ID") or "price_arclink_sovereign").strip()
+        self.scale_price_id: str = str(e.get("ARCLINK_SCALE_PRICE_ID") or "price_arclink_scale").strip()
+        self.sovereign_agent_expansion_price_id: str = str(
+            e.get("ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID")
+            or e.get("ARCLINK_ADDITIONAL_AGENT_PRICE_ID")
+            or "price_arclink_sovereign_agent_expansion"
+        ).strip()
+        self.scale_agent_expansion_price_id: str = str(
+            e.get("ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID")
+            or "price_arclink_scale_agent_expansion"
+        ).strip()
+        self.additional_agent_price_id: str = self.sovereign_agent_expansion_price_id
 
 
 # --- Request / Response helpers -----------------------------------------------
@@ -207,7 +219,7 @@ def _handle_public_onboarding_start(
         channel_identity=str(body.get("channel_identity") or body.get("email") or ""),
         email_hint=str(body.get("email") or ""),
         display_name_hint=str(body.get("display_name") or ""),
-        selected_plan_id=str(body.get("plan_id") or "sovereign"),
+        selected_plan_id=str(body.get("plan_id") or "founders"),
         selected_model_id=str(body.get("model_id") or ""),
         metadata=body.get("metadata"),
     )
@@ -244,6 +256,10 @@ def _handle_public_onboarding_checkout(
     session_row = conn.execute("SELECT selected_plan_id FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
     selected_plan_id = str((dict(session_row) if session_row is not None else {}).get("selected_plan_id") or body.get("plan_id") or "").strip().lower()
     price_id = str(body.get("price_id") or config.default_price_id)
+    if selected_plan_id == "founders" and config.founders_price_id:
+        price_id = config.founders_price_id
+    if selected_plan_id == "sovereign" and config.sovereign_price_id:
+        price_id = config.sovereign_price_id
     if selected_plan_id == "scale" and config.scale_price_id:
         price_id = config.scale_price_id
     result = open_public_onboarding_checkout_api(
@@ -654,9 +670,12 @@ def _handle_telegram_webhook(
     result = handle_telegram_update(
         conn, body,
         stripe_client=stripe_client,
-        price_id=config.default_price_id,
+        price_id=config.sovereign_price_id,
+        founders_price_id=config.founders_price_id,
         scale_price_id=config.scale_price_id,
         additional_agent_price_id=config.additional_agent_price_id,
+        sovereign_agent_expansion_price_id=config.sovereign_agent_expansion_price_id,
+        scale_agent_expansion_price_id=config.scale_agent_expansion_price_id,
         base_domain=config.base_domain,
     )
     if result is None:
@@ -726,9 +745,12 @@ def _handle_discord_webhook(
             timestamp=ts,
             config=dc,
             stripe_client=stripe_client,
-            price_id=config.default_price_id,
+            price_id=config.sovereign_price_id,
+            founders_price_id=config.founders_price_id,
             scale_price_id=config.scale_price_id,
             additional_agent_price_id=config.additional_agent_price_id,
+            sovereign_agent_expansion_price_id=config.sovereign_agent_expansion_price_id,
+            scale_agent_expansion_price_id=config.scale_agent_expansion_price_id,
             base_domain=config.base_domain,
         )
     except ArcLinkDiscordError as exc:

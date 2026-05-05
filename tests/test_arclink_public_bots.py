@@ -104,7 +104,7 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
 
     started = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:42", text="/start")
     expect(started.action == "prompt_name", str(started))
-    expect("Sovereign or Scale" in started.reply, started.reply)
+    expect("Founders, Sovereign, or Scale" in started.reply, started.reply)
     named = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -127,7 +127,7 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     )
     expect({started.session_id, named.session_id, planned.session_id, checkout.session_id} == {started.session_id}, "session changed")
     expect(checkout.action == "open_checkout" and checkout.checkout_url.startswith("https://stripe.test/checkout/"), str(checkout))
-    expect(checkout.buttons and checkout.buttons[0].label == "Hire Sovereign", str(checkout.buttons))
+    expect(checkout.buttons and checkout.buttons[0].label == "Hire Sovereign - $199/month", str(checkout.buttons))
     session = conn.execute(
         "SELECT channel, channel_identity, status, checkout_state, email_hint, display_name_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
         (checkout.session_id,),
@@ -160,7 +160,11 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     package = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="Scale Buyer",
     )
-    expect([b.label for b in package.buttons] == ["Sovereign - $99/month", "Scale - $179/month"], str(package.buttons))
+    expect([b.label for b in package.buttons] == ["Founders - $149/month", "Sovereign / Scale"], str(package.buttons))
+    standard = bots.handle_arclink_public_bot_turn(
+        conn, channel="telegram", channel_identity="tg:scale", text="/packages standard",
+    )
+    expect([b.label for b in standard.buttons] == ["Sovereign - $199/month", "Scale - $275/month"], str(standard.buttons))
     planned = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="/plan scale",
     )
@@ -196,6 +200,40 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     print("PASS test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents")
 
 
+def test_public_bot_founders_checkout_uses_founders_price() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_founders_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_founders_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_founders_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:founders", text="/start", display_name_hint="Founder")
+    planned = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:founders", text="/plan founders")
+    expect("Limited 100 Founders is locked" in planned.reply, planned.reply)
+    expect([b.label for b in planned.buttons] == ["Hire Founders - $149/month", "Change Package"], str(planned.buttons))
+
+    checkout = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:founders",
+        text="/checkout",
+        stripe_client=stripe,
+        price_id="price_sovereign_test",
+        founders_price_id="price_founders_test",
+        scale_price_id="price_scale_test",
+        base_domain="example.test",
+    )
+    checkout_session = stripe.checkout_sessions[checkout.checkout_url.rsplit("/", 1)[1]]
+    expect(checkout_session["price_id"] == "price_founders_test", str(checkout_session))
+    expect(checkout.buttons[0].label == "Hire Founders - $149/month", str(checkout.buttons))
+    session = conn.execute(
+        "SELECT selected_plan_id FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (checkout.session_id,),
+    ).fetchone()
+    expect(session["selected_plan_id"] == "founders", str(dict(session)))
+    print("PASS test_public_bot_founders_checkout_uses_founders_price")
+
+
 def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_action_catalog_test")
     telegram = bots.arclink_public_bot_telegram_commands()
@@ -211,7 +249,7 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     expect({"arclink", "connect-notion", "config-backup", "pair-channel", "agents", "name", "plan"} <= discord_names, str(discord_names))
     expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
-    expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"sovereign", "scale"}, str(plan))
+    expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"founders", "sovereign", "scale"}, str(plan))
     print("PASS test_public_bot_action_catalog_has_real_platform_commands")
 
 
@@ -423,8 +461,49 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     ).fetchone()
     add_metadata = json.loads(add_session["metadata_json"])
     expect(add_session["user_id"] == seeded["user_id"], str(dict(add_session)))
-    expect(add_session["selected_plan_id"] == "additional_agent", str(dict(add_session)))
+    expect(add_session["selected_plan_id"] == "agent_expansion_sovereign", str(dict(add_session)))
+    expect(add_metadata["agent_expansion_plan_id"] == "sovereign", str(add_metadata))
+    expect(add_metadata["agent_expansion_monthly_price"] == "$99/month", str(add_metadata))
     expect(add_metadata.get("active_deployment_id") == seeded["deployment_id"], str(add_metadata))
+
+    scale_seed = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:scale_add",
+        prefix="arc-scale-add",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps({
+                "ingress_mode": "tailscale",
+                "tailscale_dns_name": "control.example.ts.net",
+                "tailscale_host_strategy": "path",
+                "selected_plan_id": "scale",
+            }, sort_keys=True),
+            scale_seed["deployment_id"],
+        ),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET selected_plan_id = ? WHERE session_id = ?",
+        ("scale", scale_seed["session_id"]),
+    )
+    conn.commit()
+    scale_add = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:scale_add",
+        text="/add-agent",
+        stripe_client=stripe,
+        sovereign_agent_expansion_price_id="price_sovereign_expansion",
+        scale_agent_expansion_price_id="price_scale_expansion",
+        base_domain="example.test",
+    )
+    expect(scale_add.action == "open_add_agent_checkout", str(scale_add))
+    scale_checkout = stripe.checkout_sessions[scale_add.checkout_url.rsplit("/", 1)[1]]
+    expect(scale_checkout["price_id"] == "price_scale_expansion", str(scale_checkout))
+    expect("$79/month" in scale_add.reply, scale_add.reply)
 
     control.reserve_arclink_deployment_prefix(
         conn,
@@ -661,7 +740,7 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         display_name_hint="Chris",
     )
     expect("Welcome aboard, Chris" in started.reply, f"expected greeting by name, got: {started.reply}")
-    expect("Sovereign or Scale" in started.reply, started.reply)
+    expect("Founders, Sovereign, or Scale" in started.reply, started.reply)
     labels = [b.label for b in started.buttons]
     expect(labels == ["Take Me Aboard", "Update Name"], f"unexpected buttons: {labels}")
     expect("Run Systems Check" not in labels, "no systems-check on cold-open greeting")
@@ -673,7 +752,12 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         text="/packages", display_name_hint="Chris",
     )
     expect(aboard.action == "prompt_package", str(aboard.action))
-    expect([b.label for b in aboard.buttons] == ["Sovereign - $99/month", "Scale - $179/month"], str(aboard.buttons))
+    expect([b.label for b in aboard.buttons] == ["Founders - $149/month", "Sovereign / Scale"], str(aboard.buttons))
+    standard = bots.handle_arclink_public_bot_turn(
+        conn, channel="telegram", channel_identity="tg:9001",
+        text="/packages standard", display_name_hint="Chris",
+    )
+    expect([b.label for b in standard.buttons] == ["Sovereign - $199/month", "Scale - $275/month"], str(standard.buttons))
 
     # Update Name (bare /name) prompts for input rather than blanking the
     # captured name. The current name is shown back to the user.
@@ -690,9 +774,10 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         display_name_hint="Chris",
     )
     expect("Welcome aboard, Sirouk" in renamed.reply, renamed.reply)
-    expect("$99/month" in renamed.reply, renamed.reply)
-    expect("$179/month" in renamed.reply, renamed.reply)
-    expect([b.label for b in renamed.buttons] == ["Sovereign - $99/month", "Scale - $179/month"], str(renamed.buttons))
+    expect("$149/month" in renamed.reply, renamed.reply)
+    expect("$199/month" in renamed.reply, renamed.reply)
+    expect("$275/month" in renamed.reply, renamed.reply)
+    expect([b.label for b in renamed.buttons] == ["Founders - $149/month", "Sovereign / Scale"], str(renamed.buttons))
     expect(len(renamed.buttons) == 2, str(renamed.buttons))
 
     # If no display name was provided by the channel, the greeting falls back

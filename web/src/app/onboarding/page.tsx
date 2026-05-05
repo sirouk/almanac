@@ -7,7 +7,7 @@ import Link from "next/link";
 import { ErrorAlert } from "@/components/ui";
 
 type Step = "start" | "questions" | "checkout" | "done";
-type PlanId = "sovereign" | "scale";
+type PlanId = "founders" | "sovereign" | "scale";
 
 const RESUME_KEY = "arclink_onboarding_resume";
 
@@ -20,24 +20,31 @@ type ResumeState = {
 };
 
 const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; checkout: string }> = {
+  founders: {
+    name: "Limited 100 Founders",
+    price: "$149/month",
+    summary: "Sovereign-equivalent access for the first 100 aboard.",
+    checkout: "Hire Founders - $149/month",
+  },
   sovereign: {
     name: "Sovereign",
-    price: "$99/month",
+    price: "$199/month",
     summary: "One private agent plus ArcLink systems.",
-    checkout: "Hire Sovereign - $99/month",
+    checkout: "Hire Sovereign - $199/month",
   },
   scale: {
     name: "Scale",
-    price: "$179/month",
+    price: "$275/month",
     summary: "Three private agents, ArcLink systems, and Federation.",
-    checkout: "Hire Scale - $179/month",
+    checkout: "Hire Scale - $275/month",
   },
 };
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
   const [name, setName] = useState("");
-  const [planId, setPlanId] = useState<PlanId>("sovereign");
+  const [planId, setPlanId] = useState<PlanId>("founders");
+  const [showStandardPlans, setShowStandardPlans] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,7 +59,7 @@ export default function OnboardingPage() {
       const parsed = JSON.parse(raw) as Partial<ResumeState>;
       if (parsed.sessionId) setSessionId(parsed.sessionId);
       if (parsed.name) setName(parsed.name);
-      if (parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
+      if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
       if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
       if (parsed.step && parsed.step !== "start") {
         setStep(parsed.step);
@@ -205,24 +212,49 @@ export default function OnboardingPage() {
               I can take you from a few answers to a private ArcLink vessel with agents, memory, files, code workspace, model access, and a live systems board already wired up.
             </p>
             <div className="grid gap-3">
-              <button
-                type="button"
-                onClick={() => handleStart("sovereign")}
-                disabled={loading}
-                className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
-              >
-                Sovereign - $99/month
-                <span className="mt-1 block text-xs font-normal text-jet/70">One agent plus ArcLink systems.</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleStart("scale")}
-                disabled={loading}
-                className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
-              >
-                Scale - $179/month
-                <span className="mt-1 block text-xs font-normal text-soft-white/60">Three agents, ArcLink systems, and Federation.</span>
-              </button>
+              {!showStandardPlans ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleStart("founders")}
+                    disabled={loading}
+                    className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
+                  >
+                    Founders - $149/month
+                    <span className="mt-1 block text-xs font-normal text-jet/70">Limited to the first 100. Sovereign-equivalent access.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowStandardPlans(true)}
+                    disabled={loading}
+                    className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
+                  >
+                    Sovereign / Scale
+                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Compare the standard vessels.</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleStart("sovereign")}
+                    disabled={loading}
+                    className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
+                  >
+                    Sovereign - $199/month
+                    <span className="mt-1 block text-xs font-normal text-jet/70">One agent plus ArcLink systems.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStart("scale")}
+                    disabled={loading}
+                    className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
+                  >
+                    Scale - $275/month
+                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Three agents, ArcLink systems, and Federation.</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -242,7 +274,7 @@ export default function OnboardingPage() {
               />
             </div>
             <p className="text-sm text-soft-white/40">
-              {PLAN_COPY[planId].name} is on deck at <span className="text-signal-orange">{PLAN_COPY[planId].price}</span>. {PLAN_COPY[planId].summary} Agent Deployment adds another agent for $50/month.
+              {PLAN_COPY[planId].name} is on deck at <span className="text-signal-orange">{PLAN_COPY[planId].price}</span>. {PLAN_COPY[planId].summary} Agentic Expansion is $99/month on Sovereign and $79/month on Scale.
             </p>
             <button
               type="submit"

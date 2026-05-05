@@ -19,10 +19,13 @@ python3 python/arclink_hosted_api.py   # starts on 127.0.0.1:8900
 | `ARCLINK_COOKIE_DOMAIN` | (none) | Cookie domain attribute |
 | `ARCLINK_COOKIE_SECURE` | `1` | Set 0 for HTTP-only dev |
 | `ARCLINK_LOG_LEVEL` | `INFO` | Structured log verbosity |
-| `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_sovereign` | Sovereign Stripe price |
-| `ARCLINK_FIRST_AGENT_PRICE_ID` | `price_arclink_sovereign` | Sovereign Stripe price ($99/month target) |
-| `ARCLINK_SCALE_PRICE_ID` | `price_arclink_scale` | Scale Stripe price ($179/month target) |
-| `ARCLINK_ADDITIONAL_AGENT_PRICE_ID` | `price_arclink_agent_deployment` | Agent Deployment Stripe price ($50/month target) |
+| `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_founders` | Limited 100 Founders Stripe price |
+| `ARCLINK_FOUNDERS_PRICE_ID` | `price_arclink_founders` | Limited 100 Founders Stripe price ($149/month target) |
+| `ARCLINK_SOVEREIGN_PRICE_ID` | `price_arclink_sovereign` | Sovereign Stripe price ($199/month target) |
+| `ARCLINK_SCALE_PRICE_ID` | `price_arclink_scale` | Scale Stripe price ($275/month target) |
+| `ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID` | `price_arclink_sovereign_agent_expansion` | Sovereign Agentic Expansion Stripe price ($99/month target) |
+| `ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID` | `price_arclink_scale_agent_expansion` | Scale Agentic Expansion Stripe price ($79/month target) |
+| `ARCLINK_ADDITIONAL_AGENT_PRICE_ID` | `price_arclink_sovereign_agent_expansion` | Legacy alias for Sovereign Agentic Expansion |
 
 **Health check:**
 ```bash

@@ -554,7 +554,7 @@ def start_public_onboarding_api(
     channel_identity: str,
     email_hint: str = "",
     display_name_hint: str = "",
-    selected_plan_id: str = "sovereign",
+    selected_plan_id: str = "founders",
     selected_model_id: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:

@@ -99,8 +99,8 @@ def test_discord_message_event_through_bot_contract() -> None:
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
     expect("Welcome aboard, Test Buyer" in result["data"]["content"], result["data"]["content"])
-    expect("Sovereign - $99/month" in str(result["data"].get("components", [])), str(result["data"]))
-    expect("Scale - $179/month" in str(result["data"].get("components", [])), str(result["data"]))
+    expect("Founders - $149/month" in str(result["data"].get("components", [])), str(result["data"]))
+    expect("Sovereign / Scale" in str(result["data"].get("components", [])), str(result["data"]))
     print("PASS test_discord_message_event_through_bot_contract")
 
 

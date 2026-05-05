@@ -705,7 +705,7 @@ def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
     config = hosted.HostedApiConfig(env={
         "ARCLINK_BASE_DOMAIN": "example.test",
         "STRIPE_SECRET_KEY": "sk_test_configured_secret",
-        "ARCLINK_DEFAULT_PRICE_ID": "price_live_resolve",
+        "ARCLINK_SOVEREIGN_PRICE_ID": "price_live_resolve",
     })
     calls: list[dict] = []
 
@@ -746,6 +746,59 @@ def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
     expect(payload["session"]["checkout_url"].startswith("https://checkout.stripe.com/"), str(payload))
     expect(calls and calls[0]["price_id"] == "price_live_resolve", str(calls))
     print("PASS test_public_onboarding_checkout_resolves_live_stripe_from_config")
+
+
+def test_public_onboarding_checkout_maps_package_price_ids() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_price_map_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_price_map_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_SECRET_KEY": "sk_test_configured_secret",
+        "ARCLINK_FOUNDERS_PRICE_ID": "price_founders_live",
+        "ARCLINK_SOVEREIGN_PRICE_ID": "price_sovereign_live",
+        "ARCLINK_SCALE_PRICE_ID": "price_scale_live",
+    })
+    calls: list[dict] = []
+
+    class RecordingStripe:
+        def create_checkout_session(self, **kwargs):
+            calls.append(kwargs)
+            return {"id": f"cs_{len(calls)}", "url": f"https://checkout.stripe.com/c/cs_{len(calls)}"}
+
+    hosted.resolve_stripe_client = lambda env: RecordingStripe()
+
+    expected = {
+        "founders": "price_founders_live",
+        "sovereign": "price_sovereign_live",
+        "scale": "price_scale_live",
+    }
+    for plan_id, price_id in expected.items():
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/onboarding/start",
+            headers={},
+            body=json.dumps({"channel": "web", "channel_identity": f"web:{plan_id}", "plan_id": plan_id}),
+            config=config,
+        )
+        expect(status == 201, f"expected 201 got {status}: {payload}")
+        session_id = payload["session"]["session_id"]
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/onboarding/checkout",
+            headers={},
+            body=json.dumps({
+                "session_id": session_id,
+                "success_url": "https://app.arclink.online/success",
+                "cancel_url": "https://app.arclink.online/cancel",
+            }),
+            config=config,
+        )
+        expect(status == 200, f"expected 200 got {status}: {payload}")
+        expect(calls[-1]["price_id"] == price_id, str(calls[-1]))
+    print("PASS test_public_onboarding_checkout_maps_package_price_ids")
 
 
 def test_web_telegram_discord_onboarding_parity() -> None:

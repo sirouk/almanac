@@ -656,7 +656,7 @@ def _aboard_freeform_reply(
     conn: sqlite3.Connection | None = None,
 ) -> ArcLinkPublicBotTurn:
     """Routing law: once a user has a live pod, freeform messages on this
-    channel belong to their private agent on the Helm — not to Raven. Raven
+    channel belong to their private agent on the Helm, not to Raven. Raven
     keeps slash commands; everything else is a clear handoff with the helm
     URL and a short slash-command map for the times the user wanted Raven.
     """
@@ -664,7 +664,7 @@ def _aboard_freeform_reply(
     access = _deployment_access(deployment)
     helm = str(access.get("dashboard") or "").rstrip("/")
     lines = [
-        f"I'm Raven — onboarding only. Your agent **{label}** is awake on the helm, and freeform messages on this channel reach me, not it.",
+        f"I'm Raven, onboarding only. Your agent **{label}** is awake on the helm, and freeform messages on this channel reach me, not it.",
         "",
         "Open the helm to talk to your agent directly:" if helm else "Open the helm to talk to your agent directly.",
     ]
@@ -1409,12 +1409,14 @@ def handle_arclink_public_bot_turn(
     additional_agent_price_id: str = "",
     base_domain: str = "",
     metadata: Mapping[str, Any] | None = None,
+    display_name_hint: str = "",
 ) -> ArcLinkPublicBotTurn:
     clean_channel = _clean_channel(channel)
     clean_identity = _clean_identity(channel_identity)
     _check_public_bot_rate_limit(conn, channel=clean_channel, channel_identity=clean_identity)
     message = str(text or "").strip()
     command = message.lower()
+    captured_display_name = str(display_name_hint or "").strip()[:40]
 
     if command in ARCLINK_PUBLIC_BOT_HELP_COMMANDS:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
@@ -1443,6 +1445,7 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             selected_model_id=chutes_default_model({}),
             metadata=metadata,
+            display_name_hint=captured_display_name,
         )
         context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         return _pair_channel_reply(
@@ -1529,20 +1532,28 @@ def handle_arclink_public_bot_turn(
         channel_identity=clean_identity,
         selected_model_id=chutes_default_model({}),
         metadata=metadata,
+        display_name_hint=captured_display_name,
     )
 
     if command in {"", "/start", "start", "restart"}:
+        # Greet by the name we picked up from the channel profile (Telegram
+        # first_name, Discord global_name). The user can override via Update
+        # Name -> /name. If nothing was captured, the greeting stays generic.
+        name = str(session.get("display_name_hint") or "").strip()
+        greeting = f"Welcome aboard, {name}." if name else "Raven here. ArcLink is in range."
         return _reply(
             session,
             action="prompt_name",
             reply=(
-                "Raven here. ArcLink is in range.\n\n"
-                "Give me a name and choose your path. I will bring your first private AI workspace online with an agent, memory, files, code tools, model access, and a live systems board. No bot-building. No server chores.\n\n"
-                "Stripe collects your email at checkout. Send `/name Your Name`, or tap Starter when you are ready."
+                f"{greeting}\n\n"
+                "I bring your first private AI workspace online: an agent, memory, files, a code workspace, "
+                "model access, and a live systems board. No bot-building. No server chores.\n\n"
+                "Tap Take Me Aboard to start the launch path. Stripe collects your email securely at checkout. "
+                "Tap Update Name if you'd like to set a different display name first."
             ),
             buttons=(
-                _button("Starter - $35/mo", command="/plan starter", style="secondary"),
-                _button("Open Comms", command="/help", style="secondary"),
+                _button("Take Me Aboard", command="/plan starter"),
+                _button("Update Name", command="/name", style="secondary"),
             ),
         )
     if command in {"status", "/status"}:
@@ -1578,6 +1589,23 @@ def handle_arclink_public_bot_turn(
             session,
             action="prompt_name",
             reply="Keep your email out of comms. Stripe collects it at checkout, and only there. Send `/name Your Name` and I will put your name on the workspace.",
+        )
+    if command in {"name", "/name"}:
+        # Bare /name (or the Update Name button) — prompt the user to set one
+        # rather than blanking out the captured display name.
+        current = str(session.get("display_name_hint") or "").strip()
+        current_line = f"\n\n_Currently on the hatch: {current}_" if current else ""
+        return _reply(
+            session,
+            action="prompt_name_input",
+            reply=(
+                "What name should I paint on the hatch?\n\n"
+                "Send `/name Your Name` and I will set it."
+                f"{current_line}"
+            ),
+            buttons=(
+                _button("Take Me Aboard", command="/plan starter"),
+            ),
         )
     name = _command_value(message, command, ("name", "/name"))
     if name is not None:

@@ -222,8 +222,24 @@ def verify_discord_signature(
         return False
 
 
+def _discord_display_name(user: Mapping[str, Any]) -> str:
+    """Pick the friendliest display name from a Discord user object.
+
+    Prefer global_name (the human name shown in chat), fall back to username
+    (handle), otherwise empty. Discord no longer has discriminators on most
+    accounts, so global_name is what people actually see.
+    """
+    global_name = str(user.get("global_name") or "").strip()
+    if global_name:
+        return global_name[:40]
+    username = str(user.get("username") or "").strip()
+    if username:
+        return username[:40]
+    return ""
+
+
 def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] | None:
-    """Extract channel_id, user_id, and text from a Discord interaction."""
+    """Extract channel_id, user_id, text, and display_name from a Discord interaction."""
     itype = interaction.get("type", 0)
 
     # Type 1 = PING
@@ -261,6 +277,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "channel_id": str(interaction.get("channel_id") or ""),
             "user_id": str(user.get("id") or ""),
             "text": text,
+            "display_name": _discord_display_name(user),
         }
 
     # Type 3 = MESSAGE_COMPONENT (buttons)
@@ -274,6 +291,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "channel_id": str(interaction.get("channel_id") or ""),
             "user_id": str(user.get("id") or ""),
             "text": custom_id,
+            "display_name": _discord_display_name(user),
         }
 
     # Type 4 = AUTOCOMPLETE - skip for now
@@ -284,6 +302,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "channel_id": str(interaction.get("channel_id") or ""),
             "user_id": str(author.get("id") or ""),
             "text": str(interaction.get("content") or ""),
+            "display_name": _discord_display_name(author),
         }
 
     return None
@@ -321,6 +340,7 @@ def handle_discord_interaction(
         price_id=price_id,
         additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
+        display_name_hint=parsed.get("display_name", ""),
     )
     data: dict[str, Any] = {
         "content": turn.reply,

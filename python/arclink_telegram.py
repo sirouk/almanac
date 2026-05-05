@@ -316,8 +316,23 @@ def _telegram_api_url(config: TelegramConfig, method: str) -> str:
     return f"{config.api_base}/bot{config.bot_token}/{method}"
 
 
+def _telegram_display_name(user: Mapping[str, Any]) -> str:
+    """Pick the friendliest display name from a Telegram `from` object.
+
+    Prefer first_name (the human name shown in the chat header), fall back to
+    @username if the user has hidden their first name, otherwise empty.
+    """
+    first = str(user.get("first_name") or "").strip()
+    if first:
+        return first[:40]
+    username = str(user.get("username") or "").strip()
+    if username:
+        return username[:40]
+    return ""
+
+
 def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
-    """Extract chat_id, user_id, and text from a Telegram update dict."""
+    """Extract chat_id, user_id, text, and display_name from a Telegram update."""
     callback = update.get("callback_query") or {}
     if callback:
         data = str(callback.get("data") or "").strip()
@@ -334,6 +349,7 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
                 "user_id": user_id,
                 "text": data,
                 "callback_query_id": str(callback.get("id") or ""),
+                "display_name": _telegram_display_name(user),
             }
     msg = update.get("message") or update.get("edited_message") or {}
     text = str(msg.get("text") or "").strip()
@@ -343,7 +359,12 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
     user_id = str(user.get("id") or "")
     if not chat_id or not text:
         return None
-    return {"chat_id": chat_id, "user_id": user_id, "text": text}
+    return {
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "text": text,
+        "display_name": _telegram_display_name(user),
+    }
 
 
 def handle_telegram_update(
@@ -373,6 +394,7 @@ def handle_telegram_update(
         price_id=price_id,
         additional_agent_price_id=additional_agent_price_id,
         base_domain=base_domain,
+        display_name_hint=parsed.get("display_name", ""),
     )
     return {
         "chat_id": parsed["chat_id"],

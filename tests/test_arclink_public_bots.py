@@ -488,7 +488,8 @@ def main() -> int:
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
     test_public_bot_agent_label_uses_user_display_name()
-    print("PASS all 11 ArcLink public bot tests")
+    test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
+    print("PASS all 12 ArcLink public bot tests")
     return 0
 
 
@@ -586,6 +587,56 @@ def test_public_bot_agent_label_uses_user_display_name() -> None:
     expect(crew2.reply.count("Chris") >= 2, f"expected two Chris entries, got: {crew2.reply}")
     expect("#" in crew2.reply, f"expected disambiguator suffix, got: {crew2.reply}")
     print("PASS test_public_bot_agent_label_uses_user_display_name")
+
+
+def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> None:
+    """The /start greeting must address the user by the name we picked up
+    from the channel profile (Telegram first_name, Discord global_name) and
+    offer exactly two buttons: Take Me Aboard and Update Name. No "systems
+    check" button on the cold-open greeting — that has nothing to read yet.
+    """
+    control = load_module("arclink_control.py", "arclink_control_public_bot_greet_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_greet_test")
+    conn = memory_db(control)
+
+    started = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:9001",
+        text="/start",
+        display_name_hint="Chris",
+    )
+    expect("Welcome aboard, Chris" in started.reply, f"expected greeting by name, got: {started.reply}")
+    expect("Stripe collects your email securely at checkout" in started.reply, started.reply)
+    labels = [b.label for b in started.buttons]
+    expect(labels == ["Take Me Aboard", "Update Name"], f"unexpected buttons: {labels}")
+    expect("Run Systems Check" not in labels, "no systems-check on cold-open greeting")
+    expect("Open Comms" not in labels, "no Open Comms on cold-open greeting")
+
+    # Take Me Aboard advances to plan-locked.
+    aboard = bots.handle_arclink_public_bot_turn(
+        conn, channel="telegram", channel_identity="tg:9001",
+        text="/plan starter", display_name_hint="Chris",
+    )
+    expect(aboard.action == "prompt_checkout", str(aboard.action))
+
+    # Update Name (bare /name) prompts for input rather than blanking the
+    # captured name. The current name is shown back to the user.
+    update_name = bots.handle_arclink_public_bot_turn(
+        conn, channel="telegram", channel_identity="tg:9001",
+        text="/name", display_name_hint="Chris",
+    )
+    expect(update_name.action == "prompt_name_input", str(update_name.action))
+    expect("Currently on the hatch: Chris" in update_name.reply, update_name.reply)
+
+    # If no display name was provided by the channel, the greeting falls back
+    # to the generic line and the buttons are unchanged.
+    fresh = bots.handle_arclink_public_bot_turn(
+        conn, channel="discord", channel_identity="discord:9002", text="/start",
+    )
+    expect("Raven here. ArcLink is in range." in fresh.reply, fresh.reply)
+    expect([b.label for b in fresh.buttons] == ["Take Me Aboard", "Update Name"], str(fresh.buttons))
+    print("PASS test_public_bot_greets_by_captured_display_name_and_offers_two_buttons")
 
 
 if __name__ == "__main__":

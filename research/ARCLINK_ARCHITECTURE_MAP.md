@@ -1,6 +1,7 @@
 # ArcLink Architecture Map For ArcLink Transformation
 
-Source: `sirouk/arclink` cloned into this workspace on 2026-05-01. Current checkout head at prep time: `b91e9a9 Harden live agent smoke timeout handling`.
+Source: public ArcLink repository snapshot prepared on 2026-05-01. Use the
+repository history as the source of truth for exact commit provenance.
 
 ## Core Mental Model
 

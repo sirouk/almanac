@@ -1,5 +1,485 @@
 # Build Completion Notes
 
+## 2026-05-06 Workspace Proof Screenshot And Documentation Handoff
+
+Scope: completed the portable proof-note and documentation handoff tasks for
+the native Drive, Code, and Terminal Hermes dashboard plugins.
+
+Rationale:
+
+- Added sanitized screenshot capture to the repeatable
+  `bin/arclink-live-proof --journey workspace --live` path instead of keeping
+  one-off manual screenshots outside the evidence contract.
+- Kept screenshot artifacts under ignored `evidence/workspace-screenshots/`
+  and recorded only relative paths in redacted evidence. The screenshot
+  sanitizer masks file names, paths, editor text, terminal scrollback, facts,
+  and free-form inputs before capture.
+- Updated docs to claim only shipped behavior: Drive and Code are
+  first-generation native plugins; Code is not Monaco/VS Code parity; Terminal
+  is managed-pty with bounded polling, not tmux or true streaming; workspace
+  Docker/TLS proof is complete and separate from the broader hosted customer
+  live journey.
+
+Files changed:
+
+- `python/arclink_live_runner.py` - records sanitized screenshot references in
+  browser proof evidence, masks sensitive UI regions before screenshot capture,
+  and reopens Terminal after reload so the screenshot proves the native plugin
+  route.
+- `tests/test_arclink_live_runner.py` - covers screenshot evidence and runner
+  script generation.
+- `docs/arclink/architecture.md`, `docs/arclink/foundation.md`,
+  `docs/arclink/foundation-runbook.md`,
+  `docs/arclink/document-phase-status.md`,
+  `docs/arclink/CHANGELOG.md`, and
+  `docs/arclink/live-e2e-evidence-template.md` - aligned workspace plugin
+  claims with shipped behavior and completed workspace Docker/TLS proof.
+- `IMPLEMENTATION_PLAN.md` and
+  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - marked proof-note
+  and documentation handoff items complete while leaving commit curation and
+  optional deploy handoff open.
+
+Verification run:
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_arclink_live_runner.py`
+  passed.
+- `python3 -m py_compile python/arclink_live_runner.py tests/test_arclink_live_runner.py`
+  passed.
+- Generated workspace Playwright proof script passed `node --check` via a
+  temporary file.
+- `./bin/arclink-live-proof --journey workspace --live --json` passed with
+  `passed=8`; evidence: `evidence/run_82ace4c10b45.json`.
+- The passing live proof covered `deploy.sh docker upgrade`, `deploy.sh docker
+  health`, Drive desktop/mobile TLS proof, Code desktop/mobile TLS proof, and
+  Terminal desktop/mobile TLS proof.
+- Sanitized screenshot references from the passing proof:
+  `../evidence/workspace-screenshots/drive-desktop-1778044624358.png`,
+  `../evidence/workspace-screenshots/drive-mobile-1778044625589.png`,
+  `../evidence/workspace-screenshots/code-desktop-1778044627199.png`,
+  `../evidence/workspace-screenshots/code-mobile-1778044628422.png`,
+  `../evidence/workspace-screenshots/terminal-desktop-1778044632221.png`,
+  `../evidence/workspace-screenshots/terminal-mobile-1778044635510.png`.
+
+Known risks:
+
+- BUILD handoff is still not fully complete because the broad dirty worktree
+  has not been curated into scoped commits.
+- Production 12 hosted customer proof remains blocked on separate hosted
+  credentials; the workspace Docker/TLS proof does not prove Stripe,
+  Cloudflare, Chutes, Telegram, or Discord live paths.
+- Host readiness in the workspace proof result still reports missing hosted
+  provider env vars. Those are unrelated to the completed `workspace` journey
+  but remain blockers for the broader hosted journey.
+
+## 2026-05-06 Workspace TLS Proof Bring-Home Pass
+
+Scope: completed the credentialed Docker/TLS proof loop for the native Drive,
+Code, and Terminal Hermes dashboard plugins on the target Docker deployment.
+
+Rationale:
+
+- Kept proof execution in `bin/arclink-live-proof --journey workspace --live`
+  instead of a one-off transcript so the result remains repeatable and
+  redacted.
+- Activated Hermes dashboard plugins through their native dashboard links
+  instead of assuming direct `/drive`, `/code`, or `/terminal` navigation will
+  bypass the dashboard shell. The live Hermes build redirects direct plugin
+  routes back through `/sessions` until the native sidebar route is selected.
+- Kept the Terminal root guard intact for baremetal/host use and set the
+  explicit Docker dashboard allowance only in generated deployment
+  `hermes-dashboard` compose repair, where the terminal process is confined to
+  the deployment container and `/workspace` mount.
+
+Files changed:
+
+- `python/arclink_live_runner.py` - fixed workspace browser proof script
+  placement for Node module resolution, added native dashboard plugin
+  navigation for desktop/mobile, and waited for plugin-specific controls before
+  running API assertions.
+- `plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js` - registered
+  Terminal through the same Hermes plugin registry used by Drive and Code.
+- `bin/arclink-docker.sh` - repaired generated deployment dashboard compose
+  files with `ARCLINK_TERMINAL_ALLOW_ROOT=1` for the Docker container boundary.
+- `tests/test_arclink_live_runner.py`, `tests/test_arclink_plugins.py`, and
+  `tests/test_arclink_docker.py` - covered the runner script location,
+  dashboard navigation contract, Terminal registration API, and Docker
+  dashboard env repair.
+- `.gitignore` - ignored interrupted local workspace-proof temp directories.
+- `IMPLEMENTATION_PLAN.md` and
+  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - marked the
+  completed Docker/TLS proof items.
+
+Verification run:
+
+- `./bin/arclink-live-proof --journey workspace --live --json` passed with
+  `passed=8`; evidence: `evidence/run_d4513a2ba89b.json`.
+- The passing live proof covered `deploy.sh docker upgrade`, `deploy.sh docker
+  health`, Drive desktop/mobile TLS proof, Code desktop/mobile TLS proof, and
+  Terminal desktop/mobile TLS proof.
+- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_arclink_live_runner.py`
+  passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_arclink_plugins.py` passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_arclink_docker.py` passed.
+- `node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js`
+  passed.
+- `bash -n bin/arclink-docker.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- BUILD handoff is still not fully complete because screenshot capture, commit
+  curation, and final deploy-ready documentation/hygiene remain open plan
+  items.
+- The live runner host-readiness section still reports missing hosted-provider
+  env vars for the broader hosted journey; those are unrelated to the
+  completed `workspace` journey but should not be mistaken for hosted journey
+  proof.
+
+## 2026-05-06 Workspace TLS Proof Executor Slice
+
+Scope: advanced the credential-gated live-proof journey for the native Hermes
+workspace plugins from a canonical runner target to default live executors for
+Docker upgrade/reconcile, Docker health, and Drive/Code/Terminal desktop/mobile
+TLS browser proof.
+
+Rationale:
+
+- Extended the existing `arclink-live-proof` runner instead of creating a
+  one-off browser transcript because the current mission needs repeatable,
+  redacted proof artifacts before checkboxes can be closed.
+- Kept the hosted onboarding/provider journey as the default and added
+  `--journey workspace` so workspace proof can be planned without requiring
+  Stripe, Chutes, Telegram, or Discord credentials.
+- Required `ARCLINK_WORKSPACE_PROOF_TLS_URL` and
+  `ARCLINK_WORKSPACE_PROOF_AUTH` by name only; the live runner still does not
+  print or persist auth material.
+- Added real default runners only for `--journey workspace --live`, keeping the
+  broader hosted journey pending until its separate provider runners exist.
+- Used Playwright through the existing web dependency set instead of a one-off
+  HTTP-only probe, because the plan requires browser proof over the real TLS
+  dashboard routes.
+
+Files changed:
+
+- `python/arclink_live_journey.py` - split hosted and workspace proof journeys,
+  adding Docker health/reconcile plus Drive, Code, and Terminal desktop/mobile
+  TLS proof steps.
+- `python/arclink_live_runner.py` - added the `--journey hosted|workspace|all`
+  selector, selected default workspace live runners when no fake runners are
+  injected, ran the Docker commands, and executed redacted Playwright proof
+  steps for `/drive`, `/code`, and `/terminal`.
+- `python/arclink_evidence.py` - added workspace proof auth to the explicit
+  redaction set.
+- `tests/test_arclink_live_journey.py` and
+  `tests/test_arclink_live_runner.py` - covered workspace journey structure,
+  missing-env reporting, dry-run behavior, fake live runners, and proof auth
+  redaction.
+- `docs/arclink/live-e2e-secrets-needed.md` and
+  `docs/arclink/live-e2e-evidence-template.md` - documented the workspace proof
+  env vars, auth formats, execution commands, timeouts, and evidence rows.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_live_runner.py tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_live_journey.py` passed.
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `node --check` passed for the Drive, Code, and Terminal dashboard bundles.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `bin/arclink-live-proof --journey workspace --json` passed with
+  `blocked_missing_credentials` and missing env names only.
+- `node --check` passed for the generated workspace Playwright proof script.
+- `git diff --check` passed.
+
+Known risks:
+
+- BUILD remains incomplete: the executor path is implemented and locally
+  tested, but the actual live Docker upgrade/reconcile, Docker health, and
+  Drive/Code/Terminal desktop/mobile TLS browser proof still need a target
+  deployment and credentials.
+
+## 2026-05-06 Integration Validation Pass
+
+Scope: executed the deterministic integration checks available without a
+credentialed live TLS dashboard or deployment upgrade target.
+
+Rationale:
+
+- Kept live Docker upgrade, Docker health, and TLS browser proof open because
+  those require an explicit target deployment and credentialed dashboard access.
+- Used the existing validation floor and web browser checks rather than adding
+  a new proof harness for native Hermes plugins.
+
+Files changed:
+
+- `IMPLEMENTATION_PLAN.md` - marked the focused integration-check item complete.
+- `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - mirrored the
+  focused integration-check completion.
+- `research/BUILD_COMPLETION_NOTES.md` - recorded this validation pass and the
+  remaining live-proof blocker.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `node --check` passed for Drive, Code, and Terminal dashboard bundles.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_health_regressions.py` passed.
+- `git diff --check` passed.
+- `npm --prefix web test` passed.
+- `npm --prefix web run lint` passed.
+- `npm --prefix web run build` passed.
+- `npm --prefix web run test:browser` passed with 41 passing and 3 skipped
+  desktop-inapplicable mobile-layout cases.
+
+Known risks:
+
+- BUILD is not complete: Docker upgrade/reconcile, Docker health, and real TLS
+  browser proof for Drive, Code, and Terminal remain open.
+- The current proof did not exercise a live Hermes dashboard plugin host.
+
+## 2026-05-06 Code Nested Explorer Slice
+
+Scope: advanced the Code VS Code foundation by replacing the flat Explorer
+surface with a bounded nested tree contract, context-menu file operations, and
+tab dirty markers while keeping existing confined backend operations.
+
+Rationale:
+
+- Added a native `/tree` plugin API instead of introducing a separate workspace
+  app because the Hermes dashboard plugin already owns the Code surface.
+- Kept the tree bounded and symlink-pruned so Explorer navigation stays within
+  the configured workspace root and does not surface out-of-root symlink
+  targets.
+
+Files changed:
+
+- `plugins/hermes-agent/arclink-code/dashboard/plugin_api.py` - added bounded
+  `/tree`, advertised nested Explorer capability, and skipped symlink entries
+  in workspace listings.
+- `plugins/hermes-agent/arclink-code/dashboard/dist/index.js` - added nested
+  Explorer rendering, right-click context menu actions, drag/drop move
+  confirmation on tree folders, and tab dirty marker updates.
+- `plugins/hermes-agent/arclink-code/dashboard/dist/style.css` - styled nested
+  Explorer nodes and the context menu.
+- `tests/test_arclink_plugins.py` - covered `/tree`, symlink pruning, nested
+  Explorer bundle controls, context menus, and dirty-tab markers.
+- `IMPLEMENTATION_PLAN.md` and
+  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - marked only the
+  validated nested Explorer task complete while leaving TLS proof open.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-code/dashboard/plugin_api.py` passed.
+- `node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+
+Known risks:
+
+- Code desktop/mobile TLS browser proof remains open.
+- The nested tree is intentionally bounded to depth 3 in the UI and depth 4 in
+  the backend; deeper folders remain reachable through folder navigation and
+  search.
+
+## 2026-05-06 Terminal Managed Pty Slice
+
+Scope: advanced the Terminal persistent-session slice by replacing the scaffold
+with a documented ArcLink-managed pty backend, bounded polling dashboard UI, and
+focused lifecycle tests.
+
+Rationale:
+
+- Chose the managed-pty fallback instead of requiring tmux in this slice because
+  the Docker and baremetal runtime paths do not yet install and validate tmux as
+  a shared dependency.
+- Used bounded polling rather than WebSockets/SSE because the current Hermes
+  plugin host path already supports simple dashboard API calls and this keeps
+  reconnect behavior testable without a new transport rail.
+- Added an unrestricted-root startup guard so terminal sessions run only inside
+  the deployment/user runtime boundary unless an explicit diagnostics override
+  is set.
+
+Files changed:
+
+- `plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` - added
+  managed-pty session create/list/read/input/rename/close endpoints, atomic
+  session state, bounded scrollback, root guard, and redacted backend errors.
+- `plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js` - added the
+  Terminal session list, new session, input, polling refresh, rename, folder,
+  reorder, and close confirmation UI.
+- `plugins/hermes-agent/arclink-terminal/dashboard/dist/style.css` - added
+  responsive session, terminal pane, input, error, and confirmation styles.
+- `plugins/hermes-agent/arclink-terminal/README.md` - documented the
+  managed-pty backend, polling limitation, root guard, and future tmux path.
+- `tests/test_arclink_plugins.py` - covered Terminal create/revisit/input,
+  rename/folder/reorder, close confirmation, scrollback bounds, traversal
+  rejection, redaction, root guard, and browser bundle controls.
+- `IMPLEMENTATION_PLAN.md` and
+  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - marked only the
+  validated Terminal managed-pty tasks complete while leaving TLS proof open.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js`
+  passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+
+Known risks:
+
+- Terminal desktop/mobile TLS browser proof remains open.
+- The current transport is bounded polling, not true streaming.
+- tmux is still a future backend option; Docker/baremetal install validation
+  has not been added for tmux.
+
+## 2026-05-05 Code Source Control Diff Slice
+
+Scope: advanced the Code VS Code foundation by adding a bounded backend diff
+contract and a browser diff view for Source Control changed-file clicks.
+
+Rationale:
+
+- Kept the diff implementation inside the native ArcLink Code plugin API and
+  dashboard bundle instead of introducing a separate app or Hermes core patch.
+- Used allowlisted `git diff`/`git show` reads plus existing workspace/repo path
+  confinement so Source Control can inspect staged, unstaged, and untracked
+  text changes without shelling out through an unrestricted terminal surface.
+- Left Monaco evaluation for the dedicated editor task; this slice only needed
+  a source-control diff view.
+
+Files changed:
+
+- `plugins/hermes-agent/arclink-code/dashboard/plugin_api.py` - added
+  `/git/diff` with size bounds, text-file guards, and repo-confined file
+  resolution.
+- `plugins/hermes-agent/arclink-code/dashboard/dist/index.js` - changed Source
+  Control changed-file clicks to fetch and render a before/after diff view.
+- `plugins/hermes-agent/arclink-code/dashboard/dist/style.css` - added
+  responsive diff-pane styling.
+- `tests/test_arclink_plugins.py` - covered working-tree, staged, untracked,
+  and traversal-rejected diff behavior plus the browser bundle contract.
+- `IMPLEMENTATION_PLAN.md` and
+  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - marked only the
+  validated diff-view task complete.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+
+Known risks:
+
+- Drive TLS proof remains externally blocked by lack of a credentialed TLS
+  dashboard target in this environment.
+- Code still needs nested Explorer operations, Search/status bar, richer git
+  actions, theme/auto-save controls, Monaco decision, and live browser proof.
+
+## 2026-05-05 Deploy Baseline And Drive Trash UX Slice
+
+Scope: executed the highest-priority deploy-readiness validation from the
+native workspace plugin plan, repaired the README canonical shared-host layout
+contract, and advanced Drive browser UX with root-aware breadcrumbs plus a
+Trash/Restore view backed by the existing Drive APIs.
+
+Rationale:
+
+- Restored `/home/arclink/` in the README shared-host layout blocks instead of
+  weakening the Docker regression that protects operator documentation.
+- Kept Drive work in the native Hermes plugin's plain JavaScript bundle and
+  existing Python API boundary; no Hermes core or separate Next.js workspace app
+  changes were needed for this slice.
+- Left sharing disabled because there is still no real Nextcloud/WebDAV share
+  adapter with tests.
+
+Files changed:
+
+- `README.md` - restored the canonical `/home/arclink/` root in Shared Host
+  layout examples.
+- `plugins/hermes-agent/arclink-drive/dashboard/dist/index.js` - added
+  root-labeled `Drive / Vault|Workspace` breadcrumbs, a Trash mode, restore
+  actions, selected trash restore, and disabled upload/drop affordances while
+  viewing trash.
+- `tests/test_arclink_plugins.py` - added a focused browser bundle contract
+  check for Drive roots, breadcrumbs, Trash, and Restore controls.
+- `IMPLEMENTATION_PLAN.md` and
+  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` - marked only the
+  validated deploy-readiness and Drive root/sharing checklist items complete.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js && node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js && node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_arclink_docker.py` failed first on the README layout root, then passed after the README repair.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_health_regressions.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Drive still needs full desktop/mobile TLS browser proof before Slice 2B is
+  complete.
+- The new Trash/Restore coverage is a static bundle contract plus existing
+  backend tests, not a real browser interaction test.
+- Code VS Code foundation, Terminal persistent sessions, Docker/TLS integration
+  proof, commit curation, and deploy handoff remain open.
+
+## 2026-05-05 Native Workspace Plugin Slice 1
+
+Scope: completed the first build slice for native Hermes dashboard workspaces
+by adding the `arclink-terminal` plugin scaffold, enabling it by default, and
+standardizing sanitized `/status` contracts across Drive, Code, and Terminal.
+
+Rationale:
+
+- Kept the implementation inside ArcLink dashboard plugins and the existing
+  installer instead of patching Hermes core.
+- Shipped Terminal as an honest scaffold: it reserves the dashboard tab and
+  reports backend capability discovery, but leaves persistent sessions disabled
+  until the Slice 4 tmux or managed-pty backend is implemented.
+- Exposed capability flags through status payloads so the UI and tests can
+  distinguish available file/code surfaces from deferred terminal persistence
+  without leaking tokens, passwords, credentials, or private keys.
+
+Files changed:
+
+- `plugins/hermes-agent/arclink-terminal/` - new dashboard plugin scaffold.
+- `plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py` - status
+  contract metadata.
+- `plugins/hermes-agent/arclink-code/dashboard/plugin_api.py` - status
+  contract metadata.
+- `bin/install-arclink-plugins.sh` - default Terminal plugin install/enable.
+- `tests/test_arclink_plugins.py` - install and sanitized status coverage.
+- `README.md` and `AGENTS.md` - default plugin surface documentation.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `node --check` passed for Drive, Code, and Terminal dashboard `dist/index.js`.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Terminal persistence, streaming, scrollback, reload reconnect, grouping, and
+  confirmation-gated close/kill remain Slice 4 implementation work.
+- Live TLS browser proof remains dependent on an accessible deployed dashboard.
+
 ## 2026-05-02 Build Attempt 2 Handoff Repair
 
 Scope: repaired the Attempt 2 BUILD handoff artifacts so machine checks can
@@ -782,3 +1262,128 @@ Known risks:
   deployment-host execution remain E2E prerequisites.
 - The current build validates rendered provisioning intent only; it does not
   start live per-deployment containers.
+
+## 2026-05-05 Drive Slice 2 Hardening Build
+
+Scope: advanced the Slice 2 ArcLink Drive Google Drive foundation tasks from
+`IMPLEMENTATION_PLAN.md`, focused on root safety, upload conflict policy, batch
+partial-failure surfacing, and focused plugin regression coverage.
+
+Rationale:
+
+- Kept uploads reject-by-default for existing local filenames so drag/drop and
+  file-picker uploads cannot silently overwrite user files.
+- Added explicit `keep-both` as the only local upload conflict alternative,
+  reusing the existing copy/duplicate conflict naming behavior instead of
+  adding a replace path without overwrite confirmation UI.
+- Rejected WebDAV `keep-both` because there is no tested adapter that can prove
+  a non-overwriting remote destination name; WebDAV reject mode uses
+  `If-None-Match: *` to avoid silent remote overwrite.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Browser runtime proof against a live Hermes dashboard was not available in
+  this build pass, so mobile layout and interactive Drive proof remain runtime
+  verification items.
+- The repository already contained broad unrelated dirty and untracked changes;
+  this pass stayed scoped to Drive API/UI, focused plugin tests, and these
+  implementation notes.
+
+## 2026-05-05 Drive Slice 2 Attempt 2 Root Boundary Repair
+
+Scope: repaired the consensus-held Drive Slice 2 blocker by enforcing root
+boundary checks while constructing local list and search items.
+
+Rationale:
+
+- Kept direct symlink-escape requests as explicit 403 errors, preserving the
+  existing path safety contract.
+- Pruned symlink-escaped children from list and search traversal before item
+  metadata is built, so local Drive views do not expose size, modified time, or
+  type information for files outside the selected root.
+- Added focused regression coverage for both symlinked files and symlinked
+  folders that point outside the vault.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Browser runtime proof against a live Hermes dashboard remains a test-phase
+  item; this retry only repaired the local API boundary blocker.
+
+## 2026-05-05 Drive Slice 2 Browser Batch And Confirmation Build
+
+Scope: advanced the remaining Drive browser UX tasks from
+`IMPLEMENTATION_PLAN.md`, focused on selected-item batch operations, partial
+failure surfacing, and deliberate confirmation gates.
+
+Rationale:
+
+- Kept the work inside the native Hermes dashboard plugin bundle instead of
+  introducing an external Drive app or Hermes core changes.
+- Added a small Drive-local confirmation dialog rather than a broad shared UI
+  framework detour; the immediate blocker was risky Drive actions, not a full
+  cross-plugin component system.
+- Used the existing `/batch` API contract for restore, copy, and move so the UI
+  can report per-item failures without implying all-or-nothing success.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py plugins/hermes-agent/arclink-code/dashboard/plugin_api.py plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js` passed.
+- `node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js` passed.
+- `node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live TLS desktop/mobile browser proof was not available in this build pass.
+- Rename, new-file, and folder-path entry still use native prompt dialogs; the
+  deliberate in-app confirmation work in this slice covers overwrite conflict,
+  move, trash, and selected trash flows.
+
+## 2026-05-06 Workspace Plugin Handoff Validation
+
+Scope: completed the final handoff lane for the native ArcLink Drive, Code, and
+Terminal workspace plugin mission without running a live deploy.
+
+Rationale:
+
+- Kept the native workspace suite in Hermes dashboard plugins and ArcLink
+  wrappers rather than adding a separate workspace application or patching
+  Hermes core.
+- Preserved managed-pty terminal persistence as the tested backend and kept
+  streaming transport documented as future work because the proven dashboard
+  host path uses bounded polling.
+- Treated deployment as an operator-owned next step; this pass curated commits
+  and validation without pushing or running `./deploy.sh upgrade`.
+
+Verification run:
+
+- Plugin Python compile, plugin JavaScript syntax checks, shell syntax checks,
+  and `git diff --check` passed.
+- Focused Python suites for plugins, deploy, Docker, provisioning, dashboards,
+  live runner/journey, health, bot delivery, public bots, sovereign worker,
+  Chutes/adapters, run-agent-code-server, and agent user services passed.
+- Web unit smoke, lint, production build, and Playwright browser tests passed;
+  the browser run reported 41 passing checks with 3 expected desktop skips for
+  mobile-only layout assertions.
+
+Known risks:
+
+- This handoff did not push commits or run the canonical live host upgrade.
+- Live release state and Docker health remain the previously recorded proof
+  status until an operator requests deployment.

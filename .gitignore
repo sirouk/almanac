@@ -22,5 +22,6 @@ evidence/
 # Next.js
 web/node_modules/
 web/.next/
+web/.arclink-workspace-proof-*/
 web/out/
 web/tsconfig.tsbuildinfo

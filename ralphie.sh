@@ -1,8 +1,33 @@
 #!/usr/bin/env bash
 #
 # Ralphie - Unified autonomous loop for Codex and Claude Code.
-# Installed from stdin stream.
+# One script handles first-run setup, prompt generation, and iterative execution.
 #
+
+# Stream bootstrap:
+# When executed via stdin (for example: curl ... | bash), persist the script into
+# the current directory and re-exec from disk so relative paths work consistently.
+if [ "${RALPHIE_LIB:-0}" != "1" ] && [ -z "${BASH_SOURCE[0]:-}" ]; then
+    rb_target_script="$(pwd)/ralphie.sh"
+    rb_tmp_script="${rb_target_script}.tmp.$$"
+    if {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf '%s\n' '#'
+        printf '%s\n' '# Ralphie - Unified autonomous loop for Codex and Claude Code.'
+        printf '%s\n' '# Installed from stdin stream.'
+        printf '%s\n' '#'
+        cat
+    } > "$rb_tmp_script"; then
+        chmod +x "$rb_tmp_script" 2>/dev/null || true
+        mv "$rb_tmp_script" "$rb_target_script"
+        echo "Installed ralphie.sh to $rb_target_script"
+        exec env RALPHIE_SKIP_AUTO_UPDATE=1 "$rb_target_script" "$@"
+    else
+        echo "Failed to persist streamed ralphie.sh to $rb_target_script" >&2
+        rm -f "$rb_tmp_script"
+        exit 1
+    fi
+fi
 
 set -euo pipefail
 
@@ -329,6 +354,182 @@ extract_review_gaps() {
     echo "$gaps"
 }
 
+file_looks_like_auth_or_html_challenge() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    grep -qiE '<!doctype html|<html[ >]|</html>|cloudflare|cf_chl|challenge-platform|enable javascript and cookies|authrequired|missing or invalid access token|invalid_token' "$file" 2>/dev/null
+}
+
+review_output_invalid_reason() {
+    local file="$1"
+    local mode="${2:-consensus}"
+    local score verdict next_phase
+
+    [ -s "$file" ] || { echo "missing reviewer output"; return 0; }
+
+    if file_looks_like_auth_or_html_challenge "$file"; then
+        echo "provider auth/challenge HTML or token error"
+        return 0
+    fi
+
+    score="$(extract_xml_value "$file" "score" "")"
+    if ! is_number "$score" || [ "$score" -gt 100 ]; then
+        echo "missing or invalid <score>"
+        return 0
+    fi
+
+    verdict="$(extract_xml_value "$file" "verdict" "")"
+    case "$verdict" in
+        GO|HOLD) : ;;
+        *)
+            echo "missing or invalid <verdict>"
+            return 0
+            ;;
+    esac
+
+    if [ "$mode" != "handoff" ]; then
+        next_phase="$(extract_xml_value "$file" "next_phase" "")"
+        next_phase="$(to_lower "$next_phase")"
+        if ! is_phase_or_done "$next_phase"; then
+            echo "missing or invalid <next_phase>"
+            return 0
+        fi
+    fi
+
+    echo ""
+}
+
+write_invalid_reviewer_output_placeholder() {
+    local output_file="$1"
+    local reason="$2"
+    local raw_file="$3"
+
+    reason="$(sanitize_text_for_log "$reason")"
+    {
+        echo "Reviewer output was rejected by Ralphie before consensus parsing."
+        echo "reason: ${reason:-invalid reviewer output}"
+        if [ -n "$raw_file" ]; then
+            echo "raw_output_artifact: $(path_for_display "$raw_file")"
+        fi
+        echo "The raw output was not used for score, verdict, or phase routing."
+    } > "$output_file"
+}
+
+safe_print_file_head() {
+    local file="$1"
+    local lines="${2:-80}"
+    is_number "$lines" || lines=80
+    if [ ! -f "$file" ]; then
+        echo "- not available"
+        return 0
+    fi
+    if file_looks_like_auth_or_html_challenge "$file"; then
+        echo "- redacted: provider auth/challenge HTML or token-error output"
+        return 0
+    fi
+    sed -n "1,${lines}p" "$file"
+}
+
+safe_print_file_tail() {
+    local file="$1"
+    local lines="${2:-40}"
+    is_number "$lines" || lines=40
+    if [ ! -f "$file" ]; then
+        echo "- not available"
+        return 0
+    fi
+    if file_looks_like_auth_or_html_challenge "$file"; then
+        echo "- redacted: provider auth/challenge HTML or token-error output"
+        return 0
+    fi
+    tail -n "$lines" "$file"
+}
+
+stream_engine_output() {
+    local log_file="$1"
+    local output_file="${2:-}"
+    local stdout_enabled="${3:-true}"
+
+    if [ -n "$output_file" ]; then
+        : > "$output_file"
+    fi
+
+    awk -v log_file="$log_file" -v output_file="$output_file" -v stdout_enabled="$stdout_enabled" '
+        function emit(line) {
+            if (stdout_enabled == "true") {
+                print line
+            }
+            print line >> log_file
+            if (output_file != "") {
+                print line >> output_file
+            }
+            if (stdout_enabled == "true") {
+                fflush()
+            }
+            fflush(log_file)
+            if (output_file != "") {
+                fflush(output_file)
+            }
+        }
+        function clear_buffer() {
+            buffer_count = 0
+        }
+        function flush_buffer(    i) {
+            for (i = 1; i <= buffer_count; i++) {
+                emit(buffer[i])
+            }
+            clear_buffer()
+        }
+        function push_buffer(line,    i) {
+            buffer_count++
+            buffer[buffer_count] = line
+            if (buffer_count > max_buffer) {
+                emit(buffer[1])
+                for (i = 1; i < buffer_count; i++) {
+                    buffer[i] = buffer[i + 1]
+                }
+                buffer_count--
+            }
+        }
+        function looks_like_challenge(line) {
+            lower = tolower(line)
+            return lower ~ /<!doctype html|<html[ >]|<\/html>|cloudflare|cf_chl|challenge-platform|challenge-error-text|enable javascript and cookies|auth required|missing or invalid access token|invalid_token|window\._cf_chl_opt|cdn-cgi\/challenge/
+        }
+        BEGIN {
+            max_buffer = 80
+            buffer_count = 0
+            redacting = 0
+            redacted_once = 0
+        }
+        {
+            lower = tolower($0)
+            if (redacting) {
+                if (lower ~ /<\/html>/) {
+                    redacting = 0
+                }
+                next
+            }
+            if (looks_like_challenge($0)) {
+                clear_buffer()
+                if (!redacted_once) {
+                    emit("[ralphie redacted provider auth/challenge output]")
+                    redacted_once = 1
+                }
+                if (lower !~ /<\/html>/) {
+                    redacting = 1
+                }
+                next
+            }
+            push_buffer($0)
+        }
+        END {
+            if (!redacting) {
+                flush_buffer()
+            }
+        }
+    '
+}
+
 is_phase_or_done() {
     case "$1" in
         plan|build|test|refactor|lint|document|done) return 0 ;;
@@ -460,6 +661,12 @@ to_lower() {
     echo "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+awk_regex_is_valid() {
+    local regex="${1:-}"
+    [ -z "$regex" ] && return 0
+    awk -v re="$regex" 'BEGIN { if ("" ~ re) { } }' >/dev/null 2>&1
+}
+
 is_allowed_config_key() {
     local key="${1:-}"
     case "$key" in
@@ -469,6 +676,7 @@ is_allowed_config_key() {
             ;;
         # Explicitly supported non-prefixed compatibility keys.
         COMMAND_TIMEOUT_SECONDS|MAX_ITERATIONS|MAX_SESSION_CYCLES|YOLO|AUTO_UPDATE|AUTO_UPDATE_URL|\
+        AUTO_UPDATE_ALLOW_DIRTY|AUTO_UPDATE_ALLOW_INSECURE|AUTO_UPDATE_TIMEOUT_SECONDS|AUTO_UPDATE_LOCK_TIMEOUT_SECONDS|\
         SWARM_MAX_PARALLEL|CONFIDENCE_TARGET|CONFIDENCE_STAGNATION_LIMIT|\
         AUTO_PLAN_BACKFILL_ON_IDLE_BUILD|AUTO_ENGINE_PREFERENCE|AUTO_INIT_GIT_IF_MISSING|\
         AUTO_COMMIT_ON_PHASE_PASS|CODEX_ENDPOINT|CODEX_USE_RESPONSES_SCHEMA|\
@@ -483,7 +691,7 @@ is_allowed_config_key() {
         PHASE_NOOP_POLICY_DOCUMENT|PHASE_NOOP_PROFILE|SESSION_TOKEN_BUDGET|\
         SESSION_TOKEN_RATE_CENTS_PER_MILLION|SESSION_COST_BUDGET_CENTS|AUTO_REPAIR_MARKDOWN_ARTIFACTS|\
         AUTO_REPAIR_MARKDOWN_DRY_RUN|AUTO_REPAIR_MARKDOWN_BACKUP|AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED|\
-        PHASE_MANIFEST_MODE|\
+        MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX|PHASE_MANIFEST_MODE|\
         SWARM_CONSENSUS_TIMEOUT|CONSENSUS_SCORE_THRESHOLD|ENGINE_HEALTH_MAX_ATTEMPTS|\
         ENGINE_HEALTH_RETRY_DELAY_SECONDS|ENGINE_HEALTH_RETRY_VERBOSE|ENGINE_SMOKE_TEST_TIMEOUT|\
         STARTUP_OPERATIONAL_PROBE|ENGINE_OVERRIDES_BOOTSTRAPPED|NOTIFICATIONS_ENABLED|\
@@ -791,6 +999,10 @@ Core options:
   --run-agent-retry-verbose bool          Verbose inference retry logging (true|false)
   --auto-init-git-if-missing bool         Initialize git repository at startup when missing (true|false)
   --auto-commit-on-phase-pass bool        Auto-commit local changes after phase gate pass (true|false, no push)
+  --auto-update bool                      Check and replace ralphie.sh from remote before startup (true|false)
+  --auto-update-url URL                   Raw ralphie.sh URL for auto-update; defaults to GitHub origin/current branch
+  --auto-update-allow-insecure bool       Allow non-HTTPS HTTP auto-update URLs (true|false; default false)
+  --auto-update-lock-timeout-seconds N    Seconds to wait for another Ralphie self-update to finish
   --auto-engine-preference codex|claude   Preferred AUTO engine selection order
   --engine-output-to-stdout bool          Show or suppress live engine output stream (true|false)
   --auto-repair-markdown-artifacts bool    Auto-sanitize markdown artifacts when gate-blocked (true|false)
@@ -819,10 +1031,17 @@ Additional runtime env knobs:
   RALPHIE_ENGINE_IDLE_OUTPUT_TIMEOUT_SECONDS  Kill/retry agent run if no new output for N seconds (0=disabled)
   RALPHIE_AUTO_INIT_GIT_IF_MISSING       Initialize git repo at startup when missing (true|false)
   RALPHIE_AUTO_COMMIT_ON_PHASE_PASS      Auto-commit phase-approved changes (true|false)
+  RALPHIE_AUTO_UPDATE                    Enable pre-run single-file self-update (true|false)
+  RALPHIE_AUTO_UPDATE_URL                Explicit raw ralphie.sh update URL
+  RALPHIE_AUTO_UPDATE_ALLOW_DIRTY        Allow replacing a locally modified ralphie.sh (true|false)
+  RALPHIE_AUTO_UPDATE_ALLOW_INSECURE     Allow http:// auto-update URLs (true|false)
+  RALPHIE_AUTO_UPDATE_TIMEOUT_SECONDS    Fetch timeout for single-file self-update
+  RALPHIE_AUTO_UPDATE_LOCK_TIMEOUT_SECONDS  Seconds to wait for concurrent self-update lock
   RALPHIE_PHASE_MANIFEST_MODE            Worktree manifest mode: light|deep
   RALPHIE_AUTO_REPAIR_MARKDOWN_DRY_RUN   Preview markdown repairs without mutating files (true|false)
   RALPHIE_AUTO_REPAIR_MARKDOWN_BACKUP    Save markdown backup+diff artifacts before mutation (true|false)
   RALPHIE_AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED  Restrict markdown repair targets to this-session changed files
+  RALPHIE_MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX  ERE for intentional documented paths in markdown hygiene
   RALPHIE_STARTUP_OPERATIONAL_PROBE      Run startup operational self-checks (true|false)
   RALPHIE_ENGINE_OVERRIDES_BOOTSTRAPPED  First-deploy engine override prompt sentinel (true|false)
   RALPHIE_NOTIFICATIONS_ENABLED          Master notifications toggle (true|false)
@@ -980,6 +1199,35 @@ parse_args() {
                     err "Invalid boolean value for --auto-commit-on-phase-pass: $AUTO_COMMIT_ON_PHASE_PASS"
                     exit 1
                 fi
+                shift 2
+                ;;
+            --auto-update)
+                AUTO_UPDATE="$(parse_arg_value "--auto-update" "${2:-}")"
+                if ! is_bool_like "$AUTO_UPDATE"; then
+                    err "Invalid boolean value for --auto-update: $AUTO_UPDATE"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --auto-update-url)
+                AUTO_UPDATE_URL="$(parse_arg_value "--auto-update-url" "${2:-}")"
+                if [ -z "$(sanitize_text_for_log "$AUTO_UPDATE_URL")" ]; then
+                    err "Invalid empty value for --auto-update-url"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --auto-update-allow-insecure)
+                AUTO_UPDATE_ALLOW_INSECURE="$(parse_arg_value "--auto-update-allow-insecure" "${2:-}")"
+                if ! is_bool_like "$AUTO_UPDATE_ALLOW_INSECURE"; then
+                    err "Invalid boolean value for --auto-update-allow-insecure: $AUTO_UPDATE_ALLOW_INSECURE"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --auto-update-lock-timeout-seconds)
+                AUTO_UPDATE_LOCK_TIMEOUT_SECONDS="$(parse_arg_value "--auto-update-lock-timeout-seconds" "${2:-}")"
+                require_non_negative_int "AUTO_UPDATE_LOCK_TIMEOUT_SECONDS" "$AUTO_UPDATE_LOCK_TIMEOUT_SECONDS"
                 shift 2
                 ;;
             --auto-engine-preference)
@@ -1145,7 +1393,12 @@ DEFAULT_CLAUDE_THINKING_OVERRIDE="high"       # none|off|low|medium|high|xhigh
 DEFAULT_AUTO_INIT_GIT_IF_MISSING="true"       # initialize git repo at startup when missing
 DEFAULT_AUTO_COMMIT_ON_PHASE_PASS="true"      # commit phase-approved local changes (no push)
 DEFAULT_YOLO="true"
-DEFAULT_AUTO_UPDATE="false"                  # runtime auto-update is intentionally unsupported
+DEFAULT_AUTO_UPDATE="false"                  # check remote script and replace before startup
+DEFAULT_AUTO_UPDATE_URL=""                   # explicit raw ralphie.sh URL; derived from GitHub origin when empty
+DEFAULT_AUTO_UPDATE_ALLOW_DIRTY="false"      # refuse to overwrite local ralphie.sh edits by default
+DEFAULT_AUTO_UPDATE_ALLOW_INSECURE="false"   # refuse plaintext HTTP update URLs by default
+DEFAULT_AUTO_UPDATE_TIMEOUT_SECONDS=20       # network timeout for single-file self-update fetch
+DEFAULT_AUTO_UPDATE_LOCK_TIMEOUT_SECONDS=30  # wait for concurrent startup self-update
 DEFAULT_COMMAND_TIMEOUT_SECONDS=0           # Tolerant default: disable command timeouts unless overridden
 DEFAULT_MAX_ITERATIONS=0                    # 0 means infinite
 DEFAULT_MAX_SESSION_CYCLES=0                # 0 means infinite across all phases
@@ -1184,6 +1437,7 @@ DEFAULT_AUTO_REPAIR_MARKDOWN_ARTIFACTS="true" # sanitize common local/engine lea
 DEFAULT_AUTO_REPAIR_MARKDOWN_DRY_RUN="false"  # preview-only remediation mode (no file mutations)
 DEFAULT_AUTO_REPAIR_MARKDOWN_BACKUP="true"    # write backup+diff artifacts before markdown mutation
 DEFAULT_AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED="false" # optional scope limiter for markdown remediation
+DEFAULT_MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX="" # optional ERE for intentional documented paths
 DEFAULT_PHASE_MANIFEST_MODE="light"           # light|deep manifest capture strategy
 DEFAULT_SWARM_CONSENSUS_TIMEOUT=240             # CI-safe: 4m cap for consensus reviewers
 DEFAULT_CONSENSUS_SCORE_THRESHOLD=70             # minimum avg score for consensus/handoff to pass
@@ -1221,6 +1475,11 @@ MAX_ITERATIONS="${MAX_ITERATIONS:-$DEFAULT_MAX_ITERATIONS}"
 MAX_SESSION_CYCLES="${MAX_SESSION_CYCLES:-$DEFAULT_MAX_SESSION_CYCLES}"
 YOLO="${YOLO:-$DEFAULT_YOLO}"
 AUTO_UPDATE="${AUTO_UPDATE:-$DEFAULT_AUTO_UPDATE}"
+AUTO_UPDATE_URL="${AUTO_UPDATE_URL:-$DEFAULT_AUTO_UPDATE_URL}"
+AUTO_UPDATE_ALLOW_DIRTY="${AUTO_UPDATE_ALLOW_DIRTY:-$DEFAULT_AUTO_UPDATE_ALLOW_DIRTY}"
+AUTO_UPDATE_ALLOW_INSECURE="${AUTO_UPDATE_ALLOW_INSECURE:-$DEFAULT_AUTO_UPDATE_ALLOW_INSECURE}"
+AUTO_UPDATE_TIMEOUT_SECONDS="${AUTO_UPDATE_TIMEOUT_SECONDS:-$DEFAULT_AUTO_UPDATE_TIMEOUT_SECONDS}"
+AUTO_UPDATE_LOCK_TIMEOUT_SECONDS="${AUTO_UPDATE_LOCK_TIMEOUT_SECONDS:-$DEFAULT_AUTO_UPDATE_LOCK_TIMEOUT_SECONDS}"
 PHASE_WALLCLOCK_LIMIT_SECONDS="${PHASE_WALLCLOCK_LIMIT_SECONDS:-$DEFAULT_PHASE_WALLCLOCK_LIMIT_SECONDS}"
 RALPHIE_QUALITY_LEVEL="${RALPHIE_QUALITY_LEVEL:-$DEFAULT_RALPHIE_QUALITY_LEVEL}"
 SWARM_MAX_PARALLEL="${SWARM_MAX_PARALLEL:-2}"
@@ -1265,6 +1524,7 @@ AUTO_REPAIR_MARKDOWN_ARTIFACTS="${AUTO_REPAIR_MARKDOWN_ARTIFACTS:-$DEFAULT_AUTO_
 AUTO_REPAIR_MARKDOWN_DRY_RUN="${AUTO_REPAIR_MARKDOWN_DRY_RUN:-$DEFAULT_AUTO_REPAIR_MARKDOWN_DRY_RUN}"
 AUTO_REPAIR_MARKDOWN_BACKUP="${AUTO_REPAIR_MARKDOWN_BACKUP:-$DEFAULT_AUTO_REPAIR_MARKDOWN_BACKUP}"
 AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED="${AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED:-$DEFAULT_AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED}"
+MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX="${MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX:-$DEFAULT_MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX}"
 PHASE_MANIFEST_MODE="${PHASE_MANIFEST_MODE:-$DEFAULT_PHASE_MANIFEST_MODE}"
 SWARM_CONSENSUS_TIMEOUT="${SWARM_CONSENSUS_TIMEOUT:-$DEFAULT_SWARM_CONSENSUS_TIMEOUT}"
 CONSENSUS_SCORE_THRESHOLD="${CONSENSUS_SCORE_THRESHOLD:-$DEFAULT_CONSENSUS_SCORE_THRESHOLD}"
@@ -1340,11 +1600,18 @@ AUTO_REPAIR_MARKDOWN_ARTIFACTS="${RALPHIE_AUTO_REPAIR_MARKDOWN_ARTIFACTS:-$AUTO_
 AUTO_REPAIR_MARKDOWN_DRY_RUN="${RALPHIE_AUTO_REPAIR_MARKDOWN_DRY_RUN:-$AUTO_REPAIR_MARKDOWN_DRY_RUN}"
 AUTO_REPAIR_MARKDOWN_BACKUP="${RALPHIE_AUTO_REPAIR_MARKDOWN_BACKUP:-$AUTO_REPAIR_MARKDOWN_BACKUP}"
 AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED="${RALPHIE_AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED:-$AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED}"
+MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX="${RALPHIE_MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX:-$MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX}"
 PHASE_MANIFEST_MODE="${RALPHIE_PHASE_MANIFEST_MODE:-$PHASE_MANIFEST_MODE}"
 AUTO_PLAN_BACKFILL_ON_IDLE_BUILD="${RALPHIE_AUTO_PLAN_BACKFILL_ON_IDLE_BUILD:-$AUTO_PLAN_BACKFILL_ON_IDLE_BUILD}"
 AUTO_ENGINE_PREFERENCE="${RALPHIE_AUTO_ENGINE_PREFERENCE:-$AUTO_ENGINE_PREFERENCE}"
 AUTO_INIT_GIT_IF_MISSING="${RALPHIE_AUTO_INIT_GIT_IF_MISSING:-$AUTO_INIT_GIT_IF_MISSING}"
 AUTO_COMMIT_ON_PHASE_PASS="${RALPHIE_AUTO_COMMIT_ON_PHASE_PASS:-$AUTO_COMMIT_ON_PHASE_PASS}"
+AUTO_UPDATE="${RALPHIE_AUTO_UPDATE:-$AUTO_UPDATE}"
+AUTO_UPDATE_URL="${RALPHIE_AUTO_UPDATE_URL:-$AUTO_UPDATE_URL}"
+AUTO_UPDATE_ALLOW_DIRTY="${RALPHIE_AUTO_UPDATE_ALLOW_DIRTY:-$AUTO_UPDATE_ALLOW_DIRTY}"
+AUTO_UPDATE_ALLOW_INSECURE="${RALPHIE_AUTO_UPDATE_ALLOW_INSECURE:-$AUTO_UPDATE_ALLOW_INSECURE}"
+AUTO_UPDATE_TIMEOUT_SECONDS="${RALPHIE_AUTO_UPDATE_TIMEOUT_SECONDS:-$AUTO_UPDATE_TIMEOUT_SECONDS}"
+AUTO_UPDATE_LOCK_TIMEOUT_SECONDS="${RALPHIE_AUTO_UPDATE_LOCK_TIMEOUT_SECONDS:-$AUTO_UPDATE_LOCK_TIMEOUT_SECONDS}"
 CODEX_ENDPOINT="${RALPHIE_CODEX_ENDPOINT:-$CODEX_ENDPOINT}"
 CODEX_MODEL="${RALPHIE_CODEX_MODEL:-${CODEX_MODEL:-}}"
 CODEX_USE_RESPONSES_SCHEMA="${RALPHIE_CODEX_USE_RESPONSES_SCHEMA:-$CODEX_USE_RESPONSES_SCHEMA}"
@@ -1405,6 +1672,34 @@ if ! is_bool_like "$AUTO_COMMIT_ON_PHASE_PASS"; then
     AUTO_COMMIT_ON_PHASE_PASS="$DEFAULT_AUTO_COMMIT_ON_PHASE_PASS"
 fi
 
+AUTO_UPDATE="$(to_lower "$AUTO_UPDATE")"
+if ! is_bool_like "$AUTO_UPDATE"; then
+    warn "Invalid AUTO_UPDATE '$AUTO_UPDATE'. Falling back to '$DEFAULT_AUTO_UPDATE'."
+    AUTO_UPDATE="$DEFAULT_AUTO_UPDATE"
+fi
+
+AUTO_UPDATE_ALLOW_DIRTY="$(to_lower "$AUTO_UPDATE_ALLOW_DIRTY")"
+if ! is_bool_like "$AUTO_UPDATE_ALLOW_DIRTY"; then
+    warn "Invalid AUTO_UPDATE_ALLOW_DIRTY '$AUTO_UPDATE_ALLOW_DIRTY'. Falling back to '$DEFAULT_AUTO_UPDATE_ALLOW_DIRTY'."
+    AUTO_UPDATE_ALLOW_DIRTY="$DEFAULT_AUTO_UPDATE_ALLOW_DIRTY"
+fi
+
+AUTO_UPDATE_ALLOW_INSECURE="$(to_lower "$AUTO_UPDATE_ALLOW_INSECURE")"
+if ! is_bool_like "$AUTO_UPDATE_ALLOW_INSECURE"; then
+    warn "Invalid AUTO_UPDATE_ALLOW_INSECURE '$AUTO_UPDATE_ALLOW_INSECURE'. Falling back to '$DEFAULT_AUTO_UPDATE_ALLOW_INSECURE'."
+    AUTO_UPDATE_ALLOW_INSECURE="$DEFAULT_AUTO_UPDATE_ALLOW_INSECURE"
+fi
+
+if ! is_number "$AUTO_UPDATE_TIMEOUT_SECONDS" || [ "$AUTO_UPDATE_TIMEOUT_SECONDS" -lt 1 ]; then
+    warn "Invalid AUTO_UPDATE_TIMEOUT_SECONDS '$AUTO_UPDATE_TIMEOUT_SECONDS'. Falling back to '$DEFAULT_AUTO_UPDATE_TIMEOUT_SECONDS'."
+    AUTO_UPDATE_TIMEOUT_SECONDS="$DEFAULT_AUTO_UPDATE_TIMEOUT_SECONDS"
+fi
+
+if ! is_number "$AUTO_UPDATE_LOCK_TIMEOUT_SECONDS"; then
+    warn "Invalid AUTO_UPDATE_LOCK_TIMEOUT_SECONDS '$AUTO_UPDATE_LOCK_TIMEOUT_SECONDS'. Falling back to '$DEFAULT_AUTO_UPDATE_LOCK_TIMEOUT_SECONDS'."
+    AUTO_UPDATE_LOCK_TIMEOUT_SECONDS="$DEFAULT_AUTO_UPDATE_LOCK_TIMEOUT_SECONDS"
+fi
+
 AUTO_INIT_GIT_IF_MISSING="$(to_lower "$AUTO_INIT_GIT_IF_MISSING")"
 if ! is_bool_like "$AUTO_INIT_GIT_IF_MISSING"; then
     warn "Invalid AUTO_INIT_GIT_IF_MISSING '$AUTO_INIT_GIT_IF_MISSING'. Falling back to '$DEFAULT_AUTO_INIT_GIT_IF_MISSING'."
@@ -1438,6 +1733,11 @@ AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED="$(to_lower "$AUTO_REPAIR_MARKDOWN_ONL
 if ! is_bool_like "$AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED"; then
     warn "Invalid AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED '$AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED'. Falling back to '$DEFAULT_AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED'."
     AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED="$DEFAULT_AUTO_REPAIR_MARKDOWN_ONLY_SESSION_CHANGED"
+fi
+
+if [ -n "$MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX" ] && ! awk_regex_is_valid "$MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX"; then
+    warn "Invalid MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX; disabling markdown path allowlist."
+    MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX="$DEFAULT_MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX"
 fi
 
 PHASE_MANIFEST_MODE="$(normalize_phase_manifest_mode "$PHASE_MANIFEST_MODE")"
@@ -1649,6 +1949,17 @@ LAST_DONE_GUARD_NEXT_PHASE="done"
 LAST_PHASE_ROUTE_GUARD_REASON=""
 LAST_PHASE_ROUTE_GUARD_NEXT_PHASE="done"
 LAST_BACKLOG_STALE_SOURCES=""
+PLAN_FRESHNESS_FINGERPRINT=""
+LAST_GATE_DECISION_RECORDED_AT=""
+LAST_GATE_DECISION_PHASE=""
+LAST_GATE_DECISION_ATTEMPT=0
+LAST_GATE_DECISION_STAGE=""
+LAST_GATE_DECISION_OUTCOME=""
+LAST_GATE_DECISION_SCORE=0
+LAST_GATE_DECISION_PASS=false
+LAST_GATE_DECISION_RESPONDED_VOTES=0
+LAST_GATE_DECISION_NEXT_PHASE=""
+LAST_GATE_DECISION_SUMMARY=""
 LAST_HANDOFF_SCORE=0
 LAST_HANDOFF_VERDICT="HOLD"
 LAST_HANDOFF_GAPS="no explicit gaps"
@@ -1751,6 +2062,301 @@ sha256_stream_sum() {
     fi
 }
 
+self_update_current_script_path() {
+    printf '%s/%s' "$SCRIPT_DIR" "$(basename "${BASH_SOURCE[0]}")"
+}
+
+self_update_acquire_lock() {
+    local lock_dir="$1"
+    local timeout_seconds="${2:-30}"
+    local waited=0
+    local owner_pid=""
+    local pid_file="$lock_dir/pid"
+
+    is_number "$timeout_seconds" || timeout_seconds=30
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        owner_pid=""
+        if [ -f "$pid_file" ]; then
+            owner_pid="$(head -n 1 "$pid_file" 2>/dev/null | tr -cd '0-9' || true)"
+        fi
+        if is_number "$owner_pid" && ! kill -0 "$owner_pid" 2>/dev/null; then
+            rm -rf "$lock_dir" 2>/dev/null || true
+            continue
+        fi
+        if [ "$waited" -ge "$timeout_seconds" ]; then
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    printf '%s\n' "$$" > "$pid_file" 2>/dev/null || true
+    return 0
+}
+
+self_update_release_lock() {
+    local lock_dir="${1:-}"
+    local pid_file owner_pid
+    [ -n "$lock_dir" ] || return 0
+    pid_file="$lock_dir/pid"
+    if [ -f "$pid_file" ]; then
+        owner_pid="$(head -n 1 "$pid_file" 2>/dev/null | tr -cd '0-9' || true)"
+        if [ -n "$owner_pid" ] && [ "$owner_pid" != "$$" ]; then
+            return 0
+        fi
+    fi
+    rm -rf "$lock_dir" 2>/dev/null || true
+}
+
+self_update_url_escape_path() {
+    local value="${1:-}"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$value" <<'PY' 2>/dev/null && return 0
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe="/"))
+PY
+    fi
+    printf '%s' "$value" | sed 's/ /%20/g'
+}
+
+self_update_derive_github_raw_url() {
+    command -v git >/dev/null 2>&1 || return 1
+
+    local self_path git_root rel_path remote_url branch repo_path owner repo encoded_path
+    self_path="$(self_update_current_script_path)"
+    git_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$git_root" ] || return 1
+    case "$self_path" in
+        "$git_root"/*) rel_path="${self_path#"$git_root"/}" ;;
+        *) return 1 ;;
+    esac
+
+    remote_url="$(git -C "$git_root" config --get remote.origin.url 2>/dev/null || true)"
+    [ -n "$remote_url" ] || return 1
+    branch="$(git -C "$git_root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    if [ -z "$branch" ]; then
+        branch="$(git -C "$git_root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    fi
+    [ -n "$branch" ] && [ "$branch" != "HEAD" ] || return 1
+
+    case "$remote_url" in
+        https://github.com/*) repo_path="${remote_url#https://github.com/}" ;;
+        http://github.com/*) repo_path="${remote_url#http://github.com/}" ;;
+        git@github.com:*) repo_path="${remote_url#git@github.com:}" ;;
+        ssh://git@github.com/*) repo_path="${remote_url#ssh://git@github.com/}" ;;
+        *) return 1 ;;
+    esac
+    repo_path="${repo_path%.git}"
+    owner="${repo_path%%/*}"
+    repo="${repo_path#*/}"
+    repo="${repo%%/*}"
+    repo="${repo%.git}"
+    [ -n "$owner" ] && [ -n "$repo" ] && [ "$repo" != "$repo_path" ] || return 1
+
+    encoded_path="$(self_update_url_escape_path "$rel_path")"
+    printf 'https://raw.githubusercontent.com/%s/%s/%s/%s\n' "$owner" "$repo" "$branch" "$encoded_path"
+}
+
+self_update_url_is_allowed() {
+    local url="${1:-}"
+    case "$url" in
+        https://*) return 0 ;;
+        file://*|/*|./*|../*) return 0 ;;
+        http://*)
+            is_true "${AUTO_UPDATE_ALLOW_INSECURE:-false}" && return 0
+            return 1
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+self_update_download_to_file() {
+    local url="$1"
+    local dest="$2"
+    local timeout_seconds="${3:-20}"
+    local max_bytes=2000000
+    local local_path=""
+
+    case "$url" in
+        file://*)
+            local_path="${url#file://}"
+            [ -f "$local_path" ] || return 1
+            cp "$local_path" "$dest"
+            return $?
+            ;;
+        /*|./*|../*)
+            [ -f "$url" ] || return 1
+            cp "$url" "$dest"
+            return $?
+            ;;
+    esac
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 2 --connect-timeout "$timeout_seconds" --max-time "$timeout_seconds" --max-filesize "$max_bytes" -o "$dest" "$url"
+        return $?
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -T "$timeout_seconds" -O "$dest" "$url"
+        return $?
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$url" "$dest" "$timeout_seconds" "$max_bytes" <<'PY'
+import sys
+import urllib.request
+
+url, dest, timeout, max_bytes = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+with urllib.request.urlopen(url, timeout=timeout) as response:
+    data = response.read(max_bytes + 1)
+if len(data) > max_bytes:
+    raise SystemExit("remote ralphie.sh exceeds maximum auto-update size")
+with open(dest, "wb") as handle:
+    handle.write(data)
+PY
+        return $?
+    fi
+    return 1
+}
+
+self_update_candidate_is_valid() {
+    local candidate="$1"
+    local bytes=""
+    [ -f "$candidate" ] || return 1
+    bytes="$(wc -c < "$candidate" | tr -d ' ')"
+    is_number "$bytes" || return 1
+    [ "$bytes" -ge 200 ] && [ "$bytes" -le 2000000 ] || return 1
+    head -n 1 "$candidate" | grep -qE '^#!.*(bash|env[[:space:]]+bash)' || return 1
+    if LC_ALL=C grep -q "$(printf '\r')" "$candidate"; then
+        return 1
+    fi
+    grep -q 'Ralphie - Unified autonomous loop' "$candidate" || return 1
+    grep -q '^SCRIPT_VERSION=' "$candidate" || return 1
+    grep -q 'parse_args "$@"' "$candidate" || return 1
+    grep -q 'self_update_check_and_reexec "$@"' "$candidate" || return 1
+    grep -q 'RALPHIE_SKIP_AUTO_UPDATE' "$candidate" || return 1
+    grep -q 'main "$@"' "$candidate" || return 1
+    bash -n "$candidate" >/dev/null 2>&1
+}
+
+self_update_script_is_dirty() {
+    command -v git >/dev/null 2>&1 || return 1
+
+    local self_path git_root rel_path
+    self_path="$(self_update_current_script_path)"
+    git_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$git_root" ] || return 1
+    case "$self_path" in
+        "$git_root"/*) rel_path="${self_path#"$git_root"/}" ;;
+        *) return 1 ;;
+    esac
+    git -C "$git_root" ls-files --error-unmatch -- "$rel_path" >/dev/null 2>&1 || return 0
+    ! git -C "$git_root" diff --quiet -- "$rel_path" 2>/dev/null && return 0
+    ! git -C "$git_root" diff --cached --quiet -- "$rel_path" 2>/dev/null && return 0
+    return 1
+}
+
+self_update_check_and_reexec() {
+    is_true "${AUTO_UPDATE:-false}" || return 0
+    [ "${RALPHIE_SKIP_AUTO_UPDATE:-}" != "1" ] || return 0
+    [ "${RALPHIE_SELF_UPDATE_REEXECED:-}" != "1" ] || return 0
+
+    local self_path update_url update_dir update_lock_dir tmp_candidate backup_path current_hash candidate_hash timestamp mode
+    self_path="$(self_update_current_script_path)"
+    if [ ! -f "$self_path" ]; then
+        warn "Auto-update skipped: current script path is not a file."
+        return 0
+    fi
+
+    update_dir="$CONFIG_DIR/self-update"
+    mkdir -p "$update_dir" || {
+        warn "Auto-update skipped: could not create $(path_for_display "$update_dir")."
+        return 0
+    }
+    chmod 700 "$update_dir" 2>/dev/null || true
+    update_lock_dir="$update_dir/update.lock"
+    if ! self_update_acquire_lock "$update_lock_dir" "${AUTO_UPDATE_LOCK_TIMEOUT_SECONDS:-30}"; then
+        warn "Auto-update skipped: another Ralphie self-update is still in progress."
+        return 0
+    fi
+
+    update_url="${AUTO_UPDATE_URL:-}"
+    if [ -z "$update_url" ]; then
+        update_url="$(self_update_derive_github_raw_url || true)"
+    fi
+    if [ -z "$update_url" ]; then
+        warn "Auto-update skipped: set AUTO_UPDATE_URL or run from a GitHub checkout with origin/current branch."
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+    if ! self_update_url_is_allowed "$update_url"; then
+        warn "Auto-update skipped: update URL must be https://, file://, or a local path. Set AUTO_UPDATE_ALLOW_INSECURE=true only for trusted http:// origins."
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+
+    if ! is_true "${AUTO_UPDATE_ALLOW_DIRTY:-false}" && self_update_script_is_dirty; then
+        warn "Auto-update skipped: local ralphie.sh has uncommitted changes. Set AUTO_UPDATE_ALLOW_DIRTY=true to override."
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+    tmp_candidate="$(mktemp "$update_dir/ralphie.remote.XXXXXX")" || {
+        warn "Auto-update skipped: could not create temporary update file."
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    }
+
+    info "Auto-update: checking remote ralphie.sh from $(redact_endpoint_for_log "$update_url")."
+    if ! self_update_download_to_file "$update_url" "$tmp_candidate" "${AUTO_UPDATE_TIMEOUT_SECONDS:-20}"; then
+        warn "Auto-update skipped: failed to fetch remote ralphie.sh."
+        rm -f "$tmp_candidate"
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+    if ! self_update_candidate_is_valid "$tmp_candidate"; then
+        warn "Auto-update skipped: remote ralphie.sh failed validation."
+        rm -f "$tmp_candidate"
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+    if cmp -s "$self_path" "$tmp_candidate"; then
+        info "Auto-update: current ralphie.sh already matches remote."
+        rm -f "$tmp_candidate"
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+
+    current_hash="$(sha256_file_sum "$self_path" 2>/dev/null || echo "unknown")"
+    candidate_hash="$(sha256_file_sum "$tmp_candidate" 2>/dev/null || echo "unknown")"
+    timestamp="$(date '+%Y%m%d_%H%M%S')"
+    backup_path="$update_dir/ralphie.sh.${timestamp}.bak"
+    if ! cp -p "$self_path" "$backup_path"; then
+        warn "Auto-update skipped: could not write backup before replacing ralphie.sh."
+        rm -f "$tmp_candidate"
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+
+    mode="$(stat -c '%a' "$self_path" 2>/dev/null || stat -f '%Lp' "$self_path" 2>/dev/null || echo "")"
+    if [ -n "$mode" ]; then
+        chmod "$mode" "$tmp_candidate" 2>/dev/null || chmod +x "$tmp_candidate" 2>/dev/null || true
+    else
+        chmod +x "$tmp_candidate" 2>/dev/null || true
+    fi
+    if ! mv "$tmp_candidate" "$self_path"; then
+        warn "Auto-update failed: could not atomically replace ralphie.sh. Backup remains at $(path_for_display "$backup_path")."
+        rm -f "$tmp_candidate"
+        self_update_release_lock "$update_lock_dir"
+        return 0
+    fi
+
+    success "Auto-update: replaced ralphie.sh ($current_hash -> $candidate_hash). Backup: $(path_for_display "$backup_path")."
+    self_update_release_lock "$update_lock_dir"
+    exec env RALPHIE_SKIP_AUTO_UPDATE=1 RALPHIE_SELF_UPDATE_REEXECED=1 "$self_path" "$@"
+    warn "Auto-update failed: replacement succeeded but re-exec failed. Restoring backup."
+    cp -p "$backup_path" "$self_path" 2>/dev/null || true
+    exec env RALPHIE_SKIP_AUTO_UPDATE=1 RALPHIE_SELF_UPDATE_REEXECED=1 "$self_path" "$@"
+}
+
 state_blob_encode() {
     local payload="${1:-}"
     if command -v base64 >/dev/null 2>&1; then
@@ -1796,6 +2402,62 @@ state_unescape_value() {
     printf '%s' "$value"
 }
 
+gate_decision_trim_text() {
+    local value="${1:-}"
+    local limit="${2:-1200}"
+
+    is_number "$limit" || limit=1200
+    value="$(sanitize_text_for_log "$value")"
+    if [ "$limit" -gt 0 ]; then
+        value="$(printf '%s' "$value" | cut -c 1-"$limit")"
+    fi
+    printf '%s' "$value"
+}
+
+record_gate_decision() {
+    local phase="${1:-unknown}"
+    local attempt="${2:-0}"
+    local stage="${3:-phase-gate}"
+    local outcome="${4:-unknown}"
+    local next_phase="${5:-${LAST_CONSENSUS_NEXT_PHASE:-unknown}}"
+    local explainer="${6:-${LAST_CONSENSUS_NEXT_PHASE_REASON:-no explicit routing rationale}}"
+    local voting_summary
+    local handoff_summary
+    local failure_summary=""
+
+    voting_summary="$(gate_decision_trim_text "${LAST_CONSENSUS_SUMMARY:-no reviewer summary}" 1400)"
+    [ -n "$voting_summary" ] || voting_summary="no reviewer summary"
+    explainer="$(gate_decision_trim_text "$explainer" 900)"
+    [ -n "$explainer" ] || explainer="no explicit routing rationale"
+    handoff_summary="$(gate_decision_trim_text "handoff verdict=${LAST_HANDOFF_VERDICT:-unknown} score=${LAST_HANDOFF_SCORE:-0} gaps=${LAST_HANDOFF_GAPS:-none}" 500)"
+    if [ "${LAST_CONSENSUS_FAILURE_KIND:-none}" != "none" ] || [ -n "${LAST_CONSENSUS_FAILURE_REASON:-}" ]; then
+        failure_summary="$(gate_decision_trim_text "failure=${LAST_CONSENSUS_FAILURE_KIND:-unknown}: ${LAST_CONSENSUS_FAILURE_REASON:-unspecified}" 500)"
+    fi
+
+    LAST_GATE_DECISION_RECORDED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
+    LAST_GATE_DECISION_PHASE="$phase"
+    LAST_GATE_DECISION_ATTEMPT="$attempt"
+    LAST_GATE_DECISION_STAGE="$stage"
+    LAST_GATE_DECISION_OUTCOME="$outcome"
+    LAST_GATE_DECISION_SCORE="${LAST_CONSENSUS_SCORE:-0}"
+    LAST_GATE_DECISION_PASS="${LAST_CONSENSUS_PASS:-false}"
+    LAST_GATE_DECISION_RESPONDED_VOTES="${LAST_CONSENSUS_RESPONDED_VOTES:-0}"
+    LAST_GATE_DECISION_NEXT_PHASE="$next_phase"
+    LAST_GATE_DECISION_SUMMARY="$(printf 'score=%s pass=%s votes=%s next=%s outcome=%s\nvoting: %s\nexplainer: %s\n%s' \
+        "$LAST_GATE_DECISION_SCORE" \
+        "$LAST_GATE_DECISION_PASS" \
+        "$LAST_GATE_DECISION_RESPONDED_VOTES" \
+        "$LAST_GATE_DECISION_NEXT_PHASE" \
+        "$LAST_GATE_DECISION_OUTCOME" \
+        "$voting_summary" \
+        "$explainer" \
+        "$handoff_summary")"
+    if [ -n "$failure_summary" ]; then
+        LAST_GATE_DECISION_SUMMARY="${LAST_GATE_DECISION_SUMMARY}
+$failure_summary"
+    fi
+}
+
 save_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
     local checksum
@@ -1829,8 +2491,19 @@ save_state() {
         printf 'LAST_RUN_TOKEN_COUNT="%s"\n' "$(state_escape_value "$LAST_RUN_TOKEN_COUNT")"
         printf 'ENGINE_OUTPUT_TO_STDOUT="%s"\n' "$(state_escape_value "$ENGINE_OUTPUT_TO_STDOUT")"
         printf 'PHASE_TRANSITION_HISTORY_B64="%s"\n' "$(state_escape_value "$history_encoded")"
+        printf 'PLAN_FRESHNESS_FINGERPRINT="%s"\n' "$(state_escape_value "$PLAN_FRESHNESS_FINGERPRINT")"
         printf 'GIT_IDENTITY_READY="%s"\n' "$(state_escape_value "$GIT_IDENTITY_READY")"
         printf 'GIT_IDENTITY_SOURCE="%s"\n' "$(state_escape_value "$GIT_IDENTITY_SOURCE")"
+        printf 'LAST_GATE_DECISION_RECORDED_AT="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_RECORDED_AT")"
+        printf 'LAST_GATE_DECISION_PHASE="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_PHASE")"
+        printf 'LAST_GATE_DECISION_ATTEMPT="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_ATTEMPT")"
+        printf 'LAST_GATE_DECISION_STAGE="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_STAGE")"
+        printf 'LAST_GATE_DECISION_OUTCOME="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_OUTCOME")"
+        printf 'LAST_GATE_DECISION_SCORE="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_SCORE")"
+        printf 'LAST_GATE_DECISION_PASS="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_PASS")"
+        printf 'LAST_GATE_DECISION_RESPONDED_VOTES="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_RESPONDED_VOTES")"
+        printf 'LAST_GATE_DECISION_NEXT_PHASE="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_NEXT_PHASE")"
+        printf 'LAST_GATE_DECISION_SUMMARY="%s"\n' "$(state_escape_value "$LAST_GATE_DECISION_SUMMARY")"
     } > "$tmp_state_file"
     # Append SHA-256 checksum to the end
     if checksum="$(sha256_file_sum "$tmp_state_file")"; then
@@ -1875,6 +2548,17 @@ load_state() {
     LAST_RUN_TOKEN_COUNT=0
     ENGINE_OUTPUT_TO_STDOUT="$DEFAULT_ENGINE_OUTPUT_TO_STDOUT"
     PHASE_TRANSITION_HISTORY=()
+    PLAN_FRESHNESS_FINGERPRINT=""
+    LAST_GATE_DECISION_RECORDED_AT=""
+    LAST_GATE_DECISION_PHASE=""
+    LAST_GATE_DECISION_ATTEMPT=0
+    LAST_GATE_DECISION_STAGE=""
+    LAST_GATE_DECISION_OUTCOME=""
+    LAST_GATE_DECISION_SCORE=0
+    LAST_GATE_DECISION_PASS=false
+    LAST_GATE_DECISION_RESPONDED_VOTES=0
+    LAST_GATE_DECISION_NEXT_PHASE=""
+    LAST_GATE_DECISION_SUMMARY=""
     GIT_IDENTITY_READY="unknown"
     GIT_IDENTITY_SOURCE="unknown"
     local phase_transition_history_b64=""
@@ -1918,8 +2602,19 @@ load_state() {
             LAST_RUN_TOKEN_COUNT) is_number "$value" && LAST_RUN_TOKEN_COUNT="$value" ;;
             ENGINE_OUTPUT_TO_STDOUT) [ -n "$value" ] && ENGINE_OUTPUT_TO_STDOUT="$value" ;;
             PHASE_TRANSITION_HISTORY_B64) phase_transition_history_b64="$value" ;;
+            PLAN_FRESHNESS_FINGERPRINT) PLAN_FRESHNESS_FINGERPRINT="$value" ;;
             GIT_IDENTITY_READY) is_bool_like "$value" && GIT_IDENTITY_READY="$value" ;;
             GIT_IDENTITY_SOURCE) [ -n "$value" ] && GIT_IDENTITY_SOURCE="$value" ;;
+            LAST_GATE_DECISION_RECORDED_AT) LAST_GATE_DECISION_RECORDED_AT="$value" ;;
+            LAST_GATE_DECISION_PHASE) LAST_GATE_DECISION_PHASE="$value" ;;
+            LAST_GATE_DECISION_ATTEMPT) is_number "$value" && LAST_GATE_DECISION_ATTEMPT="$value" ;;
+            LAST_GATE_DECISION_STAGE) LAST_GATE_DECISION_STAGE="$value" ;;
+            LAST_GATE_DECISION_OUTCOME) LAST_GATE_DECISION_OUTCOME="$value" ;;
+            LAST_GATE_DECISION_SCORE) is_number "$value" && LAST_GATE_DECISION_SCORE="$value" ;;
+            LAST_GATE_DECISION_PASS) is_bool_like "$value" && LAST_GATE_DECISION_PASS="$value" ;;
+            LAST_GATE_DECISION_RESPONDED_VOTES) is_number "$value" && LAST_GATE_DECISION_RESPONDED_VOTES="$value" ;;
+            LAST_GATE_DECISION_NEXT_PHASE) LAST_GATE_DECISION_NEXT_PHASE="$value" ;;
+            LAST_GATE_DECISION_SUMMARY) LAST_GATE_DECISION_SUMMARY="$value" ;;
             STATE_CHECKSUM) ;;
             *) ;;
         esac
@@ -4003,7 +4698,7 @@ run_startup_operational_probe() {
     return 0
 }
 
-# Engine Smoke Test - verify an engine can actually respond to a prompt
+# Engine Smoke Test — verify an engine can actually respond to a prompt
 smoke_test_engine() {
     local engine_cmd="$1"
     local engine_name="$2"
@@ -4064,7 +4759,7 @@ smoke_test_engine() {
 
     smoke_elapsed=$(( $(date +%s) - smoke_start ))
     local result=1
-    # Check for canary token in output regardless of exit code - the engine may
+    # Check for canary token in output regardless of exit code — the engine may
     # have written the correct response before timeout killed the process.
     # Strip newlines before matching to handle LLMs that split the token across lines.
     if [ -f "$output_file" ] && [ -s "$output_file" ]; then
@@ -4426,7 +5121,7 @@ acquire_lock() {
         LOCK_ACQUIRED="true"
         return 0
     fi
-    # Lock dir exists - check if holder is still alive
+    # Lock dir exists — check if holder is still alive
     local holder_pid=""
     local owner_wait_attempt=0
     while [ "$owner_wait_attempt" -lt 3 ]; do
@@ -4839,21 +5534,21 @@ run_agent_with_prompt() {
             if [ -n "$timeout_cmd" ]; then
                 if is_true "$ENGINE_OUTPUT_TO_STDOUT"; then
                     (
-                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${engine_args[@]}" - --output-last-message "$output_file" 2>&1 < "$prompt_file" | tee "$log_file"
+                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${engine_args[@]}" - --output-last-message "$output_file" 2>&1 < "$prompt_file" | stream_engine_output "$log_file"
                     ) &
                 else
                     (
-                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${engine_args[@]}" - --output-last-message "$output_file" >> "$log_file" 2>&1 < "$prompt_file"
+                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${engine_args[@]}" - --output-last-message "$output_file" 2>&1 < "$prompt_file" | stream_engine_output "$log_file" "" false
                     ) &
                 fi
             else
                 if is_true "$ENGINE_OUTPUT_TO_STDOUT"; then
                     (
-                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "${engine_args[@]}" - --output-last-message "$output_file" 2>&1 < "$prompt_file" | tee "$log_file"
+                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "${engine_args[@]}" - --output-last-message "$output_file" 2>&1 < "$prompt_file" | stream_engine_output "$log_file"
                     ) &
                 else
                     (
-                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "${engine_args[@]}" - --output-last-message "$output_file" >> "$log_file" 2>&1 < "$prompt_file"
+                        "${codex_prefix[@]+"${codex_prefix[@]}"}" "${engine_args[@]}" - --output-last-message "$output_file" 2>&1 < "$prompt_file" | stream_engine_output "$log_file" "" false
                     ) &
                 fi
             fi
@@ -4861,21 +5556,21 @@ run_agent_with_prompt() {
             if [ -n "$timeout_cmd" ]; then
                 if is_true "$ENGINE_OUTPUT_TO_STDOUT"; then
                     (
-                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | tee "$output_file" >> "$log_file"
+                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file"
                     ) &
                 else
                     (
-                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - > "$output_file" 2>>"$log_file" < "$prompt_file"
+                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file" false
                     ) &
                 fi
             else
                 if is_true "$ENGINE_OUTPUT_TO_STDOUT"; then
                     (
-                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | tee "$output_file" >> "$log_file"
+                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file"
                     ) &
                 else
                     (
-                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - > "$output_file" 2>>"$log_file" < "$prompt_file"
+                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file" false
                     ) &
                 fi
             fi
@@ -5002,8 +5697,14 @@ run_swarm_reviewer() {
     local attempt_cmd
     local attempt_exit=1
     local used_cmd="${primary_cmd}"
+    local invalid_reason=""
+    local validation_mode="consensus"
     ACTIVE_ENGINE="unknown"
     ACTIVE_CMD=""
+
+    if [ "$reviewer_index" = "handoff" ]; then
+        validation_mode="handoff"
+    fi
 
     for attempt_cmd in "${candidate_cmds[@]}"; do
         [ -n "$attempt_cmd" ] || continue
@@ -5028,9 +5729,20 @@ run_swarm_reviewer() {
         ACTIVE_CMD="$attempt_cmd"
         used_cmd="$attempt_cmd"
 
+        rm -f "$output_file"
         if run_agent_with_prompt "$prompt_file" "$log_file" "$output_file" "false" "$reviewer_index"; then
-            attempt_exit=0
-            break
+            invalid_reason="$(review_output_invalid_reason "$output_file" "$validation_mode")"
+            if [ -z "$invalid_reason" ]; then
+                attempt_exit=0
+                break
+            fi
+            local raw_invalid_output=""
+            raw_invalid_output="${output_file}.invalid.${ACTIVE_ENGINE}.${reviewer_index}"
+            mv "$output_file" "$raw_invalid_output" 2>/dev/null || raw_invalid_output=""
+            write_invalid_reviewer_output_placeholder "$output_file" "$invalid_reason" "$raw_invalid_output"
+            warn "Reviewer $reviewer_index output from ${ACTIVE_ENGINE:-unknown} was rejected: $invalid_reason"
+            attempt_exit=1
+            continue
         fi
     done
 
@@ -5044,6 +5756,9 @@ run_swarm_reviewer() {
         else
             echo "status=failure"
             echo "exit_code=1"
+            if [ -n "$invalid_reason" ]; then
+                echo "failure_reason=$(sanitize_text_for_log "$invalid_reason")"
+            fi
         fi
     } > "$status_file"
     return "$attempt_exit"
@@ -5095,18 +5810,10 @@ build_consensus_evidence_context() {
         fi
         echo ""
         echo "Completion output snippet:"
-        if [ -f "$output_file" ]; then
-            sed -n '1,120p' "$output_file"
-        else
-            echo "- not available"
-        fi
+        safe_print_file_head "$output_file" 120
         echo ""
         echo "Execution log tail:"
-        if [ -f "$log_file" ]; then
-            tail -n 40 "$log_file"
-        else
-            echo "- not available"
-        fi
+        safe_print_file_tail "$log_file" 40
         echo ""
         echo "Handoff validator status:"
         if [ -f "$handoff_status_file" ]; then
@@ -5116,11 +5823,7 @@ build_consensus_evidence_context() {
         fi
         echo ""
         echo "Handoff validator output snippet:"
-        if [ -f "$handoff_output_file" ]; then
-            sed -n '1,60p' "$handoff_output_file"
-        else
-            echo "- not available"
-        fi
+        safe_print_file_head "$handoff_output_file" 60
     }
 }
 
@@ -5330,13 +6033,14 @@ run_swarm_consensus() {
     local next_phase_vote_reason=""
 
     local idx=0
-    local status_file status engine verdict score verdict_gaps next_phase next_phase_reason
+    local status_file status engine failure_reason verdict score verdict_gaps next_phase next_phase_reason
     local recommended_next="$default_next_phase"
     local highest_next_votes=0
     local candidate_votes=0
     for ofile in "${outputs[@]}"; do
         status="failure"
         engine="unknown"
+        failure_reason=""
         verdict="HOLD"
         score="0"
         verdict_gaps="no explicit gaps"
@@ -5348,10 +6052,12 @@ run_swarm_consensus() {
             status="$(grep -E "^status=" "$status_file" | head -n 1 | cut -d'=' -f2-)"
             engine="$(grep -E "^engine=" "$status_file" | head -n 1 | cut -d'=' -f2-)"
             engine="$(sanitize_text_for_log "$engine" | cut -c 1-40)"
+            failure_reason="$(grep -E "^failure_reason=" "$status_file" | head -n 1 | cut -d'=' -f2-)"
+            failure_reason="$(sanitize_text_for_log "$failure_reason" | cut -c 1-180)"
             [ "$status" = "success" ] || status="failure"
         fi
 
-        if [ -f "$ofile" ]; then
+        if [ "$status" = "success" ] && [ -f "$ofile" ]; then
             score="$(extract_review_score "$ofile")"
             verdict="$(extract_review_verdict "$ofile")"
 
@@ -5362,8 +6068,13 @@ run_swarm_consensus() {
             next_phase_reason="$(sanitize_text_for_log "$next_phase_reason")"
             [ -n "$next_phase_reason" ] || next_phase_reason="no explicit phase-routing rationale"
         else
-            verdict_gaps="no output artifact"
-            next_phase_reason="no output artifact"
+            if [ -n "$failure_reason" ]; then
+                verdict_gaps="reviewer failure: $failure_reason"
+                next_phase_reason="reviewer failure: $failure_reason"
+            else
+                verdict_gaps="no valid output artifact"
+                next_phase_reason="no valid output artifact"
+            fi
         fi
 
         [ "$status" = "success" ] && responded_votes=$((responded_votes + 1))
@@ -5532,22 +6243,14 @@ write_handoff_validation_prompt() {
 
     if [ -f "$previous_output" ]; then
         echo "Previous handoff output snippet:"
-        sed -n '1,40p' "$previous_output"
+        safe_print_file_head "$previous_output" 40
     fi
 
     echo "Current execution output snippet:"
-    if [ -f "$output_file" ]; then
-        sed -n '1,80p' "$output_file"
-    else
-        echo "- not available"
-    fi
+    safe_print_file_head "$output_file" 80
 
     echo "Current execution log tail:"
-    if [ -f "$log_file" ]; then
-        tail -n 40 "$log_file"
-    else
-        echo "- not available"
-    fi
+    safe_print_file_tail "$log_file" 40
     } > "$prompt_file"
 }
 
@@ -5562,6 +6265,13 @@ read_handoff_review_output() {
     LAST_HANDOFF_GAPS="no explicit gaps"
 
     [ -f "$output_file" ] || return 0
+
+    local invalid_reason
+    invalid_reason="$(review_output_invalid_reason "$output_file" "handoff")"
+    if [ -n "$invalid_reason" ]; then
+        LAST_HANDOFF_GAPS="invalid reviewer output: $(sanitize_text_for_log "$invalid_reason" | cut -c 1-160)"
+        return 0
+    fi
 
     score="$(extract_review_score "$output_file")"
     verdict="$(extract_review_verdict "$output_file")"
@@ -5586,7 +6296,7 @@ run_handoff_validation() {
         return 1
     fi
 
-    # Preserve engine state - run_swarm_reviewer mutates ACTIVE_ENGINE/ACTIVE_CMD
+    # Preserve engine state — run_swarm_reviewer mutates ACTIVE_ENGINE/ACTIVE_CMD
     local saved_engine="$ACTIVE_ENGINE"
     local saved_cmd="$ACTIVE_CMD"
 
@@ -6328,6 +7038,60 @@ collect_backlog_source_files() {
     printf '%s\n' "${resolved[@]}" | awk '!seen[$0]++'
 }
 
+backlog_source_display_list() {
+    local source_file rel_path
+    local -a labels=()
+
+    while IFS= read -r source_file; do
+        [ -n "$source_file" ] || continue
+        rel_path="$(path_relative_to_project "$source_file")"
+        if [ -n "$rel_path" ] && [ "$rel_path" != "$source_file" ]; then
+            labels+=("$(path_for_display "$rel_path")")
+        else
+            labels+=("$(path_for_display "$source_file")")
+        fi
+    done < <(collect_backlog_source_files)
+
+    if [ "${#labels[@]}" -eq 0 ]; then
+        printf '%s' "configured backlog sources"
+    else
+        join_with_commas "${labels[@]}"
+    fi
+}
+
+backlog_sources_fingerprint() {
+    local source_file rel_path file_hash
+
+    {
+        printf 'backlog_sources=%s\n' "${BACKLOG_SOURCES:-$DEFAULT_BACKLOG_SOURCES}"
+        while IFS= read -r source_file; do
+            [ -n "$source_file" ] || continue
+            rel_path="$(path_relative_to_project "$source_file")"
+            [ -n "$rel_path" ] || rel_path="$source_file"
+            if [ -f "$source_file" ]; then
+                file_hash="$(sha256_file_sum "$source_file" 2>/dev/null || printf 'unavailable')"
+                printf 'file\t%s\t%s\n' "$rel_path" "$file_hash"
+            else
+                printf 'missing\t%s\n' "$rel_path"
+            fi
+        done < <(collect_backlog_source_files)
+    } | sha256_stream_sum
+}
+
+record_plan_freshness_checkpoint() {
+    local fingerprint
+
+    fingerprint="$(backlog_sources_fingerprint 2>/dev/null || true)"
+    if [ -z "$fingerprint" ]; then
+        warn "Plan freshness checkpoint skipped: could not fingerprint configured backlog sources."
+        return 1
+    fi
+
+    PLAN_FRESHNESS_FINGERPRINT="$fingerprint"
+    info "Plan freshness checkpoint recorded for $(backlog_source_display_list)."
+    return 0
+}
+
 plan_has_unchecked_local_tasks() {
     local plan_file="${1:-$PLAN_FILE}"
     markdown_has_unchecked_local_tasks "$plan_file"
@@ -6360,12 +7124,25 @@ file_mtime_epoch() {
 
 backlog_sources_newer_than_plan() {
     local plan_file="${1:-$PLAN_FILE}"
-    local plan_mtime source_file source_mtime rel_path
+    local plan_mtime source_file source_mtime rel_path current_fingerprint
     local -a stale_sources=()
 
     LAST_BACKLOG_STALE_SOURCES=""
 
     [ -f "$plan_file" ] || return 1
+
+    if [ -n "${PLAN_FRESHNESS_FINGERPRINT:-}" ]; then
+        current_fingerprint="$(backlog_sources_fingerprint 2>/dev/null || true)"
+        if [ -n "$current_fingerprint" ]; then
+            if [ "$current_fingerprint" = "$PLAN_FRESHNESS_FINGERPRINT" ]; then
+                return 1
+            fi
+            LAST_BACKLOG_STALE_SOURCES="$(backlog_source_display_list)"
+            [ -n "$LAST_BACKLOG_STALE_SOURCES" ] || LAST_BACKLOG_STALE_SOURCES="configured backlog sources"
+            return 0
+        fi
+    fi
+
     plan_mtime="$(file_mtime_epoch "$plan_file")"
     is_number "$plan_mtime" || return 1
     [ "$plan_mtime" -ge 0 ] || return 1
@@ -6666,13 +7443,30 @@ file_has_local_identity_leakage() {
         return 1
     fi
 
-    local home_dir
+    local home_dir home_dir_regex
     home_dir="${HOME:-}"
+    home_dir_regex="$(printf '%s' "$home_dir" | sed 's/[][(){}.^$*+?|\\/]/\\&/g')"
 
-    if [ -n "$home_dir" ] && grep -qF "$home_dir" "$candidate_file" 2>/dev/null; then
-        return 0
-    fi
-    if grep -qiE '(/Users/[A-Za-z0-9._-]+/)|(/home/[A-Za-z0-9._-]+/)|(/root/[A-Za-z0-9._-]+/)' "$candidate_file" 2>/dev/null; then
+    if awk -v home_re="$home_dir_regex" -v allow_re="${MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX:-}" '
+        function scrub(line) {
+            if (allow_re != "") {
+                gsub(allow_re, "", line)
+            }
+            return line
+        }
+        {
+            line = scrub($0)
+            if (home_re != "" && line ~ ("(^|[^[:alnum:]_.-])" home_re "(/|$)")) {
+                found = 1
+                exit
+            }
+            if (line ~ /\/Users\/[A-Za-z0-9._-]+\// || line ~ /\/home\/[A-Za-z0-9._-]+\// || line ~ /\/root\/[A-Za-z0-9._-]+\//) {
+                found = 1
+                exit
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$candidate_file" 2>/dev/null; then
         return 0
     fi
     return 1
@@ -6738,8 +7532,18 @@ sanitize_markdown_artifact_file() {
     local rel_file=""
     rel_file="$(path_for_display "$(path_relative_to_project "$file")")"
 
-    if awk '
-        $0 ~ /succeeded in [0-9][0-9]*ms:/ || $0 ~ /assistant[[:space:]][[:space:]]*to=/ || $0 ~ /recipient_name[[:space:]]*:/ || $0 ~ /tokens used/ || $0 ~ /mcp startup:/ || $0 ~ /\/Users\/[A-Za-z0-9._-]+\// || $0 ~ /\/root\/[A-Za-z0-9._-]+\// || $0 ~ /\/home\/[A-Za-z0-9._-]+\// { next }
+    if awk -v allow_re="${MARKDOWN_LOCAL_PATH_ALLOWLIST_REGEX:-}" '
+        function scrub(line) {
+            if (allow_re != "") {
+                gsub(allow_re, "", line)
+            }
+            return line
+        }
+        {
+            clean_line = scrub($0)
+            if ($0 ~ /succeeded in [0-9][0-9]*ms:/ || $0 ~ /assistant[[:space:]][[:space:]]*to=/ || $0 ~ /recipient_name[[:space:]]*:/ || $0 ~ /tokens used/ || $0 ~ /mcp startup:/) { next }
+            if (clean_line ~ /\/Users\/[A-Za-z0-9._-]+\// || clean_line ~ /\/root\/[A-Za-z0-9._-]+\// || clean_line ~ /\/home\/[A-Za-z0-9._-]+\//) { next }
+        }
         { print }
     ' "$file" > "$tmp_file"; then
         if ! cmp -s "$file" "$tmp_file"; then
@@ -7675,7 +8479,10 @@ run_idle_plan_refresh() { return 0; }
 print_session_config_banner() {
     info "=== Ralphie Session Budget & Retry Configuration ==="
     info "script_version: ${SCRIPT_VERSION}"
-    info "auto_update: ${AUTO_UPDATE:-$DEFAULT_AUTO_UPDATE} (runtime auto-update unsupported)"
+    info "auto_update: ${AUTO_UPDATE:-$DEFAULT_AUTO_UPDATE} (pre-run single-file update)"
+    info "auto_update_url: $(redact_endpoint_for_log "$AUTO_UPDATE_URL")"
+    info "auto_update_allow_dirty: ${AUTO_UPDATE_ALLOW_DIRTY:-$DEFAULT_AUTO_UPDATE_ALLOW_DIRTY}"
+    info "auto_update_allow_insecure: ${AUTO_UPDATE_ALLOW_INSECURE:-$DEFAULT_AUTO_UPDATE_ALLOW_INSECURE}"
     info "max_session_cycles: ${MAX_SESSION_CYCLES:-0} (0=unlimited)"
     info "session_token_budget: ${SESSION_TOKEN_BUDGET:-0} (0=unlimited)"
     info "session_token_rate_cents_per_million: ${SESSION_TOKEN_RATE_CENTS_PER_MILLION:-0}"
@@ -7765,6 +8572,11 @@ format_retry_budget_block_reason() {
 
 main() {
     parse_args "$@"
+    self_update_check_and_reexec "$@"
+    if [ "${RALPHIE_SELF_UPDATE_TEST:-}" = "1" ]; then
+        echo "RALPHIE_SELF_UPDATE_CURRENT_OK"
+        return 0
+    fi
     finalize_phase_noop_profile_config
     REBOOTSTRAP_REQUESTED="$(to_lower "${REBOOTSTRAP_REQUESTED:-$DEFAULT_REBOOTSTRAP_REQUESTED}")"
     is_bool_like "$REBOOTSTRAP_REQUESTED" || REBOOTSTRAP_REQUESTED="$DEFAULT_REBOOTSTRAP_REQUESTED"
@@ -8074,6 +8886,28 @@ main() {
                         phase_failures+=("pre-build markdown remediation summary: ${repair_summary//$'\\n'/; }")
                     fi
                     if [ "${#gate_issues[@]}" -gt 0 ]; then
+                        local gate_requires_plan_refresh=false
+                        local gate_has_non_plan_refresh=false
+                        for issue in "${gate_issues[@]}"; do
+                            case "$issue" in
+                                "plan refresh required:"*) gate_requires_plan_refresh=true ;;
+                                *) gate_has_non_plan_refresh=true ;;
+                            esac
+                        done
+                        if is_true "$gate_requires_plan_refresh" && ! is_true "$gate_has_non_plan_refresh"; then
+                            phase_next_target="plan"
+                            phase_route="true"
+                            phase_route_reason="${gate_issues[0]}"
+                            phase_transition_history_append "$phase" "$phase_attempt" "$phase_next_target" "hold" "$phase_route_reason"
+                            write_gate_feedback "$phase" "${gate_issues[@]}" "auto-reroute triggered: build -> plan for backlog freshness"
+                            warn "Build gate requires plan refresh; auto-routing build -> plan instead of retrying build."
+                            notify_event "phase_decision" "reroute_hold" "phase=$phase attempt=$phase_attempt rerouted_to=$phase_next_target reason=${phase_route_reason:-none}" || true
+                            log_reason_code "RB_BUILD_GATE_PLAN_REFRESH_REROUTE" "$phase attempt $phase_attempt rerouted to plan after backlog freshness gate"
+                            PHASE_ATTEMPT_IN_PROGRESS="false"
+                            CURRENT_PHASE_ATTEMPT=1
+                            save_state_or_exit "build gate plan-refresh reroute checkpoint"
+                            break
+                        fi
                         for issue in "${gate_issues[@]}"; do
                             phase_failures+=("build gate blocked before build execution: $issue")
                         done
@@ -8094,22 +8928,36 @@ main() {
                         fi
                     fi
 
-                    if [ "$phase" = "plan" ] && ! enforce_build_gate; then
+                    if [ "$phase" = "plan" ]; then
                         local -a post_plan_gate_issues=()
+                        local -a post_plan_actionable_gate_issues=()
+                        local post_plan_issue
                         mapfile -t post_plan_gate_issues < <(collect_build_prerequisites_issues)
                         local post_plan_repair_summary=""
                         if is_true "$AUTO_REPAIR_MARKDOWN_ARTIFACTS" && ! markdown_artifacts_are_clean; then
                             if sanitize_markdown_artifacts; then
                                 post_plan_repair_summary="$(markdown_artifact_cleanup_summary)"
                                 mapfile -t post_plan_gate_issues < <(collect_build_prerequisites_issues)
-                                [ "${#post_plan_gate_issues[@]}" -eq 0 ] && info "Build gate passed after post-plan markdown remediation."
                                 [ -n "$post_plan_repair_summary" ] && phase_warnings+=("post-plan markdown remediation: ${post_plan_repair_summary//$'\\n'/; }")
                             fi
                         fi
-                        if [ "${#post_plan_gate_issues[@]}" -gt 0 ]; then
+                        for post_plan_issue in "${post_plan_gate_issues[@]}"; do
+                            case "$post_plan_issue" in
+                                "plan refresh required:"*)
+                                    phase_warnings+=("post-plan freshness checkpoint pending for configured backlog sources")
+                                    ;;
+                                *)
+                                    post_plan_actionable_gate_issues+=("$post_plan_issue")
+                                    ;;
+                            esac
+                        done
+                        if [ "${#post_plan_actionable_gate_issues[@]}" -eq 0 ] && [ -n "$post_plan_repair_summary" ]; then
+                            info "Build gate passed after post-plan markdown remediation."
+                        fi
+                        if [ "${#post_plan_actionable_gate_issues[@]}" -gt 0 ]; then
                             phase_failures+=("build gate failed after plan->build transition")
                             [ -n "$post_plan_repair_summary" ] && phase_failures+=("post-plan markdown remediation summary: ${post_plan_repair_summary//$'\\n'/; }")
-                            for issue in "${post_plan_gate_issues[@]}"; do
+                            for issue in "${post_plan_actionable_gate_issues[@]}"; do
                                 phase_failures+=("build gate: $issue")
                             done
                         fi
@@ -8228,8 +9076,10 @@ main() {
                         "$previous_attempt_output_file")"
                     while true; do
                         if run_swarm_consensus "$phase-gate" "$(phase_transition_history_recent 8)" "$consensus_evidence_context"; then
+                            record_gate_decision "$phase" "$phase_attempt" "$phase-gate" "pass"
                             break
                         fi
+                        record_gate_decision "$phase" "$phase_attempt" "$phase-gate" "hold"
 
                         if [ "$LAST_CONSENSUS_FAILURE_KIND" = "infra" ]; then
                             local consensus_failure_reason
@@ -8304,6 +9154,7 @@ main() {
                             phase_next_target="$phase_route_candidate"
                             phase_route="true"
                             phase_route_reason="${LAST_CONSENSUS_NEXT_PHASE_REASON:-no explicit phase-routing rationale}"
+                            record_gate_decision "$phase" "$phase_attempt" "$phase-gate" "reroute-hold" "$phase_next_target" "$phase_route_reason"
                             phase_transition_history_append "$phase" "$phase_attempt" "$phase_next_target" "hold" "$phase_route_reason"
                             notify_event "phase_decision" "reroute_hold" "phase=$phase attempt=$phase_attempt rerouted_to=$phase_next_target reason=${phase_route_reason:-none}" || true
                             PHASE_ATTEMPT_IN_PROGRESS="false"
@@ -8334,6 +9185,7 @@ main() {
                             phase_next_target="plan"
                             phase_route="true"
                             phase_route_reason="auto-backtrack: build exhausted retries on $build_hold_reason; refreshing plan scope"
+                            record_gate_decision "$phase" "$phase_attempt" "$phase-gate" "reroute-hold" "$phase_next_target" "$phase_route_reason"
                             phase_transition_history_append "$phase" "$phase_attempt" "$phase_next_target" "hold" "$phase_route_reason"
                             write_gate_feedback "$phase" "${phase_failures[@]}" "auto-backtrack triggered: rerouting build -> plan"
                             warn "Build retries exhausted ($build_hold_reason); auto-backtracking to plan for scope refresh."
@@ -8440,6 +9292,10 @@ main() {
                     done
                 fi
 
+                if [ "$phase" = "plan" ]; then
+                    record_plan_freshness_checkpoint || phase_warnings+=("plan freshness checkpoint could not be recorded; mtime fallback remains active")
+                fi
+
                 if is_number "$PHASE_WALLCLOCK_LIMIT_SECONDS" && [ "$PHASE_WALLCLOCK_LIMIT_SECONDS" -gt 0 ] && is_number "${phase_attempt_started_at:-0}" && [ "${phase_attempt_started_at:-0}" -gt 0 ]; then
                     local now elapsed
                     now="$(date +%s 2>/dev/null || echo 0)"
@@ -8494,6 +9350,7 @@ main() {
                 elif [ -z "$phase_route_reason" ]; then
                     phase_route_reason="no explicit phase-routing rationale"
                 fi
+                record_gate_decision "$phase" "$phase_attempt" "$phase-gate" "pass" "$phase_next_target" "$phase_route_reason"
                 phase_transition_history_append "$phase" "$phase_attempt" "$phase_next_target" "pass" "$phase_route_reason"
                 PHASE_ATTEMPT_IN_PROGRESS="false"
                 CURRENT_PHASE_ATTEMPT=1
@@ -8516,27 +9373,44 @@ main() {
                     notify_event "phase_decision" "reroute_pass" "phase=$phase rerouted_to=$phase_next_target reason=${phase_route_reason:-none}" || true
                 fi
                 if [ "$route_index" -lt "$phase_index" ]; then
-                    consensus_route_count=$((consensus_route_count + 1))
-                    local routing_signature
-                    routing_signature="$(phase_failure_signature "$phase" "$phase_next_target" "${phase_route_reason:-none}")"
-                    if [ "$routing_signature" = "$routing_stagnation_signature" ]; then
-                        routing_stagnation_count=$((routing_stagnation_count + 1))
+                    local route_is_plan_freshness
+                    route_is_plan_freshness="false"
+                    case "${phase_route_reason:-}" in
+                        "plan refresh required:"*) route_is_plan_freshness="true" ;;
+                    esac
+
+                    if is_true "$route_is_plan_freshness"; then
+                        routing_stagnation_signature=""
+                        routing_stagnation_count=0
+                        info "Plan freshness reroute will not count as consensus routing stagnation."
                     else
-                        routing_stagnation_signature="$routing_signature"
-                        routing_stagnation_count=1
-                    fi
-                    if [ "$MAX_CONSENSUS_ROUTING_ATTEMPTS" -gt 0 ] && [ "$consensus_route_count" -gt "$MAX_CONSENSUS_ROUTING_ATTEMPTS" ]; then
-                        warn "Consensus routing attempts exceeded limit ($consensus_route_count/$MAX_CONSENSUS_ROUTING_ATTEMPTS)."
-                        notify_event "session_error" "routing_budget_exceeded" "consensus routing attempts exceeded limit ($consensus_route_count/$MAX_CONSENSUS_ROUTING_ATTEMPTS)" || true
-                        should_exit="true"
-                        break 2
-                    fi
-                    if [ "$MAX_CONSENSUS_ROUTING_ATTEMPTS" -eq 0 ] && [ "$routing_stagnation_count" -ge "$CONFIDENCE_STAGNATION_LIMIT" ]; then
-                        warn "Consensus routing stagnated for ${routing_stagnation_count} backtracks with unchanged route signature."
-                        log_reason_code "RB_ROUTING_STAGNATION" "unlimited routing stagnated after ${routing_stagnation_count} backtracks ($phase->$phase_next_target)"
-                        notify_event "session_error" "routing_stagnation" "unlimited routing stagnated after ${routing_stagnation_count} backtracks" || true
-                        should_exit="true"
-                        break 2
+                        consensus_route_count=$((consensus_route_count + 1))
+                        local routing_signature
+                        routing_signature="$(phase_failure_signature "$phase" "$phase_next_target" "${phase_route_reason:-none}")"
+                        if [ "$routing_signature" = "$routing_stagnation_signature" ]; then
+                            routing_stagnation_count=$((routing_stagnation_count + 1))
+                        else
+                            routing_stagnation_signature="$routing_signature"
+                            routing_stagnation_count=1
+                        fi
+                        if [ "$MAX_CONSENSUS_ROUTING_ATTEMPTS" -gt 0 ] && [ "$consensus_route_count" -gt "$MAX_CONSENSUS_ROUTING_ATTEMPTS" ]; then
+                            warn "Consensus routing attempts exceeded limit ($consensus_route_count/$MAX_CONSENSUS_ROUTING_ATTEMPTS)."
+                            log_reason_code "RB_ROUTING_BUDGET_EXCEEDED" "consensus routing attempts exceeded limit ($consensus_route_count/$MAX_CONSENSUS_ROUTING_ATTEMPTS)"
+                            notify_event "session_error" "routing_budget_exceeded" "consensus routing attempts exceeded limit ($consensus_route_count/$MAX_CONSENSUS_ROUTING_ATTEMPTS)" || true
+                            should_exit="true"
+                            PHASE_ATTEMPT_IN_PROGRESS="false"
+                            save_state_or_exit "routing budget checkpoint ($phase->$phase_next_target)"
+                            break
+                        fi
+                        if [ "$MAX_CONSENSUS_ROUTING_ATTEMPTS" -eq 0 ] && [ "$routing_stagnation_count" -ge "$CONFIDENCE_STAGNATION_LIMIT" ]; then
+                            warn "Consensus routing stagnated for ${routing_stagnation_count} backtracks with unchanged route signature."
+                            log_reason_code "RB_ROUTING_STAGNATION" "unlimited routing stagnated after ${routing_stagnation_count} backtracks ($phase->$phase_next_target)"
+                            notify_event "session_error" "routing_stagnation" "unlimited routing stagnated after ${routing_stagnation_count} backtracks" || true
+                            should_exit="true"
+                            PHASE_ATTEMPT_IN_PROGRESS="false"
+                            save_state_or_exit "routing stagnation checkpoint ($phase->$phase_next_target)"
+                            break
+                        fi
                     fi
                 fi
                 if [ "$phase_next_target" = "done" ] || [ "$route_index" -ge "${#phases[@]}" ]; then

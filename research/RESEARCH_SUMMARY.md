@@ -1,89 +1,125 @@
 # Research Summary
 
-<confidence>96</confidence>
-<!-- refreshed: 2026-05-02 plan phase -->
+<confidence>97</confidence>
 
-## Goal
+## Objective
 
-Transform ArcLink into ArcLink: a Chutes-first, self-serve, paid,
-single-user AI deployment SaaS with web, Telegram, and Discord onboarding;
-Stripe entitlement gates; Cloudflare/Traefik host routing; responsive
-user/admin dashboards; and preserved Hermes, qmd, vault, managed memory,
-Notion, Nextcloud, code-server, bot, and health robustness.
+Prepare BUILD handoff for the active ArcLink native workspace plugin mission:
+
+- `ArcLink Drive`: Google Drive-like file management for Vault and Workspace roots.
+- `ArcLink Code`: VS Code-like Explorer, editor, diff, and Source Control surface.
+- `ArcLink Terminal`: persistent, revisit-able terminal sessions inside Hermes.
+
+All implementation must stay in ArcLink-owned Hermes plugins, wrappers,
+generated config, Docker/service glue, and focused tests. Hermes core changes
+remain out of scope.
 
 ## Current Finding
 
-ArcLink is already being built as a staged evolution of the existing
-Docker/Python/Bash ArcLink control plane. The repository now contains the
-ArcLink commercial/control-plane modules, fake/live provider boundaries,
-host-readiness and diagnostics tooling, fleet/action/rollout operations spine,
-Next.js dashboard shell, and extensive no-secret regression coverage.
+ArcLink already has the correct extension boundary for this mission. The active
+workspace surfaces are native Hermes dashboard plugins under
+`plugins/hermes-agent/`:
 
-Observed implementation signals:
+- `arclink-drive` registers the `/drive` dashboard tab and has a Python API,
+  JavaScript dashboard bundle, scoped CSS, manifest, plugin metadata, and
+  README. Its backend exposes Vault and Workspace roots, confined local file
+  operations, upload conflict policy, copy/duplicate, trash/restore, favorites,
+  bounded preview/search, root-keyed metadata, per-item batch results, and
+  disabled sharing capability flags.
+- `arclink-code` registers the `/code` dashboard tab and has a Python API,
+  JavaScript dashboard bundle, scoped CSS, manifest, plugin metadata, and
+  README. Its backend exposes workspace status, tree/list/open/save, hash-based
+  conflicting-save protection, bounded search, repo discovery, git status,
+  diff, stage, unstage, discard with explicit confirmation, commit,
+  `.gitignore`, pull, push, and confined rename/move/duplicate/trash/restore
+  operations. Its browser bundle contains the Explorer/Search/Source Control
+  split, diff view, tabs/dirty state, status bar, theme toggle, and manual-save
+  warning.
+- `arclink-terminal` registers the `/terminal` dashboard tab and has a
+  managed-pty backend with sanitized status, workspace-root cwd, shell/runtime
+  availability, stable session IDs, persisted metadata, bounded scrollback,
+  polling output, input, rename/folder/reorder controls, confirmation-gated
+  close, and an unrestricted-root startup guard.
+- `bin/install-arclink-plugins.sh` is the canonical delivery path for Hermes
+  homes and is covered for default plugin enablement, legacy alias pruning,
+  config preservation, and generated-cache exclusion.
+- Docker/provisioning code carries dashboard, Vault, and Workspace runtime
+  signals. The active backlog marks Docker/TLS proof, portable proof-note
+  capture, and documentation alignment complete. The remaining BUILD handoff
+  work is commit hygiene, optional deployment, and final release/health/proof
+  reporting.
+- The deterministic stack snapshot now ranks the Python/shell ArcLink control
+  plane with native Hermes dashboard plugins as the primary stack at 94/100
+  confidence. Node/Next is present as a supporting product/admin and browser
+  proof surface, not the primary implementation path for this mission.
 
-- 25 `python/arclink*.py` modules covering product config, Chutes, Stripe and
-  Cloudflare adapters, entitlements, onboarding, hosted API/auth, dashboards,
-  provisioning, executor, diagnostics, host readiness, fleet, action worker,
-  rollout, live journey, evidence, and bot adapters.
-- 27 `tests/test_arclink*.py` files covering the ArcLink Python surfaces.
-- `web/` contains a Next.js 15 + Tailwind 4 app with landing, login,
-  onboarding, user dashboard, admin dashboard, shared UI, API client, smoke
-  tests, and browser product checks.
-- `compose.yaml`, `Dockerfile`, `deploy.sh`, `bin/`, Hermes plugins/hooks, qmd
-  jobs, Nextcloud, memory synthesis, and systemd units remain the operational
-  substrate to preserve.
-
-## Production Coverage Status
-
-The non-external ArcLink foundation is present for Production 1-11 and
-Production 13-16:
-
-- Hosted API contract, auth/CSRF/audit, provider fake boundaries, Docker
-  executor planning, Chutes model/key abstractions, Telegram/Discord onboarding
-  parity, user/admin dashboard read models, fake full-journey E2E, deployment
-  docs, observability, data safety, and documentation truth are represented in
-  code/tests/docs.
-- Production 12 remains the only live-proof blocker. The live E2E harness,
-  live proof runner, readiness checks, diagnostics, ordered journey model, and
-  redacted evidence ledger exist, but credentialed execution is externally
-  blocked.
+This is completion and handoff work on an existing architecture, not greenfield
+discovery.
 
 ## Implementation Path Comparison
 
 | Path | Strengths | Weaknesses | Decision |
 | --- | --- | --- | --- |
-| Evolve existing Docker/Python ArcLink control plane | Preserves working Hermes/qmd/memory/deploy behavior, keeps no-secret tests deterministic, and avoids premature orchestration churn. | Requires staged naming and compatibility discipline. | Selected. |
-| Build a separate SaaS shell around ArcLink | Cleaner commercial boundary later. | Duplicates auth, provisioning, health, and entitlement state before contracts settle. | Defer. |
-| Replatform to Kubernetes/Nomad | Better long-term scheduling primitives. | Too heavy before live demand and provider proof exist. | Reject for MVP. |
+| Complete existing native Hermes dashboard plugins | Directly satisfies the mission, preserves Hermes core, reuses current Python/JS/CSS surfaces, and works with current install/provisioning rails. | Requires careful proof, documentation, and commit curation across a broad dirty tree. | Selected. |
+| Build a separate Next.js workspace app | Strong frontend tooling and full product-shell control. | Not native Hermes dashboard plugins and duplicates routing/runtime concerns. | Rejected for this mission. |
+| Use external tools as the primary UX | Nextcloud, code-server, and terminal links are mature and fast to expose. | Fails native Drive/Code/Terminal goals and risks fake parity or fake sharing claims. | Keep only as optional links/adapters. |
+| Patch Hermes dashboard core | Could expose missing host features quickly. | Violates constraints and creates upstream upgrade debt. | Rejected. |
 
-## Key Assumptions
+## Uncertainty Comparison
 
-- Docker Compose is the first customer-deployment target.
-- Python remains the business-logic and hosted-API layer.
-- Next.js/Tailwind is the production dashboard layer and consumes API
-  contracts instead of duplicating business rules.
-- SQLite stays first for ArcLink commercial state, with schema choices kept
-  portable for a later Postgres path.
-- `ARCLINK_*` configuration takes precedence while `ARCLINK_*` compatibility is
-  preserved where existing runtime paths depend on it.
-- Fake adapters are the default for unit and fake E2E tests.
-- Live provider execution requires explicit live flags and real credentials.
+| Area | Option A | Option B | Planning decision |
+| --- | --- | --- | --- |
+| Terminal backend | tmux-backed sessions | ArcLink-managed pty fallback | Managed pty is the selected shipped path for this slice because it is implemented and covered. Keep tmux as a future backend candidate only after Docker and baremetal install paths prove it. |
+| Terminal transport | WebSocket/SSE streaming | Bounded polling with POSTed input | Bounded polling is the selected shipped path because the existing plugin API supports it without adding a streaming rail. |
+| Code editor | Harden current native editor | Vendor Monaco | Do not claim Monaco parity. Ship the native editor unless Monaco workers/assets/CSP are proven inside the Hermes plugin host. |
+| Drive sharing | Disabled/gated capability | Nextcloud/WebDAV share adapter | Keep sharing disabled until a real adapter and tests exist. Do not ship synthetic share links. |
 
-## BUILD Handoff
+## Assumptions
 
-The plan phase is ready for BUILD handoff, but the actionable BUILD queue is
-credential-limited: all non-external production slices identified in
-`research/RALPHIE_PRODUCTION_GRADE_STEERING.md` are represented in current
-code/tests/docs. The next real build action is credentialed live proof through
-the existing live runner once external accounts are available.
+- Hermes dashboard plugin manifests continue to load `dashboard/plugin_api.py`,
+  `dashboard/dist/index.js`, and `dashboard/dist/style.css`.
+- Plain JavaScript/CSS bundles are acceptable for the current plugin mission.
+- Vault and Workspace remain separate first-class Drive roots.
+- Code remains manual-save by default. Auto-save, if added, must be explicit
+  opt-in with visible warning.
+- Terminal execution must stay inside the deployment/user boundary with bounded
+  state, redacted errors, and explicit lifecycle controls.
+- Portable proof notes can summarize outcomes without embedding screenshots,
+  command transcripts, host-local paths, raw terminal scrollback, or secrets.
+
+## Planning Verdict
+
+The planning phase is ready for BUILD handoff. Required artifacts are
+project-specific and portable, no fallback placeholder marker is present in the
+implementation plan, and no planning-only blocker remains.
+
+## Build Handoff
+
+Proceed against the remaining unchecked handoff items in
+`IMPLEMENTATION_PLAN.md` and
+`research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md`:
+
+1. Reconcile the broad dirty worktree into scoped commits without reverting
+   unrelated user work.
+2. Keep private state, generated caches, bytecode, secrets, and local proof
+   debris out of commits.
+3. Keep Ralphie guidance commits separate from ArcLink product commits where
+   both scopes remain present.
+4. If deploying, push to the configured upstream branch before the canonical
+   `./deploy.sh upgrade` flow.
+5. Report final release, health, smoke/browser proof, and residual risks.
 
 ## Remaining Risks
 
-- Stripe, Cloudflare, Chutes, Telegram, Discord, and production-host live proof
-  are unverified until credentials and accounts are supplied.
-- The Python hosted API has not yet been deployed behind a final production
-  identity/edge configuration.
-- Dedicated Nextcloud per deployment is strong isolation for MVP but may become
-  resource-heavy at scale.
-- Broad public rebrand from ArcLink to ArcLink must avoid breaking preserved
-  ArcLink deploy/runtime contracts.
+- The worktree is broad and dirty; BUILD must preserve unrelated edits and
+  curate changes intentionally.
+- The current workspace proof is only current while the plugin, Docker,
+  provisioning, proof-runner, and docs surfaces remain unchanged after the
+  recorded pass.
+- Nextcloud sharing is not implemented and must remain disabled or genuinely
+  adapter-backed.
+- Monaco and streaming terminal transport remain optional future improvements,
+  not current completion requirements.
+- Git pull, push, discard, and discard-all need continued strict allowlists,
+  confirmations, redaction, timeout handling, and proof notes.
+- Proof artifacts and final reports must stay portable and secret-free.

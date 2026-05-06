@@ -35,8 +35,8 @@ status contract, UI assets, and secret redaction.
 - `/download` returns files from the selected backend.
 - `/upload` accepts file uploads into the selected folder.
 - `/mkdir`, `/move`, and `/rename` mutate files under the selected backend.
-- `/favorite` stores local favorite metadata and maps to Nextcloud favorite
-  metadata where WebDAV supports it.
+- `/favorite` remains a compatibility backend endpoint, but the dashboard no
+  longer exposes favorite controls in this release.
 - `/delete` moves local files into `.arclink-trash`; WebDAV delete uses the
   provider delete call.
 - `/trash` and `/restore` are local-backend recovery APIs.
@@ -44,6 +44,9 @@ status contract, UI assets, and secret redaction.
   expandable folder carets, minimal file/folder icons, cross-root search,
   directory contents in the main pane, and selected-item metadata/actions in
   the detail strip rather than opening file contents.
+- Main-pane selection follows desktop file manager conventions: click selects a
+  file, click a folder to browse into it, Cmd/Ctrl-click toggles multi-select,
+  and Shift-click selects a range. The UI does not use row checkboxes.
 
 ## Assumptions
 

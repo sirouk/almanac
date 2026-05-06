@@ -269,7 +269,7 @@ class TestWorkspaceProofJourney(unittest.TestCase):
         self.assertIn("a[href$='/\" + plugin + \"']", script)
         self.assertIn('openPluginPage(page, "ArcLink Drive", "New Folder")', script)
         self.assertIn('openPluginPage(page, "ArcLink Code", "Explorer")', script)
-        self.assertIn('openPluginPage(page, "ArcLink Terminal", "New Session")', script)
+        self.assertIn('openPluginPage(page, "ArcLink Terminal", "Sessions")', script)
         self.assertIn("captureSanitizedScreenshot", script)
         self.assertIn("ARCLINK_WORKSPACE_PROOF_SCREENSHOT_DIR", script)
 

@@ -351,6 +351,15 @@ def _repo_display_path(path: Path) -> str:
     return _display_path(relative.as_posix())
 
 
+def _workspace_display_path(path: Path) -> str:
+    root = _workspace_root()
+    try:
+        relative = path.resolve(strict=False).relative_to(root)
+    except ValueError:
+        return ""
+    return _display_path(relative.as_posix())
+
+
 def _resolve_repo(raw_repo: Any) -> tuple[Path, str]:
     repo, relative = _resolve(raw_repo or "/")
     if not repo.is_dir():
@@ -586,6 +595,7 @@ async def status() -> dict[str, Any]:
     url = _clean_url(access.get("code_url") or access.get("code_local_url"))
     root = _workspace_root()
     vault_path = root / "ArcLink"
+    vault_display_path = _workspace_display_path(vault_path)
     username = _clean_text(access.get("username") or access.get("unix_user"), 80)
     return {
         "plugin": "arclink-code",
@@ -597,6 +607,11 @@ async def status() -> dict[str, Any]:
         "username": username,
         "workspace_root": str(root),
         "vault_path": str(vault_path),
+        "vault_display_path": vault_display_path,
+        "roots": [
+            {"id": "workspace", "label": "Workspace", "path": "/", "available": root.is_dir()},
+            {"id": "vault", "label": "Vault", "path": vault_display_path, "available": bool(vault_display_path and vault_path.exists())},
+        ],
         "editor": "native",
         "full_ide_available": bool(url),
         "monaco_global_available": False,
@@ -619,6 +634,15 @@ async def status() -> dict[str, Any]:
 async def repos() -> dict[str, Any]:
     root = _workspace_root()
     return {"workspace_root": str(root), "repos": _discover_repos(root)}
+
+
+@router.post("/repos/open")
+async def open_repo(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    root = _workspace_root()
+    target, relative = _resolve_repo(payload.get("path") or "/")
+    repo = _repo_item(root, target)
+    return {"ok": True, "repo": repo, "status": _git_status_payload(target, relative)}
 
 
 @router.get("/git/status")

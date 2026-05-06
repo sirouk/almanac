@@ -882,6 +882,15 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
             )
             repos = asyncio.run(code_api.repos())
             expect(any(item["path"] == "/demo" for item in repos["repos"]), str(repos))
+            opened_repo = asyncio.run(code_api.open_repo(JsonRequest({"path": "/demo"})))
+            expect(opened_repo["repo"]["path"] == "/demo", str(opened_repo))
+            expect("status" in opened_repo and opened_repo["status"]["repo"] == "/demo", str(opened_repo))
+            try:
+                asyncio.run(code_api.open_repo(JsonRequest({"path": "/"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected non-git source picker rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected non-git source picker rejection")
             status = asyncio.run(code_api.git_status(repo="/demo"))
             expect(any(item["path"] == "app.py" for item in status["unstaged"]), str(status))
             expect(any(item["path"] == "notes.md" for item in status["untracked"]), str(status))
@@ -964,6 +973,9 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect('"/ops/rename"' in body and '"/ops/move"' in body and '"/ops/duplicate"' in body, "Code UI should expose safe file operations")
     expect('"/ops/trash"' in body and "Move \" + item.path + \" to trash?" in body, "Code UI should confirmation-gate trash")
     expect('"/search?q="' in body and "renderSearch()" in body, "Code UI should expose workspace search")
+    expect('"/repos/open"' in body and "Open Source" in body and "Sources" in body, "Code UI should expose explicit Sources picker")
+    expect("renderSearchBox()" in body and "state.leftPanel === \"search\"" not in body, "Code UI should use inline search instead of a separate Search panel")
+    expect("onDrop: openDroppedTab" in body, "Code UI should open files dropped on the tab strip")
     expect('"/git/ignore"' in body and '"/git/pull"' in body and '"/git/push"' in body, "Code UI should expose richer source-control actions")
     expect("Auto-save is off" in body and "arclink-code-theme-" in body, "Code UI should expose manual-save warning and theme toggle")
     expect("arclink-code-statusbar" in body and "lastGitResult" in body, "Code UI should expose status bar and last git result")
@@ -1052,6 +1064,9 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             closed = asyncio.run(terminal_api.close_session(session_id, JsonRequest({"confirm": True})))
             expect(closed["session"]["state"] == "closed", str(closed))
             expect(len(closed["session"]["scrollback"].encode("utf-8")) <= 4000, "scrollback should stay bounded")
+            cleared = asyncio.run(terminal_api.clear_closed_sessions())
+            expect(cleared["removed"] >= 1, str(cleared))
+            expect(not any(item["id"] == session_id for item in cleared["sessions"]), str(cleared))
 
             try:
                 asyncio.run(terminal_api.create_session(JsonRequest({"cwd": "/../outside"})))
@@ -1076,11 +1091,14 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("setInterval" in body and "startPolling" in body, "Terminal UI should retain polling fallback")
     expect("confirmClose" in body and '"/close"' in body, "Terminal close/kill should be confirmation-gated")
     expect("moveSelectedToFolder" in body and "reorderSelected" in body, "Terminal UI should expose folder and reorder controls")
+    expect("keyInput" in body and "onKeyDown: handleTerminalKey" in body, "Terminal UI should send direct pty keystrokes")
+    expect("+ SSH" in body and "+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose SSH/TUI creation and closed cleanup")
     expect("scrollback" in body and "arclink-terminal-screen" in body, "Terminal UI should render bounded scrollback")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
     expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")
     style = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".arclink-terminal-confirm" in style, "Terminal CSS should style close confirmation")
+    expect(".arclink-terminal-context" in style, "Terminal CSS should style the session right-click menu")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")
     print("PASS test_arclink_terminal_browser_exposes_persistent_session_controls")
 

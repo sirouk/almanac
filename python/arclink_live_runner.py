@@ -370,7 +370,7 @@ def _browser_runner_script() -> str:
         }
 
         async function terminalProof(page) {
-          await openPluginPage(page, "ArcLink Terminal", "New Session");
+          await openPluginPage(page, "ArcLink Terminal", "Sessions");
           const status = await requestJSON(page, "/api/plugins/arclink-terminal/status");
           if (!status.available) throw new Error("Terminal plugin unavailable");
           const created = await requestJSON(page, "/api/plugins/arclink-terminal/sessions", {
@@ -383,7 +383,7 @@ def _browser_runner_script() -> str:
             body: { input: "printf 'workspace-proof-ok\\n'\n" },
           });
           await page.reload({ waitUntil: "domcontentloaded" });
-          await openPluginPage(page, "ArcLink Terminal", "New Session");
+          await openPluginPage(page, "ArcLink Terminal", "Sessions");
           const revisited = await requestJSON(page, "/api/plugins/arclink-terminal/sessions/" + encodeURIComponent(session.id));
           if (!String(revisited.session.scrollback || "").includes("workspace-proof-ok")) {
             throw new Error("Terminal proof output missing after reload");

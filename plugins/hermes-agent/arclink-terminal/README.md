@@ -23,9 +23,17 @@ managed-pty session backend, UI assets, lifecycle safety, and secret redaction.
 - Sessions have stable IDs, names, folders, order values, cwd metadata,
   lifecycle state, exit code, bounded scrollback, and atomic JSON state under
   `HERMES_HOME/state/arclink-terminal/sessions.json`.
-- The dashboard supports session list, new session, revisit after browser
-  reload, rename, folder assignment, reorder controls, terminal pane, input,
-  SSE output streaming with polling fallback, and confirmation-gated close.
+- The dashboard supports session list, new shell session, new SSH session, new
+  Hermes TUI session, revisit after browser reload, rename, folder assignment,
+  reorder controls, terminal pane, direct pty keystroke input, SSE output
+  streaming with polling fallback, closed-session cleanup, and
+  confirmation-gated close.
+- Session actions live on the left rail: plus buttons create shell/SSH/TUI
+  sessions, right-click opens rename/folder/reorder/close actions, and the
+  lightweight row `x` starts the close-confirmation flow.
+- Selecting terminal text attempts to copy it to the clipboard. Browser
+  clipboard permissions may still require user activation depending on the
+  client.
 - `streaming_output` is `true` when the managed-pty backend is available. The
   primary browser transport is same-origin Server-Sent Events; bounded polling
   remains as a reconnect/fallback path when EventSource is unavailable or the

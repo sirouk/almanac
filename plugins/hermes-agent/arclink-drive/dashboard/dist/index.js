@@ -84,6 +84,7 @@
       trashItems: [],
       selected: null,
       selectedPaths: {},
+      selectionAnchor: null,
       preview: null,
       treeNodes: {},
       expanded: {},
@@ -249,6 +250,7 @@
           location: "files",
           selected: null,
           selectedPaths: {},
+          selectionAnchor: null,
           preview: null,
           expanded: nextExpanded,
         };
@@ -276,7 +278,7 @@
       if (favoritesOnly) params.set("favorites_only", "true");
       fetchJSON(api("/items?" + params.toString()))
         .then(function (data) {
-          patch({ loading: false, items: decorateItems(targetRoot, data.items || []), path: data.path || targetPath, location: "files", selected: null, selectedPaths: {}, preview: null, searchResults: query ? state.searchResults : [] });
+          patch({ loading: false, items: decorateItems(targetRoot, data.items || []), path: data.path || targetPath, location: "files", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null, searchResults: query ? state.searchResults : [] });
         })
         .catch(function (error) {
           patch({ loading: false, items: [], selected: null, preview: null, errorMessage: error.message || "Unable to load Drive" });
@@ -291,7 +293,7 @@
         loadItems(state.path, "", !!favoritesOnly, state.root);
         return;
       }
-      patch({ searching: true, loading: false, selected: null, selectedPaths: {} });
+      patch({ searching: true, loading: false, selected: null, selectedPaths: {}, selectionAnchor: null });
       Promise.all(
         orderedRoots(state.roots).map(function (root) {
           const params = new URLSearchParams({ root: root.id, path: "/", query: clean });
@@ -316,7 +318,7 @@
     }
 
     function loadTrash() {
-      patch({ loading: true, location: "trash", favoritesOnly: false, query: "", selected: null, selectedPaths: {}, preview: null, errorMessage: "" });
+      patch({ loading: true, location: "trash", favoritesOnly: false, query: "", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null, errorMessage: "" });
       const params = new URLSearchParams();
       if (state.root) params.set("root", state.root);
       fetchJSON(api("/trash?" + params.toString()))
@@ -332,7 +334,7 @@
               deleted_at: record.deleted_at,
             };
           });
-          patch({ loading: false, location: "trash", trashItems: decorateItems(state.root, items), selected: null, selectedPaths: {}, preview: null });
+          patch({ loading: false, location: "trash", trashItems: decorateItems(state.root, items), selected: null, selectedPaths: {}, selectionAnchor: null, preview: null });
         })
         .catch(function (error) {
           patch({ loading: false, location: "trash", trashItems: [], selected: null, preview: null, errorMessage: error.message || "Unable to load trash" });
@@ -360,7 +362,7 @@
             });
             fetchJSON(api("/items?" + params.toString()))
               .then(function (data) {
-                patch({ loading: false, items: decorateItems(root, data.items || []), path: data.path || "/", location: "files", selected: null, selectedPaths: {}, preview: null });
+                patch({ loading: false, items: decorateItems(root, data.items || []), path: data.path || "/", location: "files", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null });
               })
               .catch(function (error) {
                 patch({ loading: false, items: [], selected: null, preview: null, errorMessage: error.message || "Unable to load Drive" });
@@ -449,13 +451,6 @@
       if (!name) return;
       requestJSON("/new-file", { root: state.root, path: state.path, name: name, content: "" }).then(function (data) {
         if (data) refreshFolder(state.root, state.path);
-      });
-    }
-
-    function toggleFavorite(item, event) {
-      if (event) event.stopPropagation();
-      requestJSON("/favorite", { root: itemRoot(item), path: item.path, favorite: !item.favorite }).then(function (data) {
-        if (data) refreshFolder(itemRoot(item), state.path);
       });
     }
 
@@ -560,15 +555,39 @@
       });
     }
 
-    function toggleSelected(item, event) {
-      event.stopPropagation();
-      const next = Object.assign({}, state.selectedPaths || {});
-      if (next[item.path]) {
-        delete next[item.path];
+    function selectListItem(item, event, index, list) {
+      const additive = !!(event && (event.ctrlKey || event.metaKey));
+      const ranged = !!(event && event.shiftKey && state.selectionAnchor);
+      const items = list || [];
+      let next = additive ? Object.assign({}, state.selectedPaths || {}) : {};
+      if (ranged) {
+        const anchorPath = state.selectionAnchor.path;
+        const anchorIndex = items.findIndex(function (candidate) {
+          return candidate.path === anchorPath;
+        });
+        const start = Math.max(0, Math.min(anchorIndex === -1 ? index : anchorIndex, index));
+        const end = Math.max(anchorIndex === -1 ? index : anchorIndex, index);
+        for (let cursor = start; cursor <= end; cursor += 1) {
+          if (items[cursor]) next[items[cursor].path] = true;
+        }
+      } else if (additive) {
+        if (next[item.path]) {
+          delete next[item.path];
+        } else {
+          next[item.path] = true;
+        }
       } else {
         next[item.path] = true;
       }
-      patch({ selectedPaths: next, selected: item });
+      patch({ selectedPaths: next, selected: item, selectionAnchor: { path: item.path, index: index }, preview: null });
+    }
+
+    function handleListItemClick(item, event, index, list) {
+      if (state.location !== "trash" && item.kind === "folder" && !(event.ctrlKey || event.metaKey || event.shiftKey)) {
+        openItem(item);
+        return;
+      }
+      selectListItem(item, event, index, list);
     }
 
     function trashSelected() {
@@ -600,18 +619,6 @@
           const message = batchFailureMessage(data, "restore");
           loadTrash();
           if (message) patch({ errorMessage: message, selectedPaths: {} });
-        }
-      });
-    }
-
-    function favoriteSelected(favorite) {
-      const paths = selectedPathList();
-      if (!paths.length) return;
-      requestJSON("/batch", { action: "favorite", root: state.root, paths: paths, favorite: favorite }).then(function (data) {
-        if (data) {
-          const message = batchFailureMessage(data, "favorite");
-          refreshFolder(state.root, state.path);
-          if (message) patch({ errorMessage: message });
         }
       });
     }
@@ -728,11 +735,30 @@
       return parts.pop().slice(0, 4).toLowerCase();
     }
 
+    function fileKindClass(item) {
+      if (!item || item.kind === "folder") return "kind-folder";
+      const ext = fileExtension(item);
+      const mime = String(item.mime || "").toLowerCase();
+      const code = ["css", "env", "go", "html", "java", "js", "jsx", "php", "py", "rb", "rs", "sh", "sql", "ts", "tsx"].indexOf(ext) !== -1;
+      const docs = ["doc", "docx", "md", "mdx", "pdf", "rtf", "txt"].indexOf(ext) !== -1;
+      const data = ["csv", "json", "toml", "tsv", "xml", "yaml", "yml"].indexOf(ext) !== -1;
+      const image = mime.indexOf("image/") === 0 || ["gif", "jpeg", "jpg", "png", "svg", "webp"].indexOf(ext) !== -1;
+      const media = mime.indexOf("audio/") === 0 || mime.indexOf("video/") === 0 || ["mp3", "mp4", "mov", "wav", "webm"].indexOf(ext) !== -1;
+      const archive = ["7z", "gz", "rar", "tar", "tgz", "zip"].indexOf(ext) !== -1;
+      if (code) return "kind-code";
+      if (data) return "kind-data";
+      if (image) return "kind-image";
+      if (media) return "kind-media";
+      if (archive) return "kind-archive";
+      if (docs) return ext === "pdf" ? "kind-pdf" : "kind-doc";
+      return "kind-file";
+    }
+
     function renderFileIcon(item) {
       const ext = fileExtension(item);
       return h(
         "span",
-        { className: "arclink-drive-fileicon " + (item.kind === "folder" ? "folder" : "file"), title: item.kind === "folder" ? "Folder" : "File" },
+        { className: "arclink-drive-fileicon " + (item.kind === "folder" ? "folder" : "file") + " " + fileKindClass(item), title: item.kind === "folder" ? "Folder" : ext ? ext.toUpperCase() + " file" : "File" },
         item.kind === "folder" ? null : h("span", { className: "arclink-drive-fileext" }, ext || "")
       );
     }
@@ -835,8 +861,7 @@
           },
           renderCaret(rootId, item, depth),
           renderFileIcon(item),
-          h("span", { className: "arclink-drive-tree-name" }, item.name),
-          item.favorite ? h("span", { className: "arclink-drive-tree-star" }, "*") : null
+          h("span", { className: "arclink-drive-tree-name" }, item.name)
         ),
         item.kind === "folder" ? renderTreeChildren(rootId, item.path, depth) : null
       );
@@ -849,34 +874,17 @@
         "div",
         { key: rootId, className: "arclink-drive-tree-root" },
         h(
-          "div",
-          { className: "arclink-drive-tree-root-row" },
-          h(
-            "button",
-            {
-              type: "button",
-              className: "arclink-drive-tree-node root " + (active ? "active" : ""),
-              onClick: function () {
-                selectFolder(rootId, "/");
-              },
+          "button",
+          {
+            type: "button",
+            className: "arclink-drive-tree-node root " + (active ? "active" : ""),
+            onClick: function () {
+              selectFolder(rootId, "/");
             },
-            renderCaret(rootId, null, 0),
-            renderFileIcon({ kind: "folder", name: root.label || rootId }),
-            h("span", { className: "arclink-drive-tree-name" }, root.label || rootId)
-          ),
-          h(
-            "button",
-            {
-              type: "button",
-              className: "arclink-drive-root-favorite",
-              onClick: function (event) {
-                event.stopPropagation();
-                patch({ root: rootId, path: "/", favoritesOnly: true });
-                searchAllRoots(state.query, true);
-              },
-            },
-            "Fav"
-          )
+          },
+          renderCaret(rootId, null, 0),
+          renderFileIcon({ kind: "folder", name: root.label || rootId }),
+          h("span", { className: "arclink-drive-tree-name" }, root.label || rootId)
         ),
         renderTreeChildren(rootId, "/", 0)
       );
@@ -913,8 +921,7 @@
           selected.trashed ? null : h("button", { type: "button", onClick: function () { duplicateItem(selected); } }, "Duplicate"),
           selected.trashed ? null : h("button", { type: "button", onClick: function () { copyItemWithPrompt(selected); } }, "Copy"),
           selected.trashed ? null : h("button", { type: "button", onClick: function () { renameItem(selected); } }, "Rename"),
-          selected.trashed ? null : h("button", { type: "button", onClick: function () { moveItemWithPrompt(selected); } }, "Move"),
-          selected.trashed ? null : h("button", { type: "button", onClick: function (event) { toggleFavorite(selected, event); } }, selected.favorite ? "Unfavorite" : "Favorite")
+          selected.trashed ? null : h("button", { type: "button", onClick: function () { moveItemWithPrompt(selected); } }, "Move")
         )
       );
     }
@@ -1036,8 +1043,6 @@
                     state.location === "trash"
                       ? h("button", { type: "button", onClick: restoreSelected }, "Restore")
                       : h(React.Fragment, null,
-                          h("button", { type: "button", onClick: function () { favoriteSelected(true); } }, "Favorite"),
-                          h("button", { type: "button", onClick: function () { favoriteSelected(false); } }, "Unfavorite"),
                           h("button", { type: "button", onClick: copySelectedWithPrompt }, "Copy To..."),
                           h("button", { type: "button", onClick: moveSelectedWithPrompt }, "Move To..."),
                           h("button", { type: "button", onClick: trashSelected }, "Trash")
@@ -1076,7 +1081,6 @@
                   "div",
                   { className: "arclink-drive-filters" },
                   h("button", { type: "button", onClick: function () { selectFolder(state.root, parentPath(state.path)); }, disabled: state.path === "/" || state.location === "trash" }, "Up"),
-                  h("button", { type: "button", className: state.favoritesOnly ? "active" : "", onClick: function () { searchAllRoots(state.query, !state.favoritesOnly); } }, "Favorites"),
                   h("select", { value: state.sortKey, onChange: function (event) { patch({ sortKey: event.target.value }); } },
                     h("option", { value: "name" }, "Name"),
                     h("option", { value: "kind" }, "Kind"),
@@ -1114,7 +1118,7 @@
                 state.loading || state.searching
                   ? h("div", { className: "arclink-drive-empty" }, "Loading")
                   : visibleItems.length
-                    ? visibleItems.map(function (item) {
+                    ? visibleItems.map(function (item, index) {
                         return h(
                           "button",
                           {
@@ -1126,8 +1130,8 @@
                               (selected && selected.path === item.path ? "selected " : "") +
                               (state.selectedPaths[item.path] ? "checked " : "") +
                               (state.draggingItem === item.path ? "dragging" : ""),
-                            onClick: function () {
-                              openItem(item);
+                            onClick: function (event) {
+                              handleListItemClick(item, event, index, visibleItems);
                             },
                             onContextMenu: function (event) {
                               openContextMenu(item, event);
@@ -1165,19 +1169,13 @@
                               uploadFiles(event.dataTransfer.files, item.path, itemRoot(item));
                             },
                           },
-                          h("input", {
-                            type: "checkbox",
-                            checked: !!state.selectedPaths[item.path],
-                            onChange: function (event) { toggleSelected(item, event); },
-                            onClick: function (event) { event.stopPropagation(); },
-                          }),
                           renderFileIcon(item),
                           h("span", { className: "arclink-drive-name" }, item.name),
                           state.query ? h("span", { className: "arclink-drive-root-chip" }, (rootById(itemRoot(item)).label || itemRoot(item) || "Drive")) : null,
                           h("span", { className: "arclink-drive-meta" }, item.trashed ? "Deleted " + (item.deleted_at || "") : item.kind === "folder" ? "Folder" : displaySize(item.size)),
                           item.trashed
-                            ? h("span", { className: "arclink-drive-star", onClick: function (event) { event.stopPropagation(); restoreItem(item); } }, "Restore")
-                            : h("span", { className: "arclink-drive-star", onClick: function (event) { toggleFavorite(item, event); } }, item.favorite ? "*" : "Mark")
+                            ? h("span", { className: "arclink-drive-row-action", onClick: function (event) { event.stopPropagation(); restoreItem(item); } }, "Restore")
+                            : null
                         );
                       })
                     : h("div", { className: "arclink-drive-empty" }, state.query ? "No search results" : "Empty")
@@ -1253,8 +1251,6 @@
                     state.location === "trash"
                       ? h("button", { type: "button", role: "menuitem", onClick: restoreSelected }, "Restore Selected")
                       : h(React.Fragment, null,
-                          h("button", { type: "button", role: "menuitem", onClick: function () { favoriteSelected(true); } }, "Favorite Selected"),
-                          h("button", { type: "button", role: "menuitem", onClick: function () { favoriteSelected(false); } }, "Unfavorite Selected"),
                           h("button", { type: "button", role: "menuitem", onClick: copySelectedWithPrompt }, "Copy Selected To..."),
                           h("button", { type: "button", role: "menuitem", onClick: moveSelectedWithPrompt }, "Move Selected To..."),
                           h("button", { type: "button", role: "menuitem", onClick: trashSelected }, "Trash Selected")
@@ -1268,7 +1264,6 @@
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { duplicateItem(contextItem); } }, "Duplicate"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { copyItemWithPrompt(contextItem); } }, "Copy To..."),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { moveItemWithPrompt(contextItem); } }, "Move To..."),
-                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function (event) { toggleFavorite(contextItem, event); } }, contextItem.favorite ? "Unfavorite" : "Favorite"),
                     !contextItem.trashed && contextItem.kind === "file"
                       ? h("a", { role: "menuitem", href: api("/download?path=" + encodeURIComponent(contextItem.path) + "&root=" + encodeURIComponent(itemRoot(contextItem) || "")), target: "_blank", rel: "noreferrer" }, "Download")
                       : null,

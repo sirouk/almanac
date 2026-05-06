@@ -9,6 +9,7 @@ import os
 import pty
 import re
 import signal
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -52,6 +53,7 @@ _MAX_READ_BYTES = 64_000
 _DEFAULT_MAX_SESSIONS = 6
 _DEFAULT_SCROLLBACK_BYTES = 32_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
 _RUNTIMES: dict[str, dict[str, Any]] = {}
 
 
@@ -170,6 +172,18 @@ def _clean_folder(value: Any) -> str:
     return text[:80]
 
 
+def _clean_session_mode(value: Any) -> str:
+    mode = str(value or "shell").strip().lower()
+    return mode if mode in {"shell", "ssh", "tui"} else "shell"
+
+
+def _clean_ssh_target(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or not _SSH_TARGET_RE.match(text):
+        raise HTTPException(status_code=400, detail="A safe SSH target like user@host is required")
+    return text
+
+
 def _clean_relative_path(raw_path: Any) -> str:
     text = str(raw_path or "/").replace("\\", "/").strip()
     if text in {"", "/", "."}:
@@ -252,6 +266,8 @@ def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) 
         "cwd": _display_path(str(entry.get("cwd") or "")),
         "shell": _shell_name(),
         "backend": "managed-pty",
+        "mode": _clean_session_mode(entry.get("mode")),
+        "target": _clean_name(entry.get("target"), ""),
         "state": str(entry.get("state") or "closed"),
         "created_at": str(entry.get("created_at") or ""),
         "updated_at": str(entry.get("updated_at") or ""),
@@ -349,10 +365,33 @@ def _poll_sessions(payload: dict[str, Any]) -> bool:
     return changed
 
 
-def _start_runtime(entry: dict[str, Any]) -> None:
+def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
+    mode = _clean_session_mode(entry.get("mode"))
+    if mode == "ssh":
+        ssh_path = shutil.which("ssh") or ""
+        if not ssh_path:
+            raise HTTPException(status_code=503, detail="ssh is not installed")
+        target = _clean_ssh_target(entry.get("target"))
+        return [ssh_path, target], "SSH " + target
+    if mode == "tui":
+        raw_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or "hermes").strip()
+        argv = shlex.split(raw_command)
+        if not argv:
+            raise HTTPException(status_code=503, detail="Hermes TUI command is not configured")
+        if not Path(argv[0]).is_absolute():
+            executable = shutil.which(argv[0]) or ""
+            if not executable:
+                raise HTTPException(status_code=503, detail="Hermes TUI command is not installed")
+            argv[0] = executable
+        return argv, "Hermes TUI"
     shell = _shell_path()
     if not shell:
         raise HTTPException(status_code=503, detail="No supported terminal shell is available")
+    return [shell, "-i"], "Terminal"
+
+
+def _start_runtime(entry: dict[str, Any]) -> None:
+    argv, label = _runtime_argv(entry)
     cwd, _relative = _resolve_cwd(entry.get("cwd") or "/")
     session_id = str(entry.get("id") or "")
     master_fd, slave_fd = pty.openpty()
@@ -361,7 +400,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     env["PS1"] = "$ "
     try:
         process = subprocess.Popen(
-            [shell, "-i"],
+            argv,
             cwd=str(cwd),
             env=env,
             stdin=slave_fd,
@@ -383,7 +422,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     _RUNTIMES[session_id] = {"process": process, "fd": master_fd}
     entry["state"] = "starting"
     entry["exit_code"] = None
-    _append_scrollback(entry, "ArcLink Terminal session ready. Workspace cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
+    _append_scrollback(entry, "ArcLink " + label + " session ready. Workspace cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
     time.sleep(0.05)
     _read_runtime(entry)
 
@@ -392,6 +431,10 @@ def _status_payload() -> dict[str, Any]:
     workspace_root = _workspace_root()
     tmux_path = shutil.which("tmux") or ""
     shell = _shell_path()
+    ssh_path = shutil.which("ssh") or ""
+    tui_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or "hermes").strip()
+    tui_argv = shlex.split(tui_command) if tui_command else []
+    tui_available = bool(tui_argv and (Path(tui_argv[0]).is_absolute() or shutil.which(tui_argv[0])))
     runtime_user_safe = _runtime_user_safe()
     available = bool(shell and workspace_root.exists() and workspace_root.is_dir() and runtime_user_safe)
     return {
@@ -430,6 +473,10 @@ def _status_payload() -> dict[str, Any]:
             "group_sessions": available,
             "reorder_sessions": available,
             "confirm_close_or_kill": True,
+            "direct_input": available,
+            "ssh_sessions": available and bool(ssh_path),
+            "hermes_tui_sessions": available and tui_available,
+            "clear_closed_sessions": True,
         },
     }
 
@@ -467,12 +514,14 @@ async def create_session(request: Request) -> dict[str, Any]:
     now = _now()
     entry = {
         "id": session_id,
-        "name": _clean_name(body.get("name"), "Terminal"),
+        "name": _clean_name(body.get("name"), "SSH" if _clean_session_mode(body.get("mode")) == "ssh" else "Hermes TUI" if _clean_session_mode(body.get("mode")) == "tui" else "Terminal"),
         "folder": _clean_folder(body.get("folder")),
         "order": int(body.get("order") or len(payload["sessions"])),
         "cwd": cwd_relative,
         "shell": _shell_name(),
         "backend": "managed-pty",
+        "mode": _clean_session_mode(body.get("mode")),
+        "target": _clean_ssh_target(body.get("target")) if _clean_session_mode(body.get("mode")) == "ssh" else "",
         "state": "starting",
         "created_at": now,
         "updated_at": now,
@@ -483,6 +532,19 @@ async def create_session(request: Request) -> dict[str, Any]:
     payload["sessions"].append(entry)
     _save_sessions(payload)
     return {"session": _session_payload(entry)}
+
+
+@router.post("/sessions/clear-closed")
+async def clear_closed_sessions() -> dict[str, Any]:
+    payload = _load_sessions()
+    before = len(payload["sessions"])
+    payload["sessions"] = [
+        entry for entry in payload["sessions"]
+        if str(entry.get("state") or "") not in {"closed", "exited"}
+    ]
+    removed = before - len(payload["sessions"])
+    _save_sessions(payload)
+    return {"ok": True, "removed": removed, "sessions": [_session_payload(entry, include_scrollback=False) for entry in payload["sessions"]]}
 
 
 @router.get("/sessions/{session_id}")

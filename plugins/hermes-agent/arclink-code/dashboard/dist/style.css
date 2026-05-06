@@ -114,8 +114,8 @@
 .arclink-code-tree {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  padding: 0.65rem;
+  gap: 0.45rem;
+  padding: 0.55rem;
 }
 
 .arclink-code-error {
@@ -138,7 +138,7 @@
 
 .arclink-code-panel-tabs {
   border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
-  padding-bottom: 0.55rem;
+  padding-bottom: 0.42rem;
 }
 
 .arclink-code-panel-tabs button {
@@ -189,23 +189,25 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.08rem;
   overflow: auto;
 }
 
-.arclink-code-item {
+.arclink-code .arclink-code-item {
   align-items: center;
+  background: transparent;
+  border: 0 !important;
   display: grid;
-  gap: 0.45rem;
+  gap: 0.34rem;
   grid-template-columns: minmax(0, 1fr);
-  min-height: 2.45rem;
+  min-height: 1.85rem;
   width: 100%;
 }
 
 .arclink-code-tree-node-wrap {
   display: flex;
   flex-direction: column;
-  gap: 0.24rem;
+  gap: 0.08rem;
 }
 
 .arclink-code-tree-node {
@@ -215,27 +217,36 @@
 .arclink-code-tree-children {
   display: flex;
   flex-direction: column;
-  gap: 0.24rem;
+  gap: 0.08rem;
 }
 
 .arclink-code-item.selected {
   background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--arclink-code-editor-accent, #61afef) 48%, transparent);
+  outline-offset: -1px;
 }
 
-.arclink-code-item-open {
+.arclink-code .arclink-code-item-open {
   align-items: center;
+  background: transparent !important;
+  border: 0 !important;
   display: grid;
-  gap: 0.45rem;
-  grid-template-columns: 1.1rem 1.35rem minmax(0, 1fr) auto;
+  gap: 0.34rem;
+  grid-template-columns: 1.1rem 1.25rem minmax(0, 1fr) auto;
   min-width: 0;
+  padding-bottom: 0.16rem;
+  padding-top: 0.16rem;
   text-align: left;
   width: 100%;
 }
 
-.arclink-code-caret {
-  border-color: transparent;
+.arclink-code .arclink-code-caret {
+  background: transparent !important;
+  border: 0 !important;
   color: color-mix(in srgb, var(--midground-base) 64%, transparent);
+  flex: 0 0 1.1rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  line-height: 1;
   padding: 0;
   text-align: center;
 }
@@ -245,6 +256,7 @@
 }
 
 .arclink-code-fileicon {
+  --file-accent: color-mix(in srgb, var(--midground-base) 70%, transparent);
   display: inline-block;
   height: 1.05rem;
   position: relative;
@@ -252,13 +264,16 @@
 }
 
 .arclink-code-fileicon.file {
-  border: 1px solid color-mix(in srgb, var(--midground-base) 54%, transparent);
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--file-accent) 68%, transparent);
   border-radius: 2px;
-  color: color-mix(in srgb, var(--midground-base) 76%, transparent);
+  color: color-mix(in srgb, var(--file-accent) 86%, var(--midground));
+  display: inline-flex;
   font-size: 0.46rem;
   font-weight: 700;
+  justify-content: center;
   line-height: 1;
-  padding-top: 0.35rem;
+  overflow: hidden;
   text-align: center;
   text-transform: uppercase;
 }
@@ -274,6 +289,22 @@
 
 .arclink-code-fileicon.folder {
   border: 0;
+}
+
+.arclink-code-fileicon.kind-code {
+  --file-accent: #7dd3fc;
+}
+
+.arclink-code-fileicon.kind-data {
+  --file-accent: #a7f3d0;
+}
+
+.arclink-code-fileicon.kind-doc {
+  --file-accent: #c4b5fd;
+}
+
+.arclink-code-fileicon.kind-image {
+  --file-accent: #f9a8d4;
 }
 
 .arclink-code-fileicon.folder::before {
@@ -347,6 +378,7 @@
 
 .arclink-code-change {
   align-items: center;
+  border-color: transparent;
   display: grid;
   gap: 0.45rem;
   grid-template-columns: 2.4rem minmax(0, 1fr) auto;
@@ -566,6 +598,8 @@
 
 .arclink-code-search input {
   flex: 1 1 auto;
+  padding: 0.42rem 0.52rem;
+  width: 100%;
 }
 
 .arclink-code-search-results {
@@ -576,9 +610,12 @@
 }
 
 .arclink-code-search-result {
+  border: 0 !important;
   display: grid;
   gap: 0.45rem;
-  grid-template-columns: 2.6rem minmax(0, 1fr);
+  grid-template-columns: 1.35rem minmax(0, 1fr);
+  min-height: 2rem;
+  padding: 0.25rem 0.35rem;
   text-align: left;
 }
 
@@ -614,6 +651,96 @@
   gap: 0.75rem;
   justify-content: space-between;
   padding: 0.42rem 0.75rem;
+}
+
+.arclink-code-modal-backdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 0.55);
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  padding: 1rem;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 45;
+}
+
+.arclink-code-modal {
+  background: color-mix(in srgb, var(--background-base) 96%, #111);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 26%, transparent);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.42);
+  color: var(--midground);
+  max-width: min(34rem, 100%);
+  padding: 1rem;
+  width: 100%;
+}
+
+.arclink-code-modal h2 {
+  font-size: 1rem;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.arclink-code-modal p,
+.arclink-code-picker-path,
+.arclink-code-picker-message {
+  color: color-mix(in srgb, var(--midground-base) 68%, transparent);
+  font-size: 0.78rem;
+}
+
+.arclink-code-modal p {
+  margin: 0.4rem 0 0.75rem;
+}
+
+.arclink-code-picker {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 16%, transparent);
+  max-height: min(22rem, 50dvh);
+  overflow: auto;
+  padding: 0.35rem;
+}
+
+.arclink-code-picker-node-wrap,
+.arclink-code-picker-children {
+  display: flex;
+  flex-direction: column;
+  gap: 0.06rem;
+}
+
+.arclink-code-picker-node {
+  align-items: center;
+  background: transparent;
+  border: 0 !important;
+  display: grid;
+  gap: 0.34rem;
+  grid-template-columns: 1.1rem 1.25rem minmax(0, 1fr);
+  min-height: 1.8rem;
+  text-align: left;
+  width: 100%;
+}
+
+.arclink-code-picker-node.selected {
+  background: color-mix(in srgb, var(--midground-base) 10%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--arclink-code-editor-accent, #61afef) 45%, transparent);
+  outline-offset: -1px;
+}
+
+.arclink-code-picker-path {
+  margin-top: 0.55rem;
+  overflow-wrap: anywhere;
+}
+
+.arclink-code-picker-message {
+  color: color-mix(in srgb, #ffb2a3 82%, var(--midground));
+  margin-top: 0.45rem;
+}
+
+.arclink-code-modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.85rem;
 }
 
 @media (max-width: 760px) {

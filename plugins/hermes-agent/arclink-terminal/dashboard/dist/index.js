@@ -5,6 +5,7 @@
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const React = SDK.React;
   const useEffect = SDK.hooks.useEffect;
+  const useRef = SDK.hooks.useRef || React.useRef;
   const useState = SDK.hooks.useState;
 
   function h(type, props) {
@@ -67,9 +68,11 @@
       confirmClose: null,
       streaming: false,
       showClosed: false,
+      contextMenu: null,
     });
     const state = statePair[0];
     const setState = statePair[1];
+    const screenRef = useRef(null);
 
     function merge(next) {
       setState(function (current) {
@@ -174,8 +177,19 @@
       [state.selectedId, state.status && state.status.capabilities && state.status.capabilities.streaming_output]
     );
 
-    function createSession() {
-      postJSON("/sessions", { name: "Terminal", cwd: "/" })
+    function createSession(mode) {
+      const sessionMode = mode || "shell";
+      let target = "";
+      if (sessionMode === "ssh") {
+        target = (window.prompt("SSH target", "user@host") || "").trim();
+        if (!target) return;
+      }
+      postJSON("/sessions", {
+        name: sessionMode === "ssh" ? "SSH " + target : sessionMode === "tui" ? "Hermes TUI" : "Terminal",
+        cwd: "/",
+        mode: sessionMode,
+        target: target,
+      })
         .then(function (payload) {
           const session = payload.session || {};
           return loadSessions(session.id || "");
@@ -240,6 +254,78 @@
         });
     }
 
+    function writeInput(text) {
+      const selected = state.selected;
+      if (!selected || ["running", "starting"].indexOf(selected.state) === -1 || !text) return;
+      postJSON("/sessions/" + encodeURIComponent(selected.id) + "/input", { input: text })
+        .then(function (payload) {
+          merge({ selected: payload.session || selected, errorMessage: "" });
+        })
+        .catch(function (error) {
+          merge({ errorMessage: String(error.message || error) });
+        });
+    }
+
+    function keyInput(event) {
+      if (event.altKey || event.metaKey) return "";
+      if (event.ctrlKey) {
+        const key = event.key.toLowerCase();
+        if (key >= "a" && key <= "z") {
+          return String.fromCharCode(key.charCodeAt(0) - 96);
+        }
+        if (key === " ") return "\x00";
+        return "";
+      }
+      const special = {
+        Enter: "\r",
+        Backspace: "\x7f",
+        Tab: "\t",
+        Escape: "\x1b",
+        ArrowUp: "\x1b[A",
+        ArrowDown: "\x1b[B",
+        ArrowRight: "\x1b[C",
+        ArrowLeft: "\x1b[D",
+        Home: "\x1b[H",
+        End: "\x1b[F",
+        Delete: "\x1b[3~",
+        PageUp: "\x1b[5~",
+        PageDown: "\x1b[6~",
+      };
+      if (special[event.key]) return special[event.key];
+      return event.key && event.key.length === 1 ? event.key : "";
+    }
+
+    function handleTerminalKey(event) {
+      const text = keyInput(event);
+      if (!text) return;
+      event.preventDefault();
+      writeInput(text);
+    }
+
+    function copySelection() {
+      const selection = window.getSelection && window.getSelection();
+      const text = selection ? String(selection.toString() || "") : "";
+      if (!text.trim() || !navigator.clipboard) return;
+      navigator.clipboard.writeText(text).catch(function () {});
+    }
+
+    function focusScreen() {
+      window.setTimeout(function () {
+        if (screenRef.current) screenRef.current.focus();
+      }, 0);
+    }
+
+    function clearClosedSessions() {
+      postJSON("/sessions/clear-closed", {})
+        .then(function () {
+          merge({ contextMenu: null });
+          return loadSessions(state.selectedId);
+        })
+        .catch(function (error) {
+          merge({ errorMessage: String(error.message || error), contextMenu: null });
+        });
+    }
+
     function closeSelected() {
       const selected = state.confirmClose;
       if (!selected) return;
@@ -253,6 +339,44 @@
         });
     }
 
+    function openSessionMenu(event, session) {
+      event.preventDefault();
+      event.stopPropagation();
+      merge({ selected: Object.assign({}, state.selected || {}, session), selectedId: session.id, contextMenu: { session: session, x: event.clientX, y: event.clientY } });
+      loadSession(session.id);
+    }
+
+    function renderSessionMenu() {
+      if (!state.contextMenu || !state.contextMenu.session) return null;
+      const session = state.contextMenu.session;
+      function closeThen(action) {
+        merge({ contextMenu: null });
+        if (action) action();
+      }
+      return h(
+        "div",
+        {
+          className: "arclink-terminal-context",
+          role: "menu",
+          style: { left: state.contextMenu.x + "px", top: state.contextMenu.y + "px" },
+          onClick: function (event) {
+            event.stopPropagation();
+          },
+        },
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(renameSelected); } }, "Rename"),
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(moveSelectedToFolder); } }, "Folder"),
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reorderSelected(-1); }); } }, "Move Up"),
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reorderSelected(1); }); } }, "Move Down"),
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(clearClosedSessions); } }, "Clear Closed"),
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { merge({ confirmClose: session }); }); } }, "Close")
+      );
+    }
+
+    useEffect(function () {
+      const element = screenRef.current;
+      if (element) element.scrollTop = element.scrollHeight;
+    }, [state.selected && state.selected.scrollback, state.selectedId]);
+
     const status = state.status || {};
     const capabilities = status.capabilities || {};
     const selected = state.selected;
@@ -262,21 +386,16 @@
     const grouped = groupSessions(visibleSessions);
     return h(
       "div",
-      { className: "arclink-terminal" },
+      {
+        className: "arclink-terminal",
+        onClick: function () {
+          if (state.contextMenu) merge({ contextMenu: null });
+        },
+      },
       h(
         "div",
         { className: "arclink-terminal-toolbar" },
-        h("div", { className: "arclink-terminal-title" }, h("h1", null, "ArcLink Terminal"), h("p", null, status.backend || "Loading")),
-        h(
-          "div",
-          { className: "arclink-terminal-actions" },
-          h("button", { type: "button", onClick: createSession, disabled: !status.available }, "New Session"),
-          h("button", { type: "button", onClick: renameSelected, disabled: !selected }, "Rename"),
-          h("button", { type: "button", onClick: moveSelectedToFolder, disabled: !selected }, "Folder"),
-          h("button", { type: "button", onClick: function () { reorderSelected(-1); }, disabled: !selected }, "Up"),
-          h("button", { type: "button", onClick: function () { reorderSelected(1); }, disabled: !selected }, "Down"),
-          h("button", { type: "button", className: "danger", onClick: function () { merge({ confirmClose: selected }); }, disabled: !selected }, "Close")
-        )
+        h("div", { className: "arclink-terminal-title" }, h("h1", null, "ArcLink Terminal"), h("p", null, status.backend || "Loading"))
       ),
       state.errorMessage ? h("div", { className: "arclink-terminal-error" }, state.errorMessage) : null,
       state.loading
@@ -292,6 +411,17 @@
                 { className: "arclink-terminal-section" },
                 h("span", null, "Sessions"),
                 h(
+                  "div",
+                  { className: "arclink-terminal-session-tools" },
+                  h("button", { type: "button", title: "New terminal", onClick: function () { createSession("shell"); }, disabled: !status.available }, "+"),
+                  h("button", { type: "button", title: "New SSH terminal", onClick: function () { createSession("ssh"); }, disabled: !capabilities.ssh_sessions }, "+ SSH"),
+                  h("button", { type: "button", title: "Open Hermes TUI", onClick: function () { createSession("tui"); }, disabled: !capabilities.hermes_tui_sessions }, "+ TUI")
+                )
+              ),
+              h(
+                "div",
+                { className: "arclink-terminal-list-actions" },
+                h(
                   "button",
                   {
                     type: "button",
@@ -300,14 +430,15 @@
                     },
                   },
                   state.showClosed ? "Hide Closed" : "Show Closed"
-                )
+                ),
+                h("button", { type: "button", onClick: clearClosedSessions }, "Clear Closed")
               ),
               grouped.length
                 ? grouped.map(function (group) {
                     return h(
                       "div",
                       { key: group.folder, className: "arclink-terminal-group" },
-                      h("div", { className: "arclink-terminal-group-label" }, group.folder),
+                      group.folder && group.folder !== "Sessions" ? h("div", { className: "arclink-terminal-group-label" }, group.folder) : null,
                       group.sessions.map(function (session) {
                         return h(
                           "button",
@@ -315,12 +446,25 @@
                             key: session.id,
                             type: "button",
                             className: "arclink-terminal-session" + (session.id === state.selectedId ? " selected" : ""),
+                            onContextMenu: function (event) {
+                              openSessionMenu(event, session);
+                            },
                             onClick: function () {
                               merge({ selectedId: session.id });
                               loadSession(session.id);
+                              focusScreen();
                             },
                           },
-                          h("strong", null, session.name || "Terminal"),
+                          h("span", { className: "arclink-terminal-session-top" },
+                            h("strong", null, session.name || "Terminal"),
+                            h("span", {
+                              className: "arclink-terminal-session-close",
+                              onClick: function (event) {
+                                event.stopPropagation();
+                                merge({ confirmClose: session });
+                              },
+                            }, "x")
+                          ),
                           h("span", null, (session.state || "closed") + " · " + (session.cwd || "/"))
                         );
                       })
@@ -333,23 +477,22 @@
               { className: "arclink-terminal-pane" },
               selected
                 ? h(
-                    "div",
-                    { className: "arclink-terminal-screen", "data-session-state": selected.state || "" },
-                    displayScrollback(selected.scrollback || "$ ")
+                    "pre",
+                    {
+                      ref: screenRef,
+                      className: "arclink-terminal-screen",
+                      "data-session-state": selected.state || "",
+                      tabIndex: 0,
+                      onKeyDown: handleTerminalKey,
+                      onMouseUp: copySelection,
+                      onClick: function (event) {
+                        event.currentTarget.focus();
+                      },
+                    },
+                    displayScrollback(selected.scrollback || "$ "),
+                    ["running", "starting"].indexOf(selected.state) !== -1 ? h("span", { className: "arclink-terminal-cursor" }, " ") : null
                   )
-                : h("div", { className: "arclink-terminal-screen muted" }, status.available ? "$ " : "Terminal backend unavailable"),
-              h(
-                "form",
-                { className: "arclink-terminal-input", onSubmit: sendInput },
-                h("input", {
-                  value: state.input,
-                  disabled: !selected || ["running", "starting"].indexOf(selected.state) === -1,
-                  onChange: function (event) {
-                    merge({ input: event.target.value });
-                  },
-                }),
-                h("button", { type: "submit", disabled: !selected || !state.input }, "Send")
-              ),
+                : h("pre", { ref: screenRef, className: "arclink-terminal-screen muted", tabIndex: 0 }, status.available ? "$ " : "Terminal backend unavailable"),
               h(
                 "div",
                 { className: "arclink-terminal-facts" },
@@ -361,6 +504,7 @@
               )
             )
           ),
+      renderSessionMenu(),
       state.confirmClose
         ? h(
             "div",

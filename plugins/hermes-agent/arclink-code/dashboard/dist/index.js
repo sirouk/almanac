@@ -74,6 +74,19 @@
     return match ? match[1].slice(0, 4).toUpperCase() : "";
   }
 
+  function fileKindClass(item) {
+    if (!item || item.kind === "folder") return "kind-folder";
+    const language = String(item.language || "").toLowerCase();
+    const name = String(item.name || item.path || "").toLowerCase();
+    const match = /\.([a-z0-9]+)$/.exec(name);
+    const ext = match ? match[1] : "";
+    if (["css", "html", "javascript", "python", "shell", "sql", "typescript"].indexOf(language) !== -1) return "kind-code";
+    if (["json", "toml", "xml", "yaml"].indexOf(language) !== -1) return "kind-data";
+    if (["md", "mdx", "markdown", "txt"].indexOf(language) !== -1 || ["md", "mdx", "txt"].indexOf(ext) !== -1) return "kind-doc";
+    if (["gif", "jpg", "jpeg", "png", "svg", "webp"].indexOf(ext) !== -1) return "kind-image";
+    return "kind-file";
+  }
+
   function changeSort(a, b) {
     return String(a.path).localeCompare(String(b.path));
   }
@@ -106,6 +119,9 @@
       searchBusy: false,
       lastGitResult: null,
       theme: "dark",
+      sourcePickerOpen: false,
+      sourcePickerPath: "/",
+      sourcePickerMessage: "",
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -160,7 +176,7 @@
     }
 
     function openRepo(repo) {
-      patch({ repo: repo, leftPanel: "source", gitMessage: "", source: null });
+      patch({ repo: repo, leftPanel: "source", gitMessage: "", source: null, sourcePickerOpen: false, sourcePickerMessage: "" });
       loadSource(repo.path);
     }
 
@@ -179,6 +195,46 @@
         })
         .catch(function (error) {
           patch({ repos: [], repo: null, source: null, errorMessage: error.message || "Unable to scan repositories" });
+        });
+    }
+
+    function openSourcePicker() {
+      patch({ sourcePickerOpen: true, sourcePickerPath: state.repo ? state.repo.path : "/", sourcePickerMessage: "" });
+      if (!state.tree) loadTree();
+    }
+
+    function openRepositoryFromPicker(path) {
+      const targetPath = path || state.sourcePickerPath || "/";
+      patch({ sourceBusy: true, sourcePickerMessage: "" });
+      fetchJSON(api("/repos/open"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: targetPath }),
+      })
+        .then(function (data) {
+          const repo = data.repo;
+          patch(function (current) {
+            const repos = (current.repos || []).filter(function (candidate) {
+              return candidate.path !== repo.path;
+            });
+            repos.push(repo);
+            repos.sort(function (a, b) {
+              return String(a.path).localeCompare(String(b.path));
+            });
+            return {
+              repos: repos,
+              repo: repo,
+              source: data.status || null,
+              sourceBusy: false,
+              leftPanel: "source",
+              sourcePickerOpen: false,
+              sourcePickerMessage: "",
+              errorMessage: "",
+            };
+          });
+        })
+        .catch(function (error) {
+          patch({ sourceBusy: false, sourcePickerMessage: error.message || "That folder is not a git repository" });
         });
     }
 
@@ -276,6 +332,13 @@
       });
     }
 
+    function openDroppedTab(event) {
+      event.preventDefault();
+      const path = event.dataTransfer && event.dataTransfer.getData("text/arclink-code-path");
+      if (!path || path === "/") return;
+      openItem({ path: path, name: basename(path), kind: "file", text: true }, true);
+    }
+
     function openItem(item, pinned) {
       patch({ contextMenu: null });
       if (item.kind === "folder") {
@@ -299,10 +362,6 @@
           dirty: !!existingTab.dirty,
           diff: null,
         });
-        return;
-      }
-      if (!item.text) {
-        patch({ openFile: Object.assign({}, item, { editable: false }), content: "", savedContent: "", dirty: false, diff: null });
         return;
       }
       fetchJSON(api("/file?path=" + encodeURIComponent(item.path)))
@@ -339,7 +398,7 @@
           });
         })
         .catch(function (error) {
-          patch({ openFile: item, content: "", savedContent: "", dirty: false, diff: null, errorMessage: error.message || "Unable to open file" });
+          patch({ openFile: Object.assign({}, item, { editable: false }), content: "", savedContent: "", dirty: false, diff: null, errorMessage: error.message || "Unable to open file" });
         });
     }
 
@@ -494,6 +553,25 @@
         .catch(function (error) {
           patch({ searchBusy: false, searchResults: [], errorMessage: error.message || "Search failed" });
         });
+    }
+
+    function scheduleSearch(value) {
+      patch({ searchQuery: value });
+      window.clearTimeout(CodePage._searchTimer);
+      CodePage._searchTimer = window.setTimeout(function () {
+        runSearch(value);
+      }, 180);
+    }
+
+    function findTreeNode(path, node) {
+      if (!node) return null;
+      if (node.path === path) return node;
+      const children = node.children || [];
+      for (let index = 0; index < children.length; index += 1) {
+        const found = findTreeNode(path, children[index]);
+        if (found) return found;
+      }
+      return null;
     }
 
     function createFolder() {
@@ -665,7 +743,7 @@
                     isExpanded ? "v" : ">"
                   )
                 : h("span", { className: "arclink-code-caret spacer" }),
-              h("span", { className: "arclink-code-fileicon " + (item.kind === "folder" ? "folder" : "file") }, fileIcon(item)),
+              h("span", { className: "arclink-code-fileicon " + (item.kind === "folder" ? "folder" : "file") + " " + fileKindClass(item) }, fileIcon(item)),
               h("span", { className: "arclink-code-item-name" }, displayName),
               h("span", { className: "arclink-code-item-lang" }, item.kind === "folder" ? (children.length ? children.length : "") : item.language)
             )
@@ -696,52 +774,50 @@
       );
     }
 
+    function renderSearchBox() {
+      return h(
+        "form",
+        {
+          className: "arclink-code-search",
+          onSubmit: function (event) {
+            event.preventDefault();
+            runSearch(state.searchQuery);
+          },
+        },
+        h("input", {
+          value: state.searchQuery,
+          placeholder: "Search workspace",
+          onChange: function (event) {
+            scheduleSearch(event.target.value);
+          },
+        })
+      );
+    }
+
     function renderSearch() {
       return h(
-        React.Fragment,
-        null,
-        h(
-          "form",
-          {
-            className: "arclink-code-search",
-            onSubmit: function (event) {
-              event.preventDefault();
-              runSearch(state.searchQuery);
-            },
-          },
-          h("input", {
-            value: state.searchQuery,
-            placeholder: "Search workspace",
-            onChange: function (event) {
-              patch({ searchQuery: event.target.value });
-            },
-          }),
-          h("button", { type: "submit", disabled: state.searchBusy }, "Search")
-        ),
-        h(
-          "div",
-          { className: "arclink-code-search-results" },
-          state.searchBusy
-            ? h("div", { className: "arclink-code-empty" }, "Searching")
-            : state.searchResults.length
-              ? state.searchResults.map(function (item) {
-                  return h(
-                    "button",
-                    {
-                      key: item.path,
-                      type: "button",
-                      className: "arclink-code-search-result",
-                      onClick: function () {
-                        openItem(item);
-                      },
+        "div",
+        { className: "arclink-code-search-results" },
+        state.searchBusy
+          ? h("div", { className: "arclink-code-empty" }, "Searching")
+          : state.searchResults.length
+            ? state.searchResults.map(function (item) {
+                return h(
+                  "button",
+                  {
+                    key: item.path,
+                    type: "button",
+                    className: "arclink-code-search-result",
+                    onClick: function () {
+                      openItem(item);
                     },
-                    h("span", { className: "arclink-code-fileicon file" }, fileIcon(item)),
-                    h("span", null, item.path),
-                    h("small", null, item.match || "")
-                  );
-                })
-              : h("div", { className: "arclink-code-empty" }, "No search results")
-        )
+                  },
+                  h("span", { className: "arclink-code-fileicon file " + fileKindClass(item) }, fileIcon(item)),
+                  h("span", null, item.path),
+                  h("small", null, item.match || "")
+                );
+              })
+            : h("div", { className: "arclink-code-empty" }, "No search results")
       );
     }
 
@@ -825,12 +901,13 @@
                 if (repo) openRepo(repo);
               },
             },
-            h("option", { value: "" }, "Open repository"),
+            h("option", { value: "" }, state.repos.length ? "Select source" : "No open sources"),
             state.repos.map(function (repo) {
               return h("option", { key: repo.path, value: repo.path }, repo.path + "  " + repo.branch);
             })
           ),
-          h("button", { type: "button", onClick: function () { loadRepos(false); } }, "Scan"),
+          h("button", { type: "button", onClick: openSourcePicker }, "Open Source"),
+          h("button", { type: "button", onClick: function () { loadRepos(false); } }, "Refresh"),
           h("button", { type: "button", onClick: closeRepo, disabled: !state.repo }, "Close")
         ),
         state.repo
@@ -895,8 +972,87 @@
           : h(
               "div",
               { className: "arclink-code-empty" },
-              state.repos.length ? "Open a repository to view source control" : "No git repositories found"
+              state.repos.length ? "Open a source to view changes" : "No open sources"
             )
+      );
+    }
+
+    function renderSourcePicker() {
+      if (!state.sourcePickerOpen) return null;
+      const roots = [{ label: "Workspace", path: "/" }];
+      if (status.vault_display_path && status.vault_display_path !== "/") {
+        roots.push({ label: "Vault", path: status.vault_display_path });
+      }
+      function renderPickerNode(item, depth, label) {
+        const children = (item.children || []).filter(function (child) {
+          return child.kind === "folder";
+        });
+        const isExpanded = !!state.expanded[item.path];
+        const isSelected = state.sourcePickerPath === item.path;
+        return h(
+          "div",
+          { key: "picker:" + item.path, className: "arclink-code-picker-node-wrap" },
+          h(
+            "button",
+            {
+              type: "button",
+              className: "arclink-code-picker-node " + (isSelected ? "selected" : ""),
+              style: { paddingLeft: 0.4 + depth * 0.8 + "rem" },
+              onClick: function () {
+                patch({ sourcePickerPath: item.path, sourcePickerMessage: "" });
+              },
+              onDoubleClick: function () {
+                openRepositoryFromPicker(item.path);
+              },
+            },
+            item.kind === "folder"
+              ? h(
+                  "span",
+                  {
+                    className: "arclink-code-caret",
+                    onClick: function (event) {
+                      event.stopPropagation();
+                      toggleExplorerNode(item.path);
+                    },
+                  },
+                  isExpanded ? "v" : ">"
+                )
+              : h("span", { className: "arclink-code-caret spacer" }),
+            h("span", { className: "arclink-code-fileicon folder kind-folder" }),
+            h("span", { className: "arclink-code-item-name" }, label || item.name || item.path)
+          ),
+          isExpanded && children.length
+            ? h("div", { className: "arclink-code-picker-children" }, children.map(function (child) {
+                return renderPickerNode(child, depth + 1);
+              }))
+            : null
+        );
+      }
+      return h(
+        "div",
+        { className: "arclink-code-modal-backdrop", role: "presentation" },
+        h(
+          "section",
+          { className: "arclink-code-modal", role: "dialog", "aria-modal": "true", "aria-label": "Open source repository" },
+          h("h2", null, "Open Source"),
+          h("p", null, "Choose a Workspace or Vault folder that contains a .git directory."),
+          h(
+            "div",
+            { className: "arclink-code-picker" },
+            roots.map(function (root) {
+              const node = findTreeNode(root.path, state.tree) || { kind: "folder", path: root.path, name: root.label, children: [] };
+              return renderPickerNode(Object.assign({}, node, { name: root.label }), 0, root.label);
+            })
+          ),
+          h("div", { className: "arclink-code-picker-path" }, state.sourcePickerPath || "/"),
+          state.sourcePickerMessage ? h("div", { className: "arclink-code-picker-message" }, state.sourcePickerMessage) : null,
+          h(
+            "div",
+            { className: "arclink-code-modal-actions" },
+            h("button", { type: "button", onClick: function () { patch({ sourcePickerOpen: false, sourcePickerMessage: "" }); } }, "Cancel"),
+            h("button", { type: "button", onClick: function () { openRepositoryFromPicker(state.sourcePickerPath); }, disabled: state.sourceBusy }, "Open")
+          )
+        )
       );
     }
 
@@ -954,14 +1110,14 @@
             h(
               "aside",
               { className: "arclink-code-tree" },
+              renderSearchBox(),
               h(
                 "div",
                 { className: "arclink-code-panel-tabs" },
                 h("button", { type: "button", className: state.leftPanel === "explorer" ? "active" : "", onClick: function () { patch({ leftPanel: "explorer" }); } }, "Explorer"),
-                h("button", { type: "button", className: state.leftPanel === "search" ? "active" : "", onClick: function () { patch({ leftPanel: "search" }); } }, "Search"),
-                h("button", { type: "button", className: state.leftPanel === "source" ? "active" : "", onClick: function () { patch({ leftPanel: "source" }); } }, "Source Control")
+                h("button", { type: "button", className: state.leftPanel === "source" ? "active" : "", onClick: function () { patch({ leftPanel: "source" }); } }, "Sources")
               ),
-              state.leftPanel === "source" ? renderSourceControl() : state.leftPanel === "search" ? renderSearch() : renderExplorer()
+              state.searchQuery.trim() ? renderSearch() : state.leftPanel === "source" ? renderSourceControl() : renderExplorer()
             ),
             h(
               "section",
@@ -977,7 +1133,15 @@
 	                      { className: "arclink-code-tab" },
 	                      h(
 	                        "div",
-	                        { className: "arclink-code-tab-list" },
+	                        {
+	                          className: "arclink-code-tab-list",
+	                          onDragOver: function (event) {
+	                            if (event.dataTransfer && event.dataTransfer.types && Array.prototype.slice.call(event.dataTransfer.types).indexOf("text/arclink-code-path") !== -1) {
+	                              event.preventDefault();
+	                            }
+	                          },
+	                          onDrop: openDroppedTab,
+	                        },
 	                        null,
 	                        state.fileTabs.map(function (tab) {
 	                          return h(
@@ -1048,7 +1212,8 @@
               )
             )
           )
-        : h("div", { className: "arclink-code-empty full" }, "ArcLink Code is not available")
+        : h("div", { className: "arclink-code-empty full" }, "ArcLink Code is not available"),
+      renderSourcePicker()
     );
   }
 

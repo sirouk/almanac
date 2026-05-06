@@ -1,8 +1,8 @@
 .arclink-terminal {
   min-height: 100%;
   padding: 18px;
-  color: #e6edf3;
-  background: #0b0f14;
+  color: var(--midground, #e6edf3);
+  background: color-mix(in srgb, var(--background-base, #0b0f14) 94%, #020409);
   box-sizing: border-box;
 }
 
@@ -35,10 +35,9 @@
 }
 
 .arclink-terminal button {
-  border: 1px solid #303846;
-  border-radius: 6px;
-  background: #161b22;
-  color: #e6edf3;
+  border: 1px solid color-mix(in srgb, var(--midground-base, #e6edf3) 22%, transparent);
+  background: color-mix(in srgb, var(--midground-base, #e6edf3) 5%, transparent);
+  color: var(--midground, #e6edf3);
   padding: 8px 11px;
 }
 
@@ -66,9 +65,8 @@
 
 .arclink-terminal-list,
 .arclink-terminal-pane {
-  border: 1px solid #222a35;
-  border-radius: 8px;
-  background: #10151c;
+  border: 1px solid color-mix(in srgb, var(--midground-base, #e6edf3) 16%, transparent);
+  background: color-mix(in srgb, var(--midground-base, #e6edf3) 4%, var(--background-base, #10151c));
 }
 
 .arclink-terminal-list {
@@ -98,22 +96,40 @@
   margin-bottom: 10px;
 }
 
-.arclink-terminal-section button {
+.arclink-terminal-session-tools,
+.arclink-terminal-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.arclink-terminal-session-tools button,
+.arclink-terminal-list-actions button {
   font-size: 11px;
   padding: 5px 7px;
 }
 
-.arclink-terminal-session {
-  width: 100%;
+.arclink-terminal-list-actions {
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base, #e6edf3) 12%, transparent);
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+}
+
+.arclink-terminal .arclink-terminal-session {
+  background: transparent;
+  border: 0 !important;
   display: grid;
   gap: 3px;
   margin-bottom: 6px;
+  min-height: 2.8rem;
   text-align: left;
+  width: 100%;
 }
 
 .arclink-terminal-session.selected {
-  border-color: #4f9cf9;
   background: #102033;
+  outline: 1px solid #4f9cf9;
+  outline-offset: -1px;
 }
 
 .arclink-terminal-session strong,
@@ -124,6 +140,26 @@
   white-space: nowrap;
 }
 
+.arclink-terminal-session-top {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.arclink-terminal-session-close {
+  color: #9aa4b2;
+  flex: 0 0 auto;
+  font-size: 13px;
+  opacity: 0.58;
+  padding: 0 3px;
+}
+
+.arclink-terminal-session-close:hover {
+  color: #fecaca;
+  opacity: 1;
+}
+
 .arclink-terminal-session span {
   color: #9aa4b2;
   font-size: 12px;
@@ -131,13 +167,18 @@
 
 .arclink-terminal-pane {
   display: grid;
-  grid-template-rows: 1fr auto auto;
+  grid-template-rows: 1fr auto;
   min-width: 0;
   overflow: hidden;
 }
 
 .arclink-terminal-screen {
+  border: 0;
+  box-sizing: border-box;
+  caret-color: #d1fae5;
   min-height: 360px;
+  margin: 0;
+  outline: none;
   padding: 14px;
   overflow: auto;
   background: #070a0f;
@@ -146,10 +187,31 @@
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .arclink-terminal-screen.muted {
   color: #9aa4b2;
+}
+
+.arclink-terminal-screen:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #4f9cf9 58%, transparent);
+}
+
+.arclink-terminal-cursor {
+  animation: arclink-terminal-blink 1.05s steps(2, start) infinite;
+  background: #d1fae5;
+  display: inline-block;
+  height: 1em;
+  margin-left: 1px;
+  transform: translateY(0.16em);
+  width: 0.62ch;
+}
+
+@keyframes arclink-terminal-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 .arclink-terminal-screen span:first-child {
@@ -234,6 +296,26 @@
   margin: 0 0 14px;
   color: #9aa4b2;
   overflow-wrap: anywhere;
+}
+
+.arclink-terminal-context {
+  background: color-mix(in srgb, var(--background-base, #10151c) 96%, #101216);
+  border: 1px solid color-mix(in srgb, var(--midground-base, #e6edf3) 24%, transparent);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.32);
+  display: flex;
+  flex-direction: column;
+  min-width: 11rem;
+  padding: 0.25rem;
+  position: fixed;
+  z-index: 40;
+}
+
+.arclink-terminal-context button {
+  background: transparent;
+  border: 0;
+  justify-content: flex-start;
+  padding: 0.48rem 0.6rem;
+  text-align: left;
 }
 
 @media (max-width: 820px) {

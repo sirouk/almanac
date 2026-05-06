@@ -40,6 +40,8 @@ as `ARCLINK_CODE_WORKSPACE_ROOT`.
   `/ops/restore` provide confined file operations. Trash uses private Hermes
   state and requires explicit confirmation.
 - `/repos` scans a bounded workspace depth for git repositories.
+- `/repos/open` validates an explicitly selected Workspace or Vault folder as a
+  git repository and returns a friendly error when `.git` is absent.
 - `/git/status` reports branch plus staged, unstaged, and untracked changes.
 - `/git/stage`, `/git/unstage`, `/git/discard`, `/git/commit`,
   `/git/ignore`, `/git/pull`, and `/git/push` perform allowlisted git
@@ -48,6 +50,10 @@ as `ARCLINK_CODE_WORKSPACE_ROOT`.
   minimal file/folder icons. File clicks open a rotating preview tab, while a
   double-click on a file or tab pins it. Tabs can be closed, dirty buffers stay
   in tab state, and saves remain explicit.
+- Search is an inline field above the tree rather than a separate panel.
+- The left rail calls source control `Sources`, with an Open Source picker that
+  shows Workspace and Vault folder roots before validating a selected git repo.
+- Dragging a file from the tree onto the tab strip opens it as a pinned tab.
 
 ## Assumptions
 

@@ -27,6 +27,7 @@ HOP_BY_HOP_HEADERS = {
 }
 SESSION_COOKIE_NAME = "arclink_dash_session"
 SESSION_COOKIE_PURPOSE = "arclink-basic-auth-proxy-v1"
+PLUGIN_DEEPLINK_PATHS = {"/drive", "/code", "/terminal"}
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -94,6 +95,49 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         value = self._session_cookie_value(username, password)
         return f"{SESSION_COOKIE_NAME}={value}; HttpOnly; Path=/; SameSite=Lax; Secure"
 
+    def _plugin_deeplink_path(self) -> str:
+        path = urlsplit(self.path).path.rstrip("/") or "/"
+        return path if path in PLUGIN_DEEPLINK_PATHS else ""
+
+    def _maybe_inject_plugin_deeplink(self, payload: bytes, response_headers: list[tuple[str, str]]) -> bytes:
+        target_path = self._plugin_deeplink_path()
+        if self.command != "GET" or not target_path:
+            return payload
+
+        header_map = {key.lower(): value for key, value in response_headers}
+        content_type = header_map.get("content-type", "")
+        if "text/html" not in content_type.lower() or header_map.get("content-encoding"):
+            return payload
+
+        try:
+            body = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return payload
+        if "data-arclink-plugin-deeplink" in body:
+            return payload
+
+        target_json = json.dumps(target_path)
+        script = (
+            '<script data-arclink-plugin-deeplink>(function(){'
+            f"var target={target_json},done=false,tries=0;"
+            "function run(){"
+            "if(done)return;"
+            "var link=document.querySelector('a[href$=\"'+target+'\"]');"
+            "if(link){done=true;link.click();return;}"
+            "if(++tries<120)setTimeout(run,100);"
+            "}"
+            "if(document.readyState==='loading'){"
+            "document.addEventListener('DOMContentLoaded',function(){setTimeout(run,50);});"
+            "}else{setTimeout(run,50);}"
+            "})();</script>"
+        )
+        marker = "</body>"
+        if marker in body:
+            body = body.replace(marker, script + marker, 1)
+        else:
+            body += script
+        return body.encode("utf-8")
+
     def _reject(self) -> None:
         body = b"Authentication required\n"
         self.send_response(401)
@@ -137,9 +181,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             payload = response.read()
         finally:
             connection.close()
+        response_headers = response.getheaders()
+        if response.status == 200:
+            payload = self._maybe_inject_plugin_deeplink(payload, response_headers)
 
         self.send_response(response.status, response.reason)
-        for key, value in response.getheaders():
+        for key, value in response_headers:
             lowered = key.lower()
             if lowered in HOP_BY_HOP_HEADERS or lowered == "content-length":
                 continue

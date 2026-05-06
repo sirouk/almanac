@@ -37,7 +37,7 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         type(self).last_authorization = self.headers.get("Authorization")
         type(self).last_cookie = self.headers.get("Cookie")
-        if self.path == "/":
+        if self.path in {"/", "/drive"}:
             body = b"<html><body>dashboard</body></html>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -155,9 +155,56 @@ def test_proxy_allows_hermes_bearer_api_calls_after_basic_login() -> None:
             backend_thread.join(timeout=5)
 
 
+def test_proxy_injects_dashboard_plugin_deeplink_helper() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_basic_auth_proxy_deeplink_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password"}),
+            encoding="utf-8",
+        )
+
+        backend = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), TestBackend)
+        backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
+        backend_thread.start()
+
+        handler = type(
+            "ConfiguredProxyHandler",
+            (proxy_mod.ProxyHandler,),
+            {
+                "access_file": access_file,
+                "target": f"http://127.0.0.1:{backend.server_port}",
+                "realm": "ArcLink Hermes",
+            },
+        )
+        proxy = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+        proxy_thread.start()
+
+        try:
+            status, headers, body = request(
+                proxy.server_port,
+                "/drive",
+                headers={"Authorization": basic_header("alex", "test-password")},
+            )
+            expect(status == 200, f"expected successful dashboard response, saw {status} {headers}")
+            expect("data-arclink-plugin-deeplink" in body, body)
+            expect('target="/drive"' in body or "target='/drive'" in body or 'target=\"/drive\"' in body, body)
+            expect(headers.get("Content-Length") == str(len(body.encode("utf-8"))), headers)
+            print("PASS test_proxy_injects_dashboard_plugin_deeplink_helper")
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            proxy_thread.join(timeout=5)
+            backend.shutdown()
+            backend.server_close()
+            backend_thread.join(timeout=5)
+
+
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_basic_login()
-    print("PASS all 1 basic-auth-proxy regression tests")
+    test_proxy_injects_dashboard_plugin_deeplink_helper()
+    print("PASS all 2 basic-auth-proxy regression tests")
     return 0
 
 

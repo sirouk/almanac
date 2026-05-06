@@ -296,11 +296,30 @@
     }
 
     function handleTerminalKey(event) {
+      if (event.defaultPrevented) return;
       const text = keyInput(event);
       if (!text) return;
       event.preventDefault();
       writeInput(text);
     }
+
+    useEffect(
+      function () {
+        const node = screenRef.current;
+        if (!node || !state.selected) return undefined;
+        function onNativeKeyDown(event) {
+          const text = keyInput(event);
+          if (!text) return;
+          event.preventDefault();
+          writeInput(text);
+        }
+        node.addEventListener("keydown", onNativeKeyDown);
+        return function () {
+          node.removeEventListener("keydown", onNativeKeyDown);
+        };
+      },
+      [state.selected && state.selected.id, state.selected && state.selected.state]
+    );
 
     function copySelection() {
       const selection = window.getSelection && window.getSelection();

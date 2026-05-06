@@ -1091,7 +1091,10 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("setInterval" in body and "startPolling" in body, "Terminal UI should retain polling fallback")
     expect("confirmClose" in body and '"/close"' in body, "Terminal close/kill should be confirmation-gated")
     expect("moveSelectedToFolder" in body and "reorderSelected" in body, "Terminal UI should expose folder and reorder controls")
-    expect("keyInput" in body and "onKeyDown: handleTerminalKey" in body, "Terminal UI should send direct pty keystrokes")
+    expect(
+        "keyInput" in body and "onKeyDown: handleTerminalKey" in body and 'addEventListener("keydown", onNativeKeyDown)' in body,
+        "Terminal UI should send direct pty keystrokes",
+    )
     expect("+ SSH" in body and "+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose SSH/TUI creation and closed cleanup")
     expect("scrollback" in body and "arclink-terminal-screen" in body, "Terminal UI should render bounded scrollback")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")

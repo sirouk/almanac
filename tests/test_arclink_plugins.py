@@ -746,6 +746,12 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("function openBackgroundContextMenu(event)" in body, "Drive UI should expose a background context menu")
     expect('mode: "background"' in body and "New Folder" in body and "Upload" in body, "Drive background context menu should expose folder/file/upload actions")
     expect('"selection"' in body and "Trash Selected" in body and "Restore Selected" in body, "Drive selected group context menu should expose batch actions")
+    expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
+    expect("function previewKind(item)" in body and 'api("/download?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/download routes")
+    expect("arclink-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
+    style = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".arclink-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
+    expect(".arclink-drive-pdf-preview" in style and ".arclink-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
 
 
@@ -757,6 +763,8 @@ def test_arclink_code_native_editor_guards_conflicting_saves() -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         source = workspace / "app.py"
         source.write_text("print('one')\n", encoding="utf-8")
+        pdf = workspace / "guide.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n%ArcLink preview proof\n")
 
         old_env = os.environ.copy()
         os.environ["HERMES_HOME"] = str(hermes_home)
@@ -768,9 +776,12 @@ def test_arclink_code_native_editor_guards_conflicting_saves() -> None:
             )
             listing = asyncio.run(code_api.items(path="/"))
             expect(any(item["name"] == "app.py" for item in listing["items"]), str(listing))
+            expect(any(item["name"] == "guide.pdf" and item["mime"] == "application/pdf" for item in listing["items"]), str(listing))
             opened = asyncio.run(code_api.file(path="/app.py"))
             expect(opened["language"] == "python", str(opened))
             expect(opened["hash"], str(opened))
+            downloaded = asyncio.run(code_api.download(path="/guide.pdf"))
+            expect(getattr(downloaded, "path", "") == str(pdf), f"expected download response for PDF, got {downloaded!r}")
 
             source.write_text("print('external')\n", encoding="utf-8")
             try:
@@ -979,10 +990,14 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect('"/git/ignore"' in body and '"/git/pull"' in body and '"/git/push"' in body, "Code UI should expose richer source-control actions")
     expect("Auto-save is off" in body and "arclink-code-theme-" in body, "Code UI should expose manual-save warning and theme toggle")
     expect("arclink-code-statusbar" in body and "lastGitResult" in body, "Code UI should expose status bar and last git result")
+    expect("function extensionColor(item)" in body and "long-ext" in body, "Code file icons should derive compact, readable extension colors")
+    expect("function renderCodePreview(file)" in body and 'api("/download?path="' in body, "Code UI should open previewable files in editor tabs")
+    expect("arclink-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")
     style = (PLUGINS_ROOT / "arclink-code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".arclink-code-diff-panes" in style, "Code CSS should style split diff panes")
     expect(".arclink-code-tree-node" in style and ".arclink-code-context-menu" in style, "Code CSS should style nested Explorer and context menus")
     expect(".arclink-code-search" in style and ".arclink-code-statusbar" in style, "Code CSS should style search and status bar")
+    expect(".arclink-code-fileicon.long-ext" in style and ".arclink-code-pdf-preview" in style, "Code CSS should style compact icons and PDF preview tabs")
     expect(".arclink-code-theme-light" in style, "Code CSS should include a light theme")
     expect("@media (max-width: 760px)" in style and "grid-template-columns: 1fr;" in style, "Code diff panes should collapse on mobile")
     print("PASS test_arclink_code_browser_opens_source_control_changes_as_diffs")

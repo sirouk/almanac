@@ -269,13 +269,8 @@
   border-radius: 2px;
   color: color-mix(in srgb, var(--file-accent) 86%, var(--midground));
   display: inline-flex;
-  font-size: 0.46rem;
-  font-weight: 700;
   justify-content: center;
-  line-height: 1;
   overflow: hidden;
-  text-align: center;
-  text-transform: uppercase;
 }
 
 .arclink-code-fileicon.file::after {
@@ -305,6 +300,34 @@
 
 .arclink-code-fileicon.kind-image {
   --file-accent: #f9a8d4;
+}
+
+.arclink-code-fileicon.kind-pdf {
+  --file-accent: #fca5a5;
+}
+
+.arclink-code-fileicon.kind-media {
+  --file-accent: #fdba74;
+}
+
+.arclink-code-fileicon.kind-archive {
+  --file-accent: #fde68a;
+}
+
+.arclink-code-fileext {
+  color: inherit;
+  font-size: 0.4rem;
+  font-weight: 800;
+  line-height: 1;
+  max-width: 1rem;
+  overflow: hidden;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.arclink-code-fileicon.long-ext .arclink-code-fileext {
+  font-size: 0.33rem;
 }
 
 .arclink-code-fileicon.folder::before {
@@ -635,8 +658,174 @@
 }
 
 .arclink-code-save-note {
+  align-items: center;
   border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 10%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  justify-content: space-between;
   padding: 0.42rem 0.75rem;
+}
+
+.arclink-code-save-note span {
+  min-width: 0;
+}
+
+.arclink-code-save-note button {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.42rem;
+}
+
+.arclink-code-preview {
+  background: var(--arclink-code-editor-bg);
+  color: var(--arclink-code-editor-fg);
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.arclink-code-preview-head,
+.arclink-code-preview-fullbar {
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  display: flex;
+  gap: 0.55rem;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0.48rem 0.75rem;
+}
+
+.arclink-code-preview-head strong,
+.arclink-code-preview-fullbar strong {
+  font-size: 0.74rem;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.arclink-code-preview-head span {
+  color: var(--arclink-code-editor-muted);
+  flex: 1 1 auto;
+  font-size: 0.72rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-preview-empty,
+.arclink-code-text-preview,
+.arclink-code-markdown-preview,
+.arclink-code-pdf-preview,
+.arclink-code-media-preview {
+  flex: 1 1 auto;
+  min-height: 28rem;
+}
+
+.arclink-code-preview-empty {
+  color: var(--arclink-code-editor-muted);
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+.arclink-code-text-preview,
+.arclink-code-markdown-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.52;
+  margin: 0;
+  overflow: auto;
+  padding: 0.85rem;
+  white-space: pre-wrap;
+}
+
+.arclink-code-markdown-preview {
+  font-family: inherit;
+  white-space: normal;
+}
+
+.arclink-code-markdown-preview h1,
+.arclink-code-markdown-preview h2,
+.arclink-code-markdown-preview h3,
+.arclink-code-markdown-preview p,
+.arclink-code-markdown-preview pre,
+.arclink-code-markdown-preview li {
+  margin: 0 0 0.55rem;
+}
+
+.arclink-code-markdown-preview h1,
+.arclink-code-markdown-preview h2,
+.arclink-code-markdown-preview h3 {
+  color: color-mix(in srgb, var(--arclink-code-editor-accent, #61afef) 44%, var(--arclink-code-editor-fg));
+  letter-spacing: 0;
+}
+
+.arclink-code-markdown-preview h1 {
+  font-size: 1.28rem;
+}
+
+.arclink-code-markdown-preview h2 {
+  font-size: 1.08rem;
+}
+
+.arclink-code-markdown-preview h3 {
+  font-size: 0.96rem;
+}
+
+.arclink-code-markdown-preview pre {
+  background: color-mix(in srgb, var(--background-base) 82%, #000);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 12%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  overflow: auto;
+  padding: 0.65rem;
+  white-space: pre;
+}
+
+.arclink-code-markdown-space {
+  min-height: 0.45rem;
+}
+
+.arclink-code-pdf-preview {
+  background: color-mix(in srgb, var(--background-base) 94%, #111);
+  border: 0;
+  width: 100%;
+}
+
+.arclink-code-media-preview {
+  background: color-mix(in srgb, var(--background-base) 94%, #111);
+  display: block;
+  max-height: calc(100dvh - 15rem);
+  object-fit: contain;
+  width: 100%;
+}
+
+.arclink-code-audio-preview {
+  margin: 1rem;
+  width: calc(100% - 2rem);
+}
+
+.arclink-code-preview-fullscreen {
+  background: color-mix(in srgb, var(--background-base) 96%, #05070a);
+  bottom: 0;
+  color: var(--midground);
+  display: flex;
+  flex-direction: column;
+  left: 0;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 60;
+}
+
+.arclink-code-preview-fullscreen .arclink-code-text-preview,
+.arclink-code-preview-fullscreen .arclink-code-markdown-preview,
+.arclink-code-preview-fullscreen .arclink-code-pdf-preview,
+.arclink-code-preview-fullscreen .arclink-code-media-preview,
+.arclink-code-preview-fullscreen .arclink-code-preview-empty {
+  height: auto;
+  max-height: none;
+  min-height: 0;
 }
 
 .arclink-code-last-git-result {

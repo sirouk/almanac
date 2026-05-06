@@ -16,6 +16,7 @@ import uuid
 
 try:
     from fastapi import APIRouter, HTTPException, Request
+    from fastapi.responses import FileResponse
 except Exception:
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int = 500, detail: str = "") -> None:
@@ -38,6 +39,12 @@ except Exception:
 
     class Request:  # type: ignore
         pass
+
+    class FileResponse:  # type: ignore
+        def __init__(self, path: str, filename: str | None = None, media_type: str | None = None) -> None:
+            self.path = path
+            self.filename = filename
+            self.media_type = media_type
 
 
 router = APIRouter()
@@ -847,6 +854,15 @@ async def file(path: str) -> dict[str, Any]:
         "hash": _file_hash(target),
         "modified": _iso_from_timestamp(target.stat().st_mtime),
     }
+
+
+@router.get("/download")
+async def download(path: str) -> Any:
+    target, _relative = _resolve(path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Workspace file does not exist")
+    media_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    return FileResponse(str(target), filename=target.name, media_type=media_type)
 
 
 @router.post("/save")

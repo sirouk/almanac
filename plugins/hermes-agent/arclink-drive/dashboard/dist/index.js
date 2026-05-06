@@ -86,6 +86,7 @@
       selectedPaths: {},
       selectionAnchor: null,
       preview: null,
+      previewFullscreen: false,
       treeNodes: {},
       expanded: {},
       searchResults: [],
@@ -732,7 +733,27 @@
       const name = String(item.name || "");
       const parts = name.split(".");
       if (parts.length < 2) return "";
-      return parts.pop().slice(0, 4).toLowerCase();
+      return parts.pop().slice(0, 12).toLowerCase();
+    }
+
+    function fileExtLabel(item) {
+      const ext = fileExtension(item);
+      if (!ext) return "";
+      return ext.length > 4 ? ext.slice(0, 3) + "." : ext.toUpperCase();
+    }
+
+    function extensionColor(item) {
+      if (!item || item.kind === "folder") return "";
+      const ext = fileExtension(item) || String(item.name || item.path || "file").toLowerCase();
+      let hash = 0;
+      for (let index = 0; index < ext.length; index += 1) {
+        hash = (hash * 31 + ext.charCodeAt(index)) >>> 0;
+      }
+      const hues = [14, 32, 48, 142, 172, 205, 232, 266, 304, 332];
+      const hue = hues[hash % hues.length] + ((hash >> 4) % 9) - 4;
+      const saturation = 62 + ((hash >> 8) % 14);
+      const lightness = 61 + ((hash >> 12) % 10);
+      return "hsl(" + hue + " " + saturation + "% " + lightness + "%)";
     }
 
     function fileKindClass(item) {
@@ -756,10 +777,96 @@
 
     function renderFileIcon(item) {
       const ext = fileExtension(item);
+      const label = fileExtLabel(item);
       return h(
         "span",
-        { className: "arclink-drive-fileicon " + (item.kind === "folder" ? "folder" : "file") + " " + fileKindClass(item), title: item.kind === "folder" ? "Folder" : ext ? ext.toUpperCase() + " file" : "File" },
-        item.kind === "folder" ? null : h("span", { className: "arclink-drive-fileext" }, ext || "")
+        {
+          className:
+            "arclink-drive-fileicon " +
+            (item.kind === "folder" ? "folder" : "file") +
+            " " +
+            fileKindClass(item) +
+            (label.length > 3 ? " long-ext" : ""),
+          style: item.kind === "folder" ? null : { "--file-accent": extensionColor(item) },
+          title: item.kind === "folder" ? "Folder" : ext ? ext.toUpperCase() + " file" : "File",
+        },
+        item.kind === "folder" ? null : h("span", { className: "arclink-drive-fileext" }, label)
+      );
+    }
+
+    function previewKind(item) {
+      if (!item || item.kind !== "file") return "";
+      const ext = fileExtension(item);
+      const mime = String(item.mime || "").toLowerCase();
+      if (ext === "pdf" || mime === "application/pdf") return "pdf";
+      if (mime.indexOf("image/") === 0 || ["gif", "jpeg", "jpg", "png", "svg", "webp"].indexOf(ext) !== -1) return "image";
+      if (mime.indexOf("audio/") === 0 || ["mp3", "wav", "ogg", "m4a"].indexOf(ext) !== -1) return "audio";
+      if (mime.indexOf("video/") === 0 || ["mov", "mp4", "webm"].indexOf(ext) !== -1) return "video";
+      if (item.text || mime.indexOf("text/") === 0 || ["css", "csv", "env", "html", "ini", "js", "json", "log", "md", "mdx", "py", "sh", "sql", "toml", "ts", "txt", "xml", "yaml", "yml"].indexOf(ext) !== -1) {
+        return ext === "md" || ext === "mdx" ? "markdown" : "text";
+      }
+      return "";
+    }
+
+    function downloadUrl(item) {
+      return api("/download?path=" + encodeURIComponent(item.path) + "&root=" + encodeURIComponent(itemRoot(item) || ""));
+    }
+
+    function renderPreviewBody(preview) {
+      if (!preview) return h("div", { className: "arclink-drive-preview-empty" }, "Select a previewable file.");
+      if (preview.kind === "loading") return h("div", { className: "arclink-drive-preview-empty" }, "Loading preview");
+      if (preview.kind === "unsupported") return h("div", { className: "arclink-drive-preview-empty" }, preview.message || "No preview available for this file type.");
+      if (preview.kind === "text" || preview.kind === "markdown") {
+        return h("pre", { className: "arclink-drive-text-preview" }, preview.content || "");
+      }
+      if (preview.kind === "pdf") {
+        return h(
+          "object",
+          { className: "arclink-drive-pdf-preview", data: preview.url, type: "application/pdf" },
+          h("a", { href: preview.url, target: "_blank", rel: "noreferrer" }, "Open PDF")
+        );
+      }
+      if (preview.kind === "image") return h("img", { className: "arclink-drive-media-preview", src: preview.url, alt: preview.name || "Preview" });
+      if (preview.kind === "audio") return h("audio", { className: "arclink-drive-audio-preview", src: preview.url, controls: true });
+      if (preview.kind === "video") return h("video", { className: "arclink-drive-media-preview", src: preview.url, controls: true });
+      return h("div", { className: "arclink-drive-preview-empty" }, "Preview unavailable");
+    }
+
+    function renderPreviewPanel() {
+      const preview = state.preview;
+      if (!preview || !preview.kind) return null;
+      const canFullscreen = ["text", "markdown", "pdf", "image", "audio", "video"].indexOf(preview.kind) !== -1;
+      return h(
+        "section",
+        { className: "arclink-drive-preview" },
+        h(
+          "div",
+          { className: "arclink-drive-preview-head" },
+          h("strong", null, preview.kind === "markdown" ? "Markdown Preview" : preview.kind.charAt(0).toUpperCase() + preview.kind.slice(1) + " Preview"),
+          h(
+            "span",
+            null,
+            preview.name || (state.selected && state.selected.name) || ""
+          ),
+          canFullscreen ? h("button", { type: "button", onClick: function () { patch({ previewFullscreen: true }); } }, "Maximize") : null
+        ),
+        renderPreviewBody(preview)
+      );
+    }
+
+    function renderFullscreenPreview() {
+      if (!state.previewFullscreen || !state.preview) return null;
+      const preview = state.preview;
+      return h(
+        "div",
+        { className: "arclink-drive-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
+        h(
+          "div",
+          { className: "arclink-drive-preview-fullbar" },
+          h("strong", null, preview.name || "Preview"),
+          h("button", { type: "button", onClick: function () { patch({ previewFullscreen: false }); } }, "Close")
+        ),
+        renderPreviewBody(preview)
       );
     }
 
@@ -922,9 +1029,44 @@
           selected.trashed ? null : h("button", { type: "button", onClick: function () { copyItemWithPrompt(selected); } }, "Copy"),
           selected.trashed ? null : h("button", { type: "button", onClick: function () { renameItem(selected); } }, "Rename"),
           selected.trashed ? null : h("button", { type: "button", onClick: function () { moveItemWithPrompt(selected); } }, "Move")
-        )
+        ),
+        renderPreviewPanel()
       );
     }
+
+    useEffect(
+      function () {
+        const selected = state.selected;
+        if (!selected || selected.kind !== "file" || selected.trashed) {
+          if (state.preview) patch({ preview: null, previewFullscreen: false });
+          return undefined;
+        }
+        const kind = previewKind(selected);
+        const name = selected.name || nameFromPath(selected.path);
+        if (!kind) {
+          patch({ preview: { kind: "unsupported", name: name, message: "No preview available for this file type." }, previewFullscreen: false });
+          return undefined;
+        }
+        if (kind === "text" || kind === "markdown") {
+          const rootId = itemRoot(selected) || state.root;
+          let cancelled = false;
+          patch({ preview: { kind: "loading", name: name }, previewFullscreen: false });
+          fetchJSON(api("/content?path=" + encodeURIComponent(selected.path) + "&root=" + encodeURIComponent(rootId)))
+            .then(function (data) {
+              if (!cancelled) patch({ preview: { kind: kind, name: name, content: data.content || "", modified: data.modified || "" } });
+            })
+            .catch(function (error) {
+              if (!cancelled) patch({ preview: { kind: "unsupported", name: name, message: error.message || "Preview unavailable" } });
+            });
+          return function () {
+            cancelled = true;
+          };
+        }
+        patch({ preview: { kind: kind, name: name, url: downloadUrl(selected) }, previewFullscreen: false });
+        return undefined;
+      },
+      [state.selected && state.selected.path, state.selected && itemRoot(state.selected)]
+    );
 
     useEffect(function () {
       loadStatus();
@@ -1185,6 +1327,7 @@
           )
         : h("div", { className: "arclink-drive-empty full" }, "ArcLink Drive is not available"),
       state.dropActive ? h("div", { className: "arclink-drive-drop-overlay" }, "Drop to upload") : null,
+      renderFullscreenPreview(),
       confirmDialog
         ? h(
             "div",

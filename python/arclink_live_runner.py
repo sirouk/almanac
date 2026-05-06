@@ -257,10 +257,13 @@ def _browser_runner_script() -> str:
               .arclink-drive-path,
               .arclink-drive-preview,
               .arclink-drive-text-preview,
+              .arclink-drive-preview-fullscreen,
               .arclink-code-item-name,
               .arclink-code-item-lang,
               .arclink-code-path,
               .arclink-code-textarea,
+              .arclink-code-preview,
+              .arclink-code-preview-fullscreen,
               .arclink-code-diff,
               .arclink-code-search-results,
               .arclink-code-change-name,
@@ -279,6 +282,9 @@ def _browser_runner_script() -> str:
                 caret-color: transparent !important;
               }
               .arclink-drive-preview *,
+              .arclink-drive-preview-fullscreen *,
+              .arclink-code-preview *,
+              .arclink-code-preview-fullscreen *,
               .arclink-code-textarea *,
               .arclink-code-diff *,
               .arclink-terminal-screen * {

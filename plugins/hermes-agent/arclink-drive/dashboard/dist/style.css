@@ -198,9 +198,9 @@
   --file-accent: color-mix(in srgb, var(--midground-base) 70%, transparent);
   display: inline-block;
   flex: 0 0 1.18rem;
-  height: 1.08rem;
+  height: 1.1rem;
   position: relative;
-  width: 1.18rem;
+  width: 1.2rem;
 }
 
 .arclink-drive-fileicon.kind-code {
@@ -279,11 +279,15 @@
   font-size: 0.42rem;
   font-weight: 800;
   line-height: 1;
-  max-width: 2.2rem;
+  max-width: 1.02rem;
   overflow: hidden;
   text-align: center;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.arclink-drive-fileicon.long-ext .arclink-drive-fileext {
+  font-size: 0.34rem;
 }
 
 .arclink-drive-selection {
@@ -450,6 +454,114 @@
   flex: 1 1 18rem;
   flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.arclink-drive-preview {
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 10%, transparent);
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.55rem;
+  min-width: 0;
+  padding-top: 0.6rem;
+}
+
+.arclink-drive-preview-head,
+.arclink-drive-preview-fullbar {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.arclink-drive-preview-head strong,
+.arclink-drive-preview-fullbar strong {
+  font-size: 0.78rem;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.arclink-drive-preview-head span {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  flex: 1 1 auto;
+  font-size: 0.74rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-drive-preview-empty,
+.arclink-drive-text-preview,
+.arclink-drive-pdf-preview,
+.arclink-drive-media-preview {
+  background: color-mix(in srgb, var(--background-base) 94%, #111);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 12%, transparent);
+  min-height: 9rem;
+}
+
+.arclink-drive-preview-empty {
+  color: color-mix(in srgb, var(--midground-base) 58%, transparent);
+  display: grid;
+  font-size: 0.78rem;
+  place-items: center;
+  text-align: center;
+}
+
+.arclink-drive-text-preview {
+  color: color-mix(in srgb, var(--midground-base) 90%, var(--background-base));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.48;
+  margin: 0;
+  max-height: 18rem;
+  overflow: auto;
+  padding: 0.65rem;
+  white-space: pre-wrap;
+}
+
+.arclink-drive-pdf-preview {
+  height: min(58dvh, 34rem);
+  width: 100%;
+}
+
+.arclink-drive-media-preview {
+  display: block;
+  max-height: min(58dvh, 34rem);
+  max-width: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
+.arclink-drive-audio-preview {
+  width: 100%;
+}
+
+.arclink-drive-preview-fullscreen {
+  background: color-mix(in srgb, var(--background-base) 96%, #05070a);
+  bottom: 0;
+  color: var(--midground);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  left: 0;
+  padding: 0.9rem;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 60;
+}
+
+.arclink-drive-preview-fullscreen .arclink-drive-text-preview,
+.arclink-drive-preview-fullscreen .arclink-drive-pdf-preview,
+.arclink-drive-preview-fullscreen .arclink-drive-media-preview,
+.arclink-drive-preview-fullscreen .arclink-drive-preview-empty {
+  flex: 1 1 auto;
+  height: auto;
+  max-height: none;
+  min-height: 0;
 }
 
 .arclink-drive-drop-overlay {

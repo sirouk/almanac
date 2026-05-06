@@ -51,40 +51,104 @@
     });
   }
 
+  function fileExtension(item) {
+    const name = String((item && (item.name || item.path)) || "");
+    const match = /\.([A-Za-z0-9]+)$/.exec(name);
+    return match ? match[1].slice(0, 12).toLowerCase() : "";
+  }
+
   function fileIcon(item) {
     if (item.kind === "folder") return "";
     const language = String(item.language || "").toLowerCase();
     const byLanguage = {
       css: "CSS",
-      html: "HTML",
+      html: "HTM",
       javascript: "JS",
-      json: "JSON",
+      json: "JSN",
       markdown: "MD",
       python: "PY",
       shell: "SH",
       sql: "SQL",
-      toml: "TOML",
+      toml: "TOM",
       typescript: "TS",
       xml: "XML",
-      yaml: "YAML",
+      yaml: "YML",
     };
     if (byLanguage[language]) return byLanguage[language];
-    const name = item.name || item.path || "";
-    const match = /\.([A-Za-z0-9]+)$/.exec(name);
-    return match ? match[1].slice(0, 4).toUpperCase() : "";
+    const ext = fileExtension(item);
+    if (!ext) return "";
+    return ext.length > 4 ? ext.slice(0, 3) + "." : ext.toUpperCase();
+  }
+
+  function extensionColor(item) {
+    if (!item || item.kind === "folder") return "";
+    const ext = fileExtension(item) || String(item.name || item.path || "file").toLowerCase();
+    let hash = 0;
+    for (let index = 0; index < ext.length; index += 1) {
+      hash = (hash * 31 + ext.charCodeAt(index)) >>> 0;
+    }
+    const hues = [14, 32, 48, 142, 172, 205, 232, 266, 304, 332];
+    const hue = hues[hash % hues.length] + ((hash >> 4) % 9) - 4;
+    const saturation = 62 + ((hash >> 8) % 14);
+    const lightness = 61 + ((hash >> 12) % 10);
+    return "hsl(" + hue + " " + saturation + "% " + lightness + "%)";
   }
 
   function fileKindClass(item) {
     if (!item || item.kind === "folder") return "kind-folder";
     const language = String(item.language || "").toLowerCase();
     const name = String(item.name || item.path || "").toLowerCase();
-    const match = /\.([a-z0-9]+)$/.exec(name);
-    const ext = match ? match[1] : "";
+    const ext = fileExtension({ name: name });
     if (["css", "html", "javascript", "python", "shell", "sql", "typescript"].indexOf(language) !== -1) return "kind-code";
     if (["json", "toml", "xml", "yaml"].indexOf(language) !== -1) return "kind-data";
     if (["md", "mdx", "markdown", "txt"].indexOf(language) !== -1 || ["md", "mdx", "txt"].indexOf(ext) !== -1) return "kind-doc";
+    if (ext === "pdf") return "kind-pdf";
     if (["gif", "jpg", "jpeg", "png", "svg", "webp"].indexOf(ext) !== -1) return "kind-image";
+    if (["m4a", "mov", "mp3", "mp4", "ogg", "wav", "webm"].indexOf(ext) !== -1) return "kind-media";
+    if (["7z", "gz", "rar", "tar", "tgz", "zip"].indexOf(ext) !== -1) return "kind-archive";
     return "kind-file";
+  }
+
+  function renderFileIcon(item) {
+    const label = fileIcon(item);
+    return h(
+      "span",
+      {
+        className:
+          "arclink-code-fileicon " +
+          (item.kind === "folder" ? "folder" : "file") +
+          " " +
+          fileKindClass(item) +
+          (label.length > 3 ? " long-ext" : ""),
+        style: item.kind === "folder" ? null : { "--file-accent": extensionColor(item) },
+        title: item.kind === "folder" ? "Folder" : label ? label + " file" : "File",
+      },
+      item.kind === "folder" ? null : h("span", { className: "arclink-code-fileext" }, label)
+    );
+  }
+
+  function previewKind(item) {
+    if (!item || item.kind === "folder") return "";
+    const ext = fileExtension(item);
+    const mime = String(item.mime || "").toLowerCase();
+    const language = String(item.language || "").toLowerCase();
+    if (ext === "pdf" || mime === "application/pdf") return "pdf";
+    if (mime.indexOf("image/") === 0 || ["gif", "jpeg", "jpg", "png", "svg", "webp"].indexOf(ext) !== -1) return "image";
+    if (mime.indexOf("audio/") === 0 || ["mp3", "wav", "ogg", "m4a"].indexOf(ext) !== -1) return "audio";
+    if (mime.indexOf("video/") === 0 || ["mov", "mp4", "webm"].indexOf(ext) !== -1) return "video";
+    if (
+      item.text ||
+      mime.indexOf("text/") === 0 ||
+      ["css", "csv", "env", "html", "ini", "js", "json", "log", "md", "mdx", "py", "sh", "sql", "toml", "ts", "txt", "xml", "yaml", "yml"].indexOf(ext) !== -1 ||
+      ["css", "html", "javascript", "json", "markdown", "plaintext", "python", "shell", "sql", "toml", "typescript", "xml", "yaml"].indexOf(language) !== -1
+    ) {
+      return ext === "md" || ext === "mdx" || language === "markdown" ? "markdown" : "text";
+    }
+    return "";
+  }
+
+  function downloadUrl(item) {
+    return api("/download?path=" + encodeURIComponent(item.path || ""));
   }
 
   function changeSort(a, b) {
@@ -122,6 +186,7 @@
       sourcePickerOpen: false,
       sourcePickerPath: "/",
       sourcePickerMessage: "",
+      previewFullscreen: false,
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -277,6 +342,10 @@
           hash: file.hash || existing.hash || "",
           language: file.language || existing.language || "plaintext",
           editable: file.editable !== false,
+          previewKind: file.previewKind || existing.previewKind || previewKind(file),
+          previewUrl: file.previewUrl || existing.previewUrl || downloadUrl(file),
+          previewContent: file.previewContent !== undefined ? file.previewContent : existing.previewContent,
+          previewMode: !!(file.previewMode || existing.previewMode),
         });
         return { fileTabs: tabs.slice(-8) };
       });
@@ -328,6 +397,7 @@
           savedContent: active && next ? next.savedContent || "" : active ? "" : current.savedContent,
           dirty: active && next ? !!next.dirty : active ? false : current.dirty,
           diff: active ? null : current.diff,
+          previewFullscreen: active ? false : current.previewFullscreen,
         };
       });
     }
@@ -339,6 +409,83 @@
       openItem({ path: path, name: basename(path), kind: "file", text: true }, true);
     }
 
+    function openPreviewFile(item, pinned) {
+      const kind = item.previewKind || previewKind(item);
+      if (!kind) {
+        patch({ errorMessage: "No preview available for " + (item.name || item.path || "this file") });
+        return;
+      }
+      const previewFile = Object.assign({}, item, {
+        kind: "file",
+        name: item.name || basename(item.path),
+        editable: false,
+        previewKind: kind,
+        previewUrl: item.previewUrl || downloadUrl(item),
+        previewContent: item.previewContent,
+      });
+      patch(function (current) {
+        let tabs = (current.fileTabs || []).filter(function (tab) {
+          return tab.path !== previewFile.path;
+        });
+        const existing = (current.fileTabs || []).filter(function (tab) {
+          return tab.path === previewFile.path;
+        })[0] || {};
+        const isPinned = !!(pinned || existing.pinned);
+        if (!isPinned) {
+          tabs = tabs.filter(function (tab) {
+            return tab.pinned || tab.dirty;
+          });
+        }
+        tabs.push({
+          path: previewFile.path,
+          name: previewFile.name,
+          dirty: false,
+          pinned: isPinned,
+          content: "",
+          savedContent: "",
+          hash: "",
+          language: previewFile.previewKind,
+          editable: false,
+          previewKind: previewFile.previewKind,
+          previewUrl: previewFile.previewUrl,
+          previewContent: previewFile.previewContent,
+          previewMessage: previewFile.previewMessage,
+        });
+        return {
+          fileTabs: tabs.slice(-8),
+          openFile: previewFile,
+          content: "",
+          savedContent: "",
+          dirty: false,
+          diff: null,
+          errorMessage: "",
+        };
+      });
+    }
+
+    function openReadOnlyPreview(item, pinned, message) {
+      const kind = previewKind(item);
+      if (!kind) {
+        patch({ errorMessage: message || "Unable to open file" });
+        return;
+      }
+      if (kind === "text" || kind === "markdown") {
+        fetch(downloadUrl(item), { credentials: "same-origin" })
+          .then(function (response) {
+            if (!response.ok) throw new Error(message || "Text preview unavailable");
+            return response.text();
+          })
+          .then(function (content) {
+            openPreviewFile(Object.assign({}, item, { previewKind: kind, previewContent: content }), pinned);
+          })
+          .catch(function (error) {
+            openPreviewFile(Object.assign({}, item, { previewKind: kind, previewContent: "", previewMessage: error.message || message || "Text preview unavailable" }), pinned);
+          });
+        return;
+      }
+      openPreviewFile(Object.assign({}, item, { previewKind: kind }), pinned);
+    }
+
     function openItem(item, pinned) {
       patch({ contextMenu: null });
       if (item.kind === "folder") {
@@ -348,6 +495,11 @@
           expanded[item.path] = true;
           return { expanded: expanded };
         });
+        return;
+      }
+      const previewable = previewKind(item);
+      if (["pdf", "image", "audio", "video"].indexOf(previewable) !== -1) {
+        openPreviewFile(Object.assign({}, item, { previewKind: previewable }), pinned);
         return;
       }
       const existingTab = (state.fileTabs || []).filter(function (tab) {
@@ -367,6 +519,8 @@
       fetchJSON(api("/file?path=" + encodeURIComponent(item.path)))
         .then(function (data) {
           const content = data.content || "";
+          const file = Object.assign({ kind: "file" }, data);
+          const kind = previewKind(file);
           patch(function (current) {
             let tabs = (current.fileTabs || []).filter(function (tab) {
               return tab.path !== data.path;
@@ -386,19 +540,23 @@
               hash: data.hash || "",
               language: data.language || "plaintext",
               editable: true,
+              previewKind: kind,
+              previewUrl: downloadUrl(data),
+              previewMode: false,
             });
             return {
               fileTabs: tabs.slice(-8),
-              openFile: Object.assign({}, data, { editable: true }),
+              openFile: Object.assign({}, data, { kind: "file", editable: true, previewKind: kind, previewUrl: downloadUrl(data), previewMode: false }),
               content: content,
               savedContent: content,
               dirty: false,
               diff: null,
+              previewFullscreen: false,
             };
           });
         })
         .catch(function (error) {
-          patch({ openFile: Object.assign({}, item, { editable: false }), content: "", savedContent: "", dirty: false, diff: null, errorMessage: error.message || "Unable to open file" });
+          openReadOnlyPreview(item, pinned, error.message || "Unable to open file");
         });
     }
 
@@ -653,6 +811,111 @@
         });
     }
 
+    function togglePreviewMode() {
+      if (!state.openFile || state.openFile.editable === false) return;
+      patch(function (current) {
+        const nextMode = !(current.openFile && current.openFile.previewMode);
+        return {
+          openFile: Object.assign({}, current.openFile, { previewMode: nextMode }),
+          fileTabs: (current.fileTabs || []).map(function (tab) {
+            return current.openFile && tab.path === current.openFile.path ? Object.assign({}, tab, { previewMode: nextMode }) : tab;
+          }),
+        };
+      });
+    }
+
+    function canPreviewFile(file) {
+      return !!(file && previewKind(file));
+    }
+
+    function renderMarkdownPreview(content) {
+      const nodes = [];
+      const lines = String(content || "").split(/\r?\n/);
+      let codeLines = [];
+      function flushCode(key) {
+        if (!codeLines.length) return;
+        nodes.push(h("pre", { key: "code:" + key }, codeLines.join("\n")));
+        codeLines = [];
+      }
+      lines.forEach(function (line, index) {
+        if (/^```/.test(line)) {
+          if (codeLines.length) flushCode(index);
+          else codeLines = [""];
+          return;
+        }
+        if (codeLines.length) {
+          codeLines.push(line);
+          return;
+        }
+        const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+        if (heading) {
+          nodes.push(h("h" + heading[1].length, { key: "h:" + index }, heading[2]));
+          return;
+        }
+        const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+        if (bullet) {
+          nodes.push(h("li", { key: "li:" + index }, bullet[1]));
+          return;
+        }
+        nodes.push(line.trim() ? h("p", { key: "p:" + index }, line) : h("div", { key: "sp:" + index, className: "arclink-code-markdown-space" }));
+      });
+      flushCode("tail");
+      return h("div", { className: "arclink-code-markdown-preview" }, nodes);
+    }
+
+    function renderPreviewBody(file) {
+      const kind = file.previewKind || previewKind(file);
+      const url = file.previewUrl || downloadUrl(file);
+      const content = file.previewContent !== undefined ? file.previewContent : state.content;
+      if (file.previewMessage) return h("div", { className: "arclink-code-preview-empty" }, file.previewMessage);
+      if (kind === "markdown") return renderMarkdownPreview(content);
+      if (kind === "text") return h("pre", { className: "arclink-code-text-preview" }, content || "");
+      if (kind === "pdf") {
+        return h(
+          "object",
+          { className: "arclink-code-pdf-preview", data: url, type: "application/pdf" },
+          h("a", { href: url, target: "_blank", rel: "noreferrer" }, "Open PDF")
+        );
+      }
+      if (kind === "image") return h("img", { className: "arclink-code-media-preview", src: url, alt: file.name || "Preview" });
+      if (kind === "audio") return h("audio", { className: "arclink-code-audio-preview", src: url, controls: true });
+      if (kind === "video") return h("video", { className: "arclink-code-media-preview", src: url, controls: true });
+      return h("div", { className: "arclink-code-preview-empty" }, "Preview unavailable");
+    }
+
+    function renderCodePreview(file) {
+      const kind = file.previewKind || previewKind(file);
+      return h(
+        "div",
+        { className: "arclink-code-preview" },
+        h(
+          "div",
+          { className: "arclink-code-preview-head" },
+          h("strong", null, kind === "markdown" ? "Markdown Preview" : kind ? kind.charAt(0).toUpperCase() + kind.slice(1) + " Preview" : "Preview"),
+          h("span", null, file.name || basename(file.path)),
+          canPreviewFile(file)
+            ? h("button", { type: "button", onClick: function () { patch({ previewFullscreen: true }); } }, "Maximize")
+            : null
+        ),
+        renderPreviewBody(file)
+      );
+    }
+
+    function renderFullscreenPreview() {
+      if (!state.previewFullscreen || !state.openFile) return null;
+      return h(
+        "div",
+        { className: "arclink-code-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
+        h(
+          "div",
+          { className: "arclink-code-preview-fullbar" },
+          h("strong", null, state.openFile.name || basename(state.openFile.path)),
+          h("button", { type: "button", onClick: function () { patch({ previewFullscreen: false }); } }, "Close")
+        ),
+        renderPreviewBody(state.openFile)
+      );
+    }
+
     function renderDiff(diff) {
       return h(
         "div",
@@ -743,7 +1006,7 @@
                     isExpanded ? "v" : ">"
                   )
                 : h("span", { className: "arclink-code-caret spacer" }),
-              h("span", { className: "arclink-code-fileicon " + (item.kind === "folder" ? "folder" : "file") + " " + fileKindClass(item) }, fileIcon(item)),
+              renderFileIcon(item),
               h("span", { className: "arclink-code-item-name" }, displayName),
               h("span", { className: "arclink-code-item-lang" }, item.kind === "folder" ? (children.length ? children.length : "") : item.language)
             )
@@ -812,7 +1075,7 @@
                       openItem(item);
                     },
                   },
-                  h("span", { className: "arclink-code-fileicon file " + fileKindClass(item) }, fileIcon(item)),
+                  renderFileIcon(Object.assign({ kind: "file" }, item)),
                   h("span", null, item.path),
                   h("small", null, item.match || "")
                 );
@@ -1018,7 +1281,7 @@
                   isExpanded ? "v" : ">"
                 )
               : h("span", { className: "arclink-code-caret spacer" }),
-            h("span", { className: "arclink-code-fileicon folder kind-folder" }),
+            renderFileIcon(Object.assign({}, item, { kind: "folder" })),
             h("span", { className: "arclink-code-item-name" }, label || item.name || item.path)
           ),
           isExpanded && children.length
@@ -1182,9 +1445,19 @@
 	                      ),
 	                      h("strong", { className: state.dirty ? "dirty" : "" }, state.dirty ? "Unsaved" : "Saved")
 	                    ),
-	                    h("div", { className: "arclink-code-save-note" }, "Auto-save is off. Save writes only when you click Save or press Cmd/Ctrl+S."),
-	                    openFile.editable === false
-                      ? h("div", { className: "arclink-code-empty" }, "Preview unavailable")
+	                    h(
+	                      "div",
+	                      { className: "arclink-code-save-note" },
+	                      h("span", null, "Auto-save is off. Save writes only when you click Save or press Cmd/Ctrl+S."),
+	                      canPreviewFile(openFile) && openFile.editable !== false
+	                        ? h("button", { type: "button", onClick: togglePreviewMode }, openFile.previewMode ? "Edit" : "Preview")
+	                        : null,
+	                      canPreviewFile(openFile)
+	                        ? h("button", { type: "button", onClick: function () { patch({ previewFullscreen: true }); } }, "Maximize")
+	                        : null
+	                    ),
+	                    openFile.editable === false || openFile.previewMode
+                      ? renderCodePreview(openFile)
                       : h("textarea", {
                           className: "arclink-code-textarea",
                           spellCheck: "false",
@@ -1213,7 +1486,8 @@
             )
           )
         : h("div", { className: "arclink-code-empty full" }, "ArcLink Code is not available"),
-      renderSourcePicker()
+      renderSourcePicker(),
+      renderFullscreenPreview()
     );
   }
 

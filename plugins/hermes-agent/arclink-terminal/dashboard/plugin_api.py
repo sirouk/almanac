@@ -570,7 +570,7 @@ async def clear_closed_sessions() -> dict[str, Any]:
     before = len(payload["sessions"])
     payload["sessions"] = [
         entry for entry in payload["sessions"]
-        if str(entry.get("state") or "") not in {"closed", "exited"}
+        if str(entry.get("state") or "") not in {"closed", "exited", "detached"}
     ]
     removed = before - len(payload["sessions"])
     _save_sessions(payload)

@@ -1095,6 +1095,27 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             asyncio.run(terminal_api.close_session(machine_session["id"], JsonRequest({"confirm": True})))
             asyncio.run(terminal_api.clear_closed_sessions())
 
+            detached_payload = terminal_api._load_sessions()
+            detached_payload["sessions"].append(
+                {
+                    "id": "term-detached-proof",
+                    "name": "Detached",
+                    "folder": "",
+                    "order": 0,
+                    "cwd": "",
+                    "mode": "tui",
+                    "target": "",
+                    "state": "detached",
+                    "created_at": "2026-05-06T00:00:00Z",
+                    "updated_at": "2026-05-06T00:00:00Z",
+                    "scrollback": "",
+                }
+            )
+            terminal_api._save_sessions(detached_payload)
+            detached_cleared = asyncio.run(terminal_api.clear_closed_sessions())
+            expect(detached_cleared["removed"] == 1, str(detached_cleared))
+            expect(not any(item["id"] == "term-detached-proof" for item in detached_cleared["sessions"]), str(detached_cleared))
+
             try:
                 asyncio.run(terminal_api.create_session(JsonRequest({"cwd": "/../outside"})))
             except Exception as exc:

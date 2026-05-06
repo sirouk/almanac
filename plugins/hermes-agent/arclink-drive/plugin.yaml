@@ -1,0 +1,5 @@
+name: arclink-drive
+version: 1.0.0
+description: Adds ArcLink Drive to the Hermes dashboard.
+provides_hooks: []
+provides_commands: []

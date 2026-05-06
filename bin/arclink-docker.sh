@@ -190,6 +190,7 @@ bootstrap() {
   ensure_env_file_value ARCLINK_TAILSCALE_HTTPS_PORT "443"
   ensure_env_file_value ARCLINK_TAILSCALE_NOTION_PATH "/notion/webhook"
   ensure_env_file_value ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY "path"
+  ensure_env_file_value ARCLINK_TAILNET_SERVICE_PORT_BASE "8443"
   ensure_env_file_value ARCLINK_PRIMARY_PROVIDER "chutes"
   ensure_env_file_value ARCLINK_API_HOST "0.0.0.0"
   ensure_env_file_value ARCLINK_CORS_ORIGIN ""
@@ -559,7 +560,460 @@ health() {
   # shellcheck disable=SC2016
   retry_compose_exec_quiet postgres sh -lc 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
   compose exec -T health-watch ./bin/docker-health.sh
+  docker_publish_tailnet_deployment_apps || true
+  docker_refresh_deployment_service_health || true
   echo "Docker health passed."
+}
+
+docker_publish_tailnet_deployment_apps() {
+  local ingress_mode="" strategy="" host="" web_port="" base_port="" db_path="" routes_file=""
+
+  ingress_mode="$(configured_or_default ARCLINK_INGRESS_MODE domain)"
+  strategy="$(configured_or_default ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY path)"
+  if [[ "$ingress_mode" != "tailscale" || "$strategy" != "path" ]]; then
+    return 0
+  fi
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "tailscale CLI not found; skipping per-deployment tailnet app publishing." >&2
+    return 0
+  fi
+
+  host="$(configured_or_default ARCLINK_TAILSCALE_DNS_NAME "")"
+  web_port="$(configured_or_default ARCLINK_WEB_PORT 3000)"
+  base_port="$(configured_or_default ARCLINK_TAILNET_SERVICE_PORT_BASE 8443)"
+  db_path="$REPO_DIR/arclink-priv/state/arclink-control.sqlite3"
+  if [[ -z "$host" || ! -f "$db_path" ]]; then
+    return 0
+  fi
+
+  routes_file="$(mktemp)"
+  PYTHONPATH="$REPO_DIR/python" python3 - "$db_path" "$base_port" >"$routes_file" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from typing import Any, Mapping
+
+db_path, base_port_raw = sys.argv[1:3]
+roles = ("hermes", "files", "code")
+try:
+    base_port = int(base_port_raw)
+except ValueError:
+    base_port = 8443
+if base_port < 1 or base_port + len(roles) >= 65536:
+    base_port = 8443
+
+
+def valid_port(value: Any) -> int:
+    try:
+        port = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return port if 0 < port < 65536 else 0
+
+
+def clean_ports(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {role: port for role in roles if (port := valid_port(value.get(role)))}
+
+
+with sqlite3.connect(db_path) as conn:
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT deployment_id, prefix, base_domain, metadata_json
+        FROM arclink_deployments
+        WHERE status IN ('active', 'provisioning', 'provisioning_ready')
+        ORDER BY created_at, deployment_id
+        """
+    ).fetchall()
+    records: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+    used: set[int] = set()
+    for row in rows:
+        metadata = json.loads(row["metadata_json"] or "{}")
+        ports = clean_ports(metadata.get("tailnet_service_ports"))
+        used.update(ports.values())
+        records.append((row, metadata))
+
+    next_block = base_port
+    for row, metadata in records:
+        prefix = str(row["prefix"] or "").strip()
+        if not prefix:
+            continue
+        ports = clean_ports(metadata.get("tailnet_service_ports"))
+        if set(roles) - set(ports):
+            while True:
+                candidate = {role: next_block + offset for offset, role in enumerate(roles)}
+                if all(0 < port < 65536 and port not in used for port in candidate.values()):
+                    ports = candidate
+                    used.update(candidate.values())
+                    next_block += len(roles)
+                    break
+                next_block += len(roles)
+        print(
+            "\t".join(
+                [
+                    str(row["deployment_id"]),
+                    prefix,
+                    str(ports["hermes"]),
+                    str(ports["files"]),
+                    str(ports["code"]),
+                ]
+            )
+        )
+PY
+
+  while IFS=$'\t' read -r deployment_id prefix hermes_port files_port code_port; do
+    [[ -n "$deployment_id" && -n "$prefix" ]] || continue
+    local status="published"
+    local successful_roles=()
+    if tailscale serve --bg --yes --https="$hermes_port" "http://127.0.0.1:$web_port/u/$prefix/hermes" >/dev/null; then
+      successful_roles+=(hermes)
+    else
+      status="unavailable"
+    fi
+    if tailscale serve --bg --yes --https="$files_port" "http://127.0.0.1:$web_port/u/$prefix/files" >/dev/null; then
+      successful_roles+=(files)
+    else
+      status="unavailable"
+    fi
+    if tailscale serve --bg --yes --https="$code_port" "http://127.0.0.1:$web_port/u/$prefix/code" >/dev/null; then
+      successful_roles+=(code)
+    else
+      status="unavailable"
+    fi
+    docker_record_tailnet_deployment_app_publish \
+      "$db_path" "$deployment_id" "$host" "$prefix" \
+      "$hermes_port" "$files_port" "$code_port" "$status" "${successful_roles[*]}"
+    if [[ "$status" == "published" ]]; then
+      docker_configure_deployment_nextcloud_overwrite "$deployment_id" "$host:$files_port" "https://$host:$files_port" || true
+    fi
+  done <"$routes_file"
+  rm -f "$routes_file"
+}
+
+docker_record_tailnet_deployment_app_publish() {
+  local db_path="$1"
+  local deployment_id="$2"
+  local host="$3"
+  local prefix="$4"
+  local hermes_port="$5"
+  local files_port="$6"
+  local code_port="$7"
+  local status="$8"
+  local successful_roles="${9:-}"
+
+  PYTHONPATH="$REPO_DIR/python" python3 - \
+    "$db_path" "$deployment_id" "$host" "$prefix" \
+    "$hermes_port" "$files_port" "$code_port" "$status" "$successful_roles" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from typing import Any
+
+from arclink_control import utc_now_iso
+
+db_path, deployment_id, host, prefix, hermes_port, files_port, code_port, status, successful_raw = sys.argv[1:10]
+roles = ("hermes", "files", "code")
+
+
+def valid_port(value: Any) -> int:
+    try:
+        port = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return port if 0 < port < 65536 else 0
+
+
+ports = {
+    "hermes": valid_port(hermes_port),
+    "files": valid_port(files_port),
+    "code": valid_port(code_port),
+}
+if set(ports.values()) == {0}:
+    raise SystemExit(0)
+successful = [role for role in successful_raw.split() if role in roles]
+published = status == "published" and set(successful) == set(roles) and all(ports.values())
+checked_at = utc_now_iso()
+with sqlite3.connect(db_path) as conn:
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchone()
+    if row is None:
+        raise SystemExit(0)
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update(
+        {
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": host,
+            "tailscale_host_strategy": "path",
+            "tailnet_service_ports": ports,
+            "tailnet_service_ports_checked_at": checked_at,
+        }
+    )
+    metadata["tailnet_app_publication"] = {
+        "status": "published" if published else "unavailable",
+        "checked_at": checked_at,
+        "successful_roles": successful,
+        "failed_roles": [role for role in roles if role not in successful],
+    }
+    if published:
+        metadata["access_urls"] = {
+            "dashboard": f"https://{host}/u/{prefix}",
+            "hermes": f"https://{host}:{ports['hermes']}/",
+            "files": f"https://{host}:{ports['files']}/",
+            "code": f"https://{host}:{ports['code']}/",
+            "notion": f"https://{host}/u/{prefix}/notion/webhook",
+        }
+    else:
+        metadata.pop("access_urls", None)
+        metadata["tailnet_app_publication"]["message"] = "tailnet app publication failed; app URLs intentionally withheld"
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), deployment_id),
+    )
+    conn.commit()
+PY
+}
+
+docker_configure_deployment_nextcloud_overwrite() {
+  local deployment_id="$1"
+  local overwrite_host="$2"
+  local overwrite_url="$3"
+  local container="arclink-${deployment_id}-nextcloud-1"
+
+  if ! docker ps --format '{{.Names}}' | grep -Fxq "$container"; then
+    return 0
+  fi
+  docker exec "$container" php occ config:system:set overwriteprotocol --value=https >/dev/null
+  docker exec "$container" php occ config:system:set overwritehost --value="$overwrite_host" >/dev/null
+  docker exec "$container" php occ config:system:set overwrite.cli.url --value="$overwrite_url" >/dev/null
+}
+
+docker_refresh_deployment_service_health() {
+  local db_path="$REPO_DIR/arclink-priv/state/arclink-control.sqlite3"
+  local state_root_base=""
+
+  [[ -f "$db_path" ]] || return 0
+  state_root_base="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
+  PYTHONPATH="$REPO_DIR/python" python3 - "$db_path" "$state_root_base" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+from arclink_control import upsert_arclink_service_health
+from arclink_provisioning import ARCLINK_PROVISIONING_SERVICE_NAMES
+from arclink_sovereign_worker import _docker_compose_service_statuses, _parse_docker_compose_ps_json
+
+db_path = Path(sys.argv[1])
+state_root_base = Path(sys.argv[2])
+
+with sqlite3.connect(db_path) as conn:
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT deployment_id, prefix
+        FROM arclink_deployments
+        WHERE status IN ('active', 'provisioning', 'provisioning_ready')
+        ORDER BY created_at, deployment_id
+        """
+    ).fetchall()
+    refreshed = 0
+    for row in rows:
+        deployment_id = str(row["deployment_id"])
+        prefix = str(row["prefix"])
+        project = f"arclink-{deployment_id}"
+        config_dir = state_root_base / f"{deployment_id}-{prefix}" / "config"
+        compose_file = config_dir / "compose.yaml"
+        env_file = config_dir / "arclink.env"
+        if not compose_file.is_file():
+            continue
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-p",
+                    project,
+                    "-f",
+                    str(compose_file),
+                    "--env-file",
+                    str(env_file),
+                    "ps",
+                    "--all",
+                    "--format",
+                    "json",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            statuses = _docker_compose_service_statuses(_parse_docker_compose_ps_json(result.stdout))
+        except Exception as exc:  # noqa: BLE001 - status refresh should not break deploy flow
+            for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:
+                upsert_arclink_service_health(
+                    conn,
+                    deployment_id=deployment_id,
+                    service_name=service_name,
+                    status="starting",
+                    detail={"source": "docker_refresh_deployment_service_health", "reconcile_error": str(exc)[:240]},
+                )
+            continue
+        for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:
+            service = statuses.get(service_name)
+            if service is None:
+                upsert_arclink_service_health(
+                    conn,
+                    deployment_id=deployment_id,
+                    service_name=service_name,
+                    status="missing",
+                    detail={"source": "docker_refresh_deployment_service_health", "project": project},
+                )
+                continue
+            upsert_arclink_service_health(
+                conn,
+                deployment_id=deployment_id,
+                service_name=service_name,
+                status=str(service["status"]),
+                detail={
+                    "source": "docker_refresh_deployment_service_health",
+                    "project": service.get("project") or project,
+                    "container": service.get("container") or "",
+                    "state": service.get("state") or "",
+                    "health": service.get("health") or "",
+                    "exit_code": service.get("exit_code"),
+                    "status_text": service.get("status_text") or "",
+                },
+            )
+        refreshed += 1
+print(f"Refreshed Docker deployment service health for {refreshed} deployment(s).")
+PY
+}
+
+docker_repair_deployment_dashboard_plugin_mounts() {
+  local deployments_root=""
+
+  deployments_root="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
+  [[ -d "$deployments_root" ]] || return 0
+
+  python3 - "$deployments_root" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+deployments_root = Path(sys.argv[1])
+changed = 0
+
+
+def ensure_volume(volumes: list[dict[str, Any]], *, source: str, target: str) -> bool:
+    for item in volumes:
+        if str(item.get("target") or "") != target:
+            continue
+        new_item = {**item, "source": source, "target": target, "type": "bind"}
+        if new_item != item:
+            item.clear()
+            item.update(new_item)
+            return True
+        return False
+    volumes.append({"source": source, "target": target, "type": "bind"})
+    return True
+
+
+for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
+    try:
+        payload = json.loads(compose_file.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    services = payload.get("services")
+    if not isinstance(services, dict):
+        continue
+    service = services.get("hermes-dashboard")
+    if not isinstance(service, dict):
+        continue
+    deployment_root = compose_file.parents[1]
+    service_changed = False
+    env = service.setdefault("environment", {})
+    if isinstance(env, dict):
+        for key, value in {
+            "VAULT_DIR": "/srv/vault",
+            "ARCLINK_DRIVE_ROOT": "/srv/vault",
+            "ARCLINK_CODE_WORKSPACE_ROOT": "/workspace",
+            "ARCLINK_TERMINAL_ALLOW_ROOT": "1",
+        }.items():
+            if env.get(key) != value:
+                env[key] = value
+                service_changed = True
+    volumes = service.setdefault("volumes", [])
+    if isinstance(volumes, list):
+        service_changed = ensure_volume(
+            volumes,
+            source=str(deployment_root / "state" / "hermes-home"),
+            target="/home/arclink/.hermes",
+        ) or service_changed
+        service_changed = ensure_volume(volumes, source=str(deployment_root / "vault"), target="/srv/vault") or service_changed
+        service_changed = ensure_volume(volumes, source=str(deployment_root / "workspace"), target="/workspace") or service_changed
+    if service_changed:
+        compose_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        changed += 1
+
+if changed:
+    print(f"Repaired Hermes dashboard plugin mounts for {changed} deployment compose file(s).")
+PY
+}
+
+docker_refresh_deployment_managed_plugins() {
+  local deployments_root=""
+  local compose_file="" deploy_root="" root_name="" deployment_id="" clean_id="" project="" refreshed=0
+
+  deployments_root="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
+  [[ -d "$deployments_root" ]] || return 0
+
+  while IFS= read -r compose_file; do
+    if ! docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq managed-context-install; then
+      continue
+    fi
+
+    deploy_root="$(dirname "$(dirname "$compose_file")")"
+    root_name="$(basename "$deploy_root")"
+    deployment_id="${root_name%%-*}"
+    clean_id="$(printf '%s' "$deployment_id" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[-_]+//; s/[-_]+$//')"
+    if [[ -z "$clean_id" ]]; then
+      echo "Skipping deployment plugin refresh for $compose_file: could not derive deployment id." >&2
+      continue
+    fi
+    project="arclink-$clean_id"
+
+    env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+      docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install >/dev/null
+
+    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq hermes-dashboard; then
+      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate hermes-dashboard >/dev/null
+    fi
+    refreshed=$((refreshed + 1))
+  done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/compose.yaml' -type f 2>/dev/null | sort)
+
+  if (( refreshed > 0 )); then
+    echo "Refreshed deployment-managed Hermes plugins for $refreshed deployment(s)."
+  fi
 }
 
 docker_reconcile() {
@@ -574,12 +1028,22 @@ docker_reconcile() {
   fi
   wait_for_docker_agent_reconcile ||
     echo "Docker agent supervisor is still reconciling; docker health will report details if it remains incomplete."
+  docker_repair_deployment_dashboard_plugin_mounts || true
+  docker_refresh_deployment_managed_plugins || true
+  docker_publish_tailnet_deployment_apps || true
+  docker_refresh_deployment_service_health || true
   echo "Docker agent supervisor realigned."
 }
 
 docker_provision_once() {
+  local rc=0
   prepare_compose
-  compose run --rm --no-deps control-provisioner python3 python/arclink_sovereign_worker.py --once --json "$@"
+  compose run --rm --no-deps control-provisioner python3 python/arclink_sovereign_worker.py --once --json "$@" || rc=$?
+  docker_repair_deployment_dashboard_plugin_mounts || true
+  docker_refresh_deployment_managed_plugins || true
+  docker_publish_tailnet_deployment_apps || true
+  docker_refresh_deployment_service_health || true
+  return "$rc"
 }
 
 wait_for_docker_agent_reconcile() {

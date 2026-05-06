@@ -423,6 +423,28 @@ def _session_page(conn: sqlite3.Connection, session_id: str, *, error: str = "")
     return ArcLinkSurfaceResponse(status=200, body=_layout("Onboarding Session", html))
 
 
+def _checkout_result_page(kind: str) -> ArcLinkSurfaceResponse:
+    success = kind == "success"
+    title = "Agent onboard ArcLink" if success else "Checkout paused"
+    body = (
+        "Raven is watching for payment confirmation. Once Stripe clears, your ArcLink agent moves into the launch queue."
+        if success
+        else "No charge completed. Your ArcLink onboarding lane is still available when you are ready."
+    )
+    action = "Open Dashboard" if success else "Resume Onboarding"
+    href = "/user" if success else "/"
+    html = f"""
+<section class="hero">
+  <div class="panel stack">
+    <span class="tag">{escape(kind)}</span>
+    <h1>{escape(title)}</h1>
+    <p>{escape(body)}</p>
+    <div class="actions"><a class="button" href="{href}">{escape(action)} &gt;</a><a class="button secondary" href="/">Start Another Agent</a></div>
+  </div>
+</section>"""
+    return ArcLinkSurfaceResponse(status=200, body=_layout(title, html))
+
+
 def _user_dashboard(conn: sqlite3.Connection, user_id: str = "") -> ArcLinkSurfaceResponse:
     clean_user = user_id or _latest_user_id(conn)
     if not clean_user:
@@ -571,6 +593,10 @@ def handle_arclink_product_surface_request(
             return _favicon_response()
         if clean_method == "GET" and route == "/":
             return _home(conn)
+        if clean_method == "GET" and route == "/checkout/success":
+            return _checkout_result_page("success")
+        if clean_method == "GET" and route == "/checkout/cancel":
+            return _checkout_result_page("cancel")
         if clean_method == "POST" and route == "/onboarding/start":
             email = _param(merged, "email")
             session = create_or_resume_arclink_onboarding_session(

@@ -304,10 +304,10 @@ def test_emit_runtime_config_defaults_public_telegram_webhook_to_callback_ready_
     config = render_runtime_config(
         "tui-only",
         "tui-only",
-        arclink_tailscale_control_url="https://s1396.tail77f45e.ts.net",
+        arclink_tailscale_control_url="https://operator.example.ts.net",
     )
     expect(
-        source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://s1396.tail77f45e.ts.net/api/v1/webhooks/telegram",
+        source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://operator.example.ts.net/api/v1/webhooks/telegram",
         config,
     )
     config = render_runtime_config(

@@ -1,0 +1,400 @@
+.arclink-drive {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: calc(100dvh - 7.5rem);
+  color: var(--midground);
+  position: relative;
+}
+
+.arclink-drive-toolbar,
+.arclink-drive-preview-head,
+.arclink-drive-filters,
+.arclink-drive-roots,
+.arclink-drive-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.arclink-drive-toolbar {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 18%, transparent);
+  background: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+  padding: 0.75rem 0.9rem;
+}
+
+.arclink-drive-title {
+  min-width: 0;
+}
+
+.arclink-drive-title h1,
+.arclink-drive-preview h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+
+.arclink-drive-title p,
+.arclink-drive-preview p,
+.arclink-drive-path,
+.arclink-drive-meta,
+.arclink-drive-file-facts {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  margin: 0.2rem 0 0;
+}
+
+.arclink-drive-actions,
+.arclink-drive-preview-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
+.arclink-drive button,
+.arclink-drive a,
+.arclink-drive select {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 22%, transparent);
+  background: transparent;
+  color: var(--midground);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.42rem 0.62rem;
+  text-decoration: none;
+}
+
+.arclink-drive button:hover,
+.arclink-drive a:hover,
+.arclink-drive button.active {
+  background: color-mix(in srgb, var(--midground-base) 10%, transparent);
+}
+
+.arclink-drive button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.arclink-drive-hidden {
+  display: none;
+}
+
+.arclink-drive-main {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(17rem, 0.35fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  min-height: 30rem;
+}
+
+.arclink-drive-browser,
+.arclink-drive-preview {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 16%, transparent);
+  min-width: 0;
+}
+
+.arclink-drive-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.65rem;
+}
+
+.arclink-drive-filters,
+.arclink-drive-roots,
+.arclink-drive-selection {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.arclink-drive-selection {
+  border: 1px solid color-mix(in srgb, var(--accent-base, #ff6a3d) 36%, transparent);
+  padding: 0.45rem;
+}
+
+.arclink-drive-selection span {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.arclink-drive-search {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 18%, transparent);
+  background: color-mix(in srgb, var(--background-base) 96%, #fff);
+  color: var(--midground);
+  font: inherit;
+  padding: 0.5rem 0.55rem;
+  width: 100%;
+}
+
+.arclink-drive-path {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  overflow: hidden;
+}
+
+.arclink-drive-path button {
+  font-size: 0.76rem;
+  padding: 0.25rem 0.38rem;
+}
+
+.arclink-drive-error {
+  border: 1px solid color-mix(in srgb, #ff684d 44%, transparent);
+  background: color-mix(in srgb, #ff684d 10%, var(--background-base));
+  color: color-mix(in srgb, #ffb2a3 82%, var(--midground));
+  padding: 0.55rem 0.7rem;
+}
+
+.arclink-drive-drop-hint {
+  border: 1px dashed color-mix(in srgb, var(--midground-base) 20%, transparent);
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  padding: 0.55rem 0.65rem;
+}
+
+.arclink-drive-items {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow: auto;
+}
+
+.arclink-drive-items.grid {
+  display: grid;
+  align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+}
+
+.arclink-drive-item {
+  align-items: center;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 1.3rem 2.6rem minmax(0, 1fr) auto 2.4rem;
+  min-height: 2.6rem;
+  text-align: left;
+  width: 100%;
+}
+
+.arclink-drive-items.grid .arclink-drive-item {
+  align-content: start;
+  grid-template-columns: 1.3rem 2.6rem minmax(0, 1fr) 2.4rem;
+  grid-template-rows: auto auto;
+  min-height: 5.6rem;
+}
+
+.arclink-drive-icon,
+.arclink-drive-star {
+  text-align: center;
+}
+
+.arclink-drive-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-drive-items.grid .arclink-drive-meta {
+  grid-column: 3 / 5;
+}
+
+.arclink-drive-item.selected {
+  background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+}
+
+.arclink-drive-item.checked {
+  border-color: color-mix(in srgb, var(--accent-base, #ff6a3d) 52%, transparent);
+}
+
+.arclink-drive-item.dragging {
+  border-color: color-mix(in srgb, var(--accent-base, #ff6a3d) 62%, transparent);
+  opacity: 0.58;
+}
+
+.arclink-drive-star {
+  color: color-mix(in srgb, var(--accent-base, #ff6a3d) 84%, var(--midground));
+  font-size: 0.72rem;
+}
+
+.arclink-drive-drop-overlay {
+  align-items: center;
+  background: color-mix(in srgb, var(--background-base) 72%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent-base, #ff6a3d) 68%, transparent);
+  bottom: 0;
+  color: var(--midground);
+  display: flex;
+  font-size: 1rem;
+  font-weight: 700;
+  justify-content: center;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 8;
+}
+
+.arclink-drive-context {
+  background: color-mix(in srgb, var(--background-base) 96%, #111);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 24%, transparent);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.32);
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  padding: 0.25rem;
+  position: fixed;
+  z-index: 12;
+}
+
+.arclink-drive-context button,
+.arclink-drive-context a {
+  border: 0;
+  justify-content: flex-start;
+  padding: 0.52rem 0.65rem;
+  text-align: left;
+}
+
+.arclink-drive-context-label {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.42rem 0.65rem 0.28rem;
+}
+
+.arclink-drive-confirm-backdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 0.55);
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  padding: 1rem;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 20;
+}
+
+.arclink-drive-confirm {
+  background: color-mix(in srgb, var(--background-base) 96%, #111);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 26%, transparent);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.42);
+  color: var(--midground);
+  max-width: min(28rem, 100%);
+  padding: 1rem;
+  width: 100%;
+}
+
+.arclink-drive-confirm h2 {
+  font-size: 1rem;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.arclink-drive-confirm p {
+  color: color-mix(in srgb, var(--midground-base) 72%, transparent);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  margin: 0.55rem 0 0;
+}
+
+.arclink-drive-confirm label {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.85rem;
+}
+
+.arclink-drive-confirm label span {
+  color: color-mix(in srgb, var(--midground-base) 68%, transparent);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.arclink-drive-confirm input {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 22%, transparent);
+  background: color-mix(in srgb, var(--background-base) 92%, #fff);
+  color: var(--midground);
+  font: inherit;
+  min-width: 0;
+  padding: 0.5rem 0.55rem;
+}
+
+.arclink-drive-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.arclink-drive-confirm .danger {
+  border-color: color-mix(in srgb, #ff684d 58%, transparent);
+  color: color-mix(in srgb, #ffb2a3 88%, var(--midground));
+}
+
+.arclink-drive-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.75rem;
+}
+
+.arclink-drive-preview-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  padding-bottom: 0.65rem;
+}
+
+.arclink-drive-text-preview {
+  background: color-mix(in srgb, var(--midground-base) 5%, var(--background-base));
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0.75rem 0 0;
+  overflow: auto;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+}
+
+.arclink-drive-file-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-top: 0.8rem;
+}
+
+.arclink-drive-empty {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  text-align: center;
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+}
+
+.arclink-drive-empty.full {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 16%, transparent);
+  min-height: 24rem;
+}
+
+@media (max-width: 760px) {
+  .arclink-drive-toolbar,
+  .arclink-drive-preview-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .arclink-drive-actions,
+  .arclink-drive-preview-actions {
+    justify-content: flex-start;
+  }
+
+  .arclink-drive-main {
+    grid-template-columns: 1fr;
+  }
+}

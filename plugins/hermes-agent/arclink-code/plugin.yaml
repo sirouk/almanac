@@ -1,0 +1,5 @@
+name: arclink-code
+version: 1.0.0
+description: Adds ArcLink Code to the Hermes dashboard.
+provides_hooks: []
+provides_commands: []

@@ -26,10 +26,17 @@ arclink_product_surface.py  Local no-secret WSGI prototype for development/contr
 arclink_public_bots.py      Telegram/Discord public onboarding bot conversation skeletons
 arclink_telegram.py         Telegram runtime adapter, long-polling bot runner, fake mode
 arclink_discord.py          Discord runtime adapter, interaction handler, fake mode
+plugins/hermes-agent/
+  arclink-managed-context/  Managed agent context and ArcLink MCP bootstrap injection
+  arclink-drive/            Hermes dashboard file manager for vault/workspace access
+  arclink-code/             Hermes dashboard native code workspace and git surface
+  arclink-terminal/         Reserved Hermes dashboard terminal surface, scaffolded only
 ```
 
-All modules live under `python/` and import from `arclink_control.py` for
+Python modules live under `python/` and import from `arclink_control.py` for
 database access (22 `arclink_*` tables in the shared SQLite/Postgres schema).
+Hermes dashboard plugins live under `plugins/hermes-agent/` and are installed
+into each target Hermes home by ArcLink wrapper scripts.
 
 ## Data Flow
 
@@ -57,7 +64,8 @@ Customer ──► Public Onboarding (web / Telegram / Discord)
                 ├── Domain/Tailscale ingress and SSH intent
                 ├── Chutes key lifecycle intent
                 ├── Traefik labels and ingress
-                ├── State roots and secret references
+                ├── State roots, workspace mounts, and secret references
+                ├── Dashboard plugin environment for Drive, Code, Terminal
                 └── Service-health placeholders
                 │
                 ▼
@@ -105,6 +113,38 @@ ArcLink reuses the shared-host Docker Compose orchestration, Hermes runtime, qmd
 retrieval, vault watching, memory synthesis, Nextcloud, code-server, Curator,
 notification delivery, and health monitoring. These services run inside
 per-deployment containers rendered by the ArcLink provisioning layer.
+
+### Hermes Workspace Plugins
+
+ArcLink adds dashboard workspaces through Hermes plugins rather than Hermes
+core patches:
+
+- `arclink-drive` owns the native file-manager surface. It prefers a mounted
+  local vault, can use sanitized Nextcloud WebDAV access state when available,
+  and exposes browse, bounded preview, download, upload, folder creation,
+  rename, move, favorite, trash, and restore contracts. The local backend keeps
+  trash recoverable under `.arclink-trash`; WebDAV delete is direct provider
+  delete and must remain UI-confirmed.
+- `arclink-code` owns the native code workspace. It uses
+  `ARCLINK_CODE_WORKSPACE_ROOT`, guards text saves with a SHA-256 expected hash,
+  scans bounded workspace depth for git repositories, and exposes source
+  control status, stage, unstage, confirmed discard, and commit operations. It
+  remains a lightweight native editor, not a full Monaco/VS Code workbench.
+- `arclink-terminal` owns the native terminal surface. It uses an
+  ArcLink-managed pty backend with stable session ids, persisted metadata,
+  bounded scrollback, polling output, input, rename/folder/reorder controls,
+  confirmation-gated close, sanitized errors, and an unrestricted-root startup
+  guard. It is not tmux-backed and does not claim true streaming transport.
+
+`bin/install-arclink-plugins.sh` installs Drive, Code, Terminal, and managed
+context by default, removes legacy dashboard plugin aliases, and enables the
+plugins in the target Hermes config. Docker reconcile/health paths repair
+Hermes dashboard mounts and rerun the managed plugin installer for existing
+deployment stacks before recreating `hermes-dashboard`.
+
+The rationale is to keep ArcLink-specific workspace behavior additive and
+replaceable. Hermes owns the dashboard plugin host; ArcLink owns the plugin
+files, allowed-root policy, secret redaction, and Docker mount wiring.
 
 ### External Providers (gated behind executor)
 
@@ -154,7 +194,9 @@ live-gated behavior.
 - **Compute**: dedicated Docker Compose project per deployment.
 - **Storage**: dedicated Nextcloud instance, DB, and Redis per deployment.
 - **Network**: Traefik labels with per-deployment hostnames or Tailscale path
-  routes.
+  routes. In Tailscale path mode, Docker health can publish per-deployment
+  Hermes, files, and code apps on stable tailnet HTTPS ports and persist those
+  URLs in deployment metadata.
 - **SSH**: Cloudflare Access TCP in domain mode or direct Tailscale SSH in
   Tailscale mode; no raw SSH over HTTP.
 - **Secrets**: per-deployment secret references; no shared credentials.
@@ -169,6 +211,12 @@ live-gated behavior.
   execution as a controlled runbook step until live host orchestration lands.
 - Public bots have runtime adapters with fake-mode fallback; live HTTP
   transport requires bot tokens.
+- ArcLink Drive and Code are functional first-generation Hermes plugins, but
+  not yet broad Google Drive or VS Code replacements. ArcLink Terminal has a
+  managed-pty persistent-session backend with bounded polling output. The
+  workspace Docker/TLS proof runner has passed desktop and mobile checks for
+  Drive, Code, and Terminal; this is separate from the broader hosted customer
+  live journey.
 - Live E2E scaffold exists (`tests/test_arclink_e2e_live.py`) with
   Stripe, selected ingress mode, Chutes, Telegram, Discord, and read-only Docker checks,
   but full live proof skips until credentials and explicit live flags are

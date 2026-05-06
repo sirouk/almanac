@@ -1015,8 +1015,7 @@ PY
 
   "$BOOTSTRAP_DIR/bin/install-arclink-plugins.sh" \
     "$BOOTSTRAP_DIR" \
-    "$ARCLINK_CURATOR_HERMES_HOME" \
-    arclink-managed-context
+    "$ARCLINK_CURATOR_HERMES_HOME"
 
   if [[ -x "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" ]]; then
     "$BOOTSTRAP_DIR/bin/migrate-hermes-config.sh" "$ARCLINK_CURATOR_HERMES_HOME" "$RUNTIME_DIR"

@@ -32,7 +32,14 @@ Template for recording live journey evidence. Fill in after a credentialed run.
 ## Evidence JSON
 
 Run `bin/arclink-live-proof --live --json` and paste the evidence JSON here after
-a live run, or copy the artifact from the `evidence/` directory:
+a live hosted run, or use `bin/arclink-live-proof --journey workspace --live
+--json` for native Drive, Code, and Terminal TLS proof. The workspace live run
+executes `deploy.sh docker upgrade`, `deploy.sh docker health`, then Playwright
+desktop/mobile browser checks for the native Drive, Code, and Terminal plugin
+routes. Browser proof records redacted JSON plus sanitized screenshot
+references under `evidence/workspace-screenshots/`; do not paste raw command
+output, terminal scrollback, local filesystem paths, or credential values. Copy
+the artifact from the `evidence/` directory:
 
 ```json
 {
@@ -56,7 +63,25 @@ a live run, or copy the artifact from the `evidence/` directory:
 - [ ] ARCLINK_E2E_DOCKER
 - [ ] TELEGRAM_BOT_TOKEN
 - [ ] DISCORD_BOT_TOKEN
+- [ ] ARCLINK_WORKSPACE_PROOF_TLS_URL
+- [ ] ARCLINK_WORKSPACE_PROOF_AUTH
+
+## Workspace Plugin Proof Steps
+
+| # | Step | Status | Duration (ms) | Notes |
+|---|------|--------|---------------|-------|
+| 1 | workspace_docker_upgrade_reconcile | pending | - | Requires ARCLINK_E2E_DOCKER |
+| 2 | workspace_docker_health | pending | - | Requires ARCLINK_E2E_DOCKER |
+| 3 | drive_tls_desktop_proof | pending | - | Requires TLS dashboard access |
+| 4 | drive_tls_mobile_proof | pending | - | Requires TLS dashboard access |
+| 5 | code_tls_desktop_proof | pending | - | Requires TLS dashboard access |
+| 6 | code_tls_mobile_proof | pending | - | Requires TLS dashboard access |
+| 7 | terminal_tls_desktop_proof | pending | - | Requires TLS dashboard access |
+| 8 | terminal_tls_mobile_proof | pending | - | Requires TLS dashboard access |
 
 ## Notes
 
 Record any anomalies, timing issues, or provider-specific observations here.
+Keep command output, raw terminal scrollback, local host paths, and credential
+values out of this file. Screenshot references should be relative artifact
+paths only.

@@ -7,7 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 
 class StripeWebhookError(ValueError):
@@ -101,7 +101,7 @@ class LiveStripeClient:
             "custom_text": {
                 "submit": {
                     "message": (
-                        "Raven is on the line. The moment payment clears, your ArcLink pod leaves the drawing board and joins the launch queue."
+                        "Raven is on the line. The moment payment clears, your ArcLink agent joins the launch queue."
                     )
                 }
             },
@@ -261,6 +261,7 @@ def arclink_access_urls(
     ingress_mode: str = "domain",
     tailscale_dns_name: str = "",
     tailscale_host_strategy: str = "path",
+    tailnet_service_ports: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     mode = str(ingress_mode or "domain").strip().lower()
     strategy = str(tailscale_host_strategy or "path").strip().lower()
@@ -272,7 +273,16 @@ def arclink_access_urls(
         )
         if strategy == "path":
             prefixes = arclink_role_path_prefixes(prefix)
-            return {role: f"https://{hostnames[role]}{prefixes[role]}" for role in hostnames}
+            urls = {role: f"https://{hostnames[role]}{prefixes[role]}" for role in hostnames}
+            ports = tailnet_service_ports or {}
+            for role in ("files", "code", "hermes"):
+                try:
+                    port = int(ports.get(role) or 0)
+                except (TypeError, ValueError):
+                    port = 0
+                if 0 < port < 65536:
+                    urls[role] = f"https://{hostnames[role]}:{port}/"
+            return urls
         return {role: f"https://{hostname}" for role, hostname in hostnames.items()}
     if mode != "domain":
         raise ValueError("ArcLink ingress mode must be domain or tailscale")

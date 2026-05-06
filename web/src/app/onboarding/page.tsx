@@ -23,20 +23,20 @@ const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; 
   founders: {
     name: "Limited 100 Founders",
     price: "$149/month",
-    summary: "Sovereign-equivalent access for the first 100 aboard.",
-    checkout: "Hire Founders - $149/month",
+    summary: "Agent onboard ArcLink for the first 100.",
+    checkout: "Onboard Agent - $149/month",
   },
   sovereign: {
     name: "Sovereign",
     price: "$199/month",
-    summary: "One private agent plus ArcLink systems.",
-    checkout: "Hire Sovereign - $199/month",
+    summary: "Agent onboard ArcLink.",
+    checkout: "Onboard Agent - $199/month",
   },
   scale: {
     name: "Scale",
     price: "$275/month",
-    summary: "Three private agents, ArcLink systems, and Federation.",
-    checkout: "Hire Scale - $275/month",
+    summary: "Agents onboard ArcLink with Federation.",
+    checkout: "Onboard Agents - $275/month",
   },
 };
 
@@ -149,8 +149,8 @@ export default function OnboardingPage() {
     try {
       const res = await api.openCheckout({
         session_id: sessionId,
-        success_url: window.location.origin + "/dashboard?session=" + encodeURIComponent(sessionId),
-        cancel_url: window.location.origin + "/onboarding?resume=1",
+        success_url: window.location.origin + "/checkout/success?session=" + encodeURIComponent(sessionId),
+        cancel_url: window.location.origin + "/checkout/cancel?session=" + encodeURIComponent(sessionId),
       });
       if (res.status === 200) {
         const session = (res.data as Record<string, Record<string, string>>).session;
@@ -187,14 +187,14 @@ export default function OnboardingPage() {
         />
         <p className="mb-2 text-xs uppercase tracking-[0.22em] text-soft-white/40">
           {step === "start" && "Step 1 of 4 - First contact"}
-          {step === "questions" && "Step 2 of 4 - Name on the hatch"}
+          {step === "questions" && "Step 2 of 4 - Name the agent"}
           {step === "checkout" && "Step 3 of 4 - Stripe handoff"}
           {step === "done" && "Step 4 of 4 - Launch queue"}
         </p>
         <h1 className="font-display text-2xl font-bold">
-          {step === "start" && "Choose Your Vessel"}
-          {step === "questions" && "Name On The Hatch"}
-          {step === "checkout" && `Hire ${PLAN_COPY[planId].name}`}
+          {step === "start" && "Choose ArcLink Onboarding"}
+          {step === "questions" && "Name The Agent"}
+          {step === "checkout" && PLAN_COPY[planId].checkout}
           {step === "done" && "Stripe Link Ready"}
         </h1>
 
@@ -209,7 +209,7 @@ export default function OnboardingPage() {
         {step === "start" && (
           <div className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              I can take you from a few answers to a private ArcLink vessel with agents, memory, files, code workspace, model access, and a live systems board already wired up.
+              I can take you from a few answers to agent onboard ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
             </p>
             <div className="grid gap-3">
               {!showStandardPlans ? (
@@ -221,7 +221,7 @@ export default function OnboardingPage() {
                     className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
                   >
                     Founders - $149/month
-                    <span className="mt-1 block text-xs font-normal text-jet/70">Limited to the first 100. Sovereign-equivalent access.</span>
+                    <span className="mt-1 block text-xs font-normal text-jet/70">Limited to the first 100. Agent onboard ArcLink.</span>
                   </button>
                   <button
                     type="button"
@@ -230,7 +230,7 @@ export default function OnboardingPage() {
                     className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
                   >
                     Sovereign / Scale
-                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Compare the standard vessels.</span>
+                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Compare agent onboarding options.</span>
                   </button>
                 </>
               ) : (
@@ -242,7 +242,7 @@ export default function OnboardingPage() {
                     className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
                   >
                     Sovereign - $199/month
-                    <span className="mt-1 block text-xs font-normal text-jet/70">One agent plus ArcLink systems.</span>
+                    <span className="mt-1 block text-xs font-normal text-jet/70">Agent onboard ArcLink.</span>
                   </button>
                   <button
                     type="button"
@@ -251,7 +251,7 @@ export default function OnboardingPage() {
                     className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
                   >
                     Scale - $275/month
-                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Three agents, ArcLink systems, and Federation.</span>
+                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Agents onboard ArcLink with Federation.</span>
                   </button>
                 </>
               )}
@@ -289,7 +289,7 @@ export default function OnboardingPage() {
         {step === "checkout" && (
           <div className="mt-6 space-y-4">
             <p className="text-sm text-soft-white/60">
-              I will hand you to Stripe, watch for confirmation, then move your {PLAN_COPY[planId].name} ArcLink vessel from idea to launch queue.
+              I will hand you to Stripe, watch for confirmation, then move your ArcLink onboarding into the launch queue.
             </p>
             <button
               onClick={handleCheckout}

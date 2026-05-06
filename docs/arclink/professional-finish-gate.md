@@ -46,7 +46,7 @@ end with honest evidence.
 Use `docs/arclink/brand-system.md` and the source brand kit. ArcLink should
 feel like premium private AI infrastructure: jet black, carbon, soft white,
 signal orange, precise status blue/green, Space Grotesk, Inter or Satoshi,
-minimal operational interfaces, direct operator language, and visible systems.
+minimal operational interfaces, direct operator language, and visible workflows.
 
 Do not use generic AI imagery, broad decorative gradients, vague marketing
 copy, or placeholder dashboards.

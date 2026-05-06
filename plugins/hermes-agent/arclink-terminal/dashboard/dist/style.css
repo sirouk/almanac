@@ -1,0 +1,252 @@
+.arclink-terminal {
+  min-height: 100%;
+  padding: 18px;
+  color: #e6edf3;
+  background: #0b0f14;
+  box-sizing: border-box;
+}
+
+.arclink-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.arclink-terminal-actions,
+.arclink-terminal-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.arclink-terminal-title h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.arclink-terminal-title p,
+.arclink-terminal-facts {
+  margin: 4px 0 0;
+  color: #9aa4b2;
+  font-size: 13px;
+}
+
+.arclink-terminal button {
+  border: 1px solid #303846;
+  border-radius: 6px;
+  background: #161b22;
+  color: #e6edf3;
+  padding: 8px 11px;
+}
+
+.arclink-terminal button:hover {
+  border-color: #4f9cf9;
+}
+
+.arclink-terminal button:disabled {
+  opacity: 0.55;
+}
+
+.arclink-terminal button.danger,
+.arclink-terminal-confirm .danger {
+  border-color: #7f1d1d;
+  background: #2b1114;
+  color: #fecaca;
+}
+
+.arclink-terminal-main {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 520px;
+}
+
+.arclink-terminal-list,
+.arclink-terminal-pane {
+  border: 1px solid #222a35;
+  border-radius: 8px;
+  background: #10151c;
+}
+
+.arclink-terminal-list {
+  padding: 12px;
+}
+
+.arclink-terminal-group {
+  margin-bottom: 12px;
+}
+
+.arclink-terminal-group-label {
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.arclink-terminal-section {
+  color: #d8dee9;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.arclink-terminal-session {
+  width: 100%;
+  display: grid;
+  gap: 3px;
+  margin-bottom: 6px;
+  text-align: left;
+}
+
+.arclink-terminal-session.selected {
+  border-color: #4f9cf9;
+  background: #102033;
+}
+
+.arclink-terminal-session strong,
+.arclink-terminal-session span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-terminal-session span {
+  color: #9aa4b2;
+  font-size: 12px;
+}
+
+.arclink-terminal-pane {
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.arclink-terminal-screen {
+  min-height: 360px;
+  padding: 14px;
+  overflow: auto;
+  background: #070a0f;
+  color: #d1fae5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.arclink-terminal-screen.muted {
+  color: #9aa4b2;
+}
+
+.arclink-terminal-screen span:first-child {
+  color: #5eead4;
+  margin-right: 8px;
+}
+
+.arclink-terminal-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid #222a35;
+}
+
+.arclink-terminal-input input {
+  min-width: 0;
+  border: 1px solid #303846;
+  border-radius: 6px;
+  background: #070a0f;
+  color: #e6edf3;
+  padding: 8px 10px;
+}
+
+.arclink-terminal-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid #222a35;
+}
+
+.arclink-terminal-empty {
+  color: #9aa4b2;
+  font-size: 13px;
+}
+
+.arclink-terminal-error {
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  background: #2b1114;
+  color: #fecaca;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.arclink-terminal-empty.full {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #222a35;
+  border-radius: 8px;
+  background: #10151c;
+}
+
+.arclink-terminal-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(7, 10, 15, 0.72);
+}
+
+.arclink-terminal-confirm {
+  width: min(420px, 100%);
+  border: 1px solid #303846;
+  border-radius: 8px;
+  background: #10151c;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+}
+
+.arclink-terminal-confirm h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.arclink-terminal-confirm p {
+  margin: 0 0 14px;
+  color: #9aa4b2;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 820px) {
+  .arclink-terminal-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .arclink-terminal-actions {
+    width: 100%;
+  }
+
+  .arclink-terminal-actions button {
+    flex: 1 1 88px;
+  }
+
+  .arclink-terminal-main {
+    grid-template-columns: 1fr;
+  }
+
+  .arclink-terminal-screen {
+    min-height: 280px;
+  }
+}

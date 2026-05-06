@@ -13,13 +13,13 @@ Some broader infrastructure items in the scope below are live foundations or pla
 | Layer | Name | Role |
 | --- | --- | --- |
 | The product | ArcLink | Private AI infrastructure, productized. The thing the customer buys. |
-| The metaphor | The Ship / The Vessel | Internal and Raven voice framing. Each customer gets their own ArcLink vessel brought online around them. |
-| The cohort | The 100 | First 100 sovereigns aboard. Founder-tier mythology: early operators who shaped the hull. |
+| The metaphor | Onboarding ArcLink | Internal and Raven voice framing. Keep the public promise simple: Agent onboard ArcLink, or Agents onboard ArcLink. |
+| The cohort | The 100 | First 100 sovereigns aboard. Founder-tier mythology: early operators who shape the launch. |
 | The guide | Raven | Public-facing bot/persona. First contact, onboarding, launch liaison, control-panel guide. Telegram username: `@arclink_bot`. Bio: `ARCLINK CURATOR`. |
 | The agent runtime | Hermes | The agentic harness inside each pod: memory, skills, tools, reasoning loop. Each pod ships with a private Hermes. |
 | The retrieval rail | qmd vault | Vault index/retrieval over the user's files. |
 | The model rail | Chutes-first | SOTA inference default; BYOK lanes for Codex, Claude, and other providers preserved. |
-| The unit | Pod / Agent / Crew member | One Hermes instance plus its surrounding services. Limited 100 Founders is $149/month for Sovereign-equivalent access. Sovereign is $199/month for one agent plus ArcLink systems. Scale is $275/month for three agents plus ArcLink systems and Federation. Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale. |
+| The unit | Agent / Crew member | One Hermes instance plus its surrounding services. Limited 100 Founders is $149/month for Sovereign-equivalent access. Sovereign is $199/month: Agent onboard ArcLink. Scale is $275/month: Agents onboard ArcLink with Federation. Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale. |
 
 Voice rule:
 
@@ -98,37 +98,37 @@ Hero headline:
 
 ```text
 I'm Raven.
-I'll bring ArcLink online.
+I'll bring your agent aboard ArcLink.
 ```
 
 Hero body:
 
 ```text
-Give me a name, a mission, and a cleared Stripe handoff. I will turn that into your private ArcLink vessel. Sovereign brings one agent plus ArcLink systems for $99/month. Scale brings three agents, ArcLink systems, and Federation for $179/month.
+Give me a name, a mission, and a cleared Stripe handoff. I will bring your agent aboard ArcLink. Sovereign is Agent onboard ArcLink for $199/month. Scale is Agents onboard ArcLink with Federation for $275/month.
 ```
 
 Hero CTAs:
 
 ```text
-Choose My Vessel
+Onboard Agent
 Open Dashboard
 ```
 
 Feature grid:
 
 ```text
-Hermes Agent - I give each pod a private assistant with memory, skills, and room to grow.
+Hermes Agent - I give each operator a private assistant with memory, skills, and room to grow.
 SOTA Model Rails - I start on Chutes and keep BYOK lanes open for the frontier models you trust.
 qmd Retrieval - I keep the vault searchable so agents can pull the right context fast.
-Managed Memory - I keep lightweight memory stubs hot so the vessel stays oriented.
-Files & Code - I wire in Nextcloud and browser VS Code so your pod has hands, not just words.
+Managed Memory - I keep lightweight memory stubs hot so the agent stays oriented.
+Files & Code - I wire in ArcLink Drive and ArcLink Code so your agent has hands, not just words.
 Health & Ops - I watch DNS, billing, provisioning, and services so the launch path stays visible.
 ```
 
 Footer:
 
 ```text
-© {year} ArcLink. Private AI Infrastructure.
+© {year} ArcLink. Agents onboard ArcLink.
 ```
 
 ## Web Onboarding
@@ -138,20 +138,22 @@ The web onboarding page is a single card with Raven's avatar at the top.
 Start step heading:
 
 ```text
-I'm Raven
+Choose ArcLink Onboarding
 ```
 
 Start body:
 
 ```text
-I can take you from a few answers to a private AI agent of your own with memory, document retrieval, files, a code workspace, and a live dashboard already wired up. Stripe collects email securely at checkout.
+I can take you from a few answers to agent onboard ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
 ```
 
 Package CTAs:
 
 ```text
-Sovereign - $99/month
-Scale - $179/month
+Founders - $149/month
+Sovereign / Scale
+Sovereign - $199/month
+Scale - $275/month
 ```
 
 Loading:
@@ -163,7 +165,7 @@ Opening...
 Questions heading:
 
 ```text
-Name On The Hatch
+Name The Agent
 ```
 
 Field:
@@ -181,13 +183,13 @@ Your name or org
 Helper:
 
 ```text
-Limited 100 Founders is $149/month for Sovereign-equivalent access. Sovereign brings one agent plus ArcLink systems for $199/month. Scale brings three agents plus ArcLink systems and Federation for $275/month. After launch, Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale.
+{Plan Name} is on deck at {Plan Price}. {Plan Summary} Agentic Expansion is $99/month on Sovereign and $79/month on Scale.
 ```
 
 CTA:
 
 ```text
-Paint The Hatch
+Save & Continue
 ```
 
 Loading:
@@ -199,19 +201,23 @@ Saving...
 Checkout heading:
 
 ```text
-Hire Founders
+Onboard Agent - $149/month
+Onboard Agent - $199/month
+Onboard Agents - $275/month
 ```
 
 Checkout body:
 
 ```text
-I will hand you to Stripe, watch for confirmation, then move your first ArcLink agent from idea to launch queue.
+I will hand you to Stripe, watch for confirmation, then move your ArcLink onboarding into the launch queue.
 ```
 
 CTA:
 
 ```text
-Hire Founders - $149/month
+Onboard Agent - $149/month
+Onboard Agent - $199/month
+Onboard Agents - $275/month
 ```
 
 Loading:
@@ -250,6 +256,13 @@ Fallback CTA:
 Open Dashboard →
 ```
 
+Checkout return pages:
+
+```text
+/checkout/success?session={session_id} clears local onboarding resume state and offers Open Dashboard or Add Another Agent.
+/checkout/cancel?session={session_id} preserves the onboarding resume path and offers Resume Onboarding or Back Home.
+```
+
 Development-only chip:
 
 ```text
@@ -267,9 +280,9 @@ Triggered by `/start`, empty message, `start`, or `restart`.
 ```text
 Raven here. ArcLink is in range.
 
-I bring private agents online with memory, files, code workspace, model access, and a live systems board. No bot-building. No server chores.
+I bring private agents online with memory, files, code workspace, model access, and dashboard visibility. No bot-building. No server chores.
 
-Tap Take Me Aboard to pick Sovereign or Scale. Tap Update Name and just tell me what to call you.
+Tap Take Me Aboard to pick Founders, Sovereign, or Scale. Tap Update Name and just tell me what to call you.
 ```
 
 Buttons:
@@ -284,7 +297,7 @@ Update Name
 ```text
 Comms are open.
 
-I will keep this simple until your first vessel is live. I can help you pick Sovereign or Scale, open checkout, or read the board.
+I will keep this simple until your first agent is live. I can help you pick Sovereign or Scale, open checkout, or read the board.
 
 After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health.
 ```
@@ -317,24 +330,47 @@ Update Name
 I do not need your email in chat. Stripe handles that securely at checkout. Tap Update Name and tell me what to call you.
 ```
 
-### Name Captured
+### Package Prompt
 
-Triggered by `/name <Your Name>`.
+Triggered by `Take Me Aboard`, `/packages`, or `/name <Your Name>` after the
+name is captured.
 
 ```text
 Welcome aboard, {Name}.
 
-Choose your ArcLink vessel.
+Choose your ArcLink onboarding lane.
 
-Sovereign is $99/month: one private agent plus ArcLink systems.
-Scale is $179/month: three agents, ArcLink systems, and Federation.
+Limited 100 Founders is $149/month: Sovereign-equivalent access for the first 100 aboard.
+Sovereign is $199/month. Scale is $275/month.
+
+Agentic Expansion after launch starts at $79/month on Scale and $99/month on Sovereign.
 ```
 
 Buttons:
 
 ```text
-Sovereign - $99/month
-Scale - $179/month
+Founders - $149/month
+Sovereign / Scale
+```
+
+### Standard Package Prompt
+
+Triggered by `Sovereign / Scale` or `/packages standard`.
+
+```text
+Welcome aboard, {Name}.
+
+Choose how many agents to onboard ArcLink.
+
+Sovereign is $199/month: Agent onboard ArcLink.
+Scale is $275/month: Agents onboard ArcLink with Federation.
+```
+
+Buttons:
+
+```text
+Sovereign - $199/month
+Scale - $275/month
 ```
 
 ### Plan Selected
@@ -344,7 +380,7 @@ Triggered by `/plan sovereign` or `/plan scale`. `starter` and `operator` are ac
 ```text
 Sovereign is locked.
 
-One private agent plus ArcLink systems for $199/month. Stripe handles the handoff, then I bring the vessel online and report back here.
+Agent onboard ArcLink for $199/month. Stripe handles the handoff, then I move onboarding into the launch queue and report back here.
 ```
 
 Buttons:
@@ -365,8 +401,8 @@ Checkout is ready. Complete the Stripe handoff here; when payment clears, I move
 Buttons:
 
 ```text
-Hire Founders
-Run Systems Check
+Hire Founders - $149/month
+Check Status
 ```
 
 ### Status
@@ -390,7 +426,7 @@ Hire Founders
 ```text
 Control panel is open.
 
-Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, and `/cancel`.
+Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/pair_channel`, and `/cancel`.
 
 Pick one lane and I will keep the steps tight.
 ```
@@ -426,7 +462,7 @@ Add Agent
 ### No Agent Yet
 
 ```text
-I do not see your first agent yet. Choose Founders for $149/month, Sovereign for $199/month, or Scale for $275/month. Once a vessel is active, Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale.
+I do not see your first agent yet. Choose Founders for $149/month, Sovereign for $199/month, or Scale for $275/month. Once an agent is active, Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale.
 ```
 
 Button:
@@ -440,14 +476,14 @@ Take Me Aboard
 Triggered by `/agent-<slug>`.
 
 ```text
-Done. I have {Agent Label} on the rail now. Notion, backup, and system workflows will target that agent until you switch again.
+Done. I have {Agent Label} on the rail now. Notion, backup, and status workflows will target that agent until you switch again.
 ```
 
 Buttons:
 
 ```text
 Show My Crew
-Run Systems Check
+Check Status
 ```
 
 ### Agent Not Found
@@ -467,14 +503,33 @@ Show My Crew
 Triggered by `/add-agent`.
 
 ```text
-I have another bay open. Hire Agentic Expansion through Stripe, and I will move the new agent into the launch queue.
+Agentic Expansion for your {plan} plan is {$price}/month. Clear the Stripe handoff and I will move the new agent into the launch queue with the rest of your crew.
 ```
 
 Buttons:
 
 ```text
-Hire Additional Agent
+Hire Agent - {$price}/month
 Back To My Crew
+```
+
+### Pair Channel
+
+Triggered by `/pair_channel` or `/pair-channel`.
+
+```text
+Pairing lane open.
+
+On the other channel, tell Raven: `/pair-channel {code}`
+
+This code expires in 10 minutes. If your agent is already online, the other channel gets the same ArcLink identity, crew, tools, vault, Notion lane, and status. The chat session stays separate; ArcLink links both channels to the same agent account.
+```
+
+Buttons:
+
+```text
+Show My Crew
+Check Status
 ```
 
 ### Connect Notion
@@ -549,7 +604,7 @@ Buttons:
 
 ```text
 Take Me Aboard
-Run Systems Check
+Check Status
 ```
 
 ### Guard Rails
@@ -600,7 +655,7 @@ Hidden/account-state actions:
 
 | Action | Description |
 | --- | --- |
-| `/add-agent` | Hire Agentic Expansion for the active vessel |
+| `/add-agent` | Hire Agentic Expansion for the active account |
 | `/agent-<slug>` | Switch active agent |
 
 Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Limited 100 Founders, Sovereign, and Scale.
@@ -626,7 +681,7 @@ Back To My Crew
 Wire Notion
 Set Up Backup
 Complete The Hire
-Paint The Hatch
+Onboard Agent
 Open Dashboard
 ```
 
@@ -673,6 +728,6 @@ Not:
 
 > I opened a bot and got a slash-command help menu.
 
-The ship metaphor should be used sparingly: vessel, hatch, hull, aboard, course, helm, crew, bay, comms, on the rail, in range. Use these as Raven's natural vocabulary, never as costume.
+The ship metaphor should stay internal. Public copy should prefer the simple purchase promise: Agent onboard ArcLink, or Agents onboard ArcLink.
 
 The 100 is founder-tier framing for the first 100 sovereigns aboard. Reserve it for launch comms, founder comms, and a future founder-cohort surface. It is not currently wired into the bot or web copy.

@@ -42,6 +42,7 @@ CONTAINER_HERMES_HOME = "/home/arclink/.hermes"
 CONTAINER_QMD_STATE_DIR = "/home/arclink/.qmd"
 CONTAINER_VAULT_DIR = "/srv/vault"
 CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
+CONTAINER_CODE_WORKSPACE_DIR = "/workspace"
 
 _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
@@ -248,6 +249,30 @@ def _notion_callback_url(access_urls: Mapping[str, str]) -> str:
     return f"{dashboard_url}/notion/webhook"
 
 
+def _clean_tailnet_service_ports(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    ports: dict[str, int] = {}
+    for role in ("files", "code", "hermes"):
+        try:
+            port = int(value.get(role) or 0)
+        except (TypeError, ValueError):
+            continue
+        if 0 < port < 65536:
+            ports[role] = port
+    return ports
+
+
+def _url_hostport(value: str) -> str:
+    text = str(value or "").strip()
+    if not text.startswith("https://"):
+        return ""
+    hostport, _, path = text.removeprefix("https://").partition("/")
+    if path.strip("/"):
+        return ""
+    return hostport
+
+
 def _render_notion_webhook_labels(
     *,
     prefix: str,
@@ -415,7 +440,11 @@ def _render_services(
             image=app_image,
             command=["hermes", "dashboard", "--host", "0.0.0.0", "--port", "3210", "--insecure"],
             environment=env,
-            volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
+            volumes=[
+                {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
+                {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
+                {"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR},
+            ],
             labels=labels["hermes"],
             depends_on=["managed-context-install"],
             deploy=_limits("hermes-dashboard"),
@@ -500,12 +529,12 @@ def _render_services(
             entrypoint=["/bin/sh", "-lc"],
             command=[
                 f"PASSWORD=\"$(cat {secret_target['code_server_password']})\" "
-                "exec code-server --bind-addr 0.0.0.0:8080 /workspace",
+                f"exec code-server --bind-addr 0.0.0.0:8080 {CONTAINER_CODE_WORKSPACE_DIR}",
             ],
             environment={
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
             },
-            volumes=[{"source": roots["code_workspace"], "target": "/workspace"}],
+            volumes=[{"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR}],
             labels=labels["code"],
             secrets=[{"source": "code_server_password", "target": secret_target["code_server_password"]}],
             deploy=_limits("code-server"),
@@ -642,12 +671,14 @@ def render_arclink_provisioning_intent(
     )
     secret_refs = _render_secret_refs(deployment_id, metadata)
     compose_secrets = _render_compose_secrets(secret_refs)
+    tailnet_service_ports = _clean_tailnet_service_ports(metadata.get("tailnet_service_ports"))
     access_urls = arclink_access_urls(
         prefix=prefix,
         base_domain=clean_base_domain,
         ingress_mode=clean_ingress_mode,
         tailscale_dns_name=clean_tailscale_dns_name,
         tailscale_host_strategy=clean_tailscale_strategy,
+        tailnet_service_ports=tailnet_service_ports,
     )
     notion_callback_path = _notion_callback_path(
         prefix,
@@ -682,6 +713,10 @@ def render_arclink_provisioning_intent(
         "ARCLINK_FILES_HOST": hostnames["files"],
         "ARCLINK_CODE_HOST": hostnames["code"],
         "ARCLINK_HERMES_HOST": hostnames["hermes"],
+        "ARCLINK_DASHBOARD_URL": access_urls["dashboard"],
+        "ARCLINK_FILES_URL": access_urls["files"],
+        "ARCLINK_CODE_URL": access_urls["code"],
+        "ARCLINK_HERMES_URL": access_urls["hermes"],
         "ARCLINK_PRIMARY_PROVIDER": primary_provider(env),
         "ARCLINK_CHUTES_BASE_URL": chutes_base_url(env),
         "ARCLINK_CHUTES_DEFAULT_MODEL": chutes_default_model(env),
@@ -692,6 +727,8 @@ def render_arclink_provisioning_intent(
         "CODE_SERVER_PASSWORD_REF": secret_refs["code_server_password"],
         "HERMES_HOME": CONTAINER_HERMES_HOME,
         "VAULT_DIR": CONTAINER_VAULT_DIR,
+        "ARCLINK_DRIVE_ROOT": CONTAINER_VAULT_DIR,
+        "ARCLINK_CODE_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "QMD_STATE_DIR": CONTAINER_QMD_STATE_DIR,
         "QMD_INDEX_NAME": f"vault-{deployment_id}",
         "QMD_COLLECTION_NAME": f"vault-{deployment_id}",
@@ -711,6 +748,13 @@ def render_arclink_provisioning_intent(
         labels=labels,
         compose_secrets=compose_secrets,
     )
+    nextcloud_hostport = _url_hostport(access_urls["files"])
+    if nextcloud_hostport:
+        nextcloud_env = services["nextcloud"]["environment"]
+        nextcloud_env["NEXTCLOUD_TRUSTED_DOMAINS"] = f"{hostnames['files']} {nextcloud_hostport}"
+        nextcloud_env["OVERWRITEPROTOCOL"] = "https"
+        nextcloud_env["OVERWRITEHOST"] = nextcloud_hostport
+        nextcloud_env["OVERWRITECLIURL"] = access_urls["files"].rstrip("/")
     entitlement_state = arclink_deployment_entitlement_state(conn, deployment_id=deployment_id)
     executable = arclink_deployment_can_provision(conn, deployment_id=deployment_id)
     ssh = build_arclink_ssh_access_record(

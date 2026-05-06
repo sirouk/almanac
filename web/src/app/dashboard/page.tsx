@@ -148,8 +148,8 @@ export default function DashboardPage() {
       <div className="flex flex-1">
         <aside className="hidden w-64 shrink-0 border-r border-border/70 bg-carbon/35 p-4 md:block">
           <div className="mb-5 border border-border bg-surface/70 p-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-soft-white/35">Vessel</p>
-            <p className="mt-1 truncate font-display text-sm font-semibold">{activeDeployment ? deploymentTitle(activeDeployment) : "No active vessel"}</p>
+            <p className="text-[10px] uppercase tracking-[0.2em] text-soft-white/35">Agent</p>
+            <p className="mt-1 truncate font-display text-sm font-semibold">{activeDeployment ? deploymentTitle(activeDeployment) : "No active agent"}</p>
             <div className="mt-3"><StatusBadge status={activeDeployment?.status || "standby"} /></div>
           </div>
           <nav className="space-y-1">
@@ -191,7 +191,7 @@ export default function DashboardPage() {
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               <SignalPanel label="Account" value={entitlementState} />
-              <SignalPanel label="Primary vessel" value={activeDeployment ? deploymentTitle(activeDeployment) : "Not launched"} />
+              <SignalPanel label="Primary agent" value={activeDeployment ? deploymentTitle(activeDeployment) : "Not launched"} />
               <SignalPanel label="Service posture" value={`${health.healthy}/${health.total || 0} healthy`} good={health.attention === 0 && health.total > 0} />
             </div>
           </section>
@@ -578,7 +578,7 @@ function DeploymentOverview({ dep }: { dep: Deployment }) {
     <div className="border border-border bg-surface/85 p-4">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
-          <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Private vessel</p>
+          <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Private agent</p>
           <h3 className="mt-1 truncate font-display text-xl font-semibold">{deploymentTitle(dep)}</h3>
           <p className="mt-1 break-all font-mono text-xs text-soft-white/35">{dep.deployment_id}</p>
         </div>

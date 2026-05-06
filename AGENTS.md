@@ -502,6 +502,10 @@ New and refreshed agents should get these defaults from the outset:
   upgrades on ArcLink's pinned shared-runtime path.
 - Telegram `/start` support through ArcLink's Hermes hook, not core Hermes.
 - `arclink-managed-context` plugin installed and enabled.
+- `arclink-drive`, `arclink-code`, and `arclink-terminal` dashboard plugins
+  installed and enabled so Hermes shows `ArcLink Drive`, `ArcLink Code`, and the
+  managed-pty `ArcLink Terminal` sidebar tab without ArcLink patching Hermes
+  core dashboard code.
 - Per-agent ArcLink MCP bootstrap token installed at
   `HERMES_HOME/secrets/arclink-bootstrap-token`. Agents do not pass this token
   manually; `arclink-managed-context` injects it before ArcLink MCP tool
@@ -523,10 +527,13 @@ hooks/hermes-agent/arclink-telegram-start/handler.py
 bin/install-arclink-plugins.sh
 ```
 
-The managed context plugin lives here:
+The ArcLink Hermes plugins live here:
 
 ```text
 plugins/hermes-agent/arclink-managed-context/
+plugins/hermes-agent/arclink-drive/
+plugins/hermes-agent/arclink-code/
+plugins/hermes-agent/arclink-terminal/
 ```
 
 Per-user installation and refresh paths:

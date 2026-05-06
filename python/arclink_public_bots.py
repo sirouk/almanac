@@ -267,9 +267,9 @@ def _package_prompt_reply(
             action="prompt_package",
             reply=(
                 f"{header}\n\n"
-                "Choose your standard ArcLink vessel.\n\n"
-                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: one private agent plus ArcLink systems.\n"
-                f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: three agents, ArcLink systems, and Federation.\n\n"
+                "Choose how many agents to onboard ArcLink.\n\n"
+                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: agent onboard ArcLink.\n"
+                f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: agents onboard ArcLink with Federation.\n\n"
                 f"Agentic Expansion after launch: Sovereign agents are ${SOVEREIGN_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each; "
                 f"Scale agents are ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each."
             ),
@@ -283,7 +283,7 @@ def _package_prompt_reply(
         action="prompt_package",
         reply=(
             f"{header}\n\n"
-            f"Choose your ArcLink vessel.\n\n"
+            f"Choose your ArcLink onboarding lane.\n\n"
             f"Limited 100 Founders is ${FOUNDERS_MONTHLY_DOLLARS}/month: Sovereign-equivalent access for the first 100 aboard.\n"
             f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month. Scale is ${SCALE_MONTHLY_DOLLARS}/month.\n\n"
             f"Agentic Expansion after launch starts at ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month on Scale "
@@ -731,12 +731,27 @@ def _deployment_context(
 
 def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     metadata = _metadata(deployment)
+    stored_urls = metadata.get("access_urls")
+    publish_state = metadata.get("tailnet_app_publication")
+    tailnet_apps_unavailable = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "unavailable"
+    if isinstance(stored_urls, Mapping):
+        safe_urls = {
+            str(role): str(url).strip()
+            for role, url in stored_urls.items()
+            if str(role).strip() and str(url).strip().startswith("https://")
+        }
+        if {"dashboard", "files", "code", "hermes"} <= set(safe_urls):
+            return safe_urls
+        if tailnet_apps_unavailable and safe_urls.get("dashboard"):
+            return {"dashboard": safe_urls["dashboard"]}
     base_domain = str(deployment.get("base_domain") or metadata.get("base_domain") or "").strip().lower().strip(".")
     ingress_mode = str(metadata.get("ingress_mode") or "").strip().lower()
     if not ingress_mode:
         ingress_mode = "tailscale" if base_domain.endswith(".ts.net") else "domain"
     tailscale_dns_name = str(metadata.get("tailscale_dns_name") or base_domain).strip().lower().strip(".")
     tailscale_strategy = str(metadata.get("tailscale_host_strategy") or "path").strip().lower()
+    if ingress_mode == "tailscale" and tailnet_apps_unavailable:
+        return {"dashboard": f"https://{tailscale_dns_name or base_domain}/u/{deployment.get('prefix') or ''}"}
     return arclink_access_urls(
         prefix=str(deployment.get("prefix") or ""),
         base_domain=base_domain,
@@ -796,7 +811,7 @@ def _aboard_freeform_reply(
 
 def _need_finished_onboarding_reply() -> str:
     return (
-        "That lane opens once your first agent is awake aboard ArcLink. Send `/start` and I will walk you to the hatch, "
+        "That lane opens once your first agent is awake aboard ArcLink. Send `/start` and I will walk you through onboarding, "
         "or finish checkout if your launch is already in motion."
     )
 
@@ -910,8 +925,8 @@ def _pair_channel_reply(
             },
         )
         live_note = (
-            "If your pod is already online, the other channel gets the same ArcLink identity, crew, tools, vault, Notion lane, and system status. "
-            "The chat session stays separate; the vessel underneath is the same."
+            "If your agent is already online, the other channel gets the same ArcLink identity, crew, tools, vault, Notion lane, and status. "
+            "The chat session stays separate; ArcLink links both channels to the same agent account."
             if deployment
             else "If you are still prelaunch, the other channel joins this same launch path."
         )
@@ -928,7 +943,7 @@ def _pair_channel_reply(
             deployment=deployment,
             buttons=(
                 _button("Show My Crew", command="/agents", style="secondary"),
-                _button("Run Systems Check", command="/status", style="secondary"),
+                _button("Check Status", command="/status", style="secondary"),
             ),
         )
 
@@ -1046,7 +1061,7 @@ def _pair_channel_reply(
         reply=(
             "Channels paired.\n\n"
             "Same ArcLink identity, same crew, same tools, same vault, same Notion rail. "
-            "Telegram and Discord keep separate chat threads, but Raven is now looking at the same vessel underneath."
+            "Telegram and Discord keep separate chat threads, but Raven is now looking at the same ArcLink account."
         ),
         session=target,
         deployment=linked_deployment,
@@ -1091,7 +1106,7 @@ def _connect_notion_reply(
         metadata={"deployment_status": str(deployment.get("status") or "")},
     )
     lines = [
-        "Opening the Notion lane into your vessel.",
+        "Opening the Notion lane for your ArcLink agent.",
         "",
         "Drop this callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
@@ -1245,12 +1260,12 @@ def _switch_agent_reply(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="switch_agent",
-                reply=f"Helm transferred. {label} is on the rail. Notion, backup, and system lanes will route to that agent until you call another to the helm.",
+                reply=f"Focus moved. {label} is on the rail. Notion, backup, and status lanes will route to that agent until you choose another.",
                 session=updated,
                 deployment=item,
                 buttons=(
                     _button("Show My Crew", command="/agents", style="secondary"),
-                    _button("Run Systems Check", command="/status", style="secondary"),
+                    _button("Check Status", command="/status", style="secondary"),
                 ),
             )
     return _turn(
@@ -1345,7 +1360,7 @@ def _add_agent_reply(
         extra_session,
         action="open_add_agent_checkout",
         reply=(
-            f"A bay is open. Agentic Expansion for your {_plan_label(plan)} vessel is {expansion_label}. "
+            f"Agentic Expansion for your {_plan_label(plan)} plan is {expansion_label}. "
             "Clear the Stripe handoff and I will move the new agent into the launch queue with the rest of your crew."
         ),
         buttons=(
@@ -1388,7 +1403,7 @@ def _handle_active_workflow(
             deployment=deployment,
             buttons=(
                 _button("Take Me Aboard", command="/packages"),
-                _button("Run Systems Check", command="/status", style="secondary"),
+                _button("Check Status", command="/status", style="secondary"),
             ),
         )
     if workflow == "name_update":
@@ -1519,7 +1534,7 @@ def _help_reply(
             action="show_help",
             reply=(
                 "Comms are open.\n\n"
-                "I will keep this simple until your first vessel is live. I can help you pick Founders, Sovereign, or Scale, open checkout, or read the board.\n\n"
+                "I will keep this simple until your first agent is live. I can help you pick Founders, Sovereign, or Scale, open checkout, or read the board.\n\n"
                 "After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health."
             ),
             session=session,
@@ -1700,7 +1715,7 @@ def handle_arclink_public_bot_turn(
             action="prompt_name",
             reply=(
                 f"{greeting}\n\n"
-                "I bring private agents online with memory, files, code workspace, model access, and a live systems board. "
+                "I bring private agents online with memory, files, code workspace, model access, and dashboard visibility. "
                 "No bot-building. No server chores.\n\n"
                 "Tap Take Me Aboard to pick Founders, Sovereign, or Scale. Tap Update Name and just tell me what to call you."
             ),
@@ -1795,20 +1810,20 @@ def handle_arclink_public_bot_turn(
         if plan == "scale":
             plan_reply = (
                 "Scale is locked.\n\n"
-                f"Three agents, ArcLink systems, and Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
-                "Stripe handles the handoff, then I bring the vessel online and report back here."
+                f"Agents onboard ArcLink with Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
+                "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
         elif plan == "founders":
             plan_reply = (
                 "Limited 100 Founders is locked.\n\n"
                 f"Sovereign-equivalent access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
-                "You get one private agent plus ArcLink systems while the Founders cohort is open."
+                "Agent onboard ArcLink while the Founders cohort is open."
             )
         else:
             plan_reply = (
                 "Sovereign is locked.\n\n"
-                f"One private agent plus ArcLink systems for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
-                "Stripe handles the handoff, then I bring the vessel online and report back here."
+                f"Agent onboard ArcLink for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
+                "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
         return _reply(
             session,
@@ -1848,11 +1863,11 @@ def handle_arclink_public_bot_turn(
             action="open_checkout",
             reply=(
                 f"{plan_label} checkout is open. Complete the Stripe handoff at the link below. "
-                "The instant payment clears, I move your ArcLink vessel into the launch queue and report back here."
+                "The instant payment clears, I move your ArcLink agent into the launch queue and report back here."
             ),
             buttons=(
                 _button(_plan_checkout_label(selected_plan), url=str(session.get("checkout_url") or "")),
-                _button("Run Systems Check", command="/status", style="secondary"),
+                _button("Check Status", command="/status", style="secondary"),
             ),
         )
     return _reply(

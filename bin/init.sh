@@ -315,8 +315,7 @@ install_default_plugins() {
   local hermes_home="$1"
   "$SHARED_REPO_DIR/bin/install-arclink-plugins.sh" \
     "$SHARED_REPO_DIR" \
-    "$hermes_home" \
-    arclink-managed-context
+    "$hermes_home"
 }
 
 register_default_mcps() {

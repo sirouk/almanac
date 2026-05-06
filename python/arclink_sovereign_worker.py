@@ -253,6 +253,7 @@ def process_sovereign_deployment(
         metadata={"job_id": str(job["job_id"])},
     )
     try:
+        deployment = _ensure_tailnet_service_ports(conn, deployment=deployment, worker=worker)
         result = _apply_deployment(conn, deployment=deployment, job=job, worker=worker, executor=executor)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
         _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
@@ -291,6 +292,75 @@ def process_sovereign_deployment(
             metadata={"job_id": str(job["job_id"]), "error": error},
         )
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "failed", "error": error}
+
+
+def _tailnet_port(value: Any) -> int:
+    try:
+        port = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return port if 0 < port < 65536 else 0
+
+
+def _tailnet_ports_from_metadata(metadata: Mapping[str, Any]) -> dict[str, int]:
+    raw = metadata.get("tailnet_service_ports")
+    if not isinstance(raw, Mapping):
+        return {}
+    roles = ("hermes", "files", "code")
+    return {role: port for role in roles if (port := _tailnet_port(raw.get(role)))}
+
+
+def _ensure_tailnet_service_ports(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+) -> dict[str, Any]:
+    if worker.ingress_mode != "tailscale" or worker.tailscale_host_strategy != "path":
+        return dict(deployment)
+    roles = ("hermes", "files", "code")
+    deployment_id = str(deployment["deployment_id"])
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    ports = _tailnet_ports_from_metadata(metadata)
+    if set(roles) <= set(ports):
+        return dict(deployment)
+
+    used: set[int] = set()
+    for row in conn.execute("SELECT deployment_id, metadata_json FROM arclink_deployments").fetchall():
+        if str(row["deployment_id"]) == deployment_id:
+            continue
+        used.update(_tailnet_ports_from_metadata(json_loads_safe(str(row["metadata_json"] or "{}"))).values())
+
+    try:
+        next_block = int(str(worker.env.get("ARCLINK_TAILNET_SERVICE_PORT_BASE") or "8443"))
+    except ValueError:
+        next_block = 8443
+    if next_block < 1 or next_block + len(roles) >= 65536:
+        next_block = 8443
+    while True:
+        candidate = {role: next_block + offset for offset, role in enumerate(roles)}
+        if all(0 < port < 65536 and port not in used for port in candidate.values()):
+            ports = candidate
+            break
+        next_block += len(roles)
+
+    metadata.update(
+        {
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": worker.tailscale_dns_name or worker.base_domain,
+            "tailscale_host_strategy": "path",
+            "tailnet_service_ports": ports,
+            "tailnet_service_ports_checked_at": utc_now_iso(),
+        }
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), deployment_id),
+    )
+    conn.commit()
+    updated = dict(deployment)
+    updated["metadata_json"] = json.dumps(metadata, sort_keys=True)
+    return updated
 
 
 def _apply_deployment(
@@ -645,13 +715,13 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     code = str(urls.get("code") or "").strip()
     hermes = str(urls.get("hermes") or "").strip()
     lines = [
-        "Vessel online.",
+        "Agent online.",
         "",
-        "I'm Raven. Your ArcLink pod is awake: private agent, files, code, memory, and deployment health are lit.",
+        "I'm Raven. Your ArcLink agent is ready: files, code, memory, and deployment health are lit.",
         "",
     ]
     for label, url in (
-        ("Helm", dashboard),
+        ("Dashboard", dashboard),
         ("Files", files),
         ("Code", code),
         ("Hermes", hermes),

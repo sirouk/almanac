@@ -110,10 +110,12 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["code_server_password"]["target"] == "/run/secrets/code_server_password", str(compose_secrets))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
-    for key in ("HERMES_HOME", "VAULT_DIR", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
+    for key in ("HERMES_HOME", "VAULT_DIR", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
         expect(not intent["environment"][key].startswith("/arcdata/"), f"{key} leaked host root")
     expect(services["nextcloud"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_html"], str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_HOST"] == "nextcloud-db", str(services["nextcloud"]))
@@ -136,10 +138,15 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["nextcloud-redis"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_redis"], str(services["nextcloud-redis"]))
     expect(services["qmd-mcp"]["volumes"][1]["target"] == intent["environment"]["QMD_STATE_DIR"], str(services["qmd-mcp"]))
     expect(services["qmd-mcp"]["environment"]["QMD_INDEX_NAME"] == "vault-dep_1", str(services["qmd-mcp"]))
+    hermes_dashboard_volumes = {item["target"]: item["source"] for item in services["hermes-dashboard"]["volumes"]}
+    expect(hermes_dashboard_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["hermes-dashboard"]))
+    expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))
+    expect(hermes_dashboard_volumes["/workspace"] == intent["state_roots"]["code_workspace"], str(services["hermes-dashboard"]))
     expect(services["memory-synth"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"], str(services["memory-synth"]))
     expect("PASSWORD_REF" not in services["code-server"]["environment"], str(services["code-server"]))
     expect(services["code-server"]["entrypoint"] == ["/bin/sh", "-lc"], str(services["code-server"]))
     expect("cat /run/secrets/code_server_password" in " ".join(services["code-server"]["command"]), str(services["code-server"]))
+    expect(services["code-server"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"], str(services["code-server"]))
     expect(services["managed-context-install"]["command"][:2] == ["./bin/install-arclink-plugins.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
     expect("--insecure" in services["hermes-dashboard"]["command"], str(services["hermes-dashboard"]))
     expect("--port" in services["hermes-dashboard"]["command"] and "3210" in services["hermes-dashboard"]["command"], str(services["hermes-dashboard"]))
@@ -443,6 +450,37 @@ def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
     print("PASS test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns")
 
 
+def test_tailscale_ingress_uses_dedicated_app_ports_when_recorded() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_tailnet_ports_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_tailnet_ports_test")
+    conn = memory_db(control)
+    seed_deployment(
+        control,
+        conn,
+        metadata={"tailnet_service_ports": {"hermes": 8443, "files": 8444, "code": 8445}},
+    )
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker.example.test",
+        tailscale_host_strategy="path",
+    )
+    env = intent["environment"]
+    services = intent["compose"]["services"]
+    expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
+    expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(intent["access"]))
+    expect(intent["access"]["urls"]["files"] == "https://worker.example.test:8444/", str(intent["access"]))
+    expect(intent["access"]["urls"]["code"] == "https://worker.example.test:8445/", str(intent["access"]))
+    expect(env["ARCLINK_HERMES_URL"] == "https://worker.example.test:8443/", str(env))
+    expect(env["ARCLINK_FILES_URL"] == "https://worker.example.test:8444/", str(env))
+    nextcloud_env = services["nextcloud"]["environment"]
+    expect(nextcloud_env["OVERWRITEPROTOCOL"] == "https", str(nextcloud_env))
+    expect(nextcloud_env["OVERWRITEHOST"] == "worker.example.test:8444", str(nextcloud_env))
+    expect(nextcloud_env["OVERWRITECLIURL"] == "https://worker.example.test:8444", str(nextcloud_env))
+    print("PASS test_tailscale_ingress_uses_dedicated_app_ports_when_recorded")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible()
@@ -453,7 +491,8 @@ def main() -> int:
     test_failed_execution_job_gets_idempotent_rollback_plan_event()
     test_rendered_services_include_resource_limits_and_healthchecks()
     test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
-    print("PASS all 9 ArcLink provisioning tests")
+    test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
+    print("PASS all 10 ArcLink provisioning tests")
     return 0
 
 

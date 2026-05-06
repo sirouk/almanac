@@ -60,6 +60,12 @@ authenticate dashboard sessions, or execute queued admin actions.
 - SSH access is advertised through Cloudflare Access TCP hints in domain mode or
   direct Tailscale SSH hints in Tailscale mode, not raw SSH over HTTP or
   path-prefix routing.
+- ArcLink workspace UX belongs in Hermes dashboard plugins, not Hermes core
+  patches. Plugin status APIs must stay capability-driven and secret-free.
+- `ArcLink Terminal` provides managed-pty sessions inside the configured
+  deployment/user boundary. It is bounded, polling-based, and confirmation
+  gated; it is not unrestricted host-root shell access, tmux persistence, or
+  true streaming transport.
 
 ## Rationale
 
@@ -96,6 +102,14 @@ ArcLink owns:
 - No-secret provisioning intent, job state, health placeholders, timeline
   events, secret-reference validation, and rollback planning in
   `python/arclink_provisioning.py`.
+- Hermes dashboard plugin installation, default enablement, and legacy alias
+  cleanup in `bin/install-arclink-plugins.sh`.
+- ArcLink workspace plugin APIs and UI assets under
+  `plugins/hermes-agent/arclink-drive/`,
+  `plugins/hermes-agent/arclink-code/`, and
+  `plugins/hermes-agent/arclink-terminal/`.
+- Docker plugin mount repair, managed plugin refresh, per-deployment tailnet app
+  publication, and deployment service-health refresh in `bin/arclink-docker.sh`.
 - Guarded mutating executor contracts and secret materialization rules in
   `python/arclink_executor.py`.
 - Public website, Telegram, and Discord onboarding session contracts in
@@ -159,6 +173,17 @@ Provisioning dry run:
 - Intent renders dashboard, Hermes gateway/dashboard, qmd, vault watch, memory
   synthesis, dedicated Nextcloud DB/Redis/app services, code-server,
   notification delivery, health watch, and managed-context installation.
+- Hermes dashboard receives the deployment vault and code workspace mounts.
+  The rendered environment sets `VAULT_DIR`, `ARCLINK_DRIVE_ROOT`, and
+  `ARCLINK_CODE_WORKSPACE_ROOT` so ArcLink Drive and ArcLink Code operate
+  inside deployment-owned roots.
+- Access URL metadata is rendered for dashboard, files, code, and Hermes. In
+  Tailscale path mode, per-service tailnet HTTPS ports may override path URLs
+  for files, code, and Hermes while the user dashboard stays under
+  `/u/<prefix>`.
+- Nextcloud overwrite settings are applied only when the files URL is a
+  root-level HTTPS host or host:port. Path-prefixed URLs are not written as
+  Nextcloud canonical overwrite hosts.
 - Nextcloud and Postgres use file-backed secret environment variables through
   Compose secrets. code-server uses an explicit entrypoint file resolver.
 - App/provider tokens remain resolver-required references until live execution
@@ -352,6 +377,29 @@ Dashboard and admin contracts:
 - Action metadata may contain `secret://...` references, but plaintext-looking
   secret material is rejected before any action intent or audit row is written.
 
+Native Hermes workspace plugins:
+
+- Refreshed agents install `arclink-drive`, `arclink-code`,
+  `arclink-terminal`, and `arclink-managed-context` by default.
+- The installer removes legacy dashboard aliases `arclink-code-space` and
+  `arclink-knowledge-vault` before enabling the current plugin names.
+- Drive status reports backend availability, mount, username, URL, local root,
+  and capability flags without returning WebDAV passwords or access-state
+  secrets.
+- Drive local backend operations are confined to the selected vault root and
+  reject path traversal. Local deletes move files into `.arclink-trash` and can
+  be restored while the original path is free.
+- Code status reports workspace root, optional full-IDE URL, editor mode, and
+  capability flags without returning credentials. Saves are manual and hash
+  guarded so stale tabs cannot silently overwrite disk changes.
+- Code git operations are root-confined to discovered repositories under the
+  workspace. Destructive discard requires explicit confirmation.
+- Terminal status reports the managed-pty backend when the workspace root,
+  shell, and non-root runtime boundary are available, while returning sanitized
+  workspace/state labels. Sessions have persisted metadata, bounded scrollback,
+  polling output, reload reconnect, rename, folder/grouping, reorder controls,
+  and confirmation-gated close.
+
 ### Entitlement Repair
 
 Use entitlement repair only after confirming the customer, deployment, and
@@ -457,6 +505,20 @@ bash -n deploy.sh bin/*.sh test.sh
 python3 tests/test_deploy_regressions.py
 ```
 
+When touching Hermes workspace plugins or their Docker mount wiring, also run:
+
+```bash
+python3 -m py_compile \
+  plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py \
+  plugins/hermes-agent/arclink-code/dashboard/plugin_api.py \
+  plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py
+python3 tests/test_arclink_plugins.py
+python3 tests/test_arclink_docker.py
+node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js
+node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js
+node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js
+```
+
 Before promoting ArcLink beyond foundation work, confirm these are still true:
 
 - Documentation does not claim production live customer provisioning is shipped.
@@ -469,6 +531,9 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
   ownership expectations.
 - Dashboard/admin docs preserve the distinction between read models, queued
   action intent, and future live executors.
+- Workspace docs preserve the distinction between current Drive/Code plugin
+  capabilities, Terminal managed-pty sessions, completed workspace Docker/TLS
+  proof, and the separate hosted customer live-proof gate.
 - New public docs contain no local machine paths, operator names, live hostnames,
   tokens, or copied `.env` values.
 - New tests can run without live secrets.
@@ -487,3 +552,10 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
   routing, identity-provider integration, browser-session hardening, RBAC
   policy, action execution, and frontend framework work still need explicit
   implementation.
+- ArcLink Drive and Code are first-generation native plugin surfaces. They have
+  bounded no-secret API contracts, but broader Google Drive and VS Code parity
+  remains future work.
+- ArcLink Terminal is managed-pty shell access inside the configured
+  deployment/user boundary, with bounded scrollback and confirmation-gated
+  lifecycle controls. It is not an unrestricted host-root shell, tmux-backed
+  persistence, or true streaming transport.

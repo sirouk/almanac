@@ -74,6 +74,10 @@ def test_product_surface_renders_usable_first_screen_and_checkout_flow() -> None
         stripe_client=stripe,
     )
     expect(checkout.status == 303, str(checkout))
+    success = surface.handle_arclink_product_surface_request(conn, method="GET", path="/checkout/success")
+    expect(success.status == 200 and "Agent onboard ArcLink" in success.body, success.body)
+    cancel = surface.handle_arclink_product_surface_request(conn, method="GET", path="/checkout/cancel")
+    expect(cancel.status == 200 and "Checkout paused" in cancel.body, cancel.body)
     api = surface.handle_arclink_product_surface_request(conn, method="GET", path=f"/api/onboarding/{session_id}")
     payload = json.loads(api.body)
     expect(payload["session"]["checkout_state"] == "open", str(payload))

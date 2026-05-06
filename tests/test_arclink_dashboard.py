@@ -144,6 +144,89 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     print("PASS test_user_dashboard_read_model_projects_safe_operational_summary")
 
 
+def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_tailnet_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    urls = {
+        "dashboard": "https://worker.example.test/u/amber-vault-1a2b",
+        "files": "https://worker.example.test:8444/",
+        "code": "https://worker.example.test:8445/",
+        "hermes": "https://worker.example.test:8443/",
+        "notion": "https://worker.example.test/u/amber-vault-1a2b/notion/webhook",
+    }
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.test",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8443, "files": 8444, "code": 8445},
+                    "access_urls": urls,
+                },
+                sort_keys=True,
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    deployment = view["deployments"][0]
+    section_index = {section["section"]: section for section in deployment["sections"]}
+    expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(deployment))
+    expect(section_index["files"]["url"] == "https://worker.example.test:8444/", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://worker.example.test:8445/", str(section_index["code"]))
+    print("PASS test_user_dashboard_prefers_stored_tailnet_app_urls")
+
+
+def test_user_dashboard_withholds_unpublished_tailnet_app_urls() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_unavailable_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_unavailable_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_tailnet_unavailable_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.test",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8443, "files": 8444, "code": 8445},
+                    "tailnet_app_publication": {"status": "unavailable", "failed_roles": ["files"]},
+                },
+                sort_keys=True,
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    deployment = view["deployments"][0]
+    section_index = {section["section"]: section for section in deployment["sections"]}
+    links = {link["role"]: link["url"] for link in section_index["access_links"]["links"]}
+    expect(links == {"dashboard": "https://worker.example.test/u/amber-vault-1a2b", "notion": "https://worker.example.test/u/amber-vault-1a2b/notion/webhook"}, str(links))
+    expect(section_index["files"]["status"] == "pending" and not section_index["files"]["url"], str(section_index["files"]))
+    expect(section_index["code"]["status"] == "pending" and not section_index["code"]["url"], str(section_index["code"]))
+    expect(section_index["hermes"]["status"] == "pending" and not section_index["hermes"]["url"], str(section_index["hermes"]))
+    print("PASS test_user_dashboard_withholds_unpublished_tailnet_app_urls")
+
+
 def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_admin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_admin_test")
@@ -278,9 +361,11 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
+    test_user_dashboard_prefers_stored_tailnet_app_urls()
+    test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 3 ArcLink dashboard tests")
+    print("PASS all 5 ArcLink dashboard tests")
     return 0
 
 

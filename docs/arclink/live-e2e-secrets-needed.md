@@ -5,10 +5,15 @@ has been proven. The live proof orchestration runner
 (`python/arclink_live_runner.py`) composes host readiness, provider diagnostics,
 journey model, and evidence ledger into a single dry-run or live proof pass.
 Run `bin/arclink-live-proof` (dry-run by default) or
-`bin/arclink-live-proof --live` when credentials are supplied. The fake E2E
-harness (`tests/test_arclink_e2e_fake.py`) passes without credentials. Provider
-live checks in `tests/test_arclink_e2e_live.py` skip cleanly when credentials
-are absent. The ordered journey model (`python/arclink_live_journey.py`) and
+`bin/arclink-live-proof --live` when credentials are supplied. Use
+`bin/arclink-live-proof --journey workspace` to plan the native Drive, Code, and
+Terminal TLS proof without running it, or
+`bin/arclink-live-proof --journey workspace --live` to run the gated Docker
+upgrade, Docker health, and desktop/mobile browser proof steps against a real
+HTTPS Hermes dashboard. The fake E2E harness
+(`tests/test_arclink_e2e_fake.py`) passes without credentials. Provider live
+checks in `tests/test_arclink_e2e_live.py` skip cleanly when credentials are
+absent. The ordered journey model (`python/arclink_live_journey.py`) and
 evidence ledger (`python/arclink_evidence.py`) are scaffolded and tested without
 secrets.
 
@@ -27,6 +32,29 @@ secrets.
 | `CHUTES_API_KEY` | Key provisioning | Chutes owner key |
 | `TELEGRAM_BOT_TOKEN` | Bot check | Telegram bot token |
 | `DISCORD_BOT_TOKEN` | Bot check | Discord bot token |
+
+## Workspace Plugin TLS Proof Env Vars
+
+| Var | Required For | Purpose |
+|-----|-------------|---------|
+| `ARCLINK_E2E_LIVE` | All workspace proof steps | Master gate for live proof |
+| `ARCLINK_E2E_DOCKER` | Docker upgrade/reconcile and health | Opt-in for Docker access |
+| `ARCLINK_WORKSPACE_PROOF_TLS_URL` | Drive, Code, Terminal browser proof | HTTPS Hermes dashboard URL |
+| `ARCLINK_WORKSPACE_PROOF_AUTH` | Drive, Code, Terminal browser proof | Session/auth material supplied outside tracked files |
+
+`ARCLINK_WORKSPACE_PROOF_AUTH` is read only from the process environment. The
+browser runner accepts `Cookie:NAME=VALUE`, `Basic ...`, `Bearer ...`,
+`basic:user:password`, `bearer:TOKEN`, `user:password`, or a raw bearer token.
+Values are passed to the browser process through environment only and are not
+written to evidence.
+
+Optional workspace proof timeouts:
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `ARCLINK_WORKSPACE_PROOF_DOCKER_TIMEOUT_SECONDS` | 2700 | Docker upgrade/reconcile timeout |
+| `ARCLINK_WORKSPACE_PROOF_HEALTH_TIMEOUT_SECONDS` | 900 | Docker health timeout |
+| `ARCLINK_WORKSPACE_PROOF_BROWSER_TIMEOUT_SECONDS` | 300 | Per desktop/mobile browser proof timeout |
 
 ## Evidence
 

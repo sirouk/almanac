@@ -17,6 +17,8 @@ describe("Page files exist and export default", () => {
     { path: "src/app/page.tsx", name: "Landing" },
     { path: "src/app/login/page.tsx", name: "Login" },
     { path: "src/app/onboarding/page.tsx", name: "Onboarding" },
+    { path: "src/app/checkout/success/page.tsx", name: "Checkout Success" },
+    { path: "src/app/checkout/cancel/page.tsx", name: "Checkout Cancel" },
     { path: "src/app/dashboard/page.tsx", name: "Dashboard" },
     { path: "src/app/admin/page.tsx", name: "Admin" },
   ];
@@ -58,6 +60,15 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("answerOnboarding"), "missing answer API call");
     assert.ok(content.includes("openCheckout"), "missing checkout API call");
     assert.ok(content.includes("Fake adapters"), "missing fake adapter notice");
+    assert.ok(content.includes("/checkout/success"), "missing checkout success redirect");
+    assert.ok(content.includes("/checkout/cancel"), "missing checkout cancel redirect");
+  });
+
+  it("Checkout result pages exist for Stripe redirects", () => {
+    const success = readFileSync(resolve(ROOT, "src/app/checkout/success/page.tsx"), "utf-8");
+    const cancel = readFileSync(resolve(ROOT, "src/app/checkout/cancel/page.tsx"), "utf-8");
+    assert.ok(success.includes("Agent onboard ArcLink"), "missing success copy");
+    assert.ok(cancel.includes("Checkout paused"), "missing cancel copy");
   });
 
   it("Dashboard page has all required tabs", () => {

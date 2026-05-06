@@ -1,22 +1,36 @@
 # Document Phase Status
 
-Generated: 2026-05-02 (updated after scale-operations spine and web lint landing)
+Generated: 2026-05-05 (updated after native Hermes workspace plugin slice)
 
 ## Documentation Audit
 
 Project-facing ArcLink documentation has been refreshed against the current
-codebase state: 25 ArcLink Python modules (10,067 lines), 27 arclink test
-files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
-+ Tailwind 4 web app (1,991 lines, 9 source files).
+codebase state: the SaaS foundation, Docker deployment wrapper, native Hermes
+workspace plugins, public bot copy, and no-secret regression tests. Counts are
+intentionally omitted here because this file is a status artifact; use the
+repository and tests as source of truth when exact line/function counts matter.
 
 ### Files Updated (This Pass)
 
 | File | Change | Rationale |
 | --- | --- | --- |
-| `docs/arclink/architecture.md` | Added fleet/action-worker/rollout modules, scale operations data flow, admin route, ownership section, and live-worker limitation | Scale operations spine landed after the previous truth pass |
-| `docs/arclink/operations-runbook.md` | Added Scale Operations runbook with assumptions, module ownership, admin snapshot, manual worker processing, and stale recovery | Operators need reproducible handling steps before live worker automation |
-| `docs/arclink/CHANGELOG.md` | Added Scale Operations Spine and Deterministic Web Linting entries; updated ArcLink schema count to 22 tables | Changelog was stale after new schema tables, modules, API route, and ESLint config |
-| `docs/arclink/document-phase-status.md` | Refreshed audit status, counts, risks, and verdict | Prior version described the P13-16 pass only |
+| `docs/arclink/architecture.md` | Added native Hermes workspace plugin architecture, default installer behavior, Docker mount repair, tailnet app URL persistence, and current limitations | Drive, Code, and Terminal now ship through ArcLink plugins rather than Hermes core changes |
+| `docs/arclink/foundation.md` | Added provisioning mount/access URL behavior and workspace plugin foundation notes | Operators and future agents need to know where Drive/Code/Terminal roots and plugin boundaries come from |
+| `docs/arclink/foundation-runbook.md` | Added assumptions, ownership, current behavior, checks, and risks for workspace plugins and Docker repair paths | The runbook needed reproducible validation commands and explicit implemented-vs-scaffolded boundaries |
+| `docs/arclink/operations-runbook.md` | Added Tailscale port-base env var and a Native Hermes Workspace Plugins runbook section | Docker health/reconcile now repairs dashboard mounts, refreshes plugins, publishes tailnet apps, and refreshes service health |
+| `docs/docker.md` | Added Docker-mode workspace plugin mounts, repair behavior, and tailnet publication notes | Docker operators need the same plugin assumptions in the Docker deployment guide |
+| `README.md` | Removed a local checkout-path example, added canonical shared-host layout, and noted default Hermes workspace plugins for enrolled users | The top-level operator guide should stay reproducible and reflect the current user-facing workspace surface |
+| `docs/arclink/raven-public-bot.md` | Aligned Raven copy around onboarding agents into ArcLink instead of vessel-heavy public language | Public bot docs needed to match the current product promise and status wording |
+| `docs/arclink/CREATIVE_BRIEF.md` | Updated pricing/offer copy, public CTA labels, and workspace wording around ArcLink Drive/Code | Brand and product-copy source notes needed to match the current surface and avoid stale pricing |
+| `docs/arclink/brand-system.md` | Reframed the product promise around private AI agents and workflows | Brand rails needed to match the current public copy direction |
+| `docs/arclink/professional-finish-gate.md` | Updated finish-gate wording from visible systems to visible workflows | The gate should evaluate the current product language consistently |
+| `docs/arclink/CHANGELOG.md` | Added a Native Hermes Workspace Plugins entry with current behavior and rationale | Project-facing release history was stale after the plugin slice |
+| `plugins/hermes-agent/arclink-drive/README.md` | Expanded ownership, backend, behavior, assumptions, runbook, and boundaries | The plugin is now project-facing documentation for Drive maintainers |
+| `plugins/hermes-agent/arclink-code/README.md` | Expanded ownership, workspace, editor/git behavior, assumptions, runbook, and boundaries | The Code plugin now has source-control behavior and hash-guarded save semantics to document |
+| `plugins/hermes-agent/arclink-terminal/README.md` | Updated for the managed-pty backend, polling limitation, root guard, and future tmux path | The Terminal tab now has tested persistent sessions but still needs TLS proof |
+| `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` | Updated the active steering current-state notes for Terminal managed-pty sessions, default plugin install set, and repaired deploy-readiness checklist | Future Ralphie runs should not restart from stale Tailnet, installer, or Terminal assumptions |
+| `research/ARCLINK_ARCHITECTURE_MAP.md` | Removed local workspace provenance from the source note | Research markdown should stay reproducible outside this checkout |
+| `docs/arclink/document-phase-status.md` | Refreshed this audit status and risks | Prior status described the scale-operations/web-lint pass |
 
 ### Files Updated (Prior Passes)
 
@@ -28,15 +42,10 @@ files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
 | `docs/arclink/foundation-runbook.md` | Added E2E test commands to runbook validation | E2E tests now exist |
 | `IMPLEMENTATION_PLAN.md` | P13-16 marked COMPLETE in BUILD Tasks | Items landed |
 
-### Files Reviewed (No Changes Needed)
+### Additional Files Reviewed (No Changes Needed)
 
 | File | Verdict |
 | --- | --- |
-| `docs/arclink/foundation.md` | Current. Covers config, schema, provisioning, executor, onboarding, bots, adapters. Scale details now live in architecture/runbook. |
-| `docs/arclink/foundation-runbook.md` | Current. Includes all test commands including E2E. |
-| `docs/arclink/brand-system.md` | Current. Brand identity documentation unchanged. |
-| `docs/arclink/professional-finish-gate.md` | Current. Gate criteria unchanged. |
-| `docs/arclink/operations-runbook.md` | Current after this pass. 13 sections including API, ingress, executor, rollback, scale operations, readiness, diagnostics, and live evidence. |
 | `docs/arclink/secret-checklist.md` | Current. Secret inventory, handling rules, verification command. |
 | `docs/arclink/ingress-plan.md` | Current. Domain/Tailscale ingress, DNS layout, Traefik, SSH, drift, teardown. |
 | `docs/arclink/backup-restore.md` | Current. Backup targets, schedule, restore, DR, retention. |
@@ -55,6 +64,13 @@ files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
   host, and the selected Cloudflare-domain or Tailscale ingress mode).
 - The action worker has code-level batch and stale-recovery entrypoints, but no
   documented production service/timer unit is live yet.
+- ArcLink Terminal has managed-pty persistent sessions with bounded polling
+  output. True streaming and tmux backend validation remain future work; the
+  workspace Docker/TLS proof runner has passed desktop and mobile checks for
+  Drive, Code, and Terminal.
+- ArcLink Drive and Code are first-generation native plugins. They are useful
+  local/WebDAV workspace surfaces, but broad Google Drive and VS Code parity
+  remains future work.
 
 ## Risks
 
@@ -67,12 +83,20 @@ files (225 `def test_` functions), 41 browser product checks, and a Next.js 15
 - Scale operations placement is intentionally deterministic and capacity-based,
   not a replacement for an external scheduler. Live worker automation should
   keep the same executor gates and secret rejection rules.
+- Docker tailnet app publication depends on the host Tailscale CLI and tailnet
+  policy. The runbook documents that absence of the CLI skips publication while
+  health continues.
+- WebDAV delete behavior is provider-direct, unlike local Drive delete which is
+  recoverable through `.arclink-trash`; UI confirmations must preserve that
+  distinction.
 
 ## Verdict
 
 Project-facing docs are clear enough to proceed with no-secret development and
 operator rehearsal. Production 12 remains externally blocked by credentials and
-a deliberate live run. Scale operations are documented as durable, API-visible,
-and fake/live-gated, with live worker automation still an explicit follow-up.
-All updated artifacts are reproducible and free of local context (no machine
-paths, operator names, live hostnames, tokens, or `.env` values).
+a deliberate live run. Workspace plugin docs now describe current Drive/Code
+behavior, Terminal's managed-pty boundary, Docker repair/runbook steps, the
+completed workspace Docker/TLS proof, and the reason ArcLink keeps this
+behavior in plugins rather than Hermes core. All updated artifacts are
+reproducible and free of local context: no operator names, live hostnames,
+tokens, or copied `.env` values.

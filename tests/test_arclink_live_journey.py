@@ -63,6 +63,41 @@ class TestBuildJourney(unittest.TestCase):
             self.assertIn("ARCLINK_E2E_LIVE", step.required_env,
                           f"{step.name} missing ARCLINK_E2E_LIVE gate")
 
+    def test_workspace_journey_targets_native_plugin_tls_proof(self):
+        steps = journey_mod.build_journey("workspace")
+        names = [step.name for step in steps]
+        self.assertEqual(names[0], "workspace_docker_upgrade_reconcile")
+        self.assertIn("drive_tls_desktop_proof", names)
+        self.assertIn("drive_tls_mobile_proof", names)
+        self.assertIn("code_tls_desktop_proof", names)
+        self.assertIn("code_tls_mobile_proof", names)
+        self.assertIn("terminal_tls_desktop_proof", names)
+        self.assertIn("terminal_tls_mobile_proof", names)
+        for step in steps:
+            self.assertIn("ARCLINK_E2E_LIVE", step.required_env,
+                          f"{step.name} missing ARCLINK_E2E_LIVE gate")
+
+    def test_workspace_browser_steps_require_tls_url_and_auth_names_only(self):
+        for step in journey_mod.build_journey("workspace"):
+            if "_tls_" not in step.name:
+                continue
+            self.assertIn("ARCLINK_WORKSPACE_PROOF_TLS_URL", step.required_env)
+            self.assertIn("ARCLINK_WORKSPACE_PROOF_AUTH", step.required_env)
+
+    def test_all_journey_appends_workspace_after_hosted(self):
+        steps = journey_mod.build_journey("all")
+        names = [step.name for step in steps]
+        self.assertEqual(names[0], "web_onboarding_start")
+        self.assertIn("workspace_docker_upgrade_reconcile", names)
+        self.assertLess(
+            names.index("discord_bot_check"),
+            names.index("workspace_docker_upgrade_reconcile"),
+        )
+
+    def test_unknown_journey_kind_rejected(self):
+        with self.assertRaises(ValueError):
+            journey_mod.build_journey("unknown")
+
 
 class TestEvaluateJourney(unittest.TestCase):
     def test_all_skip_without_credentials(self):

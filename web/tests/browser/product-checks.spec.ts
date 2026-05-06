@@ -205,9 +205,9 @@ test.describe("Route smoke", () => {
 
   test("/onboarding renders start step", async ({ page }) => {
     await page.goto("/onboarding");
-    await expect(page.locator("text=I'm Raven")).toBeVisible();
-    await expect(page.locator("text=No technical setup on your end")).toBeVisible();
-    await expect(page.locator('button[type="submit"]')).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Choose ArcLink Onboarding" })).toBeVisible();
+    await expect(page.getByText("I can take you from a few answers to agent onboard ArcLink")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Founders - \$149\/month/ })).toBeVisible();
     // Fake adapter notice present
     await expect(page.locator("text=Fake adapters")).toBeVisible();
   });
@@ -242,7 +242,7 @@ test.describe("Accessibility", () => {
   test("onboarding form has labeled inputs", async ({ page }) => {
     await mockApi(page);
     await page.goto("/onboarding");
-    await page.click('button[type="submit"]');
+    await page.getByRole("button", { name: /Founders - \$149\/month/ }).click();
     const nameInput = page.locator('input[id="name"]');
     await expect(nameInput).toBeVisible();
     const label = page.locator('label[for="name"]');
@@ -414,17 +414,18 @@ test.describe("Onboarding flow", () => {
     await mockApi(page);
     await page.goto("/onboarding");
 
-    // Step 1: Pick the Founders vessel without collecting email in ArcLink chat/form
+    // Step 1: Pick the Founders onboarding lane without collecting email in ArcLink chat/form
     await page.click("text=Founders - $149/month");
-    await expect(page.getByRole("heading", { name: "Name On The Hatch" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Name The Agent" })).toBeVisible();
 
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Hire Founders").first()).toBeVisible();
+    await expect(page.locator("text=Onboard Agent").first()).toBeVisible();
 
     // Step 3: Checkout
-    await page.click("text=Hire Founders - $149/month");
+    await page.getByRole("button", { name: "Onboard Agent - $149/month" }).click();
+    await expect(page.getByRole("heading", { name: "Stripe Link Ready" })).toBeVisible();
     await expect(page.locator("text=Complete The Hire").last()).toBeVisible();
   });
 });

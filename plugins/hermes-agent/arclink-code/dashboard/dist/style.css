@@ -1,0 +1,561 @@
+.arclink-code {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: calc(100dvh - 7.5rem);
+  color: var(--midground);
+}
+
+.arclink-code-theme-light {
+  --arclink-code-surface: #f8fafc;
+  --arclink-code-editor-bg: #ffffff;
+  --arclink-code-editor-fg: #172033;
+}
+
+.arclink-code-theme-dark {
+  --arclink-code-surface: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+  --arclink-code-editor-bg: #101216;
+  --arclink-code-editor-fg: #e9edf2;
+}
+
+.arclink-code-toolbar,
+.arclink-code-treebar,
+.arclink-code-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.arclink-code-toolbar {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 18%, transparent);
+  background: var(--arclink-code-surface);
+  padding: 0.75rem 0.9rem;
+}
+
+.arclink-code-title {
+  min-width: 0;
+}
+
+.arclink-code-title h1 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+
+.arclink-code-title p,
+.arclink-code-path,
+.arclink-code-item-lang,
+.arclink-code-tab {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  margin: 0.2rem 0 0;
+}
+
+.arclink-code-actions,
+.arclink-code-treebar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.arclink-code button,
+.arclink-code a,
+.arclink-code select,
+.arclink-code input {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 22%, transparent);
+  background: transparent;
+  color: var(--midground);
+  font: inherit;
+  padding: 0.42rem 0.62rem;
+  text-decoration: none;
+}
+
+.arclink-code button,
+.arclink-code a {
+  cursor: pointer;
+}
+
+.arclink-code select,
+.arclink-code input {
+  background: color-mix(in srgb, var(--background-base) 96%, #fff);
+  min-width: 0;
+}
+
+.arclink-code button:hover,
+.arclink-code a:hover {
+  background: color-mix(in srgb, var(--midground-base) 10%, transparent);
+}
+
+.arclink-code button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.arclink-code-main {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(16rem, 0.32fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  min-height: 31rem;
+}
+
+.arclink-code-tree,
+.arclink-code-editor {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 16%, transparent);
+  min-width: 0;
+}
+
+.arclink-code-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.65rem;
+}
+
+.arclink-code-error {
+  border: 1px solid color-mix(in srgb, #ff684d 44%, transparent);
+  background: color-mix(in srgb, #ff684d 10%, var(--background-base));
+  color: color-mix(in srgb, #ffb2a3 82%, var(--midground));
+  padding: 0.55rem 0.7rem;
+}
+
+.arclink-code-panel-tabs,
+.arclink-code-repo-row,
+.arclink-code-source-actions,
+.arclink-code-source-head,
+.arclink-code-source-group-title,
+.arclink-code-commit {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.arclink-code-panel-tabs {
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  padding-bottom: 0.55rem;
+}
+
+.arclink-code-panel-tabs button {
+  flex: 1 1 0;
+}
+
+.arclink-code-panel-tabs button.active {
+  background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+}
+
+.arclink-code-repo-row,
+.arclink-code-source-actions,
+.arclink-code-commit {
+  flex-wrap: wrap;
+}
+
+.arclink-code-repo-row select,
+.arclink-code-commit input {
+  flex: 1 1 10rem;
+}
+
+.arclink-code-source-head {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  justify-content: space-between;
+  padding: 0.55rem 0.65rem;
+}
+
+.arclink-code-source-head strong,
+.arclink-code-source-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-source-head span {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.75rem;
+}
+
+.arclink-code-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-items {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow: auto;
+}
+
+.arclink-code-item {
+  align-items: center;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 2.45rem;
+  width: 100%;
+}
+
+.arclink-code-tree-node-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+}
+
+.arclink-code-tree-node {
+  cursor: default;
+}
+
+.arclink-code-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+}
+
+.arclink-code-item.selected {
+  background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+}
+
+.arclink-code-item-open {
+  align-items: center;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+  min-width: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.arclink-code-fileicon {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 18%, transparent);
+  color: color-mix(in srgb, var(--midground-base) 76%, transparent);
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 2.1rem;
+  padding: 0.35rem 0.2rem;
+  text-align: center;
+}
+
+.arclink-code-fileicon.folder {
+  color: color-mix(in srgb, var(--accent-base, #ff6a3d) 78%, var(--midground));
+}
+
+.arclink-code-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-context-menu {
+  background: color-mix(in srgb, var(--background-base) 96%, #101216);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 24%, transparent);
+  box-shadow: 0 0.8rem 2rem rgb(0 0 0 / 24%);
+  display: flex;
+  flex-direction: column;
+  min-width: 10rem;
+  padding: 0.25rem;
+  position: fixed;
+  z-index: 40;
+}
+
+.arclink-code-context-menu button {
+  border: 0;
+  justify-content: flex-start;
+  padding: 0.42rem 0.5rem;
+  text-align: left;
+}
+
+.arclink-code-source-group {
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 13%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding-top: 0.55rem;
+}
+
+.arclink-code-source-group-title {
+  color: color-mix(in srgb, var(--midground-base) 66%, transparent);
+  font-size: 0.72rem;
+  justify-content: space-between;
+  text-transform: uppercase;
+}
+
+.arclink-code-source-group-title strong {
+  color: var(--midground);
+  font-size: 0.72rem;
+}
+
+.arclink-code-change {
+  align-items: center;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  min-height: 2.45rem;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  width: 100%;
+}
+
+.arclink-code-change-status {
+  color: color-mix(in srgb, var(--accent-base, #ff6a3d) 82%, var(--midground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.arclink-code-change-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.arclink-code-change-name span,
+.arclink-code-change-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-change-name small {
+  color: color-mix(in srgb, var(--midground-base) 58%, transparent);
+  font-size: 0.68rem;
+}
+
+.arclink-code-change-actions {
+  display: flex;
+  gap: 0.28rem;
+}
+
+.arclink-code-change-actions span {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 20%, transparent);
+  color: var(--midground);
+  min-width: 1.7rem;
+  padding: 0.24rem 0.35rem;
+  text-align: center;
+}
+
+.arclink-code-change-actions span:hover {
+  background: color-mix(in srgb, var(--midground-base) 10%, transparent);
+}
+
+.arclink-code-source-empty {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.78rem;
+  padding: 0.65rem;
+  text-align: center;
+}
+
+.arclink-code-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.arclink-code-tab {
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+}
+
+.arclink-code-tab span {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arclink-code-tab-button {
+  font-size: 0.74rem;
+  max-width: 11rem;
+  overflow: hidden;
+  padding: 0.26rem 0.42rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-tab-button.active {
+  background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+}
+
+.arclink-code-tab strong {
+  color: var(--midground);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.arclink-code-tab strong.dirty {
+  color: color-mix(in srgb, var(--accent-base, #ff6a3d) 86%, var(--midground));
+}
+
+.arclink-code-textarea {
+  background: var(--arclink-code-editor-bg);
+  border: 0;
+  color: var(--arclink-code-editor-fg);
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  min-height: 28rem;
+  outline: none;
+  padding: 0.85rem;
+  resize: none;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.arclink-code-diff {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.arclink-code-diff-head {
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  display: flex;
+  gap: 0.65rem;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+}
+
+.arclink-code-diff-head strong,
+.arclink-code-diff-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-diff-head span {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.75rem;
+}
+
+.arclink-code-diff-panes {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 15rem;
+}
+
+.arclink-code-diff pre {
+  background: var(--arclink-code-editor-bg);
+  color: var(--arclink-code-editor-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin: 0;
+  overflow: auto;
+  padding: 0.75rem;
+  white-space: pre;
+}
+
+.arclink-code-diff-panes pre:first-child {
+  border-right: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+}
+
+.arclink-code-diff-unified {
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  max-height: 12rem;
+}
+
+.arclink-code-empty {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  text-align: center;
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+}
+
+.arclink-code-empty.full {
+  min-height: 24rem;
+}
+
+.arclink-code-search {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.arclink-code-search input {
+  flex: 1 1 auto;
+}
+
+.arclink-code-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow: auto;
+}
+
+.arclink-code-search-result {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 2.6rem minmax(0, 1fr);
+  text-align: left;
+}
+
+.arclink-code-search-result small {
+  color: color-mix(in srgb, var(--midground-base) 58%, transparent);
+  grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arclink-code-save-note,
+.arclink-code-last-git-result,
+.arclink-code-statusbar {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.74rem;
+}
+
+.arclink-code-save-note {
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 10%, transparent);
+  padding: 0.42rem 0.75rem;
+}
+
+.arclink-code-last-git-result {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  padding: 0.45rem 0.55rem;
+}
+
+.arclink-code-statusbar {
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.42rem 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .arclink-code-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .arclink-code-actions {
+    justify-content: flex-start;
+  }
+
+  .arclink-code-main {
+    grid-template-columns: 1fr;
+  }
+
+  .arclink-code-diff-panes {
+    grid-template-columns: 1fr;
+  }
+
+  .arclink-code-diff-panes pre:first-child {
+    border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+    border-right: 0;
+  }
+}

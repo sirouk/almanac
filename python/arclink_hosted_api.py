@@ -346,8 +346,8 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     greeting = f"Captain {name}, " if name else ""
     message = (
         f"{greeting}payment cleared.\n\n"
-        "I have your bay reserved and the hull is coming up around you. "
-        "I will ping this same channel the moment your vessel is online - usually 30 to 90 seconds."
+        "I have your ArcLink agent reserved and onboarding is starting now. "
+        "I will ping this same channel the moment your agent is ready - usually 30 to 90 seconds."
     )
     nid = queue_notification(
         conn,
@@ -378,7 +378,7 @@ def _public_bot_ping_actions() -> dict[str, Any]:
         "telegram_reply_markup": {
             "inline_keyboard": [
                 [
-                    {"text": "Run Systems Check", "callback_data": "arclink:/status"},
+                    {"text": "Check Status", "callback_data": "arclink:/status"},
                     {"text": "Show My Crew", "callback_data": "arclink:/agents"},
                 ],
             ],
@@ -387,7 +387,7 @@ def _public_bot_ping_actions() -> dict[str, Any]:
             {
                 "type": 1,
                 "components": [
-                    {"type": 2, "label": "Run Systems Check", "style": 2, "custom_id": "arclink:/status"},
+                    {"type": 2, "label": "Check Status", "style": 2, "custom_id": "arclink:/status"},
                     {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
                 ],
             }

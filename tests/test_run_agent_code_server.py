@@ -58,6 +58,8 @@ def test_run_agent_code_server_seeds_dark_theme_without_overwriting_existing_the
         access_state = hermes_home / "state" / "arclink-web-access.json"
         access_state.parent.mkdir(parents=True, exist_ok=True)
         workspace_home.mkdir(parents=True, exist_ok=True)
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            os.chown(workspace_home, 1000, 1000)
         vault_dir.mkdir(parents=True, exist_ok=True)
         (workspace_home / "Vault").symlink_to(vault_dir)
         workspace_file = hermes_home / "state" / "code-server" / "workspace" / "arclink.code-workspace"
@@ -141,6 +143,8 @@ def test_run_agent_code_server_supports_docker_runtime_without_podman() -> None:
         access_state = hermes_home / "state" / "arclink-web-access.json"
         access_state.parent.mkdir(parents=True, exist_ok=True)
         workspace_home.mkdir(parents=True, exist_ok=True)
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            os.chown(workspace_home, 1000, 1000)
         access_state.write_text(
             json.dumps(
                 {

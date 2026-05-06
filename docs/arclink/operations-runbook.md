@@ -81,6 +81,7 @@ unreachable or background service unhealthy).
 | `ARCLINK_TAILSCALE_HTTPS_PORT` | Funnel/Serve HTTPS port, default `443` |
 | `ARCLINK_TAILSCALE_NOTION_PATH` | Public Notion webhook path |
 | `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY` | `path` by default; `subdomain` only when proven |
+| `ARCLINK_TAILNET_SERVICE_PORT_BASE` | First HTTPS port for per-deployment Hermes/files/code tailnet apps in Tailscale path mode |
 
 **Fake mode:** Default. Records and intent are persisted to SQLite but no
 provider API calls are made. Drift reconciliation reports local-only state.
@@ -92,7 +93,9 @@ from Cloudflare.
 **Tailscale live mode:** `deploy.sh control install` keeps the control node
 Dockerized, then uses the host Tailscale CLI as the network edge. It publishes
 the web/API/Notion routes on the selected HTTPS port and does not require
-Cloudflare DNS credentials.
+Cloudflare DNS credentials. In Tailscale path mode, Docker health/reconcile can
+also publish each deployment's Hermes, files, and code surfaces on stable
+tailnet HTTPS ports and persist those URLs into deployment metadata.
 
 **Drift detection:**
 ```python
@@ -457,6 +460,101 @@ ARCLINK_E2E_LIVE=1 PYTHONPATH=python python3 -m pytest tests/test_arclink_e2e_li
 
 Without credentials, all steps skip cleanly. Evidence template at
 `docs/arclink/live-e2e-evidence-template.md`.
+
+## 14. Native Hermes Workspace Plugins
+
+**Ownership:**
+
+| Surface | Owner | Current status |
+| --- | --- | --- |
+| ArcLink Drive | `plugins/hermes-agent/arclink-drive/` | Functional first-generation file manager |
+| ArcLink Code | `plugins/hermes-agent/arclink-code/` | Functional first-generation editor/git surface |
+| ArcLink Terminal | `plugins/hermes-agent/arclink-terminal/` | Managed-pty persistent sessions with bounded polling output |
+| Install/enable | `bin/install-arclink-plugins.sh` | Installs all default ArcLink plugins and prunes legacy aliases |
+| Docker repair | `bin/arclink-docker.sh` | Repairs dashboard mounts and refreshes managed plugins |
+
+**Assumptions:**
+
+- Workspace plugins are additive Hermes dashboard plugins. Do not patch Hermes
+  core for ArcLink-specific Drive, Code, or Terminal behavior.
+- Plugin status contracts are capability-driven and secret-free. They may
+  return access URLs, usernames, mount labels, roots, editor mode, and backend
+  names; they must not return tokens, passwords, deploy keys, OAuth material, or
+  raw `.env` values.
+- Drive and Code are mounted into deployment-owned roots. In Docker
+  deployments, Drive uses `/srv/vault` and Code uses `/workspace`.
+- Terminal is intentionally unavailable until its persistent session backend is
+  implemented. Operators should not treat the tab as shell access.
+
+**Default install:**
+
+```bash
+bin/install-arclink-plugins.sh "$REPO_DIR" "$HERMES_HOME"
+```
+
+With no explicit plugin list, the installer enables:
+
+```text
+arclink-code
+arclink-drive
+arclink-terminal
+arclink-managed-context
+```
+
+It also removes legacy aliases from the Hermes home and plugin config:
+
+```text
+arclink-code-space
+arclink-knowledge-vault
+```
+
+**Docker repair and refresh:**
+
+Docker reconcile and health call helper paths that:
+
+1. Ensure deployed `hermes-dashboard` services mount the Hermes home, vault,
+   and workspace.
+2. Ensure `VAULT_DIR`, `ARCLINK_DRIVE_ROOT`, and
+   `ARCLINK_CODE_WORKSPACE_ROOT` are present in the dashboard environment.
+3. Re-run `managed-context-install` for each deployment stack that has that
+   service.
+4. Recreate `hermes-dashboard` so plugin changes are loaded.
+5. Refresh `arclink_service_health` rows from `docker compose ps --format json`.
+
+Use the canonical Docker path rather than editing generated Compose by hand:
+
+```bash
+./deploy.sh docker reconcile
+./deploy.sh docker health
+```
+
+**Tailscale path-mode app publishing:**
+
+When `ARCLINK_INGRESS_MODE=tailscale` and
+`ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY=path`, Docker health/reconcile
+assigns stable tailnet HTTPS ports starting at
+`ARCLINK_TAILNET_SERVICE_PORT_BASE` for the per-deployment `hermes`, `files`,
+and `code` roles. It stores those ports and `access_urls` in deployment
+metadata, then calls `tailscale serve --https=<port>` for each role when the
+host has the Tailscale CLI.
+
+If the host lacks the Tailscale CLI, publishing is skipped with a warning and
+health continues. The deployment metadata remains the source for the dashboard
+URL read model when publishing succeeds.
+
+**Focused checks:**
+
+```bash
+python3 -m py_compile \
+  plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py \
+  plugins/hermes-agent/arclink-code/dashboard/plugin_api.py \
+  plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py
+python3 tests/test_arclink_plugins.py
+python3 tests/test_arclink_docker.py
+node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js
+node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js
+node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js
+```
 
 ---
 

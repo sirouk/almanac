@@ -1,5 +1,40 @@
 # ArcLink Changelog
 
+## Native Hermes Workspace Plugins (2026-05-05)
+
+- **ArcLink Drive**: `plugins/hermes-agent/arclink-drive/` is now documented as
+  the ArcLink-owned Hermes dashboard file manager. It supports local vault and
+  sanitized Nextcloud WebDAV backends, bounded preview/download/upload, folder
+  creation, rename/move, favorites, local trash, and local restore. WebDAV
+  credentials stay server-side in the plugin API.
+- **ArcLink Code**: `plugins/hermes-agent/arclink-code/` is now documented as
+  the native Hermes code workspace. It uses the deployment workspace root,
+  opens bounded text files, guards saves with expected SHA-256 hashes, scans
+  bounded git repositories, and exposes allowlisted source-control operations
+  with confirmation-gated discard.
+- **ArcLink Terminal**: `plugins/hermes-agent/arclink-terminal/` now exposes a
+  managed-pty persistent-session backend with stable session IDs, persisted
+  metadata, bounded scrollback, polling output, input, reload reconnect,
+  rename/folder/reorder controls, confirmation-gated close, and an
+  unrestricted-root startup guard. True streaming and tmux-backed persistence
+  remain future work.
+- **Workspace proof**: `bin/arclink-live-proof --journey workspace --live`
+  now runs Docker upgrade/reconcile, Docker health, and TLS desktop/mobile
+  browser proof for Drive, Code, and Terminal through the native Hermes
+  dashboard plugin routes. The browser proof records redacted evidence and
+  sanitized screenshot references; it does not prove the broader hosted
+  customer journey.
+- **Installer and Docker repair**: `bin/install-arclink-plugins.sh` installs
+  Drive, Code, Terminal, and managed context by default and removes legacy
+  dashboard plugin aliases. Docker reconcile/health repairs Hermes dashboard
+  mounts, reruns the managed plugin installer for deployment stacks, recreates
+  `hermes-dashboard`, and can publish per-deployment Hermes/files/code tailnet
+  HTTPS app URLs in Tailscale path mode.
+
+Rationale: ArcLink-specific workspace behavior stays in ArcLink-owned plugins,
+wrappers, and generated deployment config instead of patching Hermes core.
+Status and runbook contracts stay no-secret and capability-driven.
+
 ## Foundation (2026-05-01)
 
 Initial ArcLink foundation landed as an additive layer on the shared-host substrate.

@@ -115,9 +115,9 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
           AND channel_kind = 'telegram'
         """
     ).fetchone()
-    expect(notification is not None, "expected vessel-online ping to be queued")
+    expect(notification is not None, "expected agent-ready ping to be queued")
     expect(notification["target_id"] == "100", str(dict(notification)))
-    expect("Vessel online" in notification["message"], str(notification["message"]))
+    expect("Agent online" in notification["message"], str(notification["message"]))
     expect("Hermes:" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
     expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
@@ -225,6 +225,7 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
                     "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                    "ARCLINK_TAILNET_SERVICE_PORT_BASE": "8443",
                 },
             }
         )
@@ -233,6 +234,13 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     expect(results[0]["status"] == "applied", str(results))
     expect(results[0]["dns_records"] == [], str(results))
     expect(results[0]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1234", str(results))
+    expect(results[0]["urls"]["hermes"] == "https://worker.example.test:8443/", str(results))
+    expect(results[0]["urls"]["files"] == "https://worker.example.test:8444/", str(results))
+    expect(results[0]["urls"]["code"] == "https://worker.example.test:8445/", str(results))
+    metadata = json.loads(
+        conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
+    )
+    expect(metadata["tailnet_service_ports"] == {"code": 8445, "files": 8444, "hermes": 8443}, str(metadata))
     dns_count = conn.execute("SELECT COUNT(*) AS c FROM arclink_dns_records").fetchone()["c"]
     expect(dns_count == 0, str(dns_count))
     event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'sovereign_pod_applied'").fetchone()

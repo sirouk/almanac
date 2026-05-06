@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import os
+import shlex
+import sqlite3
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +20,12 @@ def expect(condition: bool, message: str) -> None:
 
 def read(path: str) -> str:
     return (REPO / path).read_text(encoding="utf-8")
+
+
+def extract(text: str, start_marker: str, end_marker: str) -> str:
+    start = text.index(start_marker)
+    end = text.index(end_marker, start)
+    return text[start:end]
 
 
 def test_dockerfile_installs_pinned_runtime_assets() -> None:
@@ -181,6 +190,16 @@ def test_docker_operator_commands_are_present() -> None:
     expect('pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' in body, body)
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
     expect("docker_reconcile()" in body and "./bin/arclink-ctl org-profile apply --yes" in body, body)
+    expect("docker_publish_tailnet_deployment_apps()" in body and "tailscale serve --bg --yes --https" in body, body)
+    expect("docker_refresh_deployment_service_health()" in body and "docker compose" in body and "upsert_arclink_service_health" in body, body)
+    expect("docker_refresh_deployment_managed_plugins()" in body, body)
+    expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
+    expect("Refreshed deployment-managed Hermes plugins" in body, body)
+    expect("docker_repair_deployment_dashboard_plugin_mounts()" in body, body)
+    expect("ARCLINK_DRIVE_ROOT" in body and "ARCLINK_CODE_WORKSPACE_ROOT" in body, body)
+    expect("ARCLINK_TERMINAL_ALLOW_ROOT" in body, body)
+    expect("Repaired Hermes dashboard plugin mounts" in body, body)
+    expect("ARCLINK_TAILNET_SERVICE_PORT_BASE" in body, body)
     expect("wait_for_docker_agent_reconcile()" in body and "arclink-vault-reconciler.json" in body, body)
     expect("docker_record_release_state()" in body and '"deployed_from": "docker-checkout"' in body, body)
     expect("docker_live_agent_smoke()" in body and "./bin/live-agent-tool-smoke.sh" in body, body)
@@ -218,6 +237,85 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker health passed" not in body.lower() or "Docker health passed." in body, body)
     expect("redact_output" in job_loop and 'cat "$output_file"' not in job_loop, "Docker job loop must redact failure output before logs/state")
     print("PASS test_docker_operator_commands_are_present")
+
+
+def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
+    body = read("bin/arclink-docker.sh")
+    snippet = extract(body, "docker_publish_tailnet_deployment_apps() {", "docker_configure_deployment_nextcloud_overwrite() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        state = repo / "arclink-priv" / "state"
+        state.mkdir(parents=True)
+        (repo / "python").symlink_to(REPO / "python")
+        db_path = state / "arclink-control.sqlite3"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE arclink_deployments (
+                  deployment_id TEXT PRIMARY KEY,
+                  prefix TEXT,
+                  base_domain TEXT,
+                  status TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO arclink_deployments (
+                  deployment_id, prefix, base_domain, status, metadata_json, created_at
+                ) VALUES ('dep_1', 'amber-vault-1a2b', 'worker.example.ts.net', 'active', '{}', '2026-01-01T00:00:00+00:00')
+                """
+            )
+            conn.commit()
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        log_path = root / "tailscale.log"
+        (bin_dir / "tailscale").write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log_path))}\n"
+            "case \"$*\" in *--https=8444*) exit 1 ;; *) exit 0 ;; esac\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "tailscale").chmod(0o755)
+        script = f"""
+set -euo pipefail
+{snippet}
+REPO_DIR={shlex.quote(str(repo))}
+configured_or_default() {{
+  case "$1" in
+    ARCLINK_INGRESS_MODE) printf '%s\\n' tailscale ;;
+    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY) printf '%s\\n' path ;;
+    ARCLINK_TAILSCALE_DNS_NAME) printf '%s\\n' worker.example.ts.net ;;
+    ARCLINK_WEB_PORT) printf '%s\\n' 3000 ;;
+    ARCLINK_TAILNET_SERVICE_PORT_BASE) printf '%s\\n' 8443 ;;
+    *) printf '%s\\n' "${{2:-}}" ;;
+  esac
+}}
+docker_configure_deployment_nextcloud_overwrite() {{
+  printf 'called\\n' >> {shlex.quote(str(root / "nextcloud-called"))}
+}}
+docker_publish_tailnet_deployment_apps
+"""
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            cwd=REPO,
+            env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"tailnet publish probe failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        with sqlite3.connect(db_path) as conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()[0])
+        expect(metadata["tailnet_app_publication"]["status"] == "unavailable", str(metadata))
+        expect("files" in metadata["tailnet_app_publication"]["failed_roles"], str(metadata))
+        expect("access_urls" not in metadata, str(metadata))
+        expect(metadata["tailnet_service_ports"] == {"code": 8445, "files": 8444, "hermes": 8443}, str(metadata))
+        expect(not (root / "nextcloud-called").exists(), "Nextcloud overwrite must not be configured for unpublished files URL")
+        print("PASS test_docker_tailnet_publish_failure_withholds_app_urls")
 
 
 def test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config() -> None:
@@ -444,6 +542,7 @@ def main() -> int:
     test_dockerfile_installs_pinned_runtime_assets()
     test_compose_defines_full_stack_services()
     test_docker_operator_commands_are_present()
+    test_docker_tailnet_publish_failure_withholds_app_urls()
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
     test_docker_agent_supervisor_replaces_user_systemd_units()
     test_docker_entrypoint_generates_fresh_secrets()
@@ -453,7 +552,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 12 ArcLink Docker regression tests")
+    print("PASS all 13 ArcLink Docker regression tests")
     return 0
 
 

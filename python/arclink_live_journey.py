@@ -68,7 +68,7 @@ def missing_credentials(step: JourneyStep) -> list[str]:
 # Journey definition
 # ---------------------------------------------------------------------------
 
-_JOURNEY_STEPS: list[dict[str, Any]] = [
+_HOSTED_JOURNEY_STEPS: list[dict[str, Any]] = [
     {
         "name": "web_onboarding_start",
         "description": "Start onboarding session via hosted API",
@@ -132,9 +132,73 @@ _JOURNEY_STEPS: list[dict[str, Any]] = [
 ]
 
 
-def build_journey() -> list[JourneyStep]:
-    """Build the ordered journey step list."""
-    return [JourneyStep(**spec) for spec in _JOURNEY_STEPS]
+_WORKSPACE_PROOF_ENV = [
+    "ARCLINK_E2E_LIVE",
+    "ARCLINK_WORKSPACE_PROOF_TLS_URL",
+    "ARCLINK_WORKSPACE_PROOF_AUTH",
+]
+
+_WORKSPACE_JOURNEY_STEPS: list[dict[str, Any]] = [
+    {
+        "name": "workspace_docker_upgrade_reconcile",
+        "description": "Run Docker upgrade/reconcile for the target deployment",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_E2E_DOCKER"],
+    },
+    {
+        "name": "workspace_docker_health",
+        "description": "Verify Docker health before workspace browser proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_E2E_DOCKER"],
+    },
+    {
+        "name": "drive_tls_desktop_proof",
+        "description": "Exercise ArcLink Drive upload, rename, duplicate, move, trash, restore, and root switch over TLS on desktop",
+        "required_env": list(_WORKSPACE_PROOF_ENV),
+    },
+    {
+        "name": "drive_tls_mobile_proof",
+        "description": "Exercise ArcLink Drive workflow over TLS on a mobile viewport",
+        "required_env": list(_WORKSPACE_PROOF_ENV),
+    },
+    {
+        "name": "code_tls_desktop_proof",
+        "description": "Exercise ArcLink Code open, edit without auto-save, save, diff, stage, and unstage over TLS on desktop",
+        "required_env": list(_WORKSPACE_PROOF_ENV),
+    },
+    {
+        "name": "code_tls_mobile_proof",
+        "description": "Exercise ArcLink Code workflow over TLS on a mobile viewport",
+        "required_env": list(_WORKSPACE_PROOF_ENV),
+    },
+    {
+        "name": "terminal_tls_desktop_proof",
+        "description": "Exercise ArcLink Terminal create, output, reload, revisit, rename, and close over TLS on desktop",
+        "required_env": list(_WORKSPACE_PROOF_ENV),
+    },
+    {
+        "name": "terminal_tls_mobile_proof",
+        "description": "Exercise ArcLink Terminal workflow over TLS on a mobile viewport",
+        "required_env": list(_WORKSPACE_PROOF_ENV),
+    },
+]
+
+
+def build_journey(kind: str = "hosted") -> list[JourneyStep]:
+    """Build an ordered journey step list.
+
+    Args:
+        kind: ``hosted`` for the public onboarding/provider journey,
+            ``workspace`` for native Drive/Code/Terminal TLS proof, or ``all``
+            for both in order.
+    """
+    if kind == "hosted":
+        specs = _HOSTED_JOURNEY_STEPS
+    elif kind == "workspace":
+        specs = _WORKSPACE_JOURNEY_STEPS
+    elif kind == "all":
+        specs = [*_HOSTED_JOURNEY_STEPS, *_WORKSPACE_JOURNEY_STEPS]
+    else:
+        raise ValueError(f"unknown journey kind: {kind}")
+    return [JourneyStep(**spec) for spec in specs]
 
 
 # ---------------------------------------------------------------------------

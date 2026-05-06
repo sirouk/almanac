@@ -115,6 +115,14 @@ stay behind explicit resolver metadata until live execution installs a wrapper
 or secret materialization step. This keeps the dry-run contract executable for
 stock images without leaking plaintext into persisted Compose intent.
 
+Hermes dashboard intent now mounts the deployment vault at `/srv/vault` and the
+code workspace at `/workspace`, then exports `ARCLINK_DRIVE_ROOT` and
+`ARCLINK_CODE_WORKSPACE_ROOT` for ArcLink dashboard plugins. It also exports
+role-specific access URLs when ingress metadata is available. Nextcloud
+overwrite settings are derived from the files URL only when the URL is a
+root-level HTTPS host or host:port, avoiding path-prefixed overwrite URLs that
+Nextcloud cannot safely treat as its canonical host.
+
 Entitlement-gated deployments may still render dry-run intent for admin
 visibility, but `execution.ready` stays false and no
 `provisioning_ready_for_execution` event is recorded until paid or comped.
@@ -261,6 +269,39 @@ bot adapter skeletons. They share the same onboarding session rows and fake
 checkout semantics as the website surface. They intentionally store public
 channel identity only and reject private bot-token-shaped or provider-token
 material in metadata. They do not run live Telegram or Discord clients yet.
+
+## Native Hermes Workspace Plugins
+
+ArcLink installs native Hermes dashboard plugins for the agent workspace:
+
+- `arclink-drive` provides `ArcLink Drive`, a file-manager surface over the
+  mounted vault or sanitized Nextcloud WebDAV state. Current API capabilities
+  include status, listing, bounded text preview, download, upload, folder
+  creation, rename, move, favorites, local trash, and local restore.
+- `arclink-code` provides `ArcLink Code`, a native workspace browser/editor.
+  It uses `ARCLINK_CODE_WORKSPACE_ROOT`, opens bounded text files, writes
+  manual saves atomically, rejects stale saves when the expected file hash no
+  longer matches, scans for git repositories, and exposes source-control
+  status, stage, unstage, confirmed discard, and commit helpers.
+- `arclink-terminal` provides the `ArcLink Terminal` tab and a sanitized status
+  contract. The shipped backend is ArcLink-managed pty with stable session ids,
+  persisted metadata, bounded scrollback, polling output, input, reload
+  reconnect, rename/folder/reorder controls, confirmation-gated close, and an
+  unrestricted-root startup guard. It is not tmux-backed and does not claim
+  true streaming transport.
+
+`bin/install-arclink-plugins.sh` owns default plugin installation for refreshed
+agents. When no explicit plugin list is passed it installs Drive, Code,
+Terminal, and managed context, then removes old dashboard aliases
+`arclink-code-space` and `arclink-knowledge-vault` from disk and from
+`config.yaml`.
+
+Docker reconcile and health now repair deployed Hermes dashboard plugin mounts,
+rerun the managed plugin installer for existing deployment stacks, and recreate
+`hermes-dashboard` so refreshed plugins become visible without patching Hermes
+core. The workspace plugin contract stays no-secret: status payloads expose
+URLs, usernames, mount labels, roots, and capability flags, but not passwords,
+tokens, or raw access-state credentials.
 
 ## Telegram And Discord Runtime Adapters
 

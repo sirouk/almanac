@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -11,8 +12,19 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO / "bin" / "install-arclink-plugins.sh"
+PLUGINS_ROOT = REPO / "plugins" / "hermes-agent"
 PLUGIN_DIR = REPO / "plugins" / "hermes-agent" / "arclink-managed-context"
 PLUGIN_INIT = PLUGIN_DIR / "__init__.py"
+DEFAULT_PLUGIN_NAMES = (
+    "arclink-code",
+    "arclink-drive",
+    "arclink-terminal",
+    "arclink-managed-context",
+)
+LEGACY_PLUGIN_NAMES = (
+    "arclink-code-space",
+    "arclink-knowledge-vault",
+)
 START_HOOK_DIR = REPO / "hooks" / "hermes-agent" / "arclink-telegram-start"
 CONTROL_PY = REPO / "python" / "arclink_control.py"
 
@@ -38,6 +50,23 @@ class FakeCtx:
         }
 
 
+class JsonRequest:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    async def json(self) -> dict:
+        return self.payload
+
+
+class MemoryUpload:
+    def __init__(self, filename: str, body: bytes) -> None:
+        self.filename = filename
+        self.body = body
+
+    async def read(self) -> bytes:
+        return self.body
+
+
 def load_module(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -46,6 +75,51 @@ def load_module(path: Path, name: str):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _assert_no_secret_status(payload: dict, label: str) -> None:
+    serialized = json.dumps(payload, sort_keys=True)
+    forbidden_values = (
+        "do-not-return",
+        "token-",
+        "sk-",
+        "BEGIN PRIVATE KEY",
+    )
+    for value in forbidden_values:
+        expect(value not in serialized, f"{label} status leaked secret-looking value: {serialized}")
+
+    forbidden_key_fragments = ("password", "secret", "credential", "api_key", "private_key", "token")
+
+    def walk(value, path: str = "$") -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                lowered = str(key).lower()
+                expect(
+                    not any(fragment in lowered for fragment in forbidden_key_fragments),
+                    f"{label} status exposed secret-looking key at {path}.{key}: {serialized}",
+                )
+                walk(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload)
+
+
+def _assert_default_plugins_installed(hermes_home: Path) -> None:
+    config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+    for plugin_name in DEFAULT_PLUGIN_NAMES:
+        installed_dir = hermes_home / "plugins" / plugin_name
+        expect((installed_dir / "plugin.yaml").is_file(), f"expected installed plugin manifest at {installed_dir / 'plugin.yaml'}")
+        expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
+        expect(f"  - {plugin_name}" in config_body, config_body)
+
+    for plugin_name in ("arclink-code", "arclink-drive", "arclink-terminal"):
+        dashboard_dir = hermes_home / "plugins" / plugin_name / "dashboard"
+        expect((dashboard_dir / "manifest.json").is_file(), f"expected dashboard manifest at {dashboard_dir / 'manifest.json'}")
+        expect((dashboard_dir / "plugin_api.py").is_file(), f"expected dashboard API at {dashboard_dir / 'plugin_api.py'}")
+        expect((dashboard_dir / "dist" / "index.js").is_file(), f"expected dashboard JS at {dashboard_dir / 'dist' / 'index.js'}")
+        expect((dashboard_dir / "dist" / "style.css").is_file(), f"expected dashboard CSS at {dashboard_dir / 'dist' / 'style.css'}")
 
 
 def test_install_arclink_plugins_installs_default_hermes_plugin() -> None:
@@ -60,15 +134,12 @@ def test_install_arclink_plugins_installs_default_hermes_plugin() -> None:
             check=False,
         )
         expect(result.returncode == 0, f"expected install-arclink-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
-        installed_dir = hermes_home / "plugins" / "arclink-managed-context"
         installed_hook_dir = hermes_home / "hooks" / "arclink-telegram-start"
-        expect((installed_dir / "plugin.yaml").is_file(), f"expected installed plugin manifest at {installed_dir / 'plugin.yaml'}")
-        expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
+        _assert_default_plugins_installed(hermes_home)
         expect((installed_hook_dir / "HOOK.yaml").is_file(), f"expected installed hook manifest at {installed_hook_dir / 'HOOK.yaml'}")
         expect((installed_hook_dir / "handler.py").is_file(), f"expected installed hook handler at {installed_hook_dir / 'handler.py'}")
         config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
         expect("plugins:\n" in config_body, config_body)
-        expect("enabled:\n  - arclink-managed-context" in config_body, config_body)
         expect("disabled:\n  - arclink-managed-context" not in config_body, config_body)
         print("PASS test_install_arclink_plugins_installs_default_hermes_plugin")
 
@@ -99,15 +170,943 @@ def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_de
             check=False,
         )
         expect(result.returncode == 0, f"expected install-arclink-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        _assert_default_plugins_installed(hermes_home)
         config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
         expect("model: gpt-5.4" in config_body, config_body)
         expect("mcp_servers:\n  arclink-mcp:" in config_body, config_body)
         expect("  - existing-plugin" in config_body, config_body)
-        expect("  - arclink-managed-context" in config_body, config_body)
         expect("  - noisy-plugin" in config_body, config_body)
         disabled_block = config_body.split("  disabled:\n", 1)[1].split("  enabled:\n", 1)[0]
         expect("arclink-managed-context" not in disabled_block, config_body)
         print("PASS test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default")
+
+
+def test_install_arclink_plugins_preserves_comments_and_future_nested_config() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "config.yaml").write_text(
+            "model: gpt-5.4\n"
+            "plugins:\n"
+            "  # operator comment must survive managed plugin refresh\n"
+            "  disabled:\n"
+            "  - arclink-managed-context # move back to enabled\n"
+            "  - noisy-plugin\n"
+            "  defaults:\n"
+            "    future:\n"
+            "      nested: preserve-me\n"
+            "  enabled:\n"
+            "  # enabled comment must remain near the list\n"
+            "  - existing-plugin\n"
+            "mcp_servers:\n"
+            "  arclink-mcp:\n"
+            "    url: http://127.0.0.1:8282/mcp\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [str(INSTALL_SCRIPT), str(REPO), str(hermes_home)],
+            env={**os.environ},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected install-arclink-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        expect("# operator comment must survive managed plugin refresh" in config_body, config_body)
+        expect("# enabled comment must remain near the list" in config_body, config_body)
+        expect("defaults:\n    future:\n      nested: preserve-me" in config_body, config_body)
+        expect("mcp_servers:\n  arclink-mcp:" in config_body, config_body)
+        expect("  - noisy-plugin" in config_body, config_body)
+        expect("  - existing-plugin" in config_body, config_body)
+        disabled_block = config_body.split("  disabled:\n", 1)[1].split("  defaults:\n", 1)[0]
+        expect("arclink-managed-context" not in disabled_block, config_body)
+        _assert_default_plugins_installed(hermes_home)
+        print("PASS test_install_arclink_plugins_preserves_comments_and_future_nested_config")
+
+
+def test_install_arclink_plugins_excludes_generated_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        plugin = repo / "plugins" / "hermes-agent" / "arclink-managed-context"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.yaml").write_text("name: arclink-managed-context\n", encoding="utf-8")
+        (plugin / "__init__.py").write_text("# plugin\n", encoding="utf-8")
+        (plugin / "__pycache__").mkdir()
+        (plugin / "__pycache__" / "__init__.cpython-311.pyc").write_bytes(b"cache")
+        (plugin / ".pytest_cache").mkdir()
+        (plugin / ".pytest_cache" / "README.md").write_text("cache\n", encoding="utf-8")
+        (plugin / "module.pyo").write_bytes(b"optimized")
+        (plugin / ".DS_Store").write_bytes(b"finder")
+        hermes_home = root / "hermes-home"
+
+        result = subprocess.run(
+            [str(INSTALL_SCRIPT), str(repo), str(hermes_home), "arclink-managed-context"],
+            env={**os.environ},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected install-arclink-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        installed = hermes_home / "plugins" / "arclink-managed-context"
+        expect((installed / "plugin.yaml").is_file(), "expected plugin manifest to install")
+        expect(not (installed / "__pycache__").exists(), "expected __pycache__ to be excluded")
+        expect(not (installed / ".pytest_cache").exists(), "expected .pytest_cache to be excluded")
+        expect(not (installed / "module.pyo").exists(), "expected .pyo file to be excluded")
+        expect(not (installed / ".DS_Store").exists(), "expected .DS_Store to be excluded")
+        print("PASS test_install_arclink_plugins_excludes_generated_artifacts")
+
+
+def test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        plugins_root = hermes_home / "plugins"
+        plugins_root.mkdir(parents=True, exist_ok=True)
+        for plugin_name in LEGACY_PLUGIN_NAMES:
+            legacy_dir = plugins_root / plugin_name
+            legacy_dir.mkdir(parents=True, exist_ok=True)
+            (legacy_dir / "plugin.yaml").write_text(f"name: {plugin_name}\n", encoding="utf-8")
+        (hermes_home / "config.yaml").write_text(
+            "plugins:\n"
+            "  disabled:\n"
+            "  - arclink-code-space\n"
+            "  - noisy-plugin\n"
+            "  enabled:\n"
+            "  - arclink-knowledge-vault\n"
+            "  - existing-plugin\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [str(INSTALL_SCRIPT), str(REPO), str(hermes_home)],
+            env={**os.environ},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected install-arclink-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        for plugin_name in LEGACY_PLUGIN_NAMES:
+            expect(not (plugins_root / plugin_name).exists(), f"expected legacy plugin to be removed: {plugin_name}")
+            expect(plugin_name not in config_body, config_body)
+        expect("  - noisy-plugin" in config_body, config_body)
+        expect("  - existing-plugin" in config_body, config_body)
+        _assert_default_plugins_installed(hermes_home)
+        print("PASS test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases")
+
+
+def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "arclink-web-access.json").write_text(
+            json.dumps(
+                {
+                    "username": "alex",
+                    "nextcloud_username": "alex-nextcloud",
+                    "code_url": "https://arclink.example.test:40011/",
+                    "password": "do-not-return",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (state_dir / "arclink-vault-reconciler.json").write_text(
+            json.dumps(
+                {
+                    "resource-ref": (
+                        "Canonical user access rails:\n"
+                        "- Vault access in Nextcloud: https://arclink.example.test/ (shared mount: /Vault)\n"
+                    ),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        workspace_home = root / "home" / "alex"
+        workspace_home.mkdir(parents=True, exist_ok=True)
+        (workspace_home / "ArcLink").mkdir(parents=True, exist_ok=True)
+        (workspace_home / "ArcLink" / "agent-notes.md").write_text("# Notes\n\nArcLink Drive test.\n", encoding="utf-8")
+        (workspace_home / "hello.py").write_text("print('hi')\n", encoding="utf-8")
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(workspace_home)
+        os.environ["ARCLINK_DRIVE_WORKSPACE_ROOT"] = str(workspace_home)
+        os.environ["ARCLINK_TERMINAL_ALLOW_ROOT"] = "1"
+        try:
+            knowledge_api = load_module(
+                PLUGINS_ROOT / "arclink-drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_dashboard_api_test",
+            )
+            code_api = load_module(
+                PLUGINS_ROOT / "arclink-code" / "dashboard" / "plugin_api.py",
+                "arclink_code_dashboard_api_test",
+            )
+            terminal_api = load_module(
+                PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py",
+                "arclink_terminal_dashboard_api_test",
+            )
+            knowledge = asyncio.run(knowledge_api.status())
+            code = asyncio.run(code_api.status())
+            terminal = asyncio.run(terminal_api.status())
+            expect(knowledge["plugin"] == "arclink-drive", str(knowledge))
+            expect(knowledge["status_contract"] == 1, str(knowledge))
+            expect(knowledge["available"] is True, str(knowledge))
+            expect(knowledge["url"] == "https://arclink.example.test/", str(knowledge))
+            expect(knowledge["mount"] == "/Vault", str(knowledge))
+            expect(knowledge["username"] == "alex-nextcloud", str(knowledge))
+            expect(knowledge["backend"] == "local-roots", str(knowledge))
+            expect(knowledge["default_root"] == "vault", str(knowledge))
+            root_map = {item["id"]: item for item in knowledge["roots"]}
+            expect(set(root_map) == {"vault", "workspace"}, str(knowledge))
+            expect(root_map["vault"]["label"] == "Vault", str(root_map["vault"]))
+            expect(root_map["workspace"]["label"] == "Workspace", str(root_map["workspace"]))
+            expect(root_map["vault"]["capabilities"]["sharing"] is False, str(root_map["vault"]))
+            expect(root_map["workspace"]["capabilities"]["trash"] is True, str(root_map["workspace"]))
+            expect(knowledge["capabilities"]["drag_drop_upload"] is True, str(knowledge))
+            _assert_no_secret_status(knowledge, "Drive")
+            drive_items = asyncio.run(knowledge_api.items(root="vault", path="/"))
+            expect(any(item["name"] == "agent-notes.md" for item in drive_items["items"]), str(drive_items))
+            workspace_items = asyncio.run(knowledge_api.items(root="workspace", path="/"))
+            expect(any(item["name"] == "hello.py" for item in workspace_items["items"]), str(workspace_items))
+            expect(code["plugin"] == "arclink-code", str(code))
+            expect(code["status_contract"] == 1, str(code))
+            expect(code["available"] is True, str(code))
+            expect(code["url"] == "https://arclink.example.test:40011/", str(code))
+            expect(code["workspace_root"].endswith("/home/alex"), str(code))
+            code_items = asyncio.run(code_api.items(path="/"))
+            expect(any(item["name"] == "hello.py" for item in code_items["items"]), str(code_items))
+            code_file = asyncio.run(code_api.file(path="/hello.py"))
+            expect(code_file["language"] == "python", str(code_file))
+            expect("print('hi')" in code_file["content"], str(code_file))
+            _assert_no_secret_status(code, "Code")
+            expect(terminal["plugin"] == "arclink-terminal", str(terminal))
+            expect(terminal["status_contract"] == 1, str(terminal))
+            expect(terminal["label"] == "ArcLink Terminal", str(terminal))
+            expect(terminal["available"] is True, str(terminal))
+            expect(terminal["backend"] == "managed-pty", str(terminal))
+            expect(terminal["workspace_root"] == "[workspace]", str(terminal))
+            expect(terminal["hermes_state"] == "[hermes-state]", str(terminal))
+            expect(terminal["capabilities"]["confirm_close_or_kill"] is True, str(terminal))
+            expect(terminal["capabilities"]["persistent_sessions"] is True, str(terminal))
+            expect(terminal["capabilities"]["bounded_scrollback"] is True, str(terminal))
+            expect(terminal["transport"]["mode"] == "polling", str(terminal))
+            _assert_no_secret_status(terminal, "Terminal")
+            print("PASS test_arclink_dashboard_plugins_expose_sanitized_access_state")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        vault = root / "vault"
+        workspace = root / "workspace"
+        docs = vault / "Docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        workspace.mkdir(parents=True, exist_ok=True)
+        (docs / "note.md").write_text("# Note\n\nShip carefully.\n", encoding="utf-8")
+        (workspace / "work.md").write_text("# Work\n\nWorkspace root.\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["ARCLINK_DRIVE_ROOT"] = str(vault)
+        os.environ["ARCLINK_DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        try:
+            drive_api = load_module(
+                PLUGINS_ROOT / "arclink-drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_dashboard_file_ops_test",
+            )
+            status = asyncio.run(drive_api.status())
+            root_map = {item["id"]: item for item in status["roots"]}
+            expect(status["default_root"] == "vault", str(status))
+            expect(root_map["vault"]["path"] == str(vault.resolve(strict=False)), str(root_map["vault"]))
+            expect(root_map["workspace"]["path"] == str(workspace.resolve(strict=False)), str(root_map["workspace"]))
+
+            listing = asyncio.run(drive_api.items(root="vault", path="/Docs"))
+            expect(any(item["name"] == "note.md" for item in listing["items"]), str(listing))
+            note = asyncio.run(drive_api.content(root="vault", path="/Docs/note.md"))
+            expect("Ship carefully." in note["content"], str(note))
+            workspace_note = asyncio.run(drive_api.content(root="workspace", path="/work.md"))
+            expect("Workspace root." in workspace_note["content"], str(workspace_note))
+
+            mkdir_result = asyncio.run(drive_api.mkdir(JsonRequest({"root": "vault", "path": "/Docs", "name": "Ideas"})))
+            expect(mkdir_result["path"] == "/Docs/Ideas", str(mkdir_result))
+            expect((docs / "Ideas").is_dir(), "expected mkdir to create nested folder")
+
+            new_file = asyncio.run(drive_api.new_file(JsonRequest({"root": "vault", "path": "/Docs/Ideas", "name": "starter.md", "content": "# Starter\n"})))
+            expect(new_file["path"] == "/Docs/Ideas/starter.md", str(new_file))
+            duplicate = asyncio.run(drive_api.duplicate(JsonRequest({"root": "vault", "path": "/Docs/Ideas/starter.md"})))
+            expect(duplicate["destination"] == "/Docs/Ideas/starter copy.md", str(duplicate))
+            copied = asyncio.run(
+                drive_api.copy(
+                    JsonRequest(
+                        {
+                            "root": "vault",
+                            "path": "/Docs/Ideas/starter.md",
+                            "destination_path": "/Docs/Ideas/starter copy.md",
+                            "conflict": "keep-both",
+                        }
+                    )
+                )
+            )
+            expect(copied["destination"] == "/Docs/Ideas/starter copy 2.md", str(copied))
+            batch_copied = asyncio.run(
+                drive_api.batch(
+                    JsonRequest(
+                        {
+                            "root": "vault",
+                            "action": "copy",
+                            "paths": ["/Docs/Ideas/starter.md"],
+                            "destination_folder": "/Docs",
+                        }
+                    )
+                )
+            )
+            expect(batch_copied["ok"] is True, str(batch_copied))
+            expect((docs / "starter.md").is_file(), "batch copy should copy into the destination folder")
+            batch_moved = asyncio.run(
+                drive_api.batch(
+                    JsonRequest(
+                        {
+                            "root": "vault",
+                            "action": "move",
+                            "paths": ["/Docs/starter.md"],
+                            "destination_folder": "/Docs/Moved",
+                        }
+                    )
+                )
+            )
+            expect(batch_moved["ok"] is True, str(batch_moved))
+            expect(not (docs / "starter.md").exists(), "batch move should remove the source path")
+            expect((docs / "Moved" / "starter.md").is_file(), "batch move should place the file in the destination folder")
+
+            rename_result = asyncio.run(drive_api.rename(JsonRequest({"root": "vault", "path": "/Docs/note.md", "name": "renamed.md"})))
+            expect(rename_result["destination"] == "/Docs/renamed.md", str(rename_result))
+            move_result = asyncio.run(
+                drive_api.move(JsonRequest({"root": "vault", "path": "/Docs/renamed.md", "destination_path": "/Docs/Ideas/renamed.md"}))
+            )
+            expect(move_result["destination"] == "/Docs/Ideas/renamed.md", str(move_result))
+            try:
+                asyncio.run(
+                    drive_api.move(
+                        JsonRequest(
+                            {
+                                "root": "vault",
+                                "destination_root": "workspace",
+                                "path": "/Docs/Ideas/renamed.md",
+                                "destination_path": "/renamed.md",
+                            }
+                        )
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected cross-root move rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected cross-root move to be rejected")
+
+            favorite = asyncio.run(drive_api.favorite(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md", "favorite": True})))
+            expect(favorite["favorite"] is True, str(favorite))
+
+            batch_deleted = asyncio.run(drive_api.batch(JsonRequest({"root": "vault", "action": "trash", "paths": ["/Docs/Ideas/starter copy.md"]})))
+            expect(batch_deleted["ok"] is True, str(batch_deleted))
+            expect(not (docs / "Ideas" / "starter copy.md").exists(), "batch trash should move local files to trash")
+            batch_restored = asyncio.run(
+                drive_api.batch(
+                    JsonRequest(
+                        {
+                            "root": "vault",
+                            "action": "restore",
+                            "paths": ["/Docs/Ideas/starter copy.md", "/Docs/Ideas/missing.md"],
+                        }
+                    )
+                )
+            )
+            expect(batch_restored["ok"] is False, str(batch_restored))
+            expect(batch_restored["results"][0]["ok"] is True, str(batch_restored))
+            expect(batch_restored["results"][1]["ok"] is False, str(batch_restored))
+            expect(batch_restored["results"][1]["status"] == 404, str(batch_restored))
+            expect((docs / "Ideas" / "starter copy.md").is_file(), "batch restore should restore successful records")
+
+            deleted = asyncio.run(drive_api.delete(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md"})))
+            expect(deleted["path"] == "/Docs/Ideas/renamed.md", str(deleted))
+            expect(not (docs / "Ideas" / "renamed.md").exists(), "delete should move local files to trash")
+            trash = asyncio.run(drive_api.trash(root="vault"))
+            expect(any(item["original_path"] == "/Docs/Ideas/renamed.md" for item in trash["items"]), str(trash))
+
+            restored = asyncio.run(drive_api.restore(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md"})))
+            expect(restored["path"] == "/Docs/Ideas/renamed.md", str(restored))
+            expect((docs / "Ideas" / "renamed.md").is_file(), "restore should return the trashed file")
+
+            trashed_again = asyncio.run(drive_api.delete(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md"})))
+            (docs / "Ideas" / "renamed.md").write_text("conflict\n", encoding="utf-8")
+            try:
+                asyncio.run(drive_api.restore(JsonRequest({"root": "vault", "trash_path": trashed_again["trash_path"]})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 409, f"expected restore conflict, got {exc!r}")
+            else:
+                raise AssertionError("expected restore conflict to be rejected")
+
+            try:
+                asyncio.run(drive_api.items(root="vault", path="/../outside"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected path traversal to be rejected, got {exc!r}")
+            else:
+                raise AssertionError("expected path traversal to be rejected")
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "secret.md").write_text("secret\n", encoding="utf-8")
+            (workspace / "escape").symlink_to(outside, target_is_directory=True)
+            try:
+                asyncio.run(drive_api.items(root="workspace", path="/escape"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected symlink escape to be rejected, got {exc!r}")
+            else:
+                raise AssertionError("expected symlink escape to be rejected")
+            print("PASS test_arclink_drive_local_backend_file_operations_are_recoverable")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        home = root / "home" / "alex"
+        vault = root / "vault"
+        workspace = root / "workspace"
+        missing_vault = root / "missing-vault"
+        docs = vault / "Docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        workspace.mkdir(parents=True, exist_ok=True)
+        home.mkdir(parents=True, exist_ok=True)
+        (docs / "report.md").write_text("original\n", encoding="utf-8")
+        (docs / "keep.md").write_text("keep\n", encoding="utf-8")
+        outside = root / "outside"
+        outside.mkdir()
+        (outside / "secret.md").write_text("secret\n", encoding="utf-8")
+        (docs / "secret-link.md").symlink_to(outside / "secret.md")
+        (docs / "secret-folder").symlink_to(outside, target_is_directory=True)
+        symlink_dir = docs / "linked"
+        symlink_dir.mkdir()
+        (symlink_dir / "escape.md").symlink_to(outside / "secret.md")
+
+        old_env = os.environ.copy()
+        for key in (
+            "ARCLINK_DRIVE_ROOT",
+            "ARCLINK_KNOWLEDGE_VAULT_ROOT",
+            "ARCLINK_AGENT_VAULT_DIR",
+            "VAULT_DIR",
+            "ARCLINK_DRIVE_WORKSPACE_ROOT",
+            "ARCLINK_CODE_WORKSPACE_ROOT",
+        ):
+            os.environ.pop(key, None)
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(home)
+        os.environ["ARCLINK_DRIVE_ROOT"] = str(vault)
+        os.environ["ARCLINK_DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        try:
+            drive_api = load_module(
+                PLUGINS_ROOT / "arclink-drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_dashboard_hardening_test",
+            )
+            try:
+                asyncio.run(drive_api.items(root="bogus", path="/"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected invalid root rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected invalid root to be rejected")
+
+            os.environ["ARCLINK_DRIVE_ROOT"] = str(missing_vault)
+            unavailable = asyncio.run(drive_api.status())
+            unavailable_roots = {item["id"]: item for item in unavailable["roots"]}
+            expect(unavailable_roots["vault"]["available"] is False, str(unavailable_roots["vault"]))
+            expect(unavailable_roots["workspace"]["available"] is True, str(unavailable_roots["workspace"]))
+            try:
+                asyncio.run(drive_api.items(root="vault", path="/"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 404, f"expected unavailable vault rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected unavailable vault to be rejected")
+            os.environ["ARCLINK_DRIVE_ROOT"] = str(vault)
+
+            docs_listing = asyncio.run(drive_api.items(root="vault", path="/Docs"))
+            listed_paths = {item["path"] for item in docs_listing["items"]}
+            expect("/Docs/secret-link.md" not in listed_paths, str(docs_listing))
+            expect("/Docs/secret-folder" not in listed_paths, str(docs_listing))
+            search = asyncio.run(drive_api.items(root="vault", path="/", query="secret"))
+            searched_paths = {item["path"] for item in search["items"]}
+            expect("/Docs/secret-link.md" not in searched_paths, str(search))
+            expect("/Docs/secret-folder" not in searched_paths, str(search))
+
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        files=[MemoryUpload("report.md", b"overwrite\n")],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 409, f"expected upload conflict rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected existing upload target to be rejected")
+            expect((docs / "report.md").read_text(encoding="utf-8") == "original\n", "upload conflict should preserve original")
+
+            kept = asyncio.run(
+                drive_api.upload(
+                    path="/Docs",
+                    root="vault",
+                    conflict="keep-both",
+                    files=[MemoryUpload("report.md", b"copy\n")],
+                )
+            )
+            kept_path = kept["uploaded"][0]["path"]
+            expect(kept_path != "/Docs/report.md", str(kept))
+            expect((vault / kept_path.lstrip("/")).read_text(encoding="utf-8") == "copy\n", str(kept))
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        conflict="replace",
+                        files=[MemoryUpload("new.md", b"new\n")],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected unsupported upload conflict policy rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected unsupported upload conflict policy to be rejected")
+
+            try:
+                asyncio.run(
+                    drive_api.copy(
+                        JsonRequest(
+                            {
+                                "root": "vault",
+                                "path": "/Docs/linked",
+                                "destination_path": "/Docs/linked-copy",
+                            }
+                        )
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected symlink copy escape rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected directory copy with escaping symlink to be rejected")
+
+            partial = asyncio.run(
+                drive_api.batch(
+                    JsonRequest(
+                        {
+                            "root": "vault",
+                            "action": "trash",
+                            "paths": ["/Docs/keep.md", "/Docs/missing.md"],
+                        }
+                    )
+                )
+            )
+            expect(partial["ok"] is False, str(partial))
+            expect(len(partial["results"]) == 2, str(partial))
+            expect(partial["results"][0]["ok"] is True, str(partial))
+            expect(partial["results"][1]["ok"] is False, str(partial))
+            expect(partial["results"][1]["status"] == 404, str(partial))
+            expect(not (docs / "keep.md").exists(), "successful batch item should still be applied")
+            print("PASS test_arclink_drive_api_hardens_roots_uploads_and_batch_failures")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> None:
+    body = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    expect('h("button", { key: "drive"' in body and "Drive" in body, "Drive breadcrumb root should be browser-visible")
+    expect('h("button", { key: "root"' in body and "rootLabel" in body, "selected root should be part of breadcrumbs")
+    expect('function loadTrash()' in body and 'api("/trash?"' in body, "Drive UI should load backend trash records")
+    expect('function restoreItem(item)' in body and 'requestJSON("/restore"' in body, "Drive UI should expose restore")
+    expect('function restoreSelected()' in body and 'state.location === "trash"' in body, "Drive UI should support trash selection state")
+    expect("const visibleItems = sortedItems();" in body and "visibleItems.map" in body, "Trash view should render sorted trash items")
+    expect('state.location !== "trash" && hasFiles(event)' in body, "Trash view should not advertise or accept uploads")
+    expect("arclink-drive-confirm" in body and "expectedText" in body, "Risky Drive actions should use in-app typed confirmations")
+    expect('requestJSON("/batch", { action: "restore"' in body, "Drive UI should use batch restore so partial failures are visible")
+    expect('function copySelectedWithPrompt()' in body and 'action: "copy"' in body, "Drive UI should expose selected batch copy")
+    expect('function moveSelectedWithPrompt()' in body and 'action: "move"' in body, "Drive UI should expose selected batch move")
+    expect("function openBackgroundContextMenu(event)" in body, "Drive UI should expose a background context menu")
+    expect('mode: "background"' in body and "New Folder" in body and "Upload" in body, "Drive background context menu should expose folder/file/upload actions")
+    expect('"selection"' in body and "Trash Selected" in body and "Restore Selected" in body, "Drive selected group context menu should expose batch actions")
+    print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
+
+
+def test_arclink_code_native_editor_guards_conflicting_saves() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        workspace = root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        source = workspace / "app.py"
+        source.write_text("print('one')\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["ARCLINK_CODE_WORKSPACE_ROOT"] = str(workspace)
+        try:
+            code_api = load_module(
+                PLUGINS_ROOT / "arclink-code" / "dashboard" / "plugin_api.py",
+                "arclink_code_dashboard_editor_ops_test",
+            )
+            listing = asyncio.run(code_api.items(path="/"))
+            expect(any(item["name"] == "app.py" for item in listing["items"]), str(listing))
+            opened = asyncio.run(code_api.file(path="/app.py"))
+            expect(opened["language"] == "python", str(opened))
+            expect(opened["hash"], str(opened))
+
+            source.write_text("print('external')\n", encoding="utf-8")
+            try:
+                asyncio.run(
+                    code_api.save(
+                        JsonRequest(
+                            {
+                                "path": "/app.py",
+                                "content": "print('two')\n",
+                                "expected_hash": opened["hash"],
+                            }
+                        )
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 409, f"expected conflict guard, got {exc!r}")
+            else:
+                raise AssertionError("expected conflicting save to be rejected")
+
+            reopened = asyncio.run(code_api.file(path="/app.py"))
+            saved = asyncio.run(
+                code_api.save(
+                    JsonRequest(
+                        {
+                            "path": "/app.py",
+                            "content": "print('two')\n",
+                            "expected_hash": reopened["hash"],
+                        }
+                    )
+                )
+            )
+            expect(saved["ok"] is True, str(saved))
+            expect(source.read_text(encoding="utf-8") == "print('two')\n", source.read_text(encoding="utf-8"))
+
+            mkdir_result = asyncio.run(code_api.mkdir(JsonRequest({"path": "/pkg"})))
+            expect(mkdir_result["path"] == "/pkg", str(mkdir_result))
+            created = asyncio.run(
+                code_api.save(JsonRequest({"path": "/pkg/note.md", "content": "needle in a note\n"}))
+            )
+            expect(created["path"] == "/pkg/note.md", str(created))
+            nested = workspace / "pkg" / "nested"
+            nested.mkdir()
+            (nested / "child.ts").write_text("export const value = 1;\n", encoding="utf-8")
+            outside = root / "outside"
+            outside.mkdir()
+            os.symlink(outside, workspace / "outside-link")
+            tree = asyncio.run(code_api.tree(path="/", depth=3))
+            tree_names = json.dumps(tree["tree"], sort_keys=True)
+            expect('"pkg"' in tree_names and '"nested"' in tree_names and '"child.ts"' in tree_names, tree_names)
+            expect("outside-link" not in tree_names, tree_names)
+            search = asyncio.run(code_api.search(q="needle", path="/"))
+            expect(any(item["path"] == "/pkg/note.md" for item in search["results"]), str(search))
+            renamed = asyncio.run(code_api.rename_item(JsonRequest({"path": "/pkg/note.md", "name": "renamed.md"})))
+            expect(renamed["path"] == "/pkg/renamed.md", str(renamed))
+            duplicated = asyncio.run(code_api.duplicate_item(JsonRequest({"path": "/pkg/renamed.md"})))
+            expect(duplicated["path"] == "/pkg/renamed copy.md", str(duplicated))
+            moved = asyncio.run(
+                code_api.move_item(JsonRequest({"path": "/pkg/renamed copy.md", "destination": "/copy.md"}))
+            )
+            expect(moved["path"] == "/copy.md", str(moved))
+            try:
+                asyncio.run(code_api.trash_item(JsonRequest({"path": "/copy.md"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected trash confirmation guard, got {exc!r}")
+            else:
+                raise AssertionError("expected trash without confirmation to be rejected")
+            trashed = asyncio.run(code_api.trash_item(JsonRequest({"path": "/copy.md", "confirm": True})))
+            trash_id = trashed["trash_id"]
+            expect(not (workspace / "copy.md").exists(), "expected trashed file to move out of workspace")
+            restored = asyncio.run(code_api.restore_item(JsonRequest({"id": trash_id})))
+            expect(restored["path"] == "/copy.md", str(restored))
+            expect((workspace / "copy.md").read_text(encoding="utf-8") == "needle in a note\n", "expected restored content")
+            try:
+                asyncio.run(code_api.file(path="/../outside.py"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected path traversal to be rejected, got {exc!r}")
+            else:
+                raise AssertionError("expected path traversal to be rejected")
+            print("PASS test_arclink_code_native_editor_guards_conflicting_saves")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        workspace = root / "workspace"
+        repo = workspace / "demo"
+        repo.mkdir(parents=True, exist_ok=True)
+        source = repo / "app.py"
+        source.write_text("print('one')\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=repo, text=True, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "arc@example.test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "ArcLink Test"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "app.py"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, text=True, capture_output=True, check=True)
+        source.write_text("print('two')\n", encoding="utf-8")
+        (repo / "notes.md").write_text("# Notes\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["ARCLINK_CODE_WORKSPACE_ROOT"] = str(workspace)
+        try:
+            code_api = load_module(
+                PLUGINS_ROOT / "arclink-code" / "dashboard" / "plugin_api.py",
+                "arclink_code_dashboard_git_ops_test",
+            )
+            repos = asyncio.run(code_api.repos())
+            expect(any(item["path"] == "/demo" for item in repos["repos"]), str(repos))
+            status = asyncio.run(code_api.git_status(repo="/demo"))
+            expect(any(item["path"] == "app.py" for item in status["unstaged"]), str(status))
+            expect(any(item["path"] == "notes.md" for item in status["untracked"]), str(status))
+
+            diff = asyncio.run(code_api.git_diff(repo="/demo", path="app.py"))
+            expect(diff["mode"] == "working-tree", str(diff))
+            expect("print('one')" in diff["before"], str(diff))
+            expect("print('two')" in diff["after"], str(diff))
+            expect("-print('one')" in diff["diff"] and "+print('two')" in diff["diff"], str(diff))
+
+            untracked_diff = asyncio.run(code_api.git_diff(repo="/demo", path="notes.md", untracked=True))
+            expect(untracked_diff["mode"] == "untracked", str(untracked_diff))
+            expect(untracked_diff["before"] == "", str(untracked_diff))
+            expect("# Notes" in untracked_diff["after"], str(untracked_diff))
+            ignored_file = repo / "ignored.log"
+            ignored_file.write_text("ignore me\n", encoding="utf-8")
+            ignored = asyncio.run(code_api.git_ignore(JsonRequest({"repo": "/demo", "path": "ignored.log"})))
+            expect("ignored.log" in (repo / ".gitignore").read_text(encoding="utf-8"), str(ignored))
+            try:
+                asyncio.run(code_api.git_pull(JsonRequest({"repo": "/demo"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected pull confirmation guard, got {exc!r}")
+            else:
+                raise AssertionError("expected pull without confirmation to be rejected")
+
+            staged = asyncio.run(code_api.git_stage(JsonRequest({"repo": "/demo", "path": "app.py"})))
+            expect(any(item["path"] == "app.py" for item in staged["status"]["staged"]), str(staged))
+            staged_diff = asyncio.run(code_api.git_diff(repo="/demo", path="app.py", staged=True))
+            expect(staged_diff["mode"] == "staged", str(staged_diff))
+            expect("print('one')" in staged_diff["before"], str(staged_diff))
+            expect("print('two')" in staged_diff["after"], str(staged_diff))
+            unstaged = asyncio.run(code_api.git_unstage(JsonRequest({"repo": "/demo", "path": "app.py"})))
+            expect(any(item["path"] == "app.py" for item in unstaged["status"]["unstaged"]), str(unstaged))
+
+            try:
+                asyncio.run(code_api.git_diff(repo="/demo", path="../outside.py"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected diff path traversal to be rejected, got {exc!r}")
+            else:
+                raise AssertionError("expected diff path traversal to be rejected")
+
+            source.write_text("print('committed')\n", encoding="utf-8")
+            staged_for_commit = asyncio.run(code_api.git_stage(JsonRequest({"repo": "/demo", "path": "app.py"})))
+            expect(any(item["path"] == "app.py" for item in staged_for_commit["status"]["staged"]), str(staged_for_commit))
+            asyncio.run(code_api.git_stage(JsonRequest({"repo": "/demo", "path": ".gitignore"})))
+            committed = asyncio.run(
+                code_api.git_commit(JsonRequest({"repo": "/demo", "message": "commit from source control"}))
+            )
+            expect(not any(item["path"] == "app.py" for item in committed["status"]["staged"]), str(committed))
+
+            source.write_text("print('dirty')\n", encoding="utf-8")
+            discarded = asyncio.run(
+                code_api.git_discard(JsonRequest({"repo": "/demo", "path": "app.py", "confirm": True}))
+            )
+            expect(source.read_text(encoding="utf-8") == "print('committed')\n", source.read_text(encoding="utf-8"))
+            expect(not any(item["path"] == "app.py" for item in discarded["status"]["unstaged"]), str(discarded))
+
+            cleaned = asyncio.run(
+                code_api.git_discard(
+                    JsonRequest({"repo": "/demo", "path": "notes.md", "untracked": True, "confirm": True})
+                )
+            )
+            expect(not (repo / "notes.md").exists(), "expected untracked file discard to remove the file")
+            expect(cleaned["status"]["clean"] is True, str(cleaned))
+            print("PASS test_arclink_code_source_control_reports_and_updates_git_state")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
+    body = (PLUGINS_ROOT / "arclink-code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    expect('"/git/diff?repo="' in body, "Source Control changed-file clicks should request the diff endpoint")
+    expect("function renderDiff(diff)" in body, "Code UI should render a diff view")
+    expect("arclink-code-diff-panes" in body, "Code UI should include before/after diff panes")
+    expect("state.diff" in body and "renderDiff(state.diff)" in body, "Diff state should drive the editor surface")
+    expect('"/tree?path="' in body and "function renderTreeNode(item, depth)" in body, "Code UI should render a nested Explorer tree")
+    expect("function renderContextMenu()" in body and "onContextMenu" in body, "Code UI should expose Explorer context menus")
+    expect("markTabDirty" in body and "tab.dirty" in body, "Code tabs should carry dirty markers")
+    expect('"/ops/rename"' in body and '"/ops/move"' in body and '"/ops/duplicate"' in body, "Code UI should expose safe file operations")
+    expect('"/ops/trash"' in body and "Move \" + item.path + \" to trash?" in body, "Code UI should confirmation-gate trash")
+    expect('"/search?q="' in body and "renderSearch()" in body, "Code UI should expose workspace search")
+    expect('"/git/ignore"' in body and '"/git/pull"' in body and '"/git/push"' in body, "Code UI should expose richer source-control actions")
+    expect("Auto-save is off" in body and "arclink-code-theme-" in body, "Code UI should expose manual-save warning and theme toggle")
+    expect("arclink-code-statusbar" in body and "lastGitResult" in body, "Code UI should expose status bar and last git result")
+    style = (PLUGINS_ROOT / "arclink-code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".arclink-code-diff-panes" in style, "Code CSS should style split diff panes")
+    expect(".arclink-code-tree-node" in style and ".arclink-code-context-menu" in style, "Code CSS should style nested Explorer and context menus")
+    expect(".arclink-code-search" in style and ".arclink-code-statusbar" in style, "Code CSS should style search and status bar")
+    expect(".arclink-code-theme-light" in style, "Code CSS should include a light theme")
+    expect("@media (max-width: 760px)" in style and "grid-template-columns: 1fr;" in style, "Code diff panes should collapse on mobile")
+    print("PASS test_arclink_code_browser_opens_source_control_changes_as_diffs")
+
+
+def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        workspace = root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "README.md").write_text("# Workspace\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(workspace)
+        os.environ["ARCLINK_TERMINAL_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["ARCLINK_TERMINAL_SCROLLBACK_BYTES"] = "4000"
+        os.environ["ARCLINK_TERMINAL_ALLOW_ROOT"] = "1"
+        try:
+            terminal_api = load_module(
+                PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py",
+                "arclink_terminal_dashboard_managed_pty_test",
+            )
+            status = asyncio.run(terminal_api.status())
+            expect(status["available"] is True, str(status))
+            expect(status["backend"] == "managed-pty", str(status))
+            expect(status["workspace_root"] == "[workspace]", str(status))
+            expect(status["hermes_state"] == "[hermes-state]", str(status))
+            expect(status["capabilities"]["persistent_sessions"] is True, str(status))
+            expect(status["capabilities"]["reload_reconnect"] is True, str(status))
+            expect(status["capabilities"]["group_sessions"] is True, str(status))
+
+            created = asyncio.run(
+                terminal_api.create_session(JsonRequest({"name": "Build", "folder": "Work", "cwd": "/"}))
+            )
+            session = created["session"]
+            session_id = session["id"]
+            expect(session["name"] == "Build", str(session))
+            expect(session["folder"] == "Work", str(session))
+            expect(session["cwd"] == "/", str(session))
+            expect(session["state"] in {"starting", "running"}, str(session))
+
+            sent = asyncio.run(
+                terminal_api.send_input(session_id, JsonRequest({"input": "printf 'terminal-proof\\n'\n"}))
+            )
+            expect("terminal-proof" in sent["session"]["scrollback"], sent["session"]["scrollback"])
+
+            renamed = asyncio.run(
+                terminal_api.rename_session(
+                    session_id=session_id,
+                    request=JsonRequest({"name": "Renamed", "folder": "Ops", "order": 7}),
+                )
+            )
+            expect(renamed["session"]["name"] == "Renamed", str(renamed))
+            expect(renamed["session"]["folder"] == "Ops", str(renamed))
+            expect(renamed["session"]["order"] == 7, str(renamed))
+
+            sessions = asyncio.run(terminal_api.sessions())
+            expect(any(item["id"] == session_id for item in sessions["sessions"]), str(sessions))
+            revisited = asyncio.run(terminal_api.get_session(session_id=session_id))
+            expect("terminal-proof" in revisited["session"]["scrollback"], revisited["session"]["scrollback"])
+
+            try:
+                asyncio.run(terminal_api.close_session(session_id, JsonRequest({})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected close confirmation guard, got {exc!r}")
+            else:
+                raise AssertionError("expected close confirmation guard")
+
+            closed = asyncio.run(terminal_api.close_session(session_id, JsonRequest({"confirm": True})))
+            expect(closed["session"]["state"] == "closed", str(closed))
+            expect(len(closed["session"]["scrollback"].encode("utf-8")) <= 4000, "scrollback should stay bounded")
+
+            try:
+                asyncio.run(terminal_api.create_session(JsonRequest({"cwd": "/../outside"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected cwd traversal rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected cwd traversal rejection")
+
+            redacted = terminal_api._redact_text(f"{workspace}/token=abc123 password=secret")
+            expect(str(workspace) not in redacted, redacted)
+            expect("token=[redacted]" in redacted and "password=[redacted]" in redacted, redacted)
+            print("PASS test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
+    body = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    expect('"/sessions"' in body and '"/input"' in body, "Terminal UI should use persistent session and input endpoints")
+    expect("setInterval" in body and "loadSession(state.selectedId)" in body, "Terminal UI should poll for reconnectable output")
+    expect("confirmClose" in body and '"/close"' in body, "Terminal close/kill should be confirmation-gated")
+    expect("moveSelectedToFolder" in body and "reorderSelected" in body, "Terminal UI should expose folder and reorder controls")
+    expect("scrollback" in body and "arclink-terminal-screen" in body, "Terminal UI should render bounded scrollback")
+    expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
+    expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")
+    style = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".arclink-terminal-confirm" in style, "Terminal CSS should style close confirmation")
+    expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")
+    print("PASS test_arclink_terminal_browser_exposes_persistent_session_controls")
+
+
+def test_arclink_terminal_blocks_unrestricted_root_runtime_when_not_overridden() -> None:
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("PASS test_arclink_terminal_blocks_unrestricted_root_runtime_when_not_overridden")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        workspace = root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(workspace)
+        os.environ["ARCLINK_TERMINAL_WORKSPACE_ROOT"] = str(workspace)
+        os.environ.pop("ARCLINK_TERMINAL_ALLOW_ROOT", None)
+        try:
+            terminal_api = load_module(
+                PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py",
+                "arclink_terminal_dashboard_root_guard_test",
+            )
+            status = asyncio.run(terminal_api.status())
+            expect(status["available"] is False, str(status))
+            expect(status["runtime_user_safe"] is False, str(status))
+            try:
+                asyncio.run(terminal_api.create_session(JsonRequest({"name": "root"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 503, f"expected root runtime rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected root runtime rejection")
+            print("PASS test_arclink_terminal_blocks_unrestricted_root_runtime_when_not_overridden")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def test_arclink_telegram_start_command_rewrites_to_first_message() -> None:
@@ -1504,6 +2503,19 @@ def test_arclink_managed_context_recipe_tools_match_mcp_surface() -> None:
 def main() -> int:
     test_install_arclink_plugins_installs_default_hermes_plugin()
     test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default()
+    test_install_arclink_plugins_preserves_comments_and_future_nested_config()
+    test_install_arclink_plugins_excludes_generated_artifacts()
+    test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases()
+    test_arclink_dashboard_plugins_expose_sanitized_access_state()
+    test_arclink_drive_local_backend_file_operations_are_recoverable()
+    test_arclink_drive_api_hardens_roots_uploads_and_batch_failures()
+    test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore()
+    test_arclink_code_native_editor_guards_conflicting_saves()
+    test_arclink_code_source_control_reports_and_updates_git_state()
+    test_arclink_code_browser_opens_source_control_changes_as_diffs()
+    test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded()
+    test_arclink_terminal_browser_exposes_persistent_session_controls()
+    test_arclink_terminal_blocks_unrestricted_root_runtime_when_not_overridden()
     test_arclink_telegram_start_command_rewrites_to_first_message()
     test_arclink_managed_context_reads_writer_materialized_notion_state()
     test_arclink_managed_context_plugin_registers_hook_and_uses_local_revision()
@@ -1517,7 +2529,7 @@ def main() -> int:
     test_arclink_managed_context_budgets_live_notion_queries_per_turn()
     test_arclink_managed_context_emits_telemetry_and_respects_opt_out()
     test_arclink_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 13 ArcLink plugin tests")
+    print("PASS all 28 ArcLink plugin tests")
     return 0
 
 

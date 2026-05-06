@@ -7,7 +7,7 @@ import sqlite3
 from typing import Any, Mapping
 
 from arclink_control import append_arclink_audit, utc_now_iso
-from arclink_adapters import arclink_hostnames
+from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_product import primary_provider
 
@@ -214,10 +214,50 @@ def _limit(value: int) -> int:
     return min(100, max(1, int(value or 25)))
 
 
-def _deployment_urls(prefix: str, base_domain: str) -> dict[str, str]:
+def _deployment_urls(prefix: str, base_domain: str, metadata: Mapping[str, Any] | None = None) -> dict[str, str]:
     if not str(prefix or "").strip() or not str(base_domain or "").strip():
         return {}
-    return {role: f"https://{host}" for role, host in arclink_hostnames(prefix, base_domain).items()}
+    meta = dict(metadata or {})
+    publish_state = meta.get("tailnet_app_publication")
+    tailnet_apps_unavailable = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "unavailable"
+    stored_urls = meta.get("access_urls")
+    if isinstance(stored_urls, Mapping):
+        safe_urls = {
+            str(role): str(url).strip()
+            for role, url in stored_urls.items()
+            if str(role).strip() and str(url).strip().startswith("https://")
+        }
+        if {"dashboard", "files", "code", "hermes"} <= set(safe_urls):
+            return safe_urls
+        if tailnet_apps_unavailable and safe_urls.get("dashboard"):
+            limited = {"dashboard": safe_urls["dashboard"]}
+            if safe_urls.get("notion"):
+                limited["notion"] = safe_urls["notion"]
+            return limited
+    ingress_mode = str(meta.get("ingress_mode") or os.environ.get("ARCLINK_INGRESS_MODE") or "domain").strip().lower()
+    tailscale_dns_name = str(
+        meta.get("tailscale_dns_name") or os.environ.get("ARCLINK_TAILSCALE_DNS_NAME") or base_domain
+    ).strip()
+    tailscale_host_strategy = str(
+        meta.get("tailscale_host_strategy")
+        or os.environ.get("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY")
+        or "path"
+    ).strip()
+    if ingress_mode == "tailscale" and tailnet_apps_unavailable:
+        host = tailscale_dns_name or base_domain
+        return {
+            "dashboard": f"https://{host}/u/{prefix}",
+            "notion": f"https://{host}/u/{prefix}/notion/webhook",
+        }
+    tailnet_ports = meta.get("tailnet_service_ports") if isinstance(meta.get("tailnet_service_ports"), Mapping) else None
+    return arclink_access_urls(
+        prefix=prefix,
+        base_domain=base_domain,
+        ingress_mode=ingress_mode,
+        tailscale_dns_name=tailscale_dns_name,
+        tailscale_host_strategy=tailscale_host_strategy,
+        tailnet_service_ports=tailnet_ports,
+    )
 
 
 def _count(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> int:
@@ -451,8 +491,9 @@ def read_arclink_user_dashboard(
         dep = dict(row)
         health = _service_health(conn, str(dep["deployment_id"]))
         onboarding = _deployment_onboarding(conn, str(dep["deployment_id"]))
-        model_id = onboarding.get("selected_model_id") or _json_loads(str(dep.get("metadata_json") or "{}")).get("selected_model_id") or ""
-        urls = _deployment_urls(str(dep["prefix"] or ""), str(dep["base_domain"] or ""))
+        metadata = _json_loads(str(dep.get("metadata_json") or "{}"))
+        model_id = onboarding.get("selected_model_id") or metadata.get("selected_model_id") or ""
+        urls = _deployment_urls(str(dep["prefix"] or ""), str(dep["base_domain"] or ""), metadata)
         billing = {
             "entitlement_state": str(user["entitlement_state"] or "none"),
             "entitlement_updated_at": str(user["entitlement_updated_at"] or ""),

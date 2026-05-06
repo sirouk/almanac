@@ -161,7 +161,6 @@ The Sovereign Control Node host can also run from a root-owned or operator-owned
 checkout such as:
 
 ```text
-/root/arclink/
   arclink-priv/            # generated private runtime state
 ```
 
@@ -222,8 +221,8 @@ Until the dedicated ArcLink repository exists, the working branch is
 `arclink` in this repository.
 
 ```bash
-git clone -b arclink https://github.com/sirouk/arclink.git /root/arclink
-cd /root/arclink
+git clone -b arclink https://github.com/sirouk/arclink.git arclink
+cd arclink
 ```
 
 ### 3. Bring Up The Sovereign Control Node
@@ -314,6 +313,17 @@ Shared Host Mode is the operator-led ArcLink path. It installs and repairs the
 live shared-host system, performs operator onboarding/config collection, uses
 `sudo` for privileged host setup, manages systemd units, provisions enrolled
 Unix users, and drives production upgrades from the configured upstream.
+
+Canonical shared-host installs use this on-host layout:
+
+```text
+/home/arclink/
+  arclink/                 # public repo
+    arclink-priv/          # private nested repo/state; ignored by public git
+      config/arclink.env   # live config
+      vault/               # shared vault
+      state/               # control DB, runtime, agents, indexes, containers
+```
 
 Use Shared Host Mode when you want the complete operator-led ArcLink operating
 model:
@@ -663,6 +673,9 @@ An enrolled user gets:
 - A chat bot lane on Discord or Telegram.
 - User systemd services for refresh, gateway, dashboard, and code workspace
   when enabled.
+- Hermes dashboard plugins for `ArcLink Drive`, `ArcLink Code`, and the
+  managed-pty `ArcLink Terminal`, so native workspace surfaces appear in the
+  Hermes sidebar without patching Hermes core.
 - A `~/ArcLink` symlink to the shared vault for VS Code / code-server file
   explorer convenience.
 - `$HERMES_HOME/ArcLink` and `$HERMES_HOME/Vault` symlinks for agent-local
@@ -950,7 +963,7 @@ live SSOT configuration, use:
 ```
 
 That guided flow asks for source and destination token files, a source root
-page URL/ID, and a destination parent/root page URL/ID. It writes backups under
+page URL/ID, and a destination parent or root page URL/ID. It writes backups under
 `arclink-priv/state/notion-transfer/` and always runs a restore dry-run before
 allowing writes.
 

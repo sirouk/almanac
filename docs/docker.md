@@ -102,6 +102,20 @@ Agent web surfaces are published individually as they are reconciled. ArcLink
 keeps the same access-state ports as Shared Host, but Docker mode does not reserve
 the entire possible port range at Compose startup.
 
+Docker deployment stacks also carry the native Hermes workspace plugin mounts.
+`hermes-dashboard` receives the deployment Hermes home, vault, and code
+workspace with `VAULT_DIR=/srv/vault`, `ARCLINK_DRIVE_ROOT=/srv/vault`, and
+`ARCLINK_CODE_WORKSPACE_ROOT=/workspace`. Reconcile and health repair those
+mounts for existing deployment Compose files, rerun the managed plugin installer,
+and recreate `hermes-dashboard` so `ArcLink Drive`, `ArcLink Code`, and the
+managed-pty `ArcLink Terminal` tab stay visible without Hermes core patches.
+
+When Tailscale path mode is selected, Docker reconcile/health can publish
+per-deployment Hermes, files, and code surfaces on stable tailnet HTTPS ports
+starting at `ARCLINK_TAILNET_SERVICE_PORT_BASE`. If the host Tailscale CLI is
+missing, publication is skipped and health continues; deployment metadata remains
+the source of truth after successful publication.
+
 ## Privilege Boundary
 
 Docker mode intentionally mounts `/var/run/docker.sock` into the

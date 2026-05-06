@@ -9,14 +9,14 @@ Version: 1.0, May 2026
 - Category: private AI infrastructure.
 - Audience: SMB owners, agencies, and operators drowning in manual work.
 - Value: replace repetitive work, reduce operational overhead, and scale without hiring.
-- Product promise: private AI systems that run your business.
+- Product promise: private AI agents that run your business.
 - Short promise: built once. Runs forever.
 
 ## Personality
 
 - Authoritative: speaks with certainty and expertise.
 - Minimal: no excess and no fluff. Every element has purpose.
-- Operational: focused on systems, outcomes, and results.
+- Operational: focused on workflows, outcomes, and results.
 - Quietly powerful: understated confidence that delivers impact.
 
 ## Palette
@@ -62,7 +62,7 @@ Usage rules:
 
 ## Imagery
 
-- Visualize invisible systems.
+- Visualize invisible workflows.
 - Use abstract, minimal, purpose-driven infrastructure imagery.
 - Avoid stock photos, generic AI imagery, cliches, and overused gradients.
 - Preferred imagery: dark operational nodes, orange connection paths, private infrastructure, dashboards, hardware/system abstractions, and deployment topology.
@@ -80,7 +80,7 @@ How ArcLink speaks:
 Prefer:
 
 - "Your AI workforce. Deployed."
-- "Private AI systems that run your business."
+- "Private AI agents that run your business."
 - "Built once. Runs forever."
 - "Clean. Modern. Built to scale."
 

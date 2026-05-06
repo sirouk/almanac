@@ -186,7 +186,7 @@ def test_public_bot_user_delivery_supports_telegram_and_discord_dm() -> None:
                     "target_kind": "public-bot-user",
                     "target_id": "tg:123",
                     "channel_kind": "telegram",
-                    "message": "Vessel online.",
+                    "message": "Agent online.",
                     "extra_json": json.dumps(
                         {
                             "telegram_reply_markup": {"inline_keyboard": [[{"text": "Show My Crew", "callback_data": "arclink:/agents"}]]},
@@ -201,7 +201,7 @@ def test_public_bot_user_delivery_supports_telegram_and_discord_dm() -> None:
                     "target_kind": "public-bot-user",
                     "target_id": "discord:456",
                     "channel_kind": "discord",
-                    "message": "Vessel online.",
+                    "message": "Agent online.",
                     "extra_json": json.dumps(
                         {
                             "discord_components": [

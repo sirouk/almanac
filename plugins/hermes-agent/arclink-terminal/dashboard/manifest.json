@@ -1,0 +1,14 @@
+{
+  "name": "arclink-terminal",
+  "label": "ArcLink Terminal",
+  "description": "Native ArcLink terminal sessions inside the Hermes dashboard.",
+  "icon": "Terminal",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/terminal",
+    "position": "after:code"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

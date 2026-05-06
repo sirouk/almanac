@@ -1,0 +1,14 @@
+{
+  "name": "arclink-drive",
+  "label": "ArcLink Drive",
+  "description": "Native ArcLink file manager for agent knowledge.",
+  "icon": "FolderOpen",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/drive",
+    "position": "after:docs"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

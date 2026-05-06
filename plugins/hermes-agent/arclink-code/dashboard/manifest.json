@@ -1,0 +1,14 @@
+{
+  "name": "arclink-code",
+  "label": "ArcLink Code",
+  "description": "Native ArcLink code workspace inside the Hermes dashboard.",
+  "icon": "Code",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/code",
+    "position": "after:docs"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

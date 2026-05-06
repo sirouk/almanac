@@ -169,7 +169,7 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
         conn, channel="telegram", channel_identity="tg:scale", text="/plan scale",
     )
     expect("Scale is locked" in planned.reply, planned.reply)
-    expect("Three agents" in planned.reply, planned.reply)
+    expect("Agents onboard ArcLink with Federation" in planned.reply, planned.reply)
 
     checkout = bots.handle_arclink_public_bot_turn(
         conn,
@@ -608,6 +608,45 @@ def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> 
     print("PASS test_public_bot_pair_channel_links_account_across_telegram_and_discord")
 
 
+def test_public_bot_withholds_unpublished_tailnet_app_urls() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bots_tailnet_unavailable_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_tailnet_unavailable_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:unavailable",
+        prefix="arc-unavailable",
+        base_domain="worker.example.ts.net",
+    )
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.ts.net",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8443, "files": 8444, "code": 8445},
+                    "tailnet_app_publication": {"status": "unavailable", "failed_roles": ["files"]},
+                },
+                sort_keys=True,
+            ),
+            seeded["deployment_id"],
+        ),
+    )
+    conn.commit()
+    deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (seeded["deployment_id"],)).fetchone())
+    access = bots._deployment_access(deployment)
+    expect(access == {"dashboard": "https://worker.example.ts.net/u/arc-unavailable"}, str(access))
+    print("PASS test_public_bot_withholds_unpublished_tailnet_app_urls")
+
+
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents()
@@ -619,10 +658,11 @@ def main() -> int:
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
+    test_public_bot_withholds_unpublished_tailnet_app_urls()
     test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
     test_public_bot_agent_label_uses_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 13 ArcLink public bot tests")
+    print("PASS all 14 ArcLink public bot tests")
     return 0
 
 
@@ -725,8 +765,8 @@ def test_public_bot_agent_label_uses_user_display_name() -> None:
 def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> None:
     """The /start greeting must address the user by the name we picked up
     from the channel profile (Telegram first_name, Discord global_name) and
-    offer exactly two buttons: Take Me Aboard and Update Name. No "systems
-    check" button on the cold-open greeting. That has nothing to read yet.
+    offer exactly two buttons: Take Me Aboard and Update Name. No status
+    check button on the cold-open greeting. That has nothing to read yet.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_greet_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_greet_test")
@@ -743,7 +783,7 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
     expect("Founders, Sovereign, or Scale" in started.reply, started.reply)
     labels = [b.label for b in started.buttons]
     expect(labels == ["Take Me Aboard", "Update Name"], f"unexpected buttons: {labels}")
-    expect("Run Systems Check" not in labels, "no systems-check on cold-open greeting")
+    expect("Check Status" not in labels, "no status-check on cold-open greeting")
     expect("Update Name" in labels, "Update Name belongs on the cold-open greeting")
 
     # Take Me Aboard opens the two-package choice.

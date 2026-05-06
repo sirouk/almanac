@@ -146,6 +146,23 @@ def test_cloudflare_drift_and_traefik_label_rendering() -> None:
     print("PASS test_cloudflare_drift_and_traefik_label_rendering")
 
 
+def test_tailscale_path_access_urls_can_use_dedicated_tls_ports() -> None:
+    mod = load_module("arclink_adapters.py", "arclink_adapters_tailnet_ports_test")
+    urls = mod.arclink_access_urls(
+        prefix="abc123",
+        base_domain="worker.example.test",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker.example.test",
+        tailscale_host_strategy="path",
+        tailnet_service_ports={"hermes": "8443", "files": 8444, "code": 8445},
+    )
+    expect(urls["dashboard"] == "https://worker.example.test/u/abc123", str(urls))
+    expect(urls["hermes"] == "https://worker.example.test:8443/", str(urls))
+    expect(urls["files"] == "https://worker.example.test:8444/", str(urls))
+    expect(urls["code"] == "https://worker.example.test:8445/", str(urls))
+    print("PASS test_tailscale_path_access_urls_can_use_dedicated_tls_ports")
+
+
 def test_chutes_key_rotate_and_state_tracking() -> None:
     chutes = load_module("arclink_chutes.py", "arclink_chutes_rotate_test")
     mgr = chutes.FakeChutesKeyManager()
@@ -263,12 +280,13 @@ def main() -> int:
     test_fake_stripe_webhook_and_sessions()
     test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank()
     test_cloudflare_drift_and_traefik_label_rendering()
+    test_tailscale_path_access_urls_can_use_dedicated_tls_ports()
     test_chutes_key_rotate_and_state_tracking()
     test_fake_inference_smoke_and_failure_reporting()
     test_fake_stripe_billing_portal_session()
     test_fake_cloudflare_propagation_check_after_provision()
     test_chutes_catalog_refresh_picks_up_new_models()
-    print("PASS all 11 ArcLink Chutes/adapter tests")
+    print("PASS all 12 ArcLink Chutes/adapter tests")
     return 0
 
 

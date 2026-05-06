@@ -165,6 +165,7 @@
             if (!closed) merge({ streaming: false });
             startPolling();
           });
+          startPolling();
         } else {
           merge({ streaming: false });
           startPolling();

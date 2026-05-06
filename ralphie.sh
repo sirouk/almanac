@@ -1959,6 +1959,7 @@ LAST_CONSENSUS_SUMMARY=""
 LAST_CONSENSUS_NEXT_PHASE="done"
 LAST_CONSENSUS_NEXT_PHASE_REASON="no consensus recommendation"
 LAST_CONSENSUS_RESPONDED_VOTES=0
+LAST_CONSENSUS_NEXT_PHASE_VOTES=0
 LAST_CONSENSUS_FAILURE_KIND="none"
 LAST_CONSENSUS_FAILURE_REASON=""
 LAST_DONE_GUARD_REASON=""
@@ -5877,6 +5878,7 @@ run_swarm_consensus() {
     LAST_CONSENSUS_NEXT_PHASE="$default_next_phase"
     LAST_CONSENSUS_NEXT_PHASE_REASON="insufficient consensus responses"
     LAST_CONSENSUS_RESPONDED_VOTES=0
+    LAST_CONSENSUS_NEXT_PHASE_VOTES=0
     LAST_CONSENSUS_FAILURE_KIND="none"
     LAST_CONSENSUS_FAILURE_REASON=""
     mkdir -p "$consensus_dir"
@@ -5908,6 +5910,7 @@ run_swarm_consensus() {
             LAST_CONSENSUS_NEXT_PHASE="$default_next_phase"
             LAST_CONSENSUS_NEXT_PHASE_REASON="pinned reviewer engine unavailable"
             LAST_CONSENSUS_RESPONDED_VOTES=0
+            LAST_CONSENSUS_NEXT_PHASE_VOTES=0
             LAST_CONSENSUS_FAILURE_KIND="infra"
             LAST_CONSENSUS_FAILURE_REASON="pinned reviewer engine '$reviewer_engine_request' unavailable"
             CONSENSUS_NO_ENGINES=true
@@ -5924,6 +5927,7 @@ run_swarm_consensus() {
         LAST_CONSENSUS_NEXT_PHASE="$default_next_phase"
         LAST_CONSENSUS_NEXT_PHASE_REASON="no healthy reviewer engines available"
         LAST_CONSENSUS_RESPONDED_VOTES=0
+        LAST_CONSENSUS_NEXT_PHASE_VOTES=0
         LAST_CONSENSUS_FAILURE_KIND="infra"
         LAST_CONSENSUS_FAILURE_REASON="no healthy reviewer engines available"
         CONSENSUS_NO_ENGINES=true
@@ -6174,6 +6178,7 @@ run_swarm_consensus() {
     [ -n "$next_phase_vote_reason" ] || next_phase_vote_reason="no explicit routing rationale"
     LAST_CONSENSUS_NEXT_PHASE_REASON="$next_phase_vote_reason"
     LAST_CONSENSUS_RESPONDED_VOTES="$responded_votes"
+    LAST_CONSENSUS_NEXT_PHASE_VOTES="$highest_next_votes"
     LAST_CONSENSUS_SCORE="$avg_score"
     if [ "${#summary_lines[@]}" -gt 0 ]; then
         LAST_CONSENSUS_SUMMARY="$(printf '%s; ' "${summary_lines[@]}")"
@@ -6587,6 +6592,25 @@ git_has_local_changes() {
         return 0
     fi
     return 1
+}
+
+consensus_clean_terminal_hold_reroute_allowed() {
+    local phase="${1:-}"
+    local candidate_next="${2:-}"
+
+    [ "$candidate_next" = "done" ] || return 1
+    [ "$phase" != "done" ] || return 1
+    [ "${LAST_CONSENSUS_FAILURE_KIND:-}" = "quality" ] || return 1
+    is_number "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" || return 1
+    is_number "${LAST_CONSENSUS_NEXT_PHASE_VOTES:-0}" || return 1
+    [ "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" -gt 0 ] || return 1
+    [ "${LAST_CONSENSUS_NEXT_PHASE_VOTES:-0}" -eq "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" ] || return 1
+
+    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git_has_local_changes; then
+        return 1
+    fi
+
+    return 0
 }
 
 detect_git_identity() {
@@ -9165,9 +9189,41 @@ main() {
                         local phase_route_candidate phase_route_candidate_index
                         phase_route_candidate="$LAST_CONSENSUS_NEXT_PHASE"
                         phase_route_candidate_index="$(phase_index_or_done "$phase_route_candidate")"
-                        # On failed attempts, only allow backtracking reroutes.
-                        # Forward/terminal reroutes would skip unresolved phase failures.
-                        if is_number "$phase_route_candidate_index" && [ "$phase_route_candidate_index" -ge 0 ] && [ "$phase_route_candidate_index" -lt "$phase_index" ]; then
+                        # On failed attempts, only allow backtracking reroutes by default.
+                        # A terminal reroute is allowed only when all successful reviewers
+                        # unanimously say the project is done and the worktree is clean; the
+                        # usual done prerequisites below can still remap it to lint/document/plan.
+                        if consensus_clean_terminal_hold_reroute_allowed "$phase" "$phase_route_candidate"; then
+                            local guarded_route_candidate
+                            local raw_guarded_route_candidate
+                            guarded_route_candidate="$phase_route_candidate"
+                            raw_guarded_route_candidate="$guarded_route_candidate"
+                            enforce_phase_route_prerequisites "$phase" "$guarded_route_candidate" >/dev/null
+                            guarded_route_candidate="${LAST_PHASE_ROUTE_GUARD_NEXT_PHASE:-$guarded_route_candidate}"
+                            if [ -n "${LAST_PHASE_ROUTE_GUARD_REASON:-}" ] && [ "$guarded_route_candidate" != "$raw_guarded_route_candidate" ]; then
+                                phase_route_reason="${LAST_PHASE_ROUTE_GUARD_REASON:-phase route guard remap}"
+                            else
+                                phase_route_reason="${LAST_CONSENSUS_NEXT_PHASE_REASON:-no explicit phase-routing rationale}"
+                            fi
+                            enforce_terminal_done_requirements "$phase" "$guarded_route_candidate" >/dev/null
+                            phase_next_target="${LAST_DONE_GUARD_NEXT_PHASE:-$guarded_route_candidate}"
+                            if [ "$phase_next_target" != "$guarded_route_candidate" ]; then
+                                if [ -n "$phase_route_reason" ]; then
+                                    phase_route_reason="${phase_route_reason}; ${LAST_DONE_GUARD_REASON:-terminal guard remap}"
+                                else
+                                    phase_route_reason="${LAST_DONE_GUARD_REASON:-terminal guard remap}"
+                                fi
+                            fi
+                            phase_route="true"
+                            record_gate_decision "$phase" "$phase_attempt" "$phase-gate" "reroute-terminal" "$phase_next_target" "$phase_route_reason"
+                            phase_transition_history_append "$phase" "$phase_attempt" "$phase_next_target" "hold" "$phase_route_reason"
+                            info "Allowing clean terminal reroute recommendation '$phase_route_candidate' from phase '$phase' after unanimous reviewer agreement."
+                            notify_event "phase_decision" "reroute_terminal" "phase=$phase attempt=$phase_attempt rerouted_to=$phase_next_target reason=${phase_route_reason:-none}" || true
+                            PHASE_ATTEMPT_IN_PROGRESS="false"
+                            CURRENT_PHASE_ATTEMPT=1
+                            save_state_or_exit "phase terminal reroute checkpoint ($phase->$phase_next_target)"
+                            break
+                        elif is_number "$phase_route_candidate_index" && [ "$phase_route_candidate_index" -ge 0 ] && [ "$phase_route_candidate_index" -lt "$phase_index" ]; then
                             phase_next_target="$phase_route_candidate"
                             phase_route="true"
                             phase_route_reason="${LAST_CONSENSUS_NEXT_PHASE_REASON:-no explicit phase-routing rationale}"

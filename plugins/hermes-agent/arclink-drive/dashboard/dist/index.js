@@ -388,6 +388,28 @@
       patch({ root: itemRoot(item), selected: item, preview: null });
     }
 
+    function selectItemOnly(item) {
+      patch({
+        selected: item,
+        selectedPaths: {},
+        selectionAnchor: null,
+        preview: null,
+        contextMenu: null,
+      });
+    }
+
+    function selectRootOnly(root) {
+      const rootId = root.id;
+      selectItemOnly({
+        root: rootId,
+        kind: "folder",
+        name: root.label || rootId,
+        path: "/",
+        mime: "folder",
+        size: 0,
+      });
+    }
+
     function uploadFiles(files, targetPath, targetRoot) {
       if (!files || !files.length) return;
       const fileList = Array.prototype.slice.call(files);
@@ -584,10 +606,6 @@
     }
 
     function handleListItemClick(item, event, index, list) {
-      if (state.location !== "trash" && item.kind === "folder" && !(event.ctrlKey || event.metaKey || event.shiftKey)) {
-        openItem(item);
-        return;
-      }
       selectListItem(item, event, index, list);
     }
 
@@ -812,6 +830,10 @@
       return api("/download?path=" + encodeURIComponent(item.path) + "&root=" + encodeURIComponent(itemRoot(item) || ""));
     }
 
+    function previewUrl(item) {
+      return api("/preview?path=" + encodeURIComponent(item.path) + "&root=" + encodeURIComponent(itemRoot(item) || ""));
+    }
+
     function renderPreviewBody(preview) {
       if (!preview) return h("div", { className: "arclink-drive-preview-empty" }, "Select a previewable file.");
       if (preview.kind === "loading") return h("div", { className: "arclink-drive-preview-empty" }, "Loading preview");
@@ -821,8 +843,8 @@
       }
       if (preview.kind === "pdf") {
         return h(
-          "object",
-          { className: "arclink-drive-pdf-preview", data: preview.url, type: "application/pdf" },
+          "iframe",
+          { className: "arclink-drive-pdf-preview", src: preview.url, title: preview.name || "PDF preview" },
           h("a", { href: preview.url, target: "_blank", rel: "noreferrer" }, "Open PDF")
         );
       }
@@ -913,6 +935,7 @@
     function renderTreeNode(item, depth) {
       const rootId = itemRoot(item);
       const selectedTree = state.root === rootId && state.path === item.path && item.kind === "folder" && state.location !== "trash" && !state.query;
+      const selectedItem = state.selected && itemRoot(state.selected) === rootId && state.selected.path === item.path;
       return h(
         "div",
         { key: rootId + item.path, className: "arclink-drive-tree-node-wrap" },
@@ -921,14 +944,13 @@
           {
             type: "button",
             draggable: true,
-            className: "arclink-drive-tree-node " + (selectedTree ? "active" : ""),
+            className: "arclink-drive-tree-node " + (selectedTree ? "active " : "") + (selectedItem ? "selected" : ""),
             style: { paddingLeft: 0.2 + depth * 0.9 + "rem" },
             onClick: function () {
-              if (item.kind === "folder") {
-                selectFolder(rootId, item.path);
-              } else {
-                openItem(item);
-              }
+              selectItemOnly(Object.assign({}, item, { root: rootId }));
+            },
+            onDoubleClick: function () {
+              openItem(Object.assign({}, item, { root: rootId }));
             },
             onContextMenu: function (event) {
               openContextMenu(item, event);
@@ -977,6 +999,7 @@
     function renderRootTree(root) {
       const rootId = root.id;
       const active = state.root === rootId && state.path === "/" && state.location !== "trash" && !state.query;
+      const selectedRoot = state.selected && itemRoot(state.selected) === rootId && state.selected.path === "/";
       return h(
         "div",
         { key: rootId, className: "arclink-drive-tree-root" },
@@ -984,9 +1007,12 @@
           "button",
           {
             type: "button",
-            className: "arclink-drive-tree-node root " + (active ? "active" : ""),
+            className: "arclink-drive-tree-node root " + (active ? "active " : "") + (selectedRoot ? "selected" : ""),
             style: { paddingLeft: "0.2rem" },
             onClick: function () {
+              selectRootOnly(root);
+            },
+            onDoubleClick: function () {
               selectFolder(rootId, "/");
             },
           },
@@ -1063,7 +1089,7 @@
             cancelled = true;
           };
         }
-        patch({ preview: { kind: kind, name: name, url: downloadUrl(selected) }, previewFullscreen: false });
+        patch({ preview: { kind: kind, name: name, url: previewUrl(selected) }, previewFullscreen: false });
         return undefined;
       },
       [state.selected && state.selected.path, state.selected && itemRoot(state.selected)]
@@ -1275,6 +1301,9 @@
                               (state.draggingItem === item.path ? "dragging" : ""),
                             onClick: function (event) {
                               handleListItemClick(item, event, index, visibleItems);
+                            },
+                            onDoubleClick: function () {
+                              openItem(item);
                             },
                             onContextMenu: function (event) {
                               openContextMenu(item, event);

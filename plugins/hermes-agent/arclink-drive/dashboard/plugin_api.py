@@ -47,15 +47,28 @@ except Exception:
         pass
 
     class Response:  # type: ignore
-        def __init__(self, content: bytes = b"", media_type: str = "application/octet-stream") -> None:
+        def __init__(
+            self,
+            content: bytes = b"",
+            media_type: str = "application/octet-stream",
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.content = content
             self.media_type = media_type
+            self.headers = {str(key).lower(): value for key, value in (headers or {}).items()}
 
     class FileResponse:  # type: ignore
-        def __init__(self, path: str, filename: str | None = None, media_type: str | None = None) -> None:
+        def __init__(
+            self,
+            path: str,
+            filename: str | None = None,
+            media_type: str | None = None,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.path = path
             self.filename = filename
             self.media_type = media_type
+            self.headers = {str(key).lower(): value for key, value in (headers or {}).items()}
 
     def File(default: Any = None, **_kwargs: Any) -> Any:  # type: ignore
         return default
@@ -120,6 +133,12 @@ def _clean_url(value: Any) -> str:
 def _clean_text(value: Any, limit: int = 160) -> str:
     text = " ".join(str(value or "").split())
     return text[:limit]
+
+
+def _inline_content_disposition(filename: str) -> str:
+    safe = re.sub(r'[\r\n"]+', "_", filename or "preview")
+    encoded = urllib.parse.quote(filename or "preview", safe="")
+    return f'inline; filename="{safe}"; filename*=UTF-8\'\'{encoded}'
 
 
 def _parse_resource_ref(text: str) -> tuple[str, str]:
@@ -943,6 +962,39 @@ async def download(path: str, root: str = "") -> Any:
     if backend["name"] == "nextcloud-webdav":
         _status, body, headers = _dav_request(backend["profile"], "GET", path)
         return Response(content=body, media_type=headers.get("Content-Type") or "application/octet-stream")
+    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+
+
+@router.get("/preview")
+async def preview(path: str, root: str = "") -> Any:
+    if root:
+        ctx = _root_context(root)
+        target, _relative = _resolve_local(Path(ctx["path"]), path)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="Drive file does not exist")
+        return FileResponse(
+            str(target),
+            media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
+            headers={"Content-Disposition": _inline_content_disposition(target.name)},
+        )
+    backend = _backend()
+    if backend["name"] == "local-vault":
+        target, _relative = _resolve_local(backend["root"], path)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="Drive file does not exist")
+        return FileResponse(
+            str(target),
+            media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
+            headers={"Content-Disposition": _inline_content_disposition(target.name)},
+        )
+    if backend["name"] == "nextcloud-webdav":
+        _status, body, headers = _dav_request(backend["profile"], "GET", path)
+        filename = Path(path).name or "preview"
+        return Response(
+            content=body,
+            media_type=headers.get("Content-Type") or mimetypes.guess_type(path)[0] or "application/octet-stream",
+            headers={"Content-Disposition": _inline_content_disposition(filename)},
+        )
     raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
 
 

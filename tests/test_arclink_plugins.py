@@ -417,6 +417,7 @@ def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
         docs.mkdir(parents=True, exist_ok=True)
         workspace.mkdir(parents=True, exist_ok=True)
         (docs / "note.md").write_text("# Note\n\nShip carefully.\n", encoding="utf-8")
+        (docs / "paper.pdf").write_bytes(b"%PDF-1.4\n% ArcLink preview proof\n")
         (workspace / "work.md").write_text("# Work\n\nWorkspace root.\n", encoding="utf-8")
 
         old_env = os.environ.copy()
@@ -440,6 +441,10 @@ def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
             expect("Ship carefully." in note["content"], str(note))
             workspace_note = asyncio.run(drive_api.content(root="workspace", path="/work.md"))
             expect("Workspace root." in workspace_note["content"], str(workspace_note))
+            pdf_preview = asyncio.run(drive_api.preview(root="vault", path="/Docs/paper.pdf"))
+            expect(getattr(pdf_preview, "media_type", "") == "application/pdf", str(getattr(pdf_preview, "media_type", "")))
+            disposition = pdf_preview.headers.get("content-disposition", "")
+            expect(disposition.startswith("inline;"), disposition)
 
             mkdir_result = asyncio.run(drive_api.mkdir(JsonRequest({"root": "vault", "path": "/Docs", "name": "Ideas"})))
             expect(mkdir_result["path"] == "/Docs/Ideas", str(mkdir_result))
@@ -747,7 +752,10 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect('mode: "background"' in body and "New Folder" in body and "Upload" in body, "Drive background context menu should expose folder/file/upload actions")
     expect('"selection"' in body and "Trash Selected" in body and "Restore Selected" in body, "Drive selected group context menu should expose batch actions")
     expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
-    expect("function previewKind(item)" in body and 'api("/download?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/download routes")
+    expect("function previewKind(item)" in body and 'api("/preview?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/preview routes")
+    click_handler = body.split("function handleListItemClick", 1)[1].split("function trashSelected", 1)[0]
+    expect("openItem" not in click_handler and "selectListItem(item, event, index, list)" in click_handler, "Drive single-click should select folders instead of opening them")
+    expect("onDoubleClick: function ()" in body and "openItem(item);" in body, "Drive double-click should open folder rows")
     expect("arclink-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
     expect("paddingLeft: 0.2 + depth * 0.9" in body and "marginLeft: depth * 14" not in body, "Drive tree indentation should move the full row, not only the caret")
     style = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")

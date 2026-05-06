@@ -163,6 +163,7 @@
 }
 
 .arclink-drive-tree-node.active,
+.arclink-drive-tree-node.selected,
 .arclink-drive-tree-node:focus-visible {
   background: color-mix(in srgb, var(--midground-base) 10%, transparent);
   outline: 1px solid color-mix(in srgb, var(--accent-base, #ff6a3d) 28%, transparent);

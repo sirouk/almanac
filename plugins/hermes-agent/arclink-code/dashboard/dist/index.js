@@ -52,7 +52,7 @@
   }
 
   function fileIcon(item) {
-    if (item.kind === "folder") return "DIR";
+    if (item.kind === "folder") return "";
     const language = String(item.language || "").toLowerCase();
     const byLanguage = {
       css: "CSS",
@@ -71,7 +71,7 @@
     if (byLanguage[language]) return byLanguage[language];
     const name = item.name || item.path || "";
     const match = /\.([A-Za-z0-9]+)$/.exec(name);
-    return match ? match[1].slice(0, 4).toUpperCase() : "FILE";
+    return match ? match[1].slice(0, 4).toUpperCase() : "";
   }
 
   function changeSort(a, b) {
@@ -99,6 +99,7 @@
       diff: null,
       fileTabs: [],
       tree: null,
+      expanded: { "/": true },
       contextMenu: null,
       searchQuery: "",
       searchResults: [],
@@ -136,7 +137,10 @@
     function loadTree() {
       fetchJSON(api("/tree?path=" + encodeURIComponent("/") + "&depth=3"))
         .then(function (data) {
-          patch({ tree: data.tree || null });
+          patch(function (current) {
+            const expanded = Object.assign({ "/": true }, current.expanded || {});
+            return { tree: data.tree || null, expanded: expanded };
+          });
         })
         .catch(function () {
           patch({ tree: null });
@@ -192,14 +196,33 @@
         });
     }
 
-    function rememberTab(file) {
+    function rememberTab(file, pinned) {
       if (!file || !file.path) return;
       patch(function (current) {
-        const tabs = (current.fileTabs || []).filter(function (tab) {
+        const existing = (current.fileTabs || []).filter(function (tab) {
+          return tab.path === file.path;
+        })[0] || {};
+        let tabs = (current.fileTabs || []).filter(function (tab) {
           return tab.path !== file.path;
         });
-        tabs.push({ path: file.path, name: file.name || basename(file.path), dirty: false });
-        return { fileTabs: tabs.slice(-6) };
+        const isPinned = !!(pinned || existing.pinned || existing.dirty);
+        if (!isPinned) {
+          tabs = tabs.filter(function (tab) {
+            return tab.pinned || tab.dirty;
+          });
+        }
+        tabs.push({
+          path: file.path,
+          name: file.name || basename(file.path),
+          dirty: !!existing.dirty,
+          pinned: isPinned,
+          content: existing.content !== undefined ? existing.content : file.content || "",
+          savedContent: existing.savedContent !== undefined ? existing.savedContent : file.content || "",
+          hash: file.hash || existing.hash || "",
+          language: file.language || existing.language || "plaintext",
+          editable: file.editable !== false,
+        });
+        return { fileTabs: tabs.slice(-8) };
       });
     }
 
@@ -213,22 +236,107 @@
       });
     }
 
-    function openItem(item) {
+    function updateTabBuffer(path, content, dirty) {
+      patch(function (current) {
+        return {
+          fileTabs: (current.fileTabs || []).map(function (tab) {
+            return tab.path === path ? Object.assign({}, tab, { content: content, dirty: dirty }) : tab;
+          }),
+        };
+      });
+    }
+
+    function pinTab(path) {
+      patch(function (current) {
+        return {
+          fileTabs: (current.fileTabs || []).map(function (tab) {
+            return tab.path === path ? Object.assign({}, tab, { pinned: true }) : tab;
+          }),
+        };
+      });
+    }
+
+    function closeTab(tab, event) {
+      if (event) event.stopPropagation();
+      if (tab.dirty && !window.confirm("Close " + tab.name + " without saving?")) return;
+      patch(function (current) {
+        const tabs = (current.fileTabs || []).filter(function (candidate) {
+          return candidate.path !== tab.path;
+        });
+        const active = current.openFile && current.openFile.path === tab.path;
+        const next = active ? tabs[tabs.length - 1] : null;
+        return {
+          fileTabs: tabs,
+          openFile: active && next ? Object.assign({}, next, { editable: next.editable !== false }) : active ? null : current.openFile,
+          content: active && next ? next.content || "" : active ? "" : current.content,
+          savedContent: active && next ? next.savedContent || "" : active ? "" : current.savedContent,
+          dirty: active && next ? !!next.dirty : active ? false : current.dirty,
+          diff: active ? null : current.diff,
+        };
+      });
+    }
+
+    function openItem(item, pinned) {
       patch({ contextMenu: null });
       if (item.kind === "folder") {
         loadItems(item.path);
+        patch(function (current) {
+          const expanded = Object.assign({}, current.expanded || {});
+          expanded[item.path] = true;
+          return { expanded: expanded };
+        });
         return;
       }
-      if (!confirmCleanSlate()) return;
-      if (state.openFile && state.dirty) markTabDirty(state.openFile.path, false);
+      const existingTab = (state.fileTabs || []).filter(function (tab) {
+        return tab.path === item.path;
+      })[0];
+      if (existingTab) {
+        if (pinned) pinTab(existingTab.path);
+        patch({
+          openFile: Object.assign({}, existingTab, { editable: existingTab.editable !== false }),
+          content: existingTab.content || "",
+          savedContent: existingTab.savedContent || "",
+          dirty: !!existingTab.dirty,
+          diff: null,
+        });
+        return;
+      }
       if (!item.text) {
         patch({ openFile: Object.assign({}, item, { editable: false }), content: "", savedContent: "", dirty: false, diff: null });
         return;
       }
       fetchJSON(api("/file?path=" + encodeURIComponent(item.path)))
         .then(function (data) {
-          rememberTab(data);
-          patch({ openFile: Object.assign({}, data, { editable: true }), content: data.content || "", savedContent: data.content || "", dirty: false, diff: null });
+          const content = data.content || "";
+          patch(function (current) {
+            let tabs = (current.fileTabs || []).filter(function (tab) {
+              return tab.path !== data.path;
+            });
+            if (!pinned) {
+              tabs = tabs.filter(function (tab) {
+                return tab.pinned || tab.dirty;
+              });
+            }
+            tabs.push({
+              path: data.path,
+              name: data.name || basename(data.path),
+              dirty: false,
+              pinned: !!pinned,
+              content: content,
+              savedContent: content,
+              hash: data.hash || "",
+              language: data.language || "plaintext",
+              editable: true,
+            });
+            return {
+              fileTabs: tabs.slice(-8),
+              openFile: Object.assign({}, data, { editable: true }),
+              content: content,
+              savedContent: content,
+              dirty: false,
+              diff: null,
+            };
+          });
         })
         .catch(function (error) {
           patch({ openFile: item, content: "", savedContent: "", dirty: false, diff: null, errorMessage: error.message || "Unable to open file" });
@@ -251,7 +359,9 @@
               dirty: false,
               openFile: Object.assign({}, current.openFile, { hash: data.hash, modified: data.modified }),
               fileTabs: (current.fileTabs || []).map(function (tab) {
-                return current.openFile && tab.path === current.openFile.path ? Object.assign({}, tab, { dirty: false }) : tab;
+                return current.openFile && tab.path === current.openFile.path
+                  ? Object.assign({}, tab, { dirty: false, content: current.content, savedContent: current.content, hash: data.hash })
+                  : tab;
               }),
             };
           });
@@ -268,8 +378,20 @@
       const name = (window.prompt("File name") || "").trim();
       if (!name) return;
       const path = joinPath(state.path, name);
-      patch({ openFile: { path: path, name: name, language: "plaintext", editable: true }, content: "", savedContent: "", dirty: true, diff: null });
-      rememberTab({ path: path, name: name });
+      patch(function (current) {
+        const tabs = (current.fileTabs || []).filter(function (tab) {
+          return tab.path !== path;
+        });
+        tabs.push({ path: path, name: name, dirty: true, pinned: true, content: "", savedContent: "", hash: "", language: "plaintext", editable: true });
+        return {
+          fileTabs: tabs.slice(-8),
+          openFile: { path: path, name: name, language: "plaintext", editable: true },
+          content: "",
+          savedContent: "",
+          dirty: true,
+          diff: null,
+        };
+      });
     }
 
     function fileOperation(endpoint, payload, confirmText) {
@@ -283,7 +405,16 @@
         .then(function () {
           patch({ busy: false });
           if (endpoint === "/ops/trash" && state.openFile && payload.path === state.openFile.path) {
-            patch({ openFile: null, content: "", savedContent: "", dirty: false, diff: null });
+            patch(function (current) {
+              return {
+                openFile: null,
+                content: "",
+                savedContent: "",
+                dirty: false,
+                diff: null,
+                fileTabs: (current.fileTabs || []).filter(function (tab) { return tab.path !== payload.path; }),
+              };
+            });
           }
           loadItems(state.path);
           loadTree();
@@ -464,11 +595,22 @@
       );
     }
 
+    function toggleExplorerNode(path) {
+      patch(function (current) {
+        const expanded = Object.assign({}, current.expanded || {});
+        expanded[path] = !expanded[path];
+        return { expanded: expanded };
+      });
+    }
+
     function renderExplorer() {
       const openFile = state.openFile;
       function renderTreeNode(item, depth) {
         const isSelected = openFile && openFile.path === item.path;
         const children = item.children || [];
+        const isFolder = item.kind === "folder";
+        const isExpanded = !!state.expanded[item.path];
+        const displayName = item.path === "/" ? "Workspace" : item.name;
         return h(
           "div",
           { key: item.path, className: "arclink-code-tree-node-wrap" },
@@ -506,13 +648,29 @@
                 onClick: function () {
                   openItem(item);
                 },
+                onDoubleClick: function () {
+                  if (item.kind !== "folder") openItem(item, true);
+                },
               },
+              isFolder
+                ? h(
+                    "span",
+                    {
+                      className: "arclink-code-caret",
+                      onClick: function (event) {
+                        event.stopPropagation();
+                        toggleExplorerNode(item.path);
+                      },
+                    },
+                    isExpanded ? "v" : ">"
+                  )
+                : h("span", { className: "arclink-code-caret spacer" }),
               h("span", { className: "arclink-code-fileicon " + (item.kind === "folder" ? "folder" : "file") }, fileIcon(item)),
-              h("span", { className: "arclink-code-item-name" }, item.name),
+              h("span", { className: "arclink-code-item-name" }, displayName),
               h("span", { className: "arclink-code-item-lang" }, item.kind === "folder" ? (children.length ? children.length : "") : item.language)
             )
           ),
-          children.length ? h("div", { className: "arclink-code-tree-children" }, children.map(function (child) { return renderTreeNode(child, depth + 1); })) : null
+          isFolder && isExpanded && children.length ? h("div", { className: "arclink-code-tree-children" }, children.map(function (child) { return renderTreeNode(child, depth + 1); })) : null
         );
       }
       return h(
@@ -818,20 +976,43 @@
 	                      "div",
 	                      { className: "arclink-code-tab" },
 	                      h(
-	                        "span",
+	                        "div",
+	                        { className: "arclink-code-tab-list" },
 	                        null,
 	                        state.fileTabs.map(function (tab) {
 	                          return h(
-	                            "button",
+	                            "span",
 	                            {
 	                              key: tab.path,
-	                              type: "button",
-	                              className: "arclink-code-tab-button " + (openFile.path === tab.path ? "active" : ""),
-	                              onClick: function () {
-	                                openItem({ path: tab.path, name: tab.name, kind: "file", text: true });
-	                              },
+	                              className: "arclink-code-tab-item " + (openFile.path === tab.path ? "active" : "") + (tab.pinned ? " pinned" : " preview"),
 	                            },
-	                            (tab.dirty || (tab.path === openFile.path && state.dirty) ? "* " : "") + tab.name
+	                            h(
+	                              "button",
+	                              {
+	                                type: "button",
+	                                className: "arclink-code-tab-button",
+	                                title: tab.pinned ? "Pinned tab" : "Preview tab. Double-click to pin.",
+	                                onClick: function () {
+	                                  openItem({ path: tab.path, name: tab.name, kind: "file", text: true });
+	                                },
+	                                onDoubleClick: function () {
+	                                  pinTab(tab.path);
+	                                },
+	                              },
+	                              (tab.dirty || (tab.path === openFile.path && state.dirty) ? "* " : "") + tab.name
+	                            ),
+	                            h(
+	                              "button",
+	                              {
+	                                type: "button",
+	                                className: "arclink-code-tab-close",
+	                                "aria-label": "Close " + tab.name,
+	                                onClick: function (event) {
+	                                  closeTab(tab, event);
+	                                },
+	                              },
+	                              "x"
+	                            )
 	                          );
 	                        })
 	                      ),
@@ -847,7 +1028,7 @@
                           onChange: function (event) {
                             const value = event.target.value;
                             patch({ content: value, dirty: value !== state.savedContent });
-                            markTabDirty(openFile.path, value !== state.savedContent);
+                            updateTabBuffer(openFile.path, value, value !== state.savedContent);
                           },
                           onKeyDown: function (event) {
                             if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {

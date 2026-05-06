@@ -49,6 +49,12 @@
       });
   }
 
+  function displayScrollback(text) {
+    return String(text || "")
+      .replace(new RegExp("\\x1b\\][^\\x07]*(\\x07|\\x1b\\\\)", "g"), "")
+      .replace(new RegExp("\\x1b\\[[0-?]*[ -/]*[@-~]", "g"), "");
+  }
+
   function TerminalPage() {
     const statePair = useState({
       loading: true,
@@ -60,6 +66,7 @@
       errorMessage: "",
       confirmClose: null,
       streaming: false,
+      showClosed: false,
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -249,7 +256,10 @@
     const status = state.status || {};
     const capabilities = status.capabilities || {};
     const selected = state.selected;
-    const grouped = groupSessions(state.sessions || []);
+    const visibleSessions = (state.sessions || []).filter(function (session) {
+      return state.showClosed || session.state !== "closed";
+    });
+    const grouped = groupSessions(visibleSessions);
     return h(
       "div",
       { className: "arclink-terminal" },
@@ -277,7 +287,21 @@
             h(
               "aside",
               { className: "arclink-terminal-list" },
-              h("div", { className: "arclink-terminal-section" }, "Sessions"),
+              h(
+                "div",
+                { className: "arclink-terminal-section" },
+                h("span", null, "Sessions"),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    onClick: function () {
+                      merge({ showClosed: !state.showClosed });
+                    },
+                  },
+                  state.showClosed ? "Hide Closed" : "Show Closed"
+                )
+              ),
               grouped.length
                 ? grouped.map(function (group) {
                     return h(
@@ -311,7 +335,7 @@
                 ? h(
                     "div",
                     { className: "arclink-terminal-screen", "data-session-state": selected.state || "" },
-                    selected.scrollback || "$ "
+                    displayScrollback(selected.scrollback || "$ ")
                   )
                 : h("div", { className: "arclink-terminal-screen muted" }, status.available ? "$ " : "Terminal backend unavailable"),
               h(

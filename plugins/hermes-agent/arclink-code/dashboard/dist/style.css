@@ -14,8 +14,10 @@
 
 .arclink-code-theme-dark {
   --arclink-code-surface: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
-  --arclink-code-editor-bg: #101216;
-  --arclink-code-editor-fg: #e9edf2;
+  --arclink-code-editor-bg: #1b1f27;
+  --arclink-code-editor-fg: #d7dae0;
+  --arclink-code-editor-muted: #7f8796;
+  --arclink-code-editor-accent: #61afef;
 }
 
 .arclink-code-toolbar,
@@ -224,25 +226,78 @@
   align-items: center;
   display: grid;
   gap: 0.45rem;
-  grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+  grid-template-columns: 1.1rem 1.35rem minmax(0, 1fr) auto;
   min-width: 0;
   text-align: left;
   width: 100%;
 }
 
-.arclink-code-fileicon {
-  border: 1px solid color-mix(in srgb, var(--midground-base) 18%, transparent);
-  color: color-mix(in srgb, var(--midground-base) 76%, transparent);
-  font-size: 0.66rem;
-  font-weight: 700;
-  line-height: 1;
-  min-width: 2.1rem;
-  padding: 0.35rem 0.2rem;
+.arclink-code-caret {
+  border-color: transparent;
+  color: color-mix(in srgb, var(--midground-base) 64%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  padding: 0;
   text-align: center;
 }
 
+.arclink-code-caret.spacer {
+  display: inline-block;
+}
+
+.arclink-code-fileicon {
+  display: inline-block;
+  height: 1.05rem;
+  position: relative;
+  width: 1.2rem;
+}
+
+.arclink-code-fileicon.file {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 54%, transparent);
+  border-radius: 2px;
+  color: color-mix(in srgb, var(--midground-base) 76%, transparent);
+  font-size: 0.46rem;
+  font-weight: 700;
+  line-height: 1;
+  padding-top: 0.35rem;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.arclink-code-fileicon.file::after {
+  border-left: 0.26rem solid transparent;
+  border-top: 0.26rem solid color-mix(in srgb, var(--midground-base) 40%, transparent);
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
 .arclink-code-fileicon.folder {
-  color: color-mix(in srgb, var(--accent-base, #ff6a3d) 78%, var(--midground));
+  border: 0;
+}
+
+.arclink-code-fileicon.folder::before {
+  background: color-mix(in srgb, var(--accent-base, #ff6a3d) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 54%, transparent);
+  border-radius: 2px;
+  content: "";
+  height: 0.7rem;
+  left: 0.04rem;
+  position: absolute;
+  top: 0.28rem;
+  width: 1.05rem;
+}
+
+.arclink-code-fileicon.folder::after {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 54%, transparent);
+  border-bottom: 0;
+  border-radius: 2px 2px 0 0;
+  content: "";
+  height: 0.26rem;
+  left: 0.08rem;
+  position: absolute;
+  top: 0.08rem;
+  width: 0.5rem;
 }
 
 .arclink-code-item-name {
@@ -362,7 +417,7 @@
   padding: 0.6rem 0.75rem;
 }
 
-.arclink-code-tab span {
+.arclink-code-tab-list {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
@@ -371,17 +426,38 @@
   text-overflow: ellipsis;
 }
 
+.arclink-code-tab-item {
+  align-items: stretch;
+  border: 1px solid color-mix(in srgb, var(--midground-base) 18%, transparent);
+  display: inline-flex;
+  max-width: 14rem;
+  min-width: 0;
+}
+
+.arclink-code-tab-item.active {
+  background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+  border-color: color-mix(in srgb, var(--arclink-code-editor-accent, #61afef) 50%, transparent);
+}
+
+.arclink-code-tab-item.preview .arclink-code-tab-button {
+  font-style: italic;
+}
+
 .arclink-code-tab-button {
+  border: 0;
   font-size: 0.74rem;
-  max-width: 11rem;
+  max-width: 11.5rem;
   overflow: hidden;
   padding: 0.26rem 0.42rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.arclink-code-tab-button.active {
-  background: color-mix(in srgb, var(--midground-base) 12%, transparent);
+.arclink-code-tab-close {
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--midground-base) 13%, transparent);
+  color: color-mix(in srgb, var(--midground-base) 66%, transparent);
+  padding: 0.22rem 0.36rem;
 }
 
 .arclink-code-tab strong {
@@ -408,6 +484,10 @@
   resize: none;
   tab-size: 2;
   white-space: pre;
+}
+
+.arclink-code-textarea::selection {
+  background: color-mix(in srgb, var(--arclink-code-editor-accent, #61afef) 34%, transparent);
 }
 
 .arclink-code-diff {

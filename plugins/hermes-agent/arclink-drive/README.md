@@ -40,6 +40,10 @@ status contract, UI assets, and secret redaction.
 - `/delete` moves local files into `.arclink-trash`; WebDAV delete uses the
   provider delete call.
 - `/trash` and `/restore` are local-backend recovery APIs.
+- The dashboard presents Workspace and Vault as sibling tree roots, with
+  expandable folder carets, minimal file/folder icons, cross-root search,
+  directory contents in the main pane, and selected-item metadata/actions in
+  the detail strip rather than opening file contents.
 
 ## Assumptions
 
@@ -62,8 +66,8 @@ git diff --check
 
 ## Boundaries
 
-Drive is a first-generation local/WebDAV file manager, not full Google Drive
-parity. Multi-select polish, share-link management, collaborative comments,
-tags, chunked uploads, and a richer visible trash browser remain future release
+Drive is a first-generation local/WebDAV file manager moving toward Google
+Drive parity. Share-link management, collaborative comments, tags, chunked
+uploads, richer trash browsing, and cross-root copy/move remain future release
 gates. Do not claim Nextcloud sharing is implemented until the backend has a
 real adapter and tests.

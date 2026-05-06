@@ -44,6 +44,10 @@ as `ARCLINK_CODE_WORKSPACE_ROOT`.
 - `/git/stage`, `/git/unstage`, `/git/discard`, `/git/commit`,
   `/git/ignore`, `/git/pull`, and `/git/push` perform allowlisted git
   operations. Discard, pull, and push require explicit confirmation.
+- The dashboard presents the workspace as an expandable tree with carets and
+  minimal file/folder icons. File clicks open a rotating preview tab, while a
+  double-click on a file or tab pins it. Tabs can be closed, dirty buffers stay
+  in tab state, and saves remain explicit.
 
 ## Assumptions
 
@@ -68,8 +72,9 @@ git diff --check
 
 ## Boundaries
 
-The shipped editor shell is native and lightweight. It does not bundle Monaco
-today: the current rationale is to keep the native Hermes plugin CSP and asset
-path simple until a vendored Monaco bundle is proven inside the plugin host.
-Full code-server remains a separate top-level IDE surface rather than an
-embedded component.
+The shipped editor shell is native and lightweight, with a VS Code-inspired
+manual-save tab model and dark editor theme. It does not bundle Monaco today:
+the current rationale is to keep the native Hermes plugin CSP and asset path
+simple until a vendored Monaco bundle is proven inside the plugin host. Full
+code-server remains a separate top-level IDE surface rather than an embedded
+component.

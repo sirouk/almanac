@@ -69,6 +69,8 @@
       streaming: false,
       showClosed: false,
       contextMenu: null,
+      editingSessionId: "",
+      editingSessionName: "",
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -179,16 +181,11 @@
 
     function createSession(mode) {
       const sessionMode = mode || "shell";
-      let target = "";
-      if (sessionMode === "ssh") {
-        target = (window.prompt("SSH target", "user@host") || "").trim();
-        if (!target) return;
-      }
       postJSON("/sessions", {
-        name: sessionMode === "ssh" ? "SSH " + target : sessionMode === "tui" ? "Hermes TUI" : "Terminal",
+        name: sessionMode === "ssh" ? "Machine Terminal" : sessionMode === "tui" ? "Hermes TUI" : "Terminal",
         cwd: "/",
         mode: sessionMode,
-        target: target,
+        target: "",
       })
         .then(function (payload) {
           const session = payload.session || {};
@@ -199,17 +196,37 @@
         });
     }
 
-    function renameSelected() {
-      const selected = state.selected;
-      if (!selected) return;
-      const name = window.prompt("Session name", selected.name || "Terminal");
-      if (name === null) return;
-      postJSON("/sessions/" + encodeURIComponent(selected.id) + "/rename", { name: name })
+    function startRenameSession(session) {
+      const target = session || state.selected;
+      if (!target) return;
+      merge({
+        contextMenu: null,
+        selectedId: target.id,
+        editingSessionId: target.id,
+        editingSessionName: target.name || "Terminal",
+      });
+      loadSession(target.id);
+    }
+
+    function cancelRenameSession() {
+      merge({ editingSessionId: "", editingSessionName: "" });
+    }
+
+    function commitRenameSession(sessionId) {
+      const name = String(state.editingSessionName || "").trim();
+      const selectedId = sessionId || state.editingSessionId;
+      if (!selectedId) return;
+      if (!name) {
+        cancelRenameSession();
+        return;
+      }
+      postJSON("/sessions/" + encodeURIComponent(selectedId) + "/rename", { name: name })
         .then(function () {
-          return loadSessions(selected.id);
+          merge({ editingSessionId: "", editingSessionName: "" });
+          return loadSessions(selectedId);
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
+          merge({ errorMessage: String(error.message || error), editingSessionId: "", editingSessionName: "" });
         });
     }
 
@@ -382,7 +399,7 @@
             event.stopPropagation();
           },
         },
-        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(renameSelected); } }, "Rename"),
+        h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { startRenameSession(session); }); } }, "Rename"),
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(moveSelectedToFolder); } }, "Folder"),
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reorderSelected(-1); }); } }, "Move Up"),
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reorderSelected(1); }); } }, "Move Down"),
@@ -432,8 +449,7 @@
                 h(
                   "div",
                   { className: "arclink-terminal-session-tools" },
-                  h("button", { type: "button", title: "New terminal", onClick: function () { createSession("shell"); }, disabled: !status.available }, "+"),
-                  h("button", { type: "button", title: "New SSH terminal", onClick: function () { createSession("ssh"); }, disabled: !capabilities.ssh_sessions }, "+ SSH"),
+                  h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !(capabilities.machine_terminal_sessions || capabilities.ssh_sessions) }, "+"),
                   h("button", { type: "button", title: "Open Hermes TUI", onClick: function () { createSession("tui"); }, disabled: !capabilities.hermes_tui_sessions }, "+ TUI")
                 )
               ),
@@ -475,7 +491,32 @@
                             },
                           },
                           h("span", { className: "arclink-terminal-session-top" },
-                            h("strong", null, session.name || "Terminal"),
+                            state.editingSessionId === session.id
+                              ? h("input", {
+                                  className: "arclink-terminal-session-rename",
+                                  value: state.editingSessionName,
+                                  autoFocus: true,
+                                  onClick: function (event) {
+                                    event.stopPropagation();
+                                  },
+                                  onChange: function (event) {
+                                    merge({ editingSessionName: event.target.value });
+                                  },
+                                  onBlur: function () {
+                                    commitRenameSession(session.id);
+                                  },
+                                  onKeyDown: function (event) {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      commitRenameSession(session.id);
+                                    }
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      cancelRenameSession();
+                                    }
+                                  },
+                                })
+                              : h("strong", null, session.name || "Terminal"),
                             h("span", {
                               className: "arclink-terminal-session-close",
                               onClick: function (event) {

@@ -937,6 +937,23 @@ def ensure_volume(volumes: list[dict[str, Any]], *, source: str, target: str) ->
     return True
 
 
+def ensure_secret(service: dict[str, Any], *, source: str, target: str) -> bool:
+    secrets = service.setdefault("secrets", [])
+    if not isinstance(secrets, list):
+        service["secrets"] = [{"source": source, "target": target}]
+        return True
+    desired = {"source": source, "target": target}
+    for item in secrets:
+        if isinstance(item, dict) and str(item.get("source") or "") == source:
+            if item != desired:
+                item.clear()
+                item.update(desired)
+                return True
+            return False
+    secrets.append(desired)
+    return True
+
+
 for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     try:
         payload = json.loads(compose_file.read_text(encoding="utf-8"))
@@ -945,6 +962,8 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     services = payload.get("services")
     if not isinstance(services, dict):
         continue
+    compose_secrets = payload.get("secrets")
+    has_chutes_secret = isinstance(compose_secrets, dict) and "chutes_api_key" in compose_secrets
     service = services.get("hermes-dashboard")
     if not isinstance(service, dict):
         continue
@@ -961,10 +980,15 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
             "ARCLINK_DRIVE_ROOT": "/srv/vault",
             "ARCLINK_CODE_WORKSPACE_ROOT": "/workspace",
             "ARCLINK_TERMINAL_ALLOW_ROOT": "1",
+            "ARCLINK_TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
+            "HERMES_TUI_DIR": "/opt/arclink/runtime/hermes-agent-src/ui-tui",
+            **({"ARCLINK_CHUTES_API_KEY_FILE": "/run/secrets/chutes_api_key"} if has_chutes_secret else {}),
         }.items():
             if env.get(key) != value:
                 env[key] = value
                 service_changed = True
+    if has_chutes_secret:
+        service_changed = ensure_secret(service, source="chutes_api_key", target="/run/secrets/chutes_api_key") or service_changed
     volumes = service.setdefault("volumes", [])
     if isinstance(volumes, list):
         service_changed = ensure_volume(
@@ -974,6 +998,37 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         ) or service_changed
         service_changed = ensure_volume(volumes, source=str(deployment_root / "vault"), target="/srv/vault") or service_changed
         service_changed = ensure_volume(volumes, source=str(deployment_root / "workspace"), target="/workspace") or service_changed
+    installer = services.get("managed-context-install")
+    if isinstance(installer, dict):
+        installer_changed = False
+        installer_command = ["./bin/install-deployment-hermes-home.sh", "/home/arclink/arclink", "/home/arclink/.hermes"]
+        if installer.get("command") != installer_command:
+            installer["command"] = installer_command
+            installer_changed = True
+        installer_env = installer.setdefault("environment", {})
+        if isinstance(installer_env, dict):
+            for key, value in {
+                "HERMES_HOME": "/home/arclink/.hermes",
+                **({"ARCLINK_CHUTES_API_KEY_FILE": "/run/secrets/chutes_api_key"} if has_chutes_secret else {}),
+            }.items():
+                if installer_env.get(key) != value:
+                    installer_env[key] = value
+                    installer_changed = True
+            dashboard_env = service.get("environment") if isinstance(service.get("environment"), dict) else {}
+            for key in (
+                "ARCLINK_PREFIX",
+                "ARCLINK_PRIMARY_PROVIDER",
+                "ARCLINK_CHUTES_BASE_URL",
+                "ARCLINK_CHUTES_DEFAULT_MODEL",
+                "ARCLINK_MODEL_REASONING_DEFAULT",
+            ):
+                value = dashboard_env.get(key)
+                if value and installer_env.get(key) != value:
+                    installer_env[key] = value
+                    installer_changed = True
+        if has_chutes_secret:
+            installer_changed = ensure_secret(installer, source="chutes_api_key", target="/run/secrets/chutes_api_key") or installer_changed
+        service_changed = installer_changed or service_changed
     if service_changed:
         compose_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         changed += 1

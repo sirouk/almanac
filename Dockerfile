@@ -70,6 +70,11 @@ RUN pin_value() { \
        && npm run build \
        && /opt/arclink/runtime/hermes-venv/bin/python3 -c 'from pathlib import Path; import hermes_cli, shutil; source = Path("/opt/arclink/runtime/hermes-agent-src/hermes_cli/web_dist"); target = Path(hermes_cli.__file__).resolve().parent / "web_dist"; shutil.rmtree(target, ignore_errors=True); shutil.copytree(source, target) if source.is_dir() else None'; \
      fi \
+  && if [ -d /opt/arclink/runtime/hermes-agent-src/ui-tui ]; then \
+       cd /opt/arclink/runtime/hermes-agent-src/ui-tui \
+       && npm ci --no-audit --no-fund \
+       && npm run build; \
+     fi \
   && if [ -f /home/arclink/arclink/web/package-lock.json ]; then \
        cd /home/arclink/arclink/web \
        && npm ci --no-audit --no-fund \

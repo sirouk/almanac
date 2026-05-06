@@ -881,7 +881,6 @@
           key: "caret",
           type: "button",
           className: "arclink-drive-caret",
-          style: { marginLeft: depth * 14 + "px" },
           onClick: function (event) {
             event.stopPropagation();
             toggleTree(rootId, path);
@@ -923,6 +922,7 @@
             type: "button",
             draggable: true,
             className: "arclink-drive-tree-node " + (selectedTree ? "active" : ""),
+            style: { paddingLeft: 0.2 + depth * 0.9 + "rem" },
             onClick: function () {
               if (item.kind === "folder") {
                 selectFolder(rootId, item.path);
@@ -985,6 +985,7 @@
           {
             type: "button",
             className: "arclink-drive-tree-node root " + (active ? "active" : ""),
+            style: { paddingLeft: "0.2rem" },
             onClick: function () {
               selectFolder(rootId, "/");
             },

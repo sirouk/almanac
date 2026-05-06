@@ -4,6 +4,11 @@
   color: var(--midground, #e6edf3);
   background: color-mix(in srgb, var(--background-base, #0b0f14) 94%, #020409);
   box-sizing: border-box;
+  text-transform: none;
+}
+
+.arclink-terminal * {
+  text-transform: none;
 }
 
 .arclink-terminal-toolbar {
@@ -140,6 +145,16 @@
   white-space: nowrap;
 }
 
+.arclink-terminal-session-rename {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, #4f9cf9 60%, transparent);
+  background: color-mix(in srgb, #070a0f 88%, transparent);
+  color: var(--midground, #e6edf3);
+  font: inherit;
+  padding: 2px 4px;
+}
+
 .arclink-terminal-session-top {
   align-items: center;
   display: flex;
@@ -186,6 +201,8 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.5;
+  font-variant-caps: normal;
+  text-transform: none !important;
   white-space: pre-wrap;
   word-break: break-word;
 }

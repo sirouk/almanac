@@ -749,6 +749,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
     expect("function previewKind(item)" in body and 'api("/download?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/download routes")
     expect("arclink-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
+    expect("paddingLeft: 0.2 + depth * 0.9" in body and "marginLeft: depth * 14" not in body, "Drive tree indentation should move the full row, not only the caret")
     style = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".arclink-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
     expect(".arclink-drive-pdf-preview" in style and ".arclink-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
@@ -1031,6 +1032,8 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["streaming_output"] is True, str(status))
             expect(status["capabilities"]["reload_reconnect"] is True, str(status))
             expect(status["capabilities"]["group_sessions"] is True, str(status))
+            expect(status["capabilities"]["machine_terminal_sessions"] is True, str(status))
+            expect(status["capabilities"]["ssh_sessions"] is True, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
 
             created = asyncio.run(
@@ -1083,6 +1086,15 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(cleared["removed"] >= 1, str(cleared))
             expect(not any(item["id"] == session_id for item in cleared["sessions"]), str(cleared))
 
+            machine = asyncio.run(terminal_api.create_session(JsonRequest({"mode": "ssh", "cwd": "/"})))
+            machine_session = machine["session"]
+            expect(machine_session["name"] == "Machine Terminal", str(machine_session))
+            expect(machine_session["mode"] == "ssh", str(machine_session))
+            expect(machine_session["target"] == "", str(machine_session))
+            expect(machine_session["cwd"] == "/", str(machine_session))
+            asyncio.run(terminal_api.close_session(machine_session["id"], JsonRequest({"confirm": True})))
+            asyncio.run(terminal_api.clear_closed_sessions())
+
             try:
                 asyncio.run(terminal_api.create_session(JsonRequest({"cwd": "/../outside"})))
             except Exception as exc:
@@ -1110,13 +1122,20 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
         "keyInput" in body and "onKeyDown: handleTerminalKey" in body and 'addEventListener("keydown", onNativeKeyDown)' in body,
         "Terminal UI should send direct pty keystrokes",
     )
-    expect("+ SSH" in body and "+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose SSH/TUI creation and closed cleanup")
+    expect('"New machine terminal"' in body and "+ SSH" not in body, "Terminal UI should use the plus button for a local machine shell")
+    expect("startRenameSession" in body and "editingSessionId" in body, "Terminal UI should support inline session renaming")
+    expect("window.prompt(\"SSH target\"" not in body and "target: \"\"" in body, "Terminal UI should not prompt for an SSH target")
+    expect("+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
     expect("scrollback" in body and "arclink-terminal-screen" in body, "Terminal UI should render bounded scrollback")
+    api_body = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
+    expect("_DEFAULT_TUI_DIR" in api_body and "HERMES_TUI_DIR" in api_body and "_tui_dist_available" in api_body, "Terminal API should only advertise Hermes TUI when bundled assets are ready")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
     expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")
     style = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".arclink-terminal-confirm" in style, "Terminal CSS should style close confirmation")
     expect(".arclink-terminal-context" in style, "Terminal CSS should style the session right-click menu")
+    expect(".arclink-terminal-session-rename" in style, "Terminal CSS should style inline rename")
+    expect("text-transform: none" in style and "font-variant-caps: normal" in style, "Terminal CSS should preserve shell output casing")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")
     print("PASS test_arclink_terminal_browser_exposes_persistent_session_controls")
 

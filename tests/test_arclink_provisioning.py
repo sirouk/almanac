@@ -112,6 +112,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_TERMINAL_TUI_COMMAND"] == "/opt/arclink/runtime/hermes-venv/bin/hermes", str(intent["environment"]))
+    expect(intent["environment"]["HERMES_TUI_DIR"] == "/opt/arclink/runtime/hermes-agent-src/ui-tui", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/chutes_api_key", str(intent["environment"]))
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
@@ -147,7 +150,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["code-server"]["entrypoint"] == ["/bin/sh", "-lc"], str(services["code-server"]))
     expect("cat /run/secrets/code_server_password" in " ".join(services["code-server"]["command"]), str(services["code-server"]))
     expect(services["code-server"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"], str(services["code-server"]))
-    expect(services["managed-context-install"]["command"][:2] == ["./bin/install-arclink-plugins.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["command"][:2] == ["./bin/install-deployment-hermes-home.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
+    expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
+    expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))
     expect(
         intent["runtime_resolution"]["stock_image_file_env"]["nextcloud"] == [

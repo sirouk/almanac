@@ -54,6 +54,8 @@ _DEFAULT_MAX_SESSIONS = 6
 _DEFAULT_SCROLLBACK_BYTES = 32_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
+_DEFAULT_TUI_COMMAND = "/opt/arclink/runtime/hermes-venv/bin/hermes"
+_DEFAULT_TUI_DIR = "/opt/arclink/runtime/hermes-agent-src/ui-tui"
 _RUNTIMES: dict[str, dict[str, Any]] = {}
 
 
@@ -214,6 +216,23 @@ def _resolve_cwd(raw_path: Any) -> tuple[Path, str]:
     return target, relative
 
 
+def _resolve_machine_cwd(raw_path: Any) -> tuple[Path, str]:
+    text = str(raw_path or "/").replace("\\", "/").strip() or "/"
+    if not text.startswith("/"):
+        text = "/" + _clean_relative_path(text)
+    target = Path(text).expanduser().resolve(strict=False)
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="Terminal cwd does not exist")
+    display = "/" if str(target) == "/" else str(target)
+    return target, display
+
+
+def _resolve_session_cwd(mode: str, raw_path: Any) -> tuple[Path, str]:
+    if mode == "ssh":
+        return _resolve_machine_cwd(raw_path)
+    return _resolve_cwd(raw_path)
+
+
 def _clean_session_id(value: Any) -> str:
     session_id = str(value or "").strip()
     if not session_id or not _SESSION_ID_RE.match(session_id):
@@ -368,13 +387,12 @@ def _poll_sessions(payload: dict[str, Any]) -> bool:
 def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
     mode = _clean_session_mode(entry.get("mode"))
     if mode == "ssh":
-        ssh_path = shutil.which("ssh") or ""
-        if not ssh_path:
-            raise HTTPException(status_code=503, detail="ssh is not installed")
-        target = _clean_ssh_target(entry.get("target"))
-        return [ssh_path, target], "SSH " + target
+        shell = _shell_path()
+        if not shell:
+            raise HTTPException(status_code=503, detail="No supported terminal shell is available")
+        return [shell, "-i"], "Machine Terminal"
     if mode == "tui":
-        raw_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or "hermes").strip()
+        raw_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or _DEFAULT_TUI_COMMAND).strip()
         argv = shlex.split(raw_command)
         if not argv:
             raise HTTPException(status_code=503, detail="Hermes TUI command is not configured")
@@ -390,14 +408,23 @@ def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
     return [shell, "-i"], "Terminal"
 
 
+def _tui_dist_available() -> bool:
+    tui_dir = Path(os.environ.get("HERMES_TUI_DIR") or _DEFAULT_TUI_DIR).expanduser()
+    return (tui_dir / "dist" / "entry.js").is_file() and (tui_dir / "node_modules").is_dir()
+
+
 def _start_runtime(entry: dict[str, Any]) -> None:
     argv, label = _runtime_argv(entry)
-    cwd, _relative = _resolve_cwd(entry.get("cwd") or "/")
+    mode = _clean_session_mode(entry.get("mode"))
+    cwd, cwd_display = _resolve_session_cwd(mode, entry.get("cwd") or "/")
+    entry["cwd"] = cwd_display
     session_id = str(entry.get("id") or "")
     master_fd, slave_fd = pty.openpty()
     env = os.environ.copy()
     env["TERM"] = env.get("TERM") or "xterm-256color"
     env["PS1"] = "$ "
+    if mode == "tui":
+        env.setdefault("HERMES_TUI_DIR", _DEFAULT_TUI_DIR)
     try:
         process = subprocess.Popen(
             argv,
@@ -422,7 +449,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     _RUNTIMES[session_id] = {"process": process, "fd": master_fd}
     entry["state"] = "starting"
     entry["exit_code"] = None
-    _append_scrollback(entry, "ArcLink " + label + " session ready. Workspace cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
+    _append_scrollback(entry, "ArcLink " + label + " session ready. Cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
     time.sleep(0.05)
     _read_runtime(entry)
 
@@ -431,10 +458,11 @@ def _status_payload() -> dict[str, Any]:
     workspace_root = _workspace_root()
     tmux_path = shutil.which("tmux") or ""
     shell = _shell_path()
-    ssh_path = shutil.which("ssh") or ""
-    tui_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or "hermes").strip()
+    tui_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or _DEFAULT_TUI_COMMAND).strip()
     tui_argv = shlex.split(tui_command) if tui_command else []
-    tui_available = bool(tui_argv and (Path(tui_argv[0]).is_absolute() or shutil.which(tui_argv[0])))
+    tui_command_available = bool(tui_argv and (Path(tui_argv[0]).is_absolute() or shutil.which(tui_argv[0])))
+    tui_requires_dist = "--tui" in tui_argv
+    tui_available = tui_command_available and (not tui_requires_dist or _tui_dist_available())
     runtime_user_safe = _runtime_user_safe()
     available = bool(shell and workspace_root.exists() and workspace_root.is_dir() and runtime_user_safe)
     return {
@@ -474,7 +502,8 @@ def _status_payload() -> dict[str, Any]:
             "reorder_sessions": available,
             "confirm_close_or_kill": True,
             "direct_input": available,
-            "ssh_sessions": available and bool(ssh_path),
+            "machine_terminal_sessions": available,
+            "ssh_sessions": available,
             "hermes_tui_sessions": available and tui_available,
             "clear_closed_sessions": True,
         },
@@ -508,20 +537,21 @@ async def create_session(request: Request) -> dict[str, Any]:
     _poll_sessions(payload)
     if len(_active_sessions(payload)) >= _max_sessions():
         raise HTTPException(status_code=429, detail="Terminal session limit reached")
-    cwd_path, cwd_relative = _resolve_cwd(body.get("cwd") or "/")
+    mode = _clean_session_mode(body.get("mode"))
+    cwd_path, cwd_relative = _resolve_session_cwd(mode, body.get("cwd") or "/")
     del cwd_path
     session_id = "term-" + uuid.uuid4().hex[:16]
     now = _now()
     entry = {
         "id": session_id,
-        "name": _clean_name(body.get("name"), "SSH" if _clean_session_mode(body.get("mode")) == "ssh" else "Hermes TUI" if _clean_session_mode(body.get("mode")) == "tui" else "Terminal"),
+        "name": _clean_name(body.get("name"), "Machine Terminal" if mode == "ssh" else "Hermes TUI" if mode == "tui" else "Terminal"),
         "folder": _clean_folder(body.get("folder")),
         "order": int(body.get("order") or len(payload["sessions"])),
         "cwd": cwd_relative,
         "shell": _shell_name(),
         "backend": "managed-pty",
-        "mode": _clean_session_mode(body.get("mode")),
-        "target": _clean_ssh_target(body.get("target")) if _clean_session_mode(body.get("mode")) == "ssh" else "",
+        "mode": mode,
+        "target": "",
         "state": "starting",
         "created_at": now,
         "updated_at": now,

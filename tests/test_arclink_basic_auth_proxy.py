@@ -201,10 +201,53 @@ def test_proxy_injects_dashboard_plugin_deeplink_helper() -> None:
             backend_thread.join(timeout=5)
 
 
+def test_proxy_can_run_dashboard_helpers_without_basic_auth() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_basic_auth_proxy_no_auth_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "unused", "password": "unused"}),
+            encoding="utf-8",
+        )
+
+        backend = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), TestBackend)
+        backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
+        backend_thread.start()
+
+        handler = type(
+            "ConfiguredProxyHandler",
+            (proxy_mod.ProxyHandler,),
+            {
+                "access_file": access_file,
+                "target": f"http://127.0.0.1:{backend.server_port}",
+                "realm": "ArcLink Hermes",
+                "require_auth": False,
+            },
+        )
+        proxy = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+        proxy_thread.start()
+
+        try:
+            status, headers, body = request(proxy.server_port, "/drive")
+            expect(status == 200, f"expected no-auth dashboard response, saw {status} {headers} {body!r}")
+            expect("WWW-Authenticate" not in headers, headers)
+            expect("data-arclink-plugin-deeplink" in body, body)
+            print("PASS test_proxy_can_run_dashboard_helpers_without_basic_auth")
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            proxy_thread.join(timeout=5)
+            backend.shutdown()
+            backend.server_close()
+            backend_thread.join(timeout=5)
+
+
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_basic_login()
     test_proxy_injects_dashboard_plugin_deeplink_helper()
-    print("PASS all 2 basic-auth-proxy regression tests")
+    test_proxy_can_run_dashboard_helpers_without_basic_auth()
+    print("PASS all 3 basic-auth-proxy regression tests")
     return 0
 
 

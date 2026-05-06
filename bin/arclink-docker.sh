@@ -950,6 +950,10 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         continue
     deployment_root = compose_file.parents[1]
     service_changed = False
+    dashboard_command = ["./bin/run-hermes-dashboard-proxy.sh"]
+    if service.get("command") != dashboard_command:
+        service["command"] = dashboard_command
+        service_changed = True
     env = service.setdefault("environment", {})
     if isinstance(env, dict):
         for key, value in {

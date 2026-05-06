@@ -51,6 +51,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     access_file: Path
     target: str
     realm: str
+    require_auth: bool = True
 
     def _session_cookie_value(self, username: str, password: str) -> str:
         payload = f"{SESSION_COOKIE_PURPOSE}\0{self.realm}\0{username}\0{password}"
@@ -69,6 +70,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         return secrets.compare_digest(morsel.value, expected)
 
     def _authorized(self) -> AuthState:
+        if not self.require_auth:
+            return AuthState(ok=True)
         username, password = load_access(self.access_file)
         header = self.headers.get("Authorization") or ""
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
@@ -228,8 +231,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, required=True)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--access-file", required=True)
+    parser.add_argument("--access-file", default="")
     parser.add_argument("--realm", default="ArcLink")
+    parser.add_argument("--no-auth", action="store_true", help="Disable proxy basic auth while keeping dashboard response helpers.")
     return parser.parse_args()
 
 
@@ -242,6 +246,7 @@ def main() -> int:
             "access_file": Path(args.access_file),
             "target": args.target,
             "realm": args.realm,
+            "require_auth": not args.no_auth,
         },
     )
     with ThreadingHTTPServer((args.listen_host, args.listen_port), handler) as server:

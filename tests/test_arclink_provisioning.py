@@ -148,8 +148,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect("cat /run/secrets/code_server_password" in " ".join(services["code-server"]["command"]), str(services["code-server"]))
     expect(services["code-server"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"], str(services["code-server"]))
     expect(services["managed-context-install"]["command"][:2] == ["./bin/install-arclink-plugins.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
-    expect("--insecure" in services["hermes-dashboard"]["command"], str(services["hermes-dashboard"]))
-    expect("--port" in services["hermes-dashboard"]["command"] and "3210" in services["hermes-dashboard"]["command"], str(services["hermes-dashboard"]))
+    expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))
     expect(
         intent["runtime_resolution"]["stock_image_file_env"]["nextcloud"] == [
             "POSTGRES_PASSWORD_FILE",

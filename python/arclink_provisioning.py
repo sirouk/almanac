@@ -438,7 +438,7 @@ def _render_services(
         ),
         "hermes-dashboard": _service(
             image=app_image,
-            command=["hermes", "dashboard", "--host", "0.0.0.0", "--port", "3210", "--insecure"],
+            command=["./bin/run-hermes-dashboard-proxy.sh"],
             environment=env,
             volumes=[
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},

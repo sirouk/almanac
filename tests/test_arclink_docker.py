@@ -196,6 +196,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
     expect("Refreshed deployment-managed Hermes plugins" in body, body)
     expect("docker_repair_deployment_dashboard_plugin_mounts()" in body, body)
+    expect("run-hermes-dashboard-proxy.sh" in body, body)
     expect("ARCLINK_DRIVE_ROOT" in body and "ARCLINK_CODE_WORKSPACE_ROOT" in body, body)
     expect("ARCLINK_TERMINAL_ALLOW_ROOT" in body, body)
     expect("Repaired Hermes dashboard plugin mounts" in body, body)

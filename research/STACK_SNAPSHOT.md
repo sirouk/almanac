@@ -1,85 +1,41 @@
 # Stack Snapshot
 
-- snapshot_date: 2026-05-06
-- project_type: existing ArcLink host/runtime repository
-- primary_stack_hypothesis: Python and shell ArcLink control plane with native Hermes dashboard plugins
-- deterministic_confidence_score: 94/100
+- generated_at: 2026-05-06
+- project_root: .
+- primary_stack: Python
+- primary_score: 094/100
 - confidence: high
 
-## Deterministic Scoring Method
+## Project Stack Ranking
 
-Scores are based on repository-local evidence only:
-
-- 35 points for source-file volume and location.
-- 25 points for executable entrypoints and runtime ownership.
-- 20 points for manifests, pins, and dependency declarations.
-- 20 points for focused tests covering that stack.
-
-Generated dependency folders, build output, bytecode caches, private state,
-tool transcripts, and local proof debris are excluded from the source-count
-signal.
-
-## Source Composition Signals
-
-| Source kind | Count | Evidence signal |
-| --- | ---: | --- |
-| Python | 167 | Primary plugin API, control plane, provisioning, Docker supervisor, live proof, onboarding, MCP, and tests. |
-| Shell | 80 | Canonical deploy, Docker, health, service, plugin install, qmd, Nextcloud, and runtime orchestration. |
-| JavaScript | 4 | Three hand-authored Hermes dashboard plugin bundles plus the web service worker. |
-| TypeScript | 6 | Next.js app config, API client, and Playwright/browser tooling. |
-| TSX | 10 | Next.js product/admin/onboarding pages and shared UI. |
-| CSS | 4 | Three scoped workspace plugin stylesheets plus global web styling. |
-| YAML | 12 | Compose, plugin metadata, schemas/examples, and service/config rails. |
-| JSON | 12 | Package manifests, pins, schemas, fixtures, and plugin/dashboard metadata. |
-
-## Ranked Stack Hypotheses
-
-| Rank | Stack hypothesis | Score | Evidence | Decision |
-| ---: | --- | ---: | --- | --- |
-| 1 | Python + shell ArcLink control plane with Hermes dashboard plugin APIs | 94 | `python/`, `bin/`, `deploy.sh`, workspace `dashboard/plugin_api.py` files, focused Python tests, installer/deploy scripts. | Primary stack for BUILD. |
-| 2 | Docker Compose self-hosted runtime | 86 | `compose.yaml`, `Dockerfile`, `bin/arclink-docker.sh`, provisioning renderer, Docker health and provisioning tests. | Required deployment substrate and proof target. |
-| 3 | Native Hermes dashboard plugin frontend assets | 80 | Workspace plugin manifests, plain JS bundles, scoped CSS, Hermes plugin installer, UI contract tests. | Required UI delivery path for Drive, Code, and Terminal. |
-| 4 | Next.js product/admin web app | 61 | `web/package.json`, `web/src`, Next 15, React 19, Playwright scripts. | Supporting product surface, not the selected workspace-plugin implementation path. |
-| 5 | External workspace tools: Nextcloud, code-server, qmd | 54 | Component pins, Compose services, Dockerfile installs, wrappers, docs. | Optional/supporting adapters; not substitutes for native plugins. |
-| 6 | Hermes core patching | 5 | Hermes is consumed as a pinned runtime dependency. | Rejected by mission constraints. |
-
-## Primary Runtime Stack
-
-ArcLink is best understood as a Python/shell-managed shared-host system:
-
-- Python owns control-plane behavior, plugin APIs, provisioning, MCP surfaces,
-  onboarding, live proof orchestration, hosted API helpers, and tests.
-- Shell owns host lifecycle, Docker lifecycle, health, service installation,
-  plugin installation, qmd/PDF/Nextcloud wrappers, and upgrade flows.
-- Docker Compose supplies the self-hosted deployment substrate.
-- Hermes is a pinned upstream runtime and plugin host. ArcLink extends it
-  through plugins and wrappers, not core patches.
-- Node is present for Docker image base/runtime convenience, qmd installation,
-  Hermes web build support, the Next.js product app, and JavaScript plugin
-  asset validation.
-
-## Workspace Plugin Stack
-
-| Plugin | Backend | Frontend | Runtime dependency stance |
+| rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| ArcLink Drive | Python plugin API with local root and WebDAV-aware status paths. | Plain JavaScript Hermes dashboard bundle plus scoped CSS. | No new mandatory frontend framework. Nextcloud sharing remains capability-gated until real adapter proof exists. |
-| ArcLink Code | Python plugin API with confined file operations and allowlisted git CLI calls. | Plain JavaScript workbench bundle plus scoped CSS. | Monaco is not mandatory until vendored worker/asset/CSP proof succeeds inside Hermes. |
-| ArcLink Terminal | Python managed-pty backend with persisted metadata and bounded scrollback. | Plain JavaScript session UI plus scoped CSS. | Managed pty is the shipped path. tmux and streaming transports remain future candidates. |
+| 1 | Python | 094 | requirements-dev.txt, 167 source files (control plane, plugin APIs, provisioning, tests, proof runner) |
+| 2 | Shell | 072 | 80 scripts (deploy, Docker, health, plugin install, service orchestration) |
+| 3 | Node.js | 024 | package.json, 4 JS bundles (3 plugin + 1 SW), 16 TS/TSX files (Next.js product app) |
+| 4 | Docker | 018 | Dockerfile, compose.yaml, Docker wrapper scripts |
+| 5 | .NET | 000 | - |
+| 6 | Go | 000 | - |
+| 7 | Java | 000 | - |
+| 8 | Ruby | 000 | - |
+| 9 | Rust | 000 | - |
 
-## Alternatives Compared
+## Deterministic Alternatives Ranking
 
-| Alternative | Benefits | Cost / risk | Current decision |
-| --- | --- | --- | --- |
-| Continue existing native Hermes plugins | Directly satisfies the mission, preserves Hermes core boundary, and uses existing tests/installer/proof rails. | Requires careful dirty-worktree curation and proof freshness checks. | Selected. |
-| Build a separate Next.js workspace app | Better app-shell control and conventional frontend tooling. | Misses the native Hermes dashboard-plugin requirement and duplicates runtime concerns. | Rejected for this mission. |
-| Depend on external tools as primary UX | Nextcloud, code-server, and terminal links are mature. | Would fake the requested native Drive/Code/Terminal completion. | Keep as optional adapters only. |
-| Patch Hermes core | Could expose host capabilities quickly. | Violates constraints and increases runtime upgrade debt. | Rejected. |
+- Candidate evaluation is based on repository-level manifest and source signals only.
+- Primary decision rule: highest source-file count weighted by implementation role, then explicit manifest precedence.
+- Counts exclude `arclink-priv/` private state, `node_modules/`, `__pycache__/`, `.next/`, and generated caches.
 
-## Confidence Notes
+### Top 3 stack alternatives (ranked)
 
-The score is high because the repository has strong, repeated evidence for the
-selected architecture: plugin manifests, Python APIs, JS/CSS assets, installer
-wiring, Docker/provisioning glue, and focused tests all point at the same
-native Hermes plugin path. The residual uncertainty is operational rather than
-architectural: final BUILD must keep proof current, omit generated caches, and
-curate commits without mixing unrelated dirty worktree changes.
+- 1) Python: score=094, evidence=[requirements-dev.txt, 167 source files spanning control plane, plugin APIs, provisioning, Docker supervisor, dashboards, hosted API, adapters, proof runner, and 24+ test files]
+- 2) Shell: score=072, evidence=[80 scripts spanning deploy, Docker, health, onboarding, plugin install, service management, and operational wrappers]
+- 3) Node.js: score=024, evidence=[package.json, 3 plugin JS bundles, 1 service worker, 16 TS/TSX files for Next.js product/admin surface and Playwright config]
+
+## Architecture Summary
+
+ArcLink is a Python and shell control-plane repository with a Docker Compose
+runtime and native Hermes dashboard plugins (Drive, Code, Terminal). The
+Node.js/Next.js app is an important product/admin surface but is not the
+primary implementation path for the active workspace plugin mission. Plugin
+frontends are plain JavaScript/CSS bundles loaded by the Hermes dashboard host.

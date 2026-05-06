@@ -495,10 +495,14 @@ stream_engine_output() {
             lower = tolower(line)
             return lower ~ /<!doctype html|<html[ >]|<\/html>|cloudflare|cf_chl|challenge-platform|challenge-error-text|enable javascript and cookies|auth required|missing or invalid access token|invalid_token|window\._cf_chl_opt|cdn-cgi\/challenge/
         }
+        function looks_like_engine_reentry(line) {
+            return line ~ /^(OpenAI Codex|Claude|workdir:|model:|provider:|approval:|sandbox:|reasoning effort:|reasoning summaries:|session id:|tokens used|--------)/
+        }
         BEGIN {
             max_buffer = 80
             buffer_count = 0
             redacting = 0
+            redacting_count = 0
             redacted_once = 0
         }
         {
@@ -506,6 +510,18 @@ stream_engine_output() {
             if (redacting) {
                 if (lower ~ /<\/html>/) {
                     redacting = 0
+                    redacting_count = 0
+                    next
+                }
+                if (looks_like_engine_reentry($0)) {
+                    redacting = 0
+                    redacting_count = 0
+                    push_buffer($0)
+                    next
+                }
+                redacting_count++
+                if (redacting_count % 80 == 0) {
+                    emit("[ralphie still redacting provider auth/challenge output]")
                 }
                 next
             }
@@ -517,6 +533,7 @@ stream_engine_output() {
                 }
                 if (lower !~ /<\/html>/) {
                     redacting = 1
+                    redacting_count = 0
                 }
                 next
             }

@@ -756,10 +756,12 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     click_handler = body.split("function handleListItemClick", 1)[1].split("function trashSelected", 1)[0]
     expect("openItem" not in click_handler and "selectListItem(item, event, index, list)" in click_handler, "Drive single-click should select folders instead of opening them")
     expect("onDoubleClick: function ()" in body and "openItem(item);" in body, "Drive double-click should open folder rows")
+    expect('has-selection' in body, "Drive content pane should make room for metadata and preview after selection")
     expect("arclink-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
     expect("paddingLeft: 0.2 + depth * 0.9" in body and "marginLeft: depth * 14" not in body, "Drive tree indentation should move the full row, not only the caret")
     style = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".arclink-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
+    expect(".arclink-drive-content.has-selection .arclink-drive-items" in style, "Drive CSS should keep selected-item previews visible")
     expect(".arclink-drive-pdf-preview" in style and ".arclink-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
 

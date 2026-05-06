@@ -370,6 +370,11 @@
   overflow: auto;
 }
 
+.arclink-drive-content.has-selection .arclink-drive-items {
+  flex: 0 1 auto;
+  max-height: min(36dvh, 20rem);
+}
+
 .arclink-drive-items.grid {
   align-content: start;
   display: grid;

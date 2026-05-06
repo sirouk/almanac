@@ -1228,7 +1228,7 @@
             ),
             h(
               "section",
-              { className: "arclink-drive-content" },
+              { className: "arclink-drive-content" + (selected ? " has-selection" : "") },
               h(
                 "div",
                 { className: "arclink-drive-content-head" },

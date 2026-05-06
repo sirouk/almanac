@@ -25,10 +25,11 @@ managed-pty session backend, UI assets, lifecycle safety, and secret redaction.
   `HERMES_HOME/state/arclink-terminal/sessions.json`.
 - The dashboard supports session list, new session, revisit after browser
   reload, rename, folder assignment, reorder controls, terminal pane, input,
-  bounded polling output, and confirmation-gated close.
-- `streaming_output` is currently `false`; the plugin uses bounded polling
-  because this dashboard host path does not establish a WebSocket/SSE terminal
-  transport.
+  SSE output streaming with polling fallback, and confirmation-gated close.
+- `streaming_output` is `true` when the managed-pty backend is available. The
+  primary browser transport is same-origin Server-Sent Events; bounded polling
+  remains as a reconnect/fallback path when EventSource is unavailable or the
+  stream errors.
 - Terminal startup is blocked when the dashboard process is unrestricted root.
   `ARCLINK_TERMINAL_ALLOW_ROOT=1` exists for tests and deliberate operator
   diagnostics only, not normal deployment.
@@ -37,7 +38,8 @@ managed-pty session backend, UI assets, lifecycle safety, and secret redaction.
 
 - Terminal execution runs as the dashboard process user in the configured
   workspace root. It is blocked for unrestricted root by default.
-- Scrollback, metadata, and backend errors must be bounded and redacted.
+- Streaming events, scrollback, metadata, and backend errors must be bounded
+  and redacted.
 - Session close/kill must be confirmation-gated.
 - The current backend is a managed pty fallback rather than tmux. tmux remains
   a future candidate if Docker/baremetal runtime installation is standardized.
@@ -57,8 +59,8 @@ git diff --check
 
 The implemented backend opens a local pty for each session, launches the
 configured shell in the resolved workspace cwd, stores bounded state atomically,
-and polls active ptys from dashboard API calls. This keeps the first production
-path dependency-light and testable without requiring tmux in every ArcLink
-runtime. A future tmux-backed backend can replace or augment this path if it is
-installed by the Docker and baremetal refresh flows and covered by equivalent
-session lifecycle tests.
+and exposes session snapshots through both direct API reads and a same-origin
+SSE stream. This keeps the first production path dependency-light and testable
+without requiring tmux in every ArcLink runtime. A future tmux-backed backend
+can replace or augment this path if it is installed by the Docker and baremetal
+refresh flows and covered by equivalent session lifecycle tests.

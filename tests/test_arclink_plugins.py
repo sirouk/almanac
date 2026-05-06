@@ -396,8 +396,10 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(terminal["hermes_state"] == "[hermes-state]", str(terminal))
             expect(terminal["capabilities"]["confirm_close_or_kill"] is True, str(terminal))
             expect(terminal["capabilities"]["persistent_sessions"] is True, str(terminal))
+            expect(terminal["capabilities"]["streaming_output"] is True, str(terminal))
             expect(terminal["capabilities"]["bounded_scrollback"] is True, str(terminal))
-            expect(terminal["transport"]["mode"] == "polling", str(terminal))
+            expect(terminal["transport"]["mode"] == "sse", str(terminal))
+            expect(terminal["transport"]["fallback"] == "polling", str(terminal))
             _assert_no_secret_status(terminal, "Terminal")
             print("PASS test_arclink_dashboard_plugins_expose_sanitized_access_state")
         finally:
@@ -999,8 +1001,10 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["workspace_root"] == "[workspace]", str(status))
             expect(status["hermes_state"] == "[hermes-state]", str(status))
             expect(status["capabilities"]["persistent_sessions"] is True, str(status))
+            expect(status["capabilities"]["streaming_output"] is True, str(status))
             expect(status["capabilities"]["reload_reconnect"] is True, str(status))
             expect(status["capabilities"]["group_sessions"] is True, str(status))
+            expect(status["transport"]["mode"] == "sse", str(status))
 
             created = asyncio.run(
                 terminal_api.create_session(JsonRequest({"name": "Build", "folder": "Work", "cwd": "/"}))
@@ -1016,6 +1020,12 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
                 terminal_api.send_input(session_id, JsonRequest({"input": "printf 'terminal-proof\\n'\n"}))
             )
             expect("terminal-proof" in sent["session"]["scrollback"], sent["session"]["scrollback"])
+            stream = asyncio.run(terminal_api.stream_session(session_id, JsonRequest({})))
+            first_event = asyncio.run(stream.body_iterator.__anext__())
+            expect("event: session" in first_event and "terminal-proof" in first_event, first_event)
+            aclose = getattr(stream.body_iterator, "aclose", None)
+            if callable(aclose):
+                asyncio.run(aclose())
 
             renamed = asyncio.run(
                 terminal_api.rename_session(
@@ -1062,7 +1072,8 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
 def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     body = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
     expect('"/sessions"' in body and '"/input"' in body, "Terminal UI should use persistent session and input endpoints")
-    expect("setInterval" in body and "loadSession(state.selectedId)" in body, "Terminal UI should poll for reconnectable output")
+    expect("EventSource" in body and '"/stream"' in body, "Terminal UI should stream session output")
+    expect("setInterval" in body and "startPolling" in body, "Terminal UI should retain polling fallback")
     expect("confirmClose" in body and '"/close"' in body, "Terminal close/kill should be confirmation-gated")
     expect("moveSelectedToFolder" in body and "reorderSelected" in body, "Terminal UI should expose folder and reorder controls")
     expect("scrollback" in body and "arclink-terminal-screen" in body, "Terminal UI should render bounded scrollback")

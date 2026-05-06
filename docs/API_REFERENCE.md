@@ -53,6 +53,7 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | POST | `/auth/admin/login` | Create admin session |
 | POST | `/auth/user/login` | Create user session |
 | GET | `/health` | Liveness check (DB connectivity) |
+| GET | `/openapi.json` | OpenAPI 3.1 spec (machine-readable route catalog) |
 
 ### User (session_kind=user)
 
@@ -81,6 +82,7 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | GET | `/admin/reconciliation` | Reconciliation drift summary |
 | GET | `/admin/operator-snapshot` | Operator snapshot (host readiness, diagnostics, journey blockers, evidence status) |
 | GET | `/admin/provider-state` | Provider adapter state |
+| GET | `/admin/scale-operations` | Fleet capacity, placements, stale actions, rollouts, last executor result |
 | POST | `/admin/sessions/revoke` | Revoke any session (CSRF) |
 
 ## Error Responses
@@ -133,6 +135,7 @@ The Next.js admin dashboard (`web/src/app/admin/page.tsx`) is wired to the hoste
 | provider | `/admin/provider-state` | GET |
 | reconciliation | `/admin/reconciliation` | GET |
 | operator | `/admin/operator-snapshot` | GET |
+| scale-operations | `/admin/scale-operations` | GET |
 | sessions (revoke) | `/admin/sessions/revoke` | POST |
 
 The user dashboard (`web/src/app/dashboard/page.tsx`) consumes `/user/dashboard`, `/user/billing`, `/user/provisioning`, and `/user/provider-state`.

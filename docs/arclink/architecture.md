@@ -26,11 +26,17 @@ arclink_product_surface.py  Local no-secret WSGI prototype for development/contr
 arclink_public_bots.py      Telegram/Discord public onboarding bot conversation skeletons
 arclink_telegram.py         Telegram runtime adapter, long-polling bot runner, fake mode
 arclink_discord.py          Discord runtime adapter, interaction handler, fake mode
+arclink_boundary.py         Shared rowdict helper for API/dashboard boundary
+arclink_host_readiness.py   Pre-deployment host checks (Docker, env, ports, state root)
+arclink_diagnostics.py      Secret-safe provider credential diagnostics
+arclink_live_runner.py      Live proof runner orchestrating readiness, diagnostics, journey, evidence
+arclink_live_journey.py     Ordered live E2E journey steps (credential-gated)
+arclink_evidence.py         Evidence collection and template helpers for live proof
 plugins/hermes-agent/
   arclink-managed-context/  Managed agent context and ArcLink MCP bootstrap injection
   arclink-drive/            Hermes dashboard file manager for vault/workspace access
   arclink-code/             Hermes dashboard native code workspace and git surface
-  arclink-terminal/         Reserved Hermes dashboard terminal surface, scaffolded only
+  arclink-terminal/         Managed-pty persistent-session terminal surface
 ```
 
 Python modules live under `python/` and import from `arclink_control.py` for
@@ -97,13 +103,33 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `POST /onboarding/start` | None | Start or resume public onboarding |
 | `POST /onboarding/answer` | None | Record onboarding answer |
 | `POST /onboarding/checkout` | None | Create Stripe checkout session |
-| `POST /admin/login` | None | Admin session creation, sets cookies |
-| `POST /stripe/webhook` | Stripe signature | Entitlement webhook processing |
-| `GET /user/dashboard` | Session | User dashboard read |
+| `POST /webhooks/stripe` | Stripe signature | Entitlement webhook processing |
+| `POST /webhooks/telegram` | None | Telegram Bot API webhook |
+| `POST /webhooks/discord` | None | Discord interaction webhook |
+| `POST /auth/admin/login` | None | Admin session creation, sets cookies |
+| `POST /auth/user/login` | None | User session creation, sets cookies |
+| `POST /auth/user/logout` | User + CSRF | Revoke user session |
+| `POST /auth/admin/logout` | Admin + CSRF | Revoke admin session |
+| `GET /user/dashboard` | User session | User dashboard read |
+| `GET /user/billing` | User session | Billing/entitlement status |
+| `POST /user/portal` | User + CSRF | Create Stripe portal link |
+| `GET /user/provisioning` | User session | Deployment provisioning status |
+| `GET /user/provider-state` | User session | Provider adapter state |
 | `GET /admin/dashboard` | Admin session | Admin dashboard read |
+| `GET /admin/service-health` | Admin session | Service health |
+| `GET /admin/provisioning-jobs` | Admin session | Provisioning jobs |
+| `GET /admin/dns-drift` | Admin session | DNS drift observations |
+| `GET /admin/audit` | Admin session | Audit log |
+| `GET /admin/events` | Admin session | Event log |
+| `GET /admin/actions` | Admin session | Queued actions |
 | `POST /admin/actions` | Admin + CSRF | Queue admin action intent |
+| `GET /admin/reconciliation` | Admin session | Reconciliation drift summary |
+| `GET /admin/provider-state` | Admin session | Provider adapter state |
+| `GET /admin/operator-snapshot` | Admin session | Host readiness, diagnostics, journey blockers |
 | `GET /admin/scale-operations` | Admin session | Fleet, placement, action-worker, rollout snapshot |
-| `POST /admin/sessions/revoke` | Admin + CSRF | Revoke admin session |
+| `POST /admin/sessions/revoke` | Admin + CSRF | Revoke any session |
+| `GET /health` | None | Liveness check (DB connectivity) |
+| `GET /openapi.json` | None | OpenAPI 3.1 spec |
 
 ## Integration Boundaries
 
@@ -132,9 +158,9 @@ core patches:
   remains a lightweight native editor, not a full Monaco/VS Code workbench.
 - `arclink-terminal` owns the native terminal surface. It uses an
   ArcLink-managed pty backend with stable session ids, persisted metadata,
-  bounded scrollback, polling output, input, rename/folder/reorder controls,
-  confirmation-gated close, sanitized errors, and an unrestricted-root startup
-  guard. It is not tmux-backed and does not claim true streaming transport.
+  bounded scrollback, same-origin SSE output streaming with polling fallback,
+  input, rename/folder/reorder controls, confirmation-gated close, sanitized
+  errors, and an unrestricted-root startup guard. It is not tmux-backed.
 
 `bin/install-arclink-plugins.sh` installs Drive, Code, Terminal, and managed
 context by default, removes legacy dashboard plugin aliases, and enables the
@@ -213,7 +239,8 @@ live-gated behavior.
   transport requires bot tokens.
 - ArcLink Drive and Code are functional first-generation Hermes plugins, but
   not yet broad Google Drive or VS Code replacements. ArcLink Terminal has a
-  managed-pty persistent-session backend with bounded polling output. The
+  managed-pty persistent-session backend with same-origin SSE output streaming
+  and bounded polling fallback. The
   workspace Docker/TLS proof runner has passed desktop and mobile checks for
   Drive, Code, and Terminal; this is separate from the broader hosted customer
   live journey.

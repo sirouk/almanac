@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import asyncio
 import errno
 import fcntl
 import json
@@ -18,6 +19,7 @@ import uuid
 
 try:
     from fastapi import APIRouter, HTTPException, Request
+    from fastapi.responses import StreamingResponse
 except Exception:
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int = 500, detail: str = "") -> None:
@@ -34,6 +36,12 @@ except Exception:
 
     class Request:  # type: ignore
         pass
+
+    class StreamingResponse:  # type: ignore
+        def __init__(self, content, media_type: str = "", headers: dict[str, str] | None = None) -> None:
+            self.body_iterator = content
+            self.media_type = media_type
+            self.headers = headers or {}
 
 
 router = APIRouter()
@@ -254,6 +262,11 @@ def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) 
     return payload
 
 
+def _sse_event(event: str, payload: dict[str, Any]) -> str:
+    data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    return f"event: {event}\ndata: {data}\n\n"
+
+
 def _find_session(payload: dict[str, Any], session_id: str) -> dict[str, Any]:
     for entry in payload["sessions"]:
         if str(entry.get("id") or "") == session_id:
@@ -403,12 +416,14 @@ def _status_payload() -> dict[str, Any]:
             "managed_pty": available,
         },
         "transport": {
-            "mode": "polling",
-            "poll_interval_ms": 1000,
+            "mode": "sse",
+            "stream_path": "/sessions/{session_id}/stream",
+            "fallback": "polling",
+            "fallback_poll_interval_ms": 1000,
         },
         "capabilities": {
             "persistent_sessions": available,
-            "streaming_output": False,
+            "streaming_output": available,
             "bounded_scrollback": True,
             "reload_reconnect": available,
             "rename_sessions": available,
@@ -477,6 +492,59 @@ async def get_session(session_id: str) -> dict[str, Any]:
     _poll_sessions(payload)
     entry = _find_session(payload, session_id)
     return {"session": _session_payload(entry)}
+
+
+@router.get("/sessions/{session_id}/stream")
+async def stream_session(session_id: str, request: Request) -> StreamingResponse:
+    clean_id = _clean_session_id(session_id)
+
+    async def events():
+        last_signature = ""
+        last_heartbeat = 0.0
+        while True:
+            is_disconnected = getattr(request, "is_disconnected", None)
+            if callable(is_disconnected) and await is_disconnected():
+                break
+            try:
+                payload = _load_sessions()
+                entry = _find_session(payload, clean_id)
+                _poll_sessions(payload)
+                entry = _find_session(payload, clean_id)
+                session_payload = _session_payload(entry)
+                signature = "|".join(
+                    [
+                        str(session_payload.get("state") or ""),
+                        str(session_payload.get("updated_at") or ""),
+                        str(session_payload.get("exit_code")),
+                        str(len(str(session_payload.get("scrollback") or ""))),
+                    ]
+                )
+                now = time.time()
+                if signature != last_signature:
+                    yield _sse_event("session", {"session": session_payload})
+                    last_signature = signature
+                    last_heartbeat = now
+                elif now - last_heartbeat >= 15:
+                    yield _sse_event("heartbeat", {"session_id": clean_id, "ts": _now()})
+                    last_heartbeat = now
+                if str(session_payload.get("state") or "") in {"closed", "exited", "detached"}:
+                    break
+            except HTTPException as exc:
+                yield _sse_event(
+                    "error",
+                    {
+                        "status_code": getattr(exc, "status_code", 500),
+                        "detail": _redact_text(getattr(exc, "detail", "terminal stream failed")),
+                    },
+                )
+                break
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/sessions/{session_id}/input")

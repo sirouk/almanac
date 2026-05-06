@@ -59,6 +59,7 @@
       input: "",
       errorMessage: "",
       confirmClose: null,
+      streaming: false,
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -112,17 +113,58 @@
 
     useEffect(
       function () {
-        const timer = setInterval(function () {
-          if (state.selectedId) {
-            loadSession(state.selectedId);
-            loadSessions(state.selectedId);
-          }
-        }, 1000);
+        let timer = null;
+        let stream = null;
+        let closed = false;
+
+        function startPolling() {
+          if (timer) return;
+          timer = setInterval(function () {
+            if (state.selectedId) {
+              loadSession(state.selectedId);
+              loadSessions(state.selectedId);
+            }
+          }, 1000);
+        }
+
+        if (
+          state.selectedId &&
+          state.status &&
+          state.status.capabilities &&
+          state.status.capabilities.streaming_output &&
+          window.EventSource
+        ) {
+          stream = new EventSource(api("/sessions/" + encodeURIComponent(state.selectedId) + "/stream"), { withCredentials: true });
+          stream.addEventListener("open", function () {
+            if (!closed) merge({ streaming: true });
+          });
+          stream.addEventListener("session", function (event) {
+            if (closed) return;
+            try {
+              const payload = JSON.parse(event.data || "{}");
+              merge({ selected: payload.session || null, selectedId: state.selectedId, streaming: true, errorMessage: "" });
+              loadSessions(state.selectedId);
+            } catch (_error) {
+              startPolling();
+            }
+          });
+          stream.addEventListener("error", function () {
+            if (stream) stream.close();
+            if (!closed) merge({ streaming: false });
+            startPolling();
+          });
+        } else {
+          merge({ streaming: false });
+          startPolling();
+        }
+
         return function () {
-          clearInterval(timer);
+          closed = true;
+          if (stream) stream.close();
+          if (timer) clearInterval(timer);
         };
       },
-      [state.selectedId]
+      [state.selectedId, state.status && state.status.capabilities && state.status.capabilities.streaming_output]
     );
 
     function createSession() {
@@ -289,7 +331,7 @@
                 { className: "arclink-terminal-facts" },
                 h("span", null, "Workspace: " + (status.workspace_root || "")),
                 h("span", null, "Shell: " + (status.shell || "sh")),
-                h("span", null, "Transport: " + ((status.transport && status.transport.mode) || "polling")),
+                h("span", null, "Transport: " + (state.streaming ? "sse" : ((status.transport && status.transport.mode) || "polling"))),
                 h("span", null, "Scrollback: " + ((status.limits && status.limits.scrollback_bytes) || "")),
                 h("span", null, "Confirm close: " + (capabilities.confirm_close_or_kill ? "on" : "off"))
               )

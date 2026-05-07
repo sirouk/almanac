@@ -194,46 +194,52 @@
   min-height: 360px;
   margin: 0;
   outline: none;
-  padding: 14px;
-  overflow: auto;
+  padding: 0;
+  overflow: hidden;
   background: #070a0f;
   color: #d1fae5;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.22;
   font-variant-caps: normal;
   text-transform: none !important;
-  white-space: pre-wrap;
-  word-break: break-word;
+  user-select: text;
+  white-space: normal;
+  word-break: normal;
 }
 
 .hermes-terminal-screen.muted {
   color: #9aa4b2;
+  padding: 14px;
+  white-space: pre;
 }
 
 .hermes-terminal-screen:focus {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, #4f9cf9 58%, transparent);
 }
 
-.hermes-terminal-cursor {
-  animation: hermes-terminal-blink 1.05s steps(2, start) infinite;
-  background: #d1fae5;
-  display: inline-block;
-  height: 1em;
-  margin-left: 1px;
-  transform: translateY(0.16em);
-  width: 0.62ch;
+.hermes-terminal-screen .xterm {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 14px;
 }
 
-@keyframes hermes-terminal-blink {
-  50% {
-    opacity: 0;
-  }
+.hermes-terminal-screen .xterm-viewport {
+  scrollbar-color: #334155 #070a0f;
+  scrollbar-width: thin;
 }
 
-.hermes-terminal-screen span:first-child {
-  color: #5eead4;
-  margin-right: 8px;
+.hermes-terminal-screen .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.hermes-terminal-screen .xterm-viewport::-webkit-scrollbar-track {
+  background: #070a0f;
+}
+
+.hermes-terminal-screen .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #334155;
+  border: 2px solid #070a0f;
 }
 
 .hermes-terminal-input {
@@ -285,17 +291,17 @@
   background: #10151c;
 }
 
-.hermes-terminal-confirm-backdrop {
+.hermes-terminal-confirm {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 40;
   display: grid;
   place-items: center;
   padding: 18px;
   background: rgba(7, 10, 15, 0.72);
 }
 
-.hermes-terminal-confirm {
+.hermes-terminal-confirm-card {
   width: min(420px, 100%);
   border: 1px solid #303846;
   border-radius: 8px;
@@ -304,12 +310,12 @@
   padding: 16px;
 }
 
-.hermes-terminal-confirm h2 {
+.hermes-terminal-confirm-card h2 {
   margin: 0 0 8px;
   font-size: 18px;
 }
 
-.hermes-terminal-confirm p {
+.hermes-terminal-confirm-card p {
   margin: 0 0 14px;
   color: #9aa4b2;
   overflow-wrap: anywhere;

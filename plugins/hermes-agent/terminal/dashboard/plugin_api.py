@@ -53,7 +53,8 @@ _STATE_VERSION = 1
 _MAX_INPUT_BYTES = 8_000
 _MAX_READ_BYTES = 64_000
 _DEFAULT_MAX_SESSIONS = 6
-_DEFAULT_SCROLLBACK_BYTES = 32_000
+_DEFAULT_SCROLLBACK_BYTES = 1_000_000
+_DEFAULT_SCROLLBACK_LINES = 10_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
 _DEFAULT_TUI_COMMAND = "hermes"
@@ -164,7 +165,11 @@ def _max_sessions() -> int:
 
 
 def _scrollback_limit() -> int:
-    return _clean_int(_env_first("TERMINAL_SCROLLBACK_BYTES"), _DEFAULT_SCROLLBACK_BYTES, 4_000, 250_000)
+    return _clean_int(_env_first("TERMINAL_SCROLLBACK_BYTES"), _DEFAULT_SCROLLBACK_BYTES, 4_000, 10_000_000)
+
+
+def _scrollback_lines() -> int:
+    return _clean_int(_env_first("TERMINAL_SCROLLBACK_LINES"), _DEFAULT_SCROLLBACK_LINES, 500, 100_000)
 
 
 def _runtime_user_safe() -> bool:
@@ -284,14 +289,9 @@ def _set_pty_size(fd: int, rows: int = _DEFAULT_ROWS, cols: int = _DEFAULT_COLS)
 
 
 def _answer_terminal_queries(fd: int, chunk: bytes) -> bytes:
-    if _CPR_QUERY not in chunk:
-        return chunk
-    while _CPR_QUERY in chunk:
-        chunk = chunk.replace(_CPR_QUERY, b"", 1)
-        try:
-            os.write(fd, b"\x1b[1;1R")
-        except OSError:
-            break
+    # CPR and similar terminal queries need the browser-side terminal state.
+    # Preserve them in scrollback; the frontend replies with the rendered cursor.
+    del fd
     return chunk
 
 
@@ -320,6 +320,8 @@ def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) 
         "mode": _clean_session_mode(entry.get("mode")),
         "target": _clean_name(entry.get("target"), ""),
         "state": str(entry.get("state") or "closed"),
+        "rows": _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200),
+        "cols": _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400),
         "created_at": str(entry.get("created_at") or ""),
         "updated_at": str(entry.get("updated_at") or ""),
         "exit_code": entry.get("exit_code"),
@@ -454,19 +456,24 @@ def _tui_dist_available() -> bool:
 
 def _start_runtime(entry: dict[str, Any]) -> None:
     argv, label = _runtime_argv(entry)
+    del label
     mode = _clean_session_mode(entry.get("mode"))
     cwd, cwd_display = _resolve_session_cwd(mode, entry.get("cwd") or "/")
     entry["cwd"] = cwd_display
     session_id = str(entry.get("id") or "")
+    rows = _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200)
+    cols = _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400)
+    entry["rows"] = rows
+    entry["cols"] = cols
     master_fd, slave_fd = pty.openpty()
-    _set_pty_size(master_fd)
-    _set_pty_size(slave_fd)
+    _set_pty_size(master_fd, rows, cols)
+    _set_pty_size(slave_fd, rows, cols)
     env = os.environ.copy()
     if str(env.get("TERM") or "").strip().lower() in {"", "dumb", "unknown"}:
         env["TERM"] = "xterm-256color"
     env["COLORTERM"] = env.get("COLORTERM") or "truecolor"
-    env["COLUMNS"] = str(_DEFAULT_COLS)
-    env["LINES"] = str(_DEFAULT_ROWS)
+    env["COLUMNS"] = str(cols)
+    env["LINES"] = str(rows)
     env["TERM_PROGRAM"] = "HermesTerminal"
     env["PS1"] = "$ "
     if mode == "tui":
@@ -494,10 +501,9 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     os.close(slave_fd)
     flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
     fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    _RUNTIMES[session_id] = {"process": process, "fd": master_fd}
+    _RUNTIMES[session_id] = {"process": process, "fd": master_fd, "rows": rows, "cols": cols}
     entry["state"] = "starting"
     entry["exit_code"] = None
-    _append_scrollback(entry, label + " session ready. Cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
     time.sleep(0.05)
     _read_runtime(entry)
 
@@ -528,6 +534,7 @@ def _status_payload() -> dict[str, Any]:
         "limits": {
             "max_sessions": _max_sessions(),
             "scrollback_bytes": _scrollback_limit(),
+            "scrollback_lines": _scrollback_lines(),
             "input_bytes": _MAX_INPUT_BYTES,
         },
         "backend_candidates": {
@@ -550,6 +557,9 @@ def _status_payload() -> dict[str, Any]:
             "reorder_sessions": available,
             "confirm_close_or_kill": True,
             "direct_input": available,
+            "xtermjs_terminal_emulator": available,
+            "resize": available,
+            "browser_cpr_response": available,
             "machine_terminal_sessions": available,
             "ssh_sessions": available,
             "hermes_tui_sessions": available and tui_available,
@@ -601,6 +611,8 @@ async def create_session(request: Request) -> dict[str, Any]:
         "mode": mode,
         "target": "",
         "state": "starting",
+        "rows": _clean_int(body.get("rows"), _DEFAULT_ROWS, 8, 200),
+        "cols": _clean_int(body.get("cols"), _DEFAULT_COLS, 20, 400),
         "created_at": now,
         "updated_at": now,
         "exit_code": None,
@@ -608,6 +620,31 @@ async def create_session(request: Request) -> dict[str, Any]:
     }
     _start_runtime(entry)
     payload["sessions"].append(entry)
+    _save_sessions(payload)
+    return {"session": _session_payload(entry)}
+
+
+@router.post("/sessions/{session_id}/resize")
+async def resize_session(session_id: str, request: Request) -> dict[str, Any]:
+    payload = _load_sessions()
+    entry = _find_session(payload, _clean_session_id(session_id))
+    body = await request.json()
+    rows = _clean_int(body.get("rows"), _DEFAULT_ROWS, 8, 200)
+    cols = _clean_int(body.get("cols"), _DEFAULT_COLS, 20, 400)
+    entry["rows"] = rows
+    entry["cols"] = cols
+    entry["updated_at"] = _now()
+    runtime = _runtime(session_id)
+    if runtime:
+        runtime["rows"] = rows
+        runtime["cols"] = cols
+        _set_pty_size(int(runtime["fd"]), rows, cols)
+        process: subprocess.Popen[bytes] = runtime["process"]
+        try:
+            os.killpg(process.pid, signal.SIGWINCH)
+        except Exception:
+            pass
+    _poll_sessions(payload)
     _save_sessions(payload)
     return {"session": _session_payload(entry)}
 

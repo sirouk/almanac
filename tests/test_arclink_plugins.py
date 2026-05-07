@@ -1082,16 +1082,21 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["group_sessions"] is True, str(status))
             expect(status["capabilities"]["machine_terminal_sessions"] is True, str(status))
             expect(status["capabilities"]["ssh_sessions"] is True, str(status))
+            expect(status["capabilities"]["resize"] is True, str(status))
+            expect(status["capabilities"]["browser_cpr_response"] is True, str(status))
+            expect(status["capabilities"]["xtermjs_terminal_emulator"] is True, str(status))
+            expect(status["limits"]["scrollback_lines"] == 10000, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
 
             created = asyncio.run(
-                terminal_api.create_session(JsonRequest({"name": "Build", "folder": "Work", "cwd": "/"}))
+                terminal_api.create_session(JsonRequest({"name": "Build", "folder": "Work", "cwd": "/", "rows": 12, "cols": 80}))
             )
             session = created["session"]
             session_id = session["id"]
             expect(session["name"] == "Build", str(session))
             expect(session["folder"] == "Work", str(session))
             expect(session["cwd"] == "/", str(session))
+            expect(session["rows"] == 12 and session["cols"] == 80, str(session))
             expect(session["state"] in {"starting", "running"}, str(session))
 
             sent = asyncio.run(
@@ -1119,6 +1124,11 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(any(item["id"] == session_id for item in sessions["sessions"]), str(sessions))
             revisited = asyncio.run(terminal_api.get_session(session_id=session_id))
             expect("terminal-proof" in revisited["session"]["scrollback"], revisited["session"]["scrollback"])
+
+            resized = asyncio.run(terminal_api.resize_session(session_id, JsonRequest({"rows": 20, "cols": 100})))
+            expect(resized["session"]["rows"] == 20 and resized["session"]["cols"] == 100, str(resized))
+            cpr = terminal_api._answer_terminal_queries(0, b"before\x1b[6nafter")
+            expect(cpr == b"before\x1b[6nafter", repr(cpr))
 
             try:
                 asyncio.run(terminal_api.close_session(session_id, JsonRequest({})))
@@ -1187,26 +1197,35 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("setInterval" in body and "startPolling" in body, "Terminal UI should retain polling fallback")
     expect("confirmClose" in body and '"/close"' in body, "Terminal close/kill should be confirmation-gated")
     expect("moveSelectedToFolder" in body and "reorderSelected" in body, "Terminal UI should expose folder and reorder controls")
-    expect(
-        "keyInput" in body and "onKeyDown: handleTerminalKey" in body and 'addEventListener("keydown", onNativeKeyDown)' in body,
-        "Terminal UI should send direct pty keystrokes",
-    )
+    expect("ensureTerminalVendor" in body and "xterm.js" in body and "addon-fit.js" in body, "Terminal UI should load vendored xterm.js assets")
+    expect("term.onData" in body and "writeInputTo" in body, "Terminal UI should send xterm pty input directly")
+    expect('addEventListener("keydown", onNativeKeyDown)' not in body, "Terminal UI should not double-send keystrokes")
     expect('"New machine terminal"' in body and "+SSH" in body, "Terminal UI should use +SSH for a local machine shell")
     expect("startRenameSession" in body and "editingSessionId" in body, "Terminal UI should support inline session renaming")
     expect("window.prompt(\"SSH target\"" not in body and "target: \"\"" in body, "Terminal UI should not prompt for an SSH target")
     expect("+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
     expect("scrollback" in body and "hermes-terminal-screen" in body, "Terminal UI should render bounded scrollback")
+    expect("syncTerminalOutput" in body and "scrollToBottom" in body, "Terminal UI should stream scrollback into xterm")
+    expect("registerCsiHandler" in body and "acceptReports" in body and "disableStdin" in body, "Terminal UI should answer live cursor reports without replaying stale reports")
+    expect("freshSessionRef" in body, "Terminal UI should allow initial TUI cursor negotiation for newly created sessions")
+    expect("ResizeObserver" in body and '"/resize"' in body, "Terminal UI should resize the PTY to its browser viewport")
     api_body = (PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
     expect("_DEFAULT_TUI_DIR" in api_body and "HERMES_TUI_DIR" in api_body and "_tui_dist_available" in api_body, "Terminal API should only advertise Hermes TUI when bundled assets are ready")
-    expect("_CPR_QUERY" in api_body and "_answer_terminal_queries" in api_body, "Terminal API should answer cursor-position requests for TUIs")
+    expect("_CPR_QUERY" in api_body and "browser_cpr_response" in api_body and "xtermjs_terminal_emulator" in api_body, "Terminal API should preserve cursor-position requests for browser-side response")
+    expect("_DEFAULT_SCROLLBACK_LINES" in api_body and "TERMINAL_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded browser scrollback limit")
+    expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
     expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")
+    expect((PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "vendor" / "xterm.js").is_file(), "Terminal plugin should vendor xterm.js")
+    expect((PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "vendor" / "addon-fit.js").is_file(), "Terminal plugin should vendor xterm fit addon")
+    expect((PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "vendor" / "xterm.css").is_file(), "Terminal plugin should vendor xterm CSS")
     style = (PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
-    expect(".hermes-terminal-confirm" in style, "Terminal CSS should style close confirmation")
+    expect(".hermes-terminal-confirm" in style and ".hermes-terminal-confirm-card" in style, "Terminal CSS should style close confirmation")
     expect(".hermes-terminal-context" in style, "Terminal CSS should style the session right-click menu")
     expect(".hermes-terminal-session-rename" in style, "Terminal CSS should style inline rename")
     expect("text-transform: none" in style and "font-variant-caps: normal" in style, "Terminal CSS should preserve shell output casing")
+    expect(".xterm-viewport" in style and "overflow: hidden;" in style, "Terminal CSS should leave terminal layout and scrolling to xterm")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")
     print("PASS test_arclink_terminal_browser_exposes_persistent_session_controls")
 

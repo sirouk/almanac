@@ -7,6 +7,9 @@
   const useEffect = SDK.hooks.useEffect;
   const useRef = SDK.hooks.useRef || React.useRef;
   const useState = SDK.hooks.useState;
+  const VENDOR_BASE = "/dashboard-plugins/" + PLUGIN + "/dist/vendor/";
+
+  let terminalVendorPromise = null;
 
   function h(type, props) {
     const children = Array.prototype.slice.call(arguments, 2);
@@ -36,6 +39,68 @@
     });
   }
 
+  function loadStylesheetOnce(href) {
+    if (document.querySelector('link[href="' + href + '"]')) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      link.onload = resolve;
+      link.onerror = function () {
+        reject(new Error("Could not load " + href));
+      };
+      document.head.appendChild(link);
+    });
+  }
+
+  function loadScriptOnce(src, globalReady) {
+    if (globalReady && globalReady()) return Promise.resolve();
+    const existing = document.querySelector('script[src="' + src + '"]');
+    if (existing) {
+      return new Promise(function (resolve, reject) {
+        if (globalReady && globalReady()) {
+          resolve();
+          return;
+        }
+        existing.addEventListener("load", resolve, { once: true });
+        existing.addEventListener("error", function () { reject(new Error("Could not load " + src)); }, { once: true });
+      });
+    }
+    return new Promise(function (resolve, reject) {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = false;
+      script.onload = resolve;
+      script.onerror = function () {
+        reject(new Error("Could not load " + src));
+      };
+      document.body.appendChild(script);
+    });
+  }
+
+  function ensureTerminalVendor() {
+    if (terminalVendorPromise) return terminalVendorPromise;
+    terminalVendorPromise = loadStylesheetOnce(VENDOR_BASE + "xterm.css")
+      .then(function () {
+        return loadScriptOnce(VENDOR_BASE + "xterm.js", function () {
+          return !!window.Terminal;
+        });
+      })
+      .then(function () {
+        return loadScriptOnce(VENDOR_BASE + "addon-fit.js", function () {
+          return !!(window.FitAddon && window.FitAddon.FitAddon);
+        });
+      })
+      .then(function () {
+        if (!window.Terminal) throw new Error("xterm.js did not expose Terminal");
+        return {
+          Terminal: window.Terminal,
+          FitAddon: window.FitAddon && window.FitAddon.FitAddon ? window.FitAddon.FitAddon : null,
+        };
+      });
+    return terminalVendorPromise;
+  }
+
   function groupSessions(sessions) {
     const groups = {};
     sessions.forEach(function (session) {
@@ -50,43 +115,39 @@
       });
   }
 
-  function displayScrollback(text) {
-    const stripped = String(text || "")
-      .replace(new RegExp("\\x1b\\][^\\x07]*(\\x07|\\x1b\\\\)", "g"), "")
-      .replace(new RegExp("\\x1b\\[[0-?]*[ -/]*[@-~]", "g"), "");
-    const lines = [""];
-    let row = 0;
-    let col = 0;
-    for (let index = 0; index < stripped.length; index += 1) {
-      const char = stripped[index];
-      if (char === "\r") {
-        col = 0;
-        continue;
-      }
-      if (char === "\n") {
-        row += 1;
-        lines[row] = lines[row] || "";
-        col = 0;
-        continue;
-      }
-      if (char === "\b" || char === "\x7f") {
-        if (col > 0) {
-          const line = lines[row] || "";
-          lines[row] = line.slice(0, col - 1) + line.slice(col);
-          col -= 1;
-        }
-        continue;
-      }
-      if (char < " " && char !== "\t") continue;
-      const line = lines[row] || "";
-      if (col >= line.length) {
-        lines[row] = line + " ".repeat(col - line.length) + char;
-      } else {
-        lines[row] = line.slice(0, col) + char + line.slice(col + 1);
-      }
-      col += char === "\t" ? 4 : 1;
-    }
-    return lines.join("\n");
+  function sessionIsWritable(session) {
+    return !!session && ["running", "starting"].indexOf(session.state) !== -1;
+  }
+
+  function scrollbackLines(status) {
+    const value = Number(status && status.limits && status.limits.scrollback_lines);
+    return Number.isFinite(value) && value > 0 ? value : 10000;
+  }
+
+  function terminalTheme() {
+    return {
+      background: "#05090d",
+      foreground: "#d1fae5",
+      cursor: "#d1fae5",
+      cursorAccent: "#05090d",
+      selectionBackground: "#1d4ed8aa",
+      black: "#0b1118",
+      red: "#f87171",
+      green: "#34d399",
+      yellow: "#fbbf24",
+      blue: "#60a5fa",
+      magenta: "#c084fc",
+      cyan: "#22d3ee",
+      white: "#e5e7eb",
+      brightBlack: "#64748b",
+      brightRed: "#fca5a5",
+      brightGreen: "#86efac",
+      brightYellow: "#fde68a",
+      brightBlue: "#93c5fd",
+      brightMagenta: "#d8b4fe",
+      brightCyan: "#67e8f9",
+      brightWhite: "#f8fafc",
+    };
   }
 
   function TerminalPage() {
@@ -104,10 +165,22 @@
       contextMenu: null,
       editingSessionId: "",
       editingSessionName: "",
+      terminalReady: false,
     });
     const state = statePair[0];
     const setState = statePair[1];
-    const screenRef = useRef(null);
+    const hostRef = useRef(null);
+    const vendorRef = useRef(null);
+    const stateRef = useRef(state);
+    const terminalRef = useRef({ term: null, fit: null, sessionId: "", written: "", disposables: [] });
+    const resizeTimerRef = useRef(null);
+    const resizeSignatureRef = useRef("");
+    const selectionRef = useRef("");
+    const freshSessionRef = useRef({});
+
+    useEffect(function () {
+      stateRef.current = state;
+    });
 
     function merge(next) {
       setState(function (current) {
@@ -119,7 +192,7 @@
       return fetchJSON(api("/sessions"))
         .then(function (payload) {
           const sessions = payload.sessions || [];
-          const nextId = selectId || state.selectedId || (sessions[0] && sessions[0].id) || "";
+          const nextId = selectId || stateRef.current.selectedId || (sessions[0] && sessions[0].id) || "";
           merge({ sessions: sessions, selectedId: nextId, errorMessage: "" });
           if (nextId) {
             return loadSession(nextId);
@@ -145,6 +218,176 @@
         });
     }
 
+    function disposeTerminal() {
+      const current = terminalRef.current || {};
+      (current.disposables || []).forEach(function (item) {
+        try {
+          if (item && typeof item.dispose === "function") item.dispose();
+        } catch (_error) {}
+      });
+      if (current.term && typeof current.term.dispose === "function") {
+        try {
+          current.term.dispose();
+        } catch (_error) {}
+      }
+      terminalRef.current = { term: null, fit: null, sessionId: "", written: "", disposables: [] };
+      resizeSignatureRef.current = "";
+    }
+
+    function writeInputTo(sessionId, text) {
+      const current = stateRef.current;
+      const selected = current.selected;
+      if (!selected || selected.id !== sessionId || !sessionIsWritable(selected) || !text) return;
+      postJSON("/sessions/" + encodeURIComponent(sessionId) + "/input", { input: text })
+        .then(function (payload) {
+          const latest = stateRef.current;
+          if (latest.selectedId === sessionId) {
+            merge({ selected: payload.session || selected, errorMessage: "" });
+          }
+        })
+        .catch(function (error) {
+          merge({ errorMessage: String(error.message || error) });
+        });
+    }
+
+    function resizeSession(sessionId, rows, cols) {
+      const cleanRows = Math.max(8, Math.min(200, Number(rows) || 32));
+      const cleanCols = Math.max(20, Math.min(400, Number(cols) || 132));
+      const signature = sessionId + ":" + cleanRows + "x" + cleanCols;
+      if (resizeSignatureRef.current === signature) return;
+      resizeSignatureRef.current = signature;
+      postJSON("/sessions/" + encodeURIComponent(sessionId) + "/resize", { rows: cleanRows, cols: cleanCols })
+        .then(function (payload) {
+          const latest = stateRef.current;
+          if (latest.selectedId === sessionId) {
+            merge({ selected: payload.session || latest.selected, errorMessage: "" });
+          }
+        })
+        .catch(function (error) {
+          merge({ errorMessage: String(error.message || error) });
+        });
+    }
+
+    function fitTerminal() {
+      const current = terminalRef.current || {};
+      if (!current.term || current.sessionId !== stateRef.current.selectedId) return;
+      if (current.fit && typeof current.fit.fit === "function") {
+        try {
+          current.fit.fit();
+        } catch (_error) {}
+      }
+      resizeSession(current.sessionId, current.term.rows, current.term.cols);
+    }
+
+    function writeTerminalOutput(current, text, acceptReports) {
+      if (!text || !current || !current.term) return;
+      const previousDisableStdin = !!current.term.options.disableStdin;
+      current.acceptReports = !!acceptReports;
+      if (!acceptReports) current.term.options.disableStdin = true;
+      try {
+        current.term.write(text, function () {
+          if (terminalRef.current !== current) return;
+          current.acceptReports = false;
+          if (!acceptReports) current.term.options.disableStdin = previousDisableStdin;
+        });
+      } catch (_error) {
+        current.acceptReports = false;
+        if (!acceptReports) current.term.options.disableStdin = previousDisableStdin;
+      }
+    }
+
+    function syncTerminalOutput(session) {
+      const current = terminalRef.current || {};
+      if (!current.term || !session || current.sessionId !== session.id) return;
+      const raw = String(session.scrollback || "");
+      const previous = String(current.written || "");
+      if (!raw && previous) {
+        current.term.reset();
+        current.written = "";
+        return;
+      }
+      if (raw.indexOf(previous) === 0) {
+        const delta = raw.slice(previous.length);
+        if (delta) writeTerminalOutput(current, delta, current.allowInitialReports || !!previous);
+      } else {
+        current.term.reset();
+        if (raw) writeTerminalOutput(current, raw, !!current.allowInitialReports);
+      }
+      current.allowInitialReports = false;
+      current.written = raw;
+      try {
+        current.term.scrollToBottom();
+      } catch (_error) {}
+    }
+
+    function openTerminal(session) {
+      const vendor = vendorRef.current;
+      const host = hostRef.current;
+      if (!vendor || !host || !session) return;
+      const current = terminalRef.current || {};
+      if (current.term && current.sessionId === session.id) {
+        syncTerminalOutput(session);
+        return;
+      }
+      disposeTerminal();
+      host.innerHTML = "";
+      const term = new vendor.Terminal({
+        allowTransparency: true,
+        convertEol: false,
+        cursorBlink: true,
+        cursorStyle: "block",
+        drawBoldTextInBrightColors: true,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        fontSize: 13,
+        lineHeight: 1.22,
+        macOptionIsMeta: true,
+        rightClickSelectsWord: true,
+        scrollback: scrollbackLines(stateRef.current.status),
+        theme: terminalTheme(),
+        windowsMode: true,
+      });
+      const fit = vendor.FitAddon ? new vendor.FitAddon() : null;
+      if (fit) term.loadAddon(fit);
+      term.open(host);
+      const disposables = [];
+      if (term.parser && typeof term.parser.registerCsiHandler === "function") {
+        disposables.push(
+          term.parser.registerCsiHandler({ final: "n" }, function (params) {
+            const first = Array.isArray(params && params[0]) ? params[0][0] : params && params[0];
+            if (first !== 6) return false;
+            const currentTerminal = terminalRef.current || {};
+            if (currentTerminal.sessionId === session.id && currentTerminal.acceptReports) {
+              const activeBuffer = term.buffer && term.buffer.active;
+              const row = ((activeBuffer && activeBuffer.cursorY) || 0) + 1;
+              const col = ((activeBuffer && activeBuffer.cursorX) || 0) + 1;
+              writeInputTo(session.id, "\x1b[" + row + ";" + col + "R");
+            }
+            return true;
+          })
+        );
+      }
+      disposables.push(
+        term.onData(function (data) {
+          writeInputTo(session.id, data);
+        }),
+        term.onResize(function (size) {
+          resizeSession(session.id, size.rows, size.cols);
+        }),
+        term.onSelectionChange(function () {
+          const text = term.getSelection ? String(term.getSelection() || "") : "";
+          if (!text || text === selectionRef.current || !navigator.clipboard) return;
+          selectionRef.current = text;
+          navigator.clipboard.writeText(text).catch(function () {});
+        })
+      );
+      const allowInitialReports = !!freshSessionRef.current[session.id];
+      delete freshSessionRef.current[session.id];
+      terminalRef.current = { term: term, fit: fit, sessionId: session.id, written: "", disposables: disposables, acceptReports: false, allowInitialReports: allowInitialReports };
+      fitTerminal();
+      syncTerminalOutput(session);
+      term.focus();
+    }
+
     useEffect(function () {
       SDK.fetchJSON(api("/status"))
         .then(function (status) {
@@ -154,6 +397,21 @@
         .catch(function () {
           merge({ loading: false, status: { available: false, capabilities: {} } });
         });
+
+      let cancelled = false;
+      ensureTerminalVendor()
+        .then(function (vendor) {
+          if (cancelled) return;
+          vendorRef.current = vendor;
+          merge({ terminalReady: true });
+        })
+        .catch(function (error) {
+          if (!cancelled) merge({ errorMessage: String(error.message || error) });
+        });
+      return function () {
+        cancelled = true;
+        disposeTerminal();
+      };
     }, []);
 
     useEffect(
@@ -165,9 +423,10 @@
         function startPolling() {
           if (timer) return;
           timer = setInterval(function () {
-            if (state.selectedId) {
-              loadSession(state.selectedId);
-              loadSessions(state.selectedId);
+            const selectedId = stateRef.current.selectedId;
+            if (selectedId) {
+              loadSession(selectedId);
+              loadSessions(selectedId);
             }
           }, 1000);
         }
@@ -187,8 +446,8 @@
             if (closed) return;
             try {
               const payload = JSON.parse(event.data || "{}");
-              merge({ selected: payload.session || null, selectedId: state.selectedId, streaming: true, errorMessage: "" });
-              loadSessions(state.selectedId);
+              merge({ selected: payload.session || null, selectedId: stateRef.current.selectedId, streaming: true, errorMessage: "" });
+              loadSessions(stateRef.current.selectedId);
             } catch (_error) {
               startPolling();
             }
@@ -213,16 +472,61 @@
       [state.selectedId, state.status && state.status.capabilities && state.status.capabilities.streaming_output]
     );
 
+    useEffect(
+      function () {
+        if (!state.terminalReady) return undefined;
+        if (!state.selected) {
+          disposeTerminal();
+          return undefined;
+        }
+        openTerminal(state.selected);
+        return undefined;
+      },
+      [state.terminalReady, state.selected && state.selected.id]
+    );
+
+    useEffect(
+      function () {
+        if (!state.terminalReady || !state.selected) return undefined;
+        syncTerminalOutput(state.selected);
+        return undefined;
+      },
+      [state.terminalReady, state.selected && state.selected.id, state.selected && state.selected.scrollback]
+    );
+
+    useEffect(
+      function () {
+        const host = hostRef.current;
+        if (!host || !state.terminalReady || !state.selected) return undefined;
+        fitTerminal();
+        if (!window.ResizeObserver) return undefined;
+        const observer = new ResizeObserver(function () {
+          if (resizeTimerRef.current) window.clearTimeout(resizeTimerRef.current);
+          resizeTimerRef.current = window.setTimeout(fitTerminal, 120);
+        });
+        observer.observe(host);
+        return function () {
+          observer.disconnect();
+          if (resizeTimerRef.current) window.clearTimeout(resizeTimerRef.current);
+        };
+      },
+      [state.terminalReady, state.selected && state.selected.id]
+    );
+
     function createSession(mode) {
       const sessionMode = mode || "shell";
+      const current = terminalRef.current || {};
       postJSON("/sessions", {
         name: sessionMode === "ssh" ? "Machine Terminal" : sessionMode === "tui" ? "Hermes TUI" : "Terminal",
         cwd: "/",
         mode: sessionMode,
         target: "",
+        rows: current.term ? current.term.rows : 32,
+        cols: current.term ? current.term.cols : 132,
       })
         .then(function (payload) {
           const session = payload.session || {};
+          if (session.id) freshSessionRef.current[session.id] = true;
           return loadSessions(session.id || "");
         })
         .catch(function (error) {
@@ -290,101 +594,6 @@
         });
     }
 
-    function sendInput(event) {
-      event.preventDefault();
-      const selected = state.selected;
-      if (!selected || !state.input) return;
-      const body = { input: state.input.slice(-1) === "\n" ? state.input : state.input + "\n" };
-      merge({ input: "" });
-      postJSON("/sessions/" + encodeURIComponent(selected.id) + "/input", body)
-        .then(function (payload) {
-          merge({ selected: payload.session || selected, errorMessage: "" });
-        })
-        .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
-        });
-    }
-
-    function writeInput(text) {
-      const selected = state.selected;
-      if (!selected || ["running", "starting"].indexOf(selected.state) === -1 || !text) return;
-      postJSON("/sessions/" + encodeURIComponent(selected.id) + "/input", { input: text })
-        .then(function (payload) {
-          merge({ selected: payload.session || selected, errorMessage: "" });
-        })
-        .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
-        });
-    }
-
-    function keyInput(event) {
-      if (event.altKey || event.metaKey) return "";
-      if (event.ctrlKey) {
-        const key = event.key.toLowerCase();
-        if (key >= "a" && key <= "z") {
-          return String.fromCharCode(key.charCodeAt(0) - 96);
-        }
-        if (key === " ") return "\x00";
-        return "";
-      }
-      const special = {
-        Enter: "\r",
-        Backspace: "\x7f",
-        Tab: "\t",
-        Escape: "\x1b",
-        ArrowUp: "\x1b[A",
-        ArrowDown: "\x1b[B",
-        ArrowRight: "\x1b[C",
-        ArrowLeft: "\x1b[D",
-        Home: "\x1b[H",
-        End: "\x1b[F",
-        Delete: "\x1b[3~",
-        PageUp: "\x1b[5~",
-        PageDown: "\x1b[6~",
-      };
-      if (special[event.key]) return special[event.key];
-      return event.key && event.key.length === 1 ? event.key : "";
-    }
-
-    function handleTerminalKey(event) {
-      if (event.defaultPrevented) return;
-      const text = keyInput(event);
-      if (!text) return;
-      event.preventDefault();
-      writeInput(text);
-    }
-
-    useEffect(
-      function () {
-        const node = screenRef.current;
-        if (!node || !state.selected) return undefined;
-        function onNativeKeyDown(event) {
-          const text = keyInput(event);
-          if (!text) return;
-          event.preventDefault();
-          writeInput(text);
-        }
-        node.addEventListener("keydown", onNativeKeyDown);
-        return function () {
-          node.removeEventListener("keydown", onNativeKeyDown);
-        };
-      },
-      [state.selected && state.selected.id, state.selected && state.selected.state]
-    );
-
-    function copySelection() {
-      const selection = window.getSelection && window.getSelection();
-      const text = selection ? String(selection.toString() || "") : "";
-      if (!text.trim() || !navigator.clipboard) return;
-      navigator.clipboard.writeText(text).catch(function () {});
-    }
-
-    function focusScreen() {
-      window.setTimeout(function () {
-        if (screenRef.current) screenRef.current.focus();
-      }, 0);
-    }
-
     function clearClosedSessions() {
       postJSON("/sessions/clear-closed", {})
         .then(function () {
@@ -442,11 +651,6 @@
       );
     }
 
-    useEffect(function () {
-      const element = screenRef.current;
-      if (element) element.scrollTop = element.scrollHeight;
-    }, [state.selected && state.selected.scrollback, state.selectedId]);
-
     const status = state.status || {};
     const capabilities = status.capabilities || {};
     const selected = state.selected;
@@ -454,6 +658,7 @@
       return state.showClosed || session.state !== "closed";
     });
     const grouped = groupSessions(visibleSessions);
+
     return h(
       "div",
       {
@@ -519,82 +724,63 @@
                               openSessionMenu(event, session);
                             },
                             onClick: function () {
-                              merge({ selectedId: session.id });
+                              merge({ selectedId: session.id, contextMenu: null });
                               loadSession(session.id);
-                              focusScreen();
                             },
                           },
-                          h("span", { className: "hermes-terminal-session-top" },
+                          h(
+                            "span",
+                            { className: "hermes-terminal-session-name-row" },
                             state.editingSessionId === session.id
                               ? h("input", {
                                   className: "hermes-terminal-session-rename",
                                   value: state.editingSessionName,
                                   autoFocus: true,
-                                  onClick: function (event) {
-                                    event.stopPropagation();
-                                  },
-                                  onChange: function (event) {
-                                    merge({ editingSessionName: event.target.value });
-                                  },
-                                  onBlur: function () {
-                                    commitRenameSession(session.id);
-                                  },
+                                  onClick: function (event) { event.stopPropagation(); },
+                                  onChange: function (event) { merge({ editingSessionName: event.target.value }); },
                                   onKeyDown: function (event) {
-                                    if (event.key === "Enter") {
-                                      event.preventDefault();
-                                      commitRenameSession(session.id);
-                                    }
-                                    if (event.key === "Escape") {
-                                      event.preventDefault();
-                                      cancelRenameSession();
-                                    }
+                                    if (event.key === "Enter") commitRenameSession(session.id);
+                                    if (event.key === "Escape") cancelRenameSession();
                                   },
+                                  onBlur: function () { commitRenameSession(session.id); },
                                 })
                               : h("strong", null, session.name || "Terminal"),
-                            h("span", {
-                              className: "hermes-terminal-session-close",
-                              onClick: function (event) {
-                                event.stopPropagation();
-                                merge({ confirmClose: session });
+                            h(
+                              "span",
+                              {
+                                className: "hermes-terminal-session-close",
+                                title: "Close session",
+                                onClick: function (event) {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  merge({ confirmClose: session, contextMenu: null });
+                                },
                               },
-                            }, "x")
+                              "x"
+                            )
                           ),
-                          h("span", null, (session.state || "closed") + " · " + (session.cwd || "/"))
+                          h("span", { className: "hermes-terminal-session-meta" }, (session.state || "closed") + " · " + (session.cwd || "/"))
                         );
                       })
                     );
                   })
-                : h("div", { className: "hermes-terminal-empty" }, status.available ? "No sessions" : "Terminal unavailable")
+                : h("div", { className: "hermes-terminal-empty" }, "No sessions")
             ),
             h(
               "section",
               { className: "hermes-terminal-pane" },
               selected
-                ? h(
-                    "pre",
-                    {
-                      ref: screenRef,
-                      className: "hermes-terminal-screen",
-                      "data-session-state": selected.state || "",
-                      tabIndex: 0,
-                      onKeyDown: handleTerminalKey,
-                      onMouseUp: copySelection,
-                      onClick: function (event) {
-                        event.currentTarget.focus();
-                      },
-                    },
-                    displayScrollback(selected.scrollback || "$ "),
-                    ["running", "starting"].indexOf(selected.state) !== -1 ? h("span", { className: "hermes-terminal-cursor" }, " ") : null
-                  )
-                : h("pre", { ref: screenRef, className: "hermes-terminal-screen muted", tabIndex: 0 }, status.available ? "$ " : "Terminal backend unavailable"),
+                ? h("div", { ref: hostRef, className: "hermes-terminal-screen", "data-session-state": selected.state || "" })
+                : h("div", { ref: hostRef, className: "hermes-terminal-screen muted" }, status.available ? "$ " : "Terminal backend unavailable"),
               h(
                 "div",
-                { className: "hermes-terminal-facts" },
-                h("span", null, "Workspace: " + (status.workspace_root || "")),
-                h("span", null, "Shell: " + (status.shell || "sh")),
-                h("span", null, "Transport: " + (state.streaming ? "sse" : ((status.transport && status.transport.mode) || "polling"))),
-                h("span", null, "Scrollback: " + ((status.limits && status.limits.scrollback_bytes) || "")),
-                h("span", null, "Confirm close: " + (capabilities.confirm_close_or_kill ? "on" : "off"))
+                { className: "hermes-terminal-statusbar" },
+                h("span", null, "Workspace: " + (status.workspace_root || "[workspace]")),
+                h("span", null, "Shell: " + (selected && selected.shell ? selected.shell : status.shell || "")),
+                h("span", null, "Transport: " + ((status.transport && status.transport.mode) || "sse")),
+                h("span", null, "Scrollback: " + ((status.limits && status.limits.scrollback_lines) || "") + " lines"),
+                h("span", null, "History cap: " + ((status.limits && status.limits.scrollback_bytes) || "") + " bytes"),
+                h("span", null, "Confirm close: on")
               )
             )
           ),
@@ -602,17 +788,13 @@
       state.confirmClose
         ? h(
             "div",
-            { className: "hermes-terminal-confirm-backdrop", role: "presentation" },
-            h(
-              "div",
-              { className: "hermes-terminal-confirm", role: "dialog", "aria-modal": "true", "aria-label": "Close terminal session" },
-              h("h2", null, "Close Session"),
-              h("p", null, state.confirmClose.name || "Terminal"),
-              h(
-                "div",
-                { className: "hermes-terminal-confirm-actions" },
+            { className: "hermes-terminal-confirm", role: "dialog", "aria-modal": "true" },
+            h("div", { className: "hermes-terminal-confirm-card" },
+              h("h2", null, "Close terminal session?"),
+              h("p", null, "The session will stop after confirmation."),
+              h("div", { className: "hermes-terminal-confirm-actions" },
                 h("button", { type: "button", onClick: function () { merge({ confirmClose: null }); } }, "Cancel"),
-                h("button", { type: "button", className: "danger", onClick: closeSelected }, "Close")
+                h("button", { type: "button", onClick: closeSelected }, "Close")
               )
             )
           )

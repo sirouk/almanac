@@ -17,6 +17,7 @@ HUMAN_SHARED_RESOURCE_SKIP_PREFIXES = (
     "code workspace:",
     "workspace root:",
     "arclink vault:",
+    "vault access in nextcloud:",
     "qmd mcp retrieval rail:",
     "arclink mcp control rail:",
     "credentials are",
@@ -85,13 +86,11 @@ def shared_lines(managed: dict[str, object], access: dict[str, object], home: st
         lowered = line.lower()
         if any(lowered.startswith(prefix) for prefix in HUMAN_SHARED_RESOURCE_SKIP_PREFIXES):
             continue
+        if "nextcloud" in lowered:
+            continue
         if "password" in lowered or "secret" in lowered or "credential" in lowered:
             continue
         append_unique(lines, seen, line)
-    if not any(line.lower().startswith("vault access in nextcloud:") for line in lines):
-        host = clean(access.get("tailscale_host"), 160)
-        if host:
-            append_unique(lines, seen, f"Vault access in Nextcloud: https://{host}:8445/ (shared mount: /Vault)")
     append_unique(lines, seen, f"Vault path in VS Code and shell: {vault_root(home)}")
     append_unique(lines, seen, "The shared Vault and control rails are already wired into your agent by default.")
     return lines
@@ -110,7 +109,7 @@ def remote_lines(access: dict[str, object], identity: dict[str, object]) -> list
     wrapper_name = f"hermes-{wrapper_org}-remote-{wrapper_user}" if wrapper_user and wrapper_org else "hermes-<org>-remote-<user>"
     return [
         f"Run: `curl -fsSL {setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`",
-        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
+        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Raven will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
         f"Use the generated `{wrapper_name}` wrapper, not your local `hermes` command.",
         f"Remote SSH target after key install: {remote_user}@{remote_host}",
     ]
@@ -128,13 +127,10 @@ lines = ["ArcLink resources:", "", "Web access:"]
 dashboard_url = clean(access.get("dashboard_url"))
 code_url = clean(access.get("code_url"))
 username = clean(access.get("username") or access.get("unix_user"), 80)
-nextcloud_username = clean(access.get("nextcloud_username") or username, 80)
 if dashboard_url:
     lines.append(f"- Hermes dashboard: {dashboard_url}")
 if username:
     lines.append(f"- Dashboard username: {username}")
-if nextcloud_username:
-    lines.append(f"- Nextcloud login: {nextcloud_username}")
 if code_url:
     lines.append(f"- Code workspace: {code_url}")
 if home:

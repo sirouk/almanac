@@ -72,10 +72,13 @@ except Exception:
 username = str(existing.get("username") or os.environ.get("ARCLINK_DASHBOARD_USERNAME") or os.environ.get("ARCLINK_PREFIX") or "arclink").strip()
 username = "".join(ch.lower() if ch.isalnum() else "-" for ch in username).strip("-") or "arclink"
 password = str(existing.get("password") or os.environ.get("ARCLINK_DASHBOARD_PASSWORD") or secrets.token_urlsafe(24))
+session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
 payload = {
     **existing,
+    "auth_scheme": "signed-session",
     "username": username,
     "password": password,
+    "session_secret": session_secret,
     "dashboard_url": str(os.environ.get("ARCLINK_HERMES_URL") or ""),
     "drive_url": (str(os.environ.get("ARCLINK_HERMES_URL") or "").rstrip("/") + "/drive") if os.environ.get("ARCLINK_HERMES_URL") else "",
     "code_url": (str(os.environ.get("ARCLINK_HERMES_URL") or "").rstrip("/") + "/code") if os.environ.get("ARCLINK_HERMES_URL") else "",

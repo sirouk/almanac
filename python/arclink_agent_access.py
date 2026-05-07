@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import base64
 import json
 import os
 import pwd
@@ -13,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -402,13 +402,33 @@ def wait_for_http(
 ) -> None:
     expected = expected_statuses or {200}
     deadline = time.time() + timeout_seconds
-    headers: dict[str, str] = {}
-    if username or password:
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        headers["Authorization"] = f"Basic {token}"
-    request = urllib.request.Request(url, headers=headers)
+    cookie = ""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect())
     while time.time() < deadline:
         try:
+            if username or password:
+                login_url = urllib.parse.urljoin(url, "/__arclink/login")
+                form = urllib.parse.urlencode({"username": username, "password": password, "next": url}).encode("utf-8")
+                login_request = urllib.request.Request(
+                    login_url,
+                    data=form,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    method="POST",
+                )
+                try:
+                    opener.open(login_request, timeout=10).close()
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in {303, 302}:
+                        raise
+                    cookie = (exc.headers.get("Set-Cookie") or "").split(";", 1)[0]
+                else:
+                    cookie = ""
+            headers = {"Cookie": cookie} if cookie else {}
+            request = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:
                 if response.status in expected:
                     return
@@ -448,6 +468,7 @@ def ensure_access_state(
     url_slug = str(existing.get("url_slug") or access_url_slug(unix_user))
     dashboard_label = str(existing.get("dashboard_label") or f"agent-{url_slug}-dash")
     password = str(existing.get("password") or secrets.token_urlsafe(18))
+    session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
     dashboard_backend_port = _preserve_or_allocate_port(
         existing=existing.get("dashboard_backend_port"),
         reserved_other=reserved_other,
@@ -471,7 +492,9 @@ def ensure_access_state(
         "unix_user": unix_user,
         "username": username,
         "url_slug": url_slug,
+        "auth_scheme": "signed-session",
         "password": password,
+        "session_secret": session_secret,
         "dashboard_backend_port": dashboard_backend_port,
         "dashboard_proxy_port": dashboard_proxy_port,
         "dashboard_local_url": dashboard_local_url,

@@ -349,7 +349,7 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
                 {
                     "resource-ref": (
                         "Canonical user access rails:\n"
-                        "- Vault access in Nextcloud: https://example.test/ (shared mount: /Vault)\n"
+                        "- Legacy Nextcloud access is disabled; use Drive in Hermes.\n"
                     ),
                 },
                 indent=2,
@@ -387,9 +387,9 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(knowledge["plugin"] == "drive", str(knowledge))
             expect(knowledge["status_contract"] == 1, str(knowledge))
             expect(knowledge["available"] is True, str(knowledge))
-            expect(knowledge["url"] == "https://example.test/", str(knowledge))
+            expect(knowledge["url"] == "", str(knowledge))
             expect(knowledge["mount"] == "/Vault", str(knowledge))
-            expect(knowledge["username"] == "alex-nextcloud", str(knowledge))
+            expect(knowledge["username"] == "", str(knowledge))
             expect(knowledge["backend"] == "local-roots", str(knowledge))
             expect(knowledge["default_root"] == "vault", str(knowledge))
             root_map = {item["id"]: item for item in knowledge["roots"]}
@@ -2074,7 +2074,7 @@ def test_arclink_managed_context_answers_resource_request_without_secrets() -> N
                         "- Code workspace: https://old.example/code\n"
                         "- Workspace root: /home/arclink/internal\n"
                         "- ArcLink vault: /home/arclink/internal/vault\n"
-                        "- Vault access in Nextcloud: https://arclink.example.test:8445/ (shared mount: /Vault)\n"
+                        "- Legacy Nextcloud access is disabled; use Drive in Hermes.\n"
                         "- QMD MCP retrieval rail: https://arclink.example.test:8445/mcp\n"
                         "- ArcLink MCP control rail: https://arclink.example.test:8445/arclink-mcp\n"
                         "- Shared Notion SSOT: https://www.notion.so/The-ArcLink-00000000000040008000000000000003\n"
@@ -2134,11 +2134,11 @@ def test_arclink_managed_context_answers_resource_request_without_secrets() -> N
             expect("ArcLink resources:" in context, context)
             expect("Hermes dashboard: https://arclink.example.test:30011/" in context, context)
             expect("Dashboard username: alex" in context, context)
-            expect("Nextcloud login: alex" in context, context)
+            expect("Nextcloud login:" not in context, context)
             expect("Code workspace: https://arclink.example.test:40011/" in context, context)
             expect(f"Workspace root: {user_home}" in context, context)
             expect(f"ArcLink vault: {user_home / 'ArcLink'}" in context, context)
-            expect("Vault access in Nextcloud: https://arclink.example.test:8445/ (shared mount: /Vault)" in context, context)
+            expect("Vault access in Nextcloud:" not in context, context)
             expect("Shared Notion SSOT: https://www.notion.so/The-ArcLink-00000000000040008000000000000003" in context, context)
             expect("Remote shell helper on the host: ~/.local/bin/arclink-agent-hermes" in context, context)
             expect("arclink-agent-configure-backup" in context, context)

@@ -39,6 +39,16 @@ unreachable or background service unhealthy).
 `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
 `X-RateLimit-Reset` headers.
 
+**Admin password reset:** Admin login requires email plus password. To set or
+rotate an operator password without printing it into logs, run:
+
+```bash
+./bin/arclink-ctl admin set-password admin@example.com --generate --write-password-file /path/to/private-admin-password.txt
+```
+
+The generated file is written with `0600` permissions. Use `--password-file`
+for an existing private secret, or run the command interactively to be prompted.
+
 **OpenAPI contract:** `GET /api/v1/openapi.json` (no auth). Static copy at
 `docs/openapi/arclink-v1.openapi.json`.
 

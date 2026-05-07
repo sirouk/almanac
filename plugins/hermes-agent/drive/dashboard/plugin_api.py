@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import email.utils
 import json
 import mimetypes
@@ -12,9 +11,7 @@ import shutil
 import tempfile
 import time
 from typing import Any
-import urllib.error
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 
 try:
@@ -79,8 +76,6 @@ except Exception:
 
 router = APIRouter()
 
-_URL_RE = re.compile(r"Vault access in Nextcloud:\s*(https?://[^\s)]+)", re.I)
-_MOUNT_RE = re.compile(r"(?:shared mount:|mounted as)\s*([^)\n]+)", re.I)
 _DAV_NS = {"d": "DAV:", "oc": "http://owncloud.org/ns"}
 _TEXT_EXTENSIONS = {
     ".css",
@@ -149,18 +144,6 @@ def _inline_content_disposition(filename: str) -> str:
     return f'inline; filename="{safe}"; filename*=UTF-8\'\'{encoded}'
 
 
-def _parse_resource_ref(text: str) -> tuple[str, str]:
-    url = ""
-    mount = ""
-    url_match = _URL_RE.search(text or "")
-    if url_match:
-        url = _clean_url(url_match.group(1))
-    mount_match = _MOUNT_RE.search(text or "")
-    if mount_match:
-        mount = _clean_text(mount_match.group(1), 80)
-    return url, mount
-
-
 def _first_url(payload: dict[str, Any], *keys: str) -> str:
     for key in keys:
         url = _clean_url(payload.get(key))
@@ -178,41 +161,12 @@ def _access_state() -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _nextcloud_surface(access: dict[str, Any], managed: dict[str, Any]) -> dict[str, Any]:
-    url = _first_url(
-        access,
-        "nextcloud_vault_url",
-        "nextcloud_url",
-        "vault_url",
-        "files_url",
-    )
-    source = "access" if url else ""
-    parsed_url = ""
-    parsed_mount = ""
-    for key in ("resource-ref", "resource_ref"):
-        parsed_url, parsed_mount = _parse_resource_ref(str(managed.get(key) or ""))
-        if parsed_url:
-            break
-    if not url and parsed_url:
-        url = parsed_url
-        source = "managed-resource-ref"
-    if not url:
-        url = _clean_url(_env_first("NEXTCLOUD_URL", "DRIVE_NEXTCLOUD_URL"))
-        source = "env" if url else ""
-
-    mount = (
-        _clean_text(access.get("nextcloud_mount") or access.get("nextcloud_mount_point"), 80)
-        or parsed_mount
-        or "/Vault"
-    )
-    username = _clean_text(access.get("nextcloud_username") or access.get("username"), 80)
-    password = str(access.get("nextcloud_password") or access.get("password") or "")
     return {
-        "available": bool(url),
-        "url": url,
-        "mount": mount,
-        "username": username,
-        "password": password,
-        "source": source,
+        "available": False,
+        "url": "",
+        "mount": _clean_text(access.get("nextcloud_mount") or access.get("nextcloud_mount_point"), 80) or "/Vault",
+        "username": "",
+        "source": "",
     }
 
 
@@ -702,25 +656,7 @@ def _move_webdav(profile: dict[str, Any], source_path: Any, destination_path: An
 
 
 def _webdav_profile(nextcloud: dict[str, Any]) -> dict[str, Any]:
-    url = str(nextcloud.get("url") or "").rstrip("/")
-    username = str(nextcloud.get("username") or "").strip()
-    password = str(nextcloud.get("password") or "")
-    mount = "/" + str(nextcloud.get("mount") or "/Vault").strip("/")
-    if not url or not username or not password:
-        return {"available": False}
-    webdav_base = (
-        f"{url}/remote.php/dav/files/"
-        f"{urllib.parse.quote(username, safe='')}/"
-        f"{urllib.parse.quote(mount.strip('/'), safe='/')}"
-    ).rstrip("/")
-    return {
-        "available": True,
-        "url": url,
-        "username": username,
-        "password": password,
-        "mount": mount,
-        "webdav_base": webdav_base,
-    }
+    return {"available": False}
 
 
 def _webdav_url(profile: dict[str, Any], raw_path: Any) -> str:
@@ -739,19 +675,7 @@ def _dav_request(
     body: bytes | str | None = None,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, bytes, dict[str, str]]:
-    payload = body.encode("utf-8") if isinstance(body, str) else body
-    request_headers = dict(headers or {})
-    auth = base64.b64encode(f"{profile['username']}:{profile['password']}".encode("utf-8")).decode("ascii")
-    request_headers["Authorization"] = f"Basic {auth}"
-    request = urllib.request.Request(_webdav_url(profile, raw_path), data=payload, headers=request_headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return response.status, response.read(), dict(response.headers.items())
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:400] or exc.reason
-        raise HTTPException(status_code=exc.code, detail=detail) from exc
-    except OSError as exc:
-        raise HTTPException(status_code=502, detail=f"Nextcloud WebDAV request failed: {exc}") from exc
+    raise HTTPException(status_code=501, detail="Nextcloud WebDAV access is disabled; use the local Drive backend.")
 
 
 def _propfind_body() -> str:

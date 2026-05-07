@@ -404,6 +404,7 @@ def _handle_admin_login(
     result = create_arclink_admin_login_session_api(
         conn,
         email=str(body.get("email") or ""),
+        password=str(body.get("password") or ""),
         login_subject=str(body.get("login_subject") or body.get("email") or ""),
         mfa_verified=bool(body.get("mfa_verified")),
         metadata=body.get("metadata"),
@@ -840,10 +841,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["auth"],
         "requestBody": _openapi_json_body({
             "email": {"type": "string", "format": "email"},
+            "password": {"type": "string", "format": "password"},
             "login_subject": {"type": "string"},
             "mfa_verified": {"type": "boolean"},
             "metadata": {"type": "object"},
-        }, required=["email"]),
+        }, required=["email", "password"]),
         "responses": _RESP_CREATED_UNAUTH,
     },
     "user_login": {

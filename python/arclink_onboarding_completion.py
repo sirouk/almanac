@@ -320,7 +320,6 @@ def completion_message_bundle(
     agent_backup_owner_repo: str = "",
 ) -> dict[str, Any]:
     platform = str(bot_platform or "").strip().lower()
-    nextcloud_username = str(access.get("nextcloud_username") or access.get("username") or "").strip()
     first_lines = [
         "Your lane is ready.",
         "",
@@ -330,7 +329,7 @@ def completion_message_bundle(
         notion_status_line,
         "",
         "Temporary shared password:",
-        "This password unlocks your ArcLink dashboard, code workspace, and Nextcloud when it is enabled.",
+        "This password unlocks your Hermes dashboard and the Drive, Code, and Terminal tools inside it.",
         "Save this password now.",
     ]
     if agent_backup_verified:
@@ -340,7 +339,7 @@ def completion_message_bundle(
             else "Private backup: active. Hermes-home state backs up every 4 hours."
         )
     else:
-        backup_line = "Private backup: Curator can set this up with `/setup-backup`; shell fallback: ~/.local/bin/arclink-agent-configure-backup."
+        backup_line = "Private backup: Raven can set this up with `/setup-backup`; shell fallback: ~/.local/bin/arclink-agent-configure-backup."
     handoff_lines: list[str] = []
     if discord_note:
         handoff_lines = _discord_handoff_followup_lines(discord_dm_confirmation_code)
@@ -354,7 +353,6 @@ def completion_message_bundle(
         "Web access:",
         f"- Hermes dashboard: {access.get('dashboard_url')}",
         f"- Dashboard username: {access.get('username')}",
-        f"- Nextcloud login: {nextcloud_username} (same shared password)" if nextcloud_username else "",
         f"- Code workspace: {access.get('code_url')}",
         "",
         "Files:",
@@ -371,7 +369,7 @@ def completion_message_bundle(
         *_shared_resource_lines(cfg),
         "- The shared Vault and control rails are already wired into your agent by default.",
         notion_followup_line,
-        "If you pasted any API keys or bot tokens during setup, scroll up and edit or delete those messages. Curator cannot remove your own messages for you.",
+        "If you pasted any API keys or bot tokens during setup, scroll up and edit or delete those messages. Raven cannot remove your own messages for you.",
     ]
     remote_setup_command = ""
     remote_setup_url = _remote_client_setup_url(cfg)
@@ -397,7 +395,7 @@ def completion_message_bundle(
                 followup_lines.append(f"- Run: {remote_setup_command}")
             followup_lines.append(
                 "- That helper creates a local SSH key and wrapper. When it prints the key, reply here with "
-                "`/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
+                "`/ssh-key <public key>`; Raven will bind it to your Unix user and install it with Tailscale-only SSH restrictions."
             )
             followup_lines.append(
                 f"- Use the generated `{wrapper_name}` wrapper, not your local `hermes` command. "
@@ -503,11 +501,11 @@ def completion_bundle_for_session(
         )
         notion_followup_line = ""
     elif bool(answers.get("notion_verification_skipped")):
-        notion_status_line = "Shared Notion writes: read-only until you verify your Notion identity with Curator."
+        notion_status_line = "Shared Notion writes: read-only until you verify your Notion identity with Raven."
         notion_followup_line = "When you're ready, reply `/verify-notion` here and I'll reopen the verification step."
     else:
         notion_status_line = "Shared Notion writes: read-only until your Notion identity is verified."
-        notion_followup_line = "Reply `/verify-notion` here any time you want Curator to resume that step."
+        notion_followup_line = "Reply `/verify-notion` here any time you want Raven to resume that step."
 
     return completion_message_bundle(
         cfg,

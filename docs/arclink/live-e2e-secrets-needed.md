@@ -43,10 +43,9 @@ secrets.
 | `ARCLINK_WORKSPACE_PROOF_AUTH` | Drive, Code, Terminal browser proof | Session/auth material supplied outside tracked files |
 
 `ARCLINK_WORKSPACE_PROOF_AUTH` is read only from the process environment. The
-browser runner accepts `Cookie:NAME=VALUE`, `Basic ...`, `Bearer ...`,
-`basic:user:password`, `bearer:TOKEN`, `user:password`, or a raw bearer token.
-Values are passed to the browser process through environment only and are not
-written to evidence.
+browser runner accepts `Cookie:NAME=VALUE`, `Bearer ...`, `bearer:TOKEN`, or a
+raw bearer token. Values are passed to the browser process through environment
+only and are not written to evidence.
 
 Optional workspace proof timeouts:
 

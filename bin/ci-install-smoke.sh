@@ -166,6 +166,7 @@ http_status_code() {
   local url="$1"
   local auth="${2:-}"
   local host_header="${3:-}"
+  local cookie_file=""
   local curl_args=(
     --max-time 10
     -sS
@@ -174,13 +175,28 @@ http_status_code() {
   )
 
   if [[ -n "$auth" ]]; then
-    curl_args+=(-u "$auth")
+    cookie_file="$(mktemp /tmp/arclink-dashboard-cookie.XXXXXX)"
+    local username="${auth%%:*}"
+    local password="${auth#*:}"
+    local scheme="${url%%://*}"
+    local authority
+    authority="$(printf '%s' "$url" | sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#')"
+    local login_url="${scheme}://${authority}/__arclink/login"
+    local login_args=(--max-time 10 -sS -o /dev/null -c "$cookie_file" -X POST --data-urlencode "username=$username" --data-urlencode "password=$password" --data-urlencode "next=/")
+    if [[ -n "$host_header" ]]; then
+      login_args+=(-H "Host: $host_header")
+    fi
+    curl "${login_args[@]}" "$login_url" >/dev/null 2>&1 || true
+    curl_args+=(-b "$cookie_file")
   fi
   if [[ -n "$host_header" ]]; then
     curl_args+=(-H "Host: $host_header")
   fi
 
   curl "${curl_args[@]}" "$url"
+  if [[ -n "$cookie_file" ]]; then
+    rm -f "$cookie_file"
+  fi
 }
 
 wait_for_http_status() {
@@ -281,33 +297,38 @@ assert_dashboard_proxy_bearer_flow() {
   local password="$3"
 
   python3 - "$dashboard_url" "$username" "$password" <<'PY'
-import base64
+import http.cookiejar
 import re
 import sys
+import urllib.parse
 import urllib.request
 
 dashboard_url, username, password = sys.argv[1:4]
-basic = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-with urllib.request.urlopen(
-    urllib.request.Request(dashboard_url, headers={"Authorization": f"Basic {basic}"}),
+cookie_jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+form = urllib.parse.urlencode({"username": username, "password": password, "next": "/"}).encode("utf-8")
+opener.open(
+    urllib.request.Request(
+        urllib.parse.urljoin(dashboard_url, "/__arclink/login"),
+        data=form,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    ),
     timeout=10,
-) as response:
+).close()
+with opener.open(dashboard_url, timeout=10) as response:
     html = response.read().decode("utf-8", "replace")
-    session_cookie = response.headers.get("Set-Cookie")
 
 match = re.search(r'window\.__HERMES_SESSION_TOKEN__="([^"]+)"', html)
 if not match:
     raise SystemExit("expected Hermes session token in dashboard index.html")
-if not session_cookie:
+if not any(cookie.name == "arclink_dash_session" for cookie in cookie_jar):
     raise SystemExit("expected dashboard proxy to mint a session cookie")
 
-with urllib.request.urlopen(
+with opener.open(
     urllib.request.Request(
         dashboard_url.rstrip("/") + "/api/sessions?limit=1&offset=0",
-        headers={
-            "Authorization": f"Bearer {match.group(1)}",
-            "Cookie": session_cookie.split(";", 1)[0],
-        },
+        headers={"Authorization": f"Bearer {match.group(1)}"},
     ),
     timeout=10,
 ) as response:

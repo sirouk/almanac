@@ -51,6 +51,7 @@ describe("Page content smoke checks", () => {
     const content = readFileSync(resolve(ROOT, "src/app/login/page.tsx"), "utf-8");
     assert.ok(content.includes("user"), "missing user mode");
     assert.ok(content.includes("admin"), "missing admin mode");
+    assert.ok(content.includes("type=\"password\""), "missing admin password input");
     assert.ok(content.includes("api.login"), "missing login API call");
   });
 

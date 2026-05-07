@@ -263,14 +263,20 @@ def test_admin_login_sets_session_cookies() -> None:
         "ARCLINK_BASE_DOMAIN": "example.test",
         "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
     })
-    api.upsert_arclink_admin(conn, admin_id="admin_login", email="login@example.test", role="owner")
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_login",
+        email="login@example.test",
+        role="owner",
+        password="admin-test-password",
+    )
 
     status, payload, headers = hosted.route_arclink_hosted_api(
         conn,
         method="POST",
         path="/api/v1/auth/admin/login",
         headers={},
-        body=json.dumps({"email": "login@example.test"}),
+        body=json.dumps({"email": "login@example.test", "password": "admin-test-password"}),
         config=config,
     )
     expect(status == 201, f"expected 201 got {status}: {payload}")
@@ -882,12 +888,18 @@ def test_admin_logout_clears_cookies_and_revokes_session() -> None:
         "ARCLINK_BASE_DOMAIN": "example.test",
         "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
     })
-    api.upsert_arclink_admin(conn, admin_id="admin_logout", email="logout@example.test", role="owner")
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_logout",
+        email="logout@example.test",
+        role="owner",
+        password="admin-test-password",
+    )
 
     # Login
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/login",
-        headers={}, body=json.dumps({"email": "logout@example.test"}), config=config,
+        headers={}, body=json.dumps({"email": "logout@example.test", "password": "admin-test-password"}), config=config,
     )
     expect(status == 201, f"login expected 201 got {status}")
     session = payload["session"]
@@ -1572,17 +1584,33 @@ def test_read_only_admin_blocked_from_mutations() -> None:
 
 def test_login_rejects_unknown_email() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_badlogin_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_badlogin_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_badlogin_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_badlogin",
+        email="admin-badlogin@example.test",
+        role="owner",
+        password="admin-test-password",
+    )
 
     # Admin login with unknown email -> 401
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/login",
-        headers={}, body=json.dumps({"email": "nonexistent@example.test"}),
+        headers={}, body=json.dumps({"email": "nonexistent@example.test", "password": "admin-test-password"}),
         config=config,
     )
     expect(status == 401, f"admin login expected 401 got {status}: {payload}")
+
+    # Admin login with wrong password -> 401
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/login",
+        headers={}, body=json.dumps({"email": "admin-badlogin@example.test", "password": "wrong-password"}),
+        config=config,
+    )
+    expect(status == 401, f"wrong admin password expected 401 got {status}: {payload}")
 
     # User login with unknown email -> 401
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -1595,7 +1623,7 @@ def test_login_rejects_unknown_email() -> None:
     # Admin login with blank email -> 401
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/login",
-        headers={}, body=json.dumps({"email": ""}),
+        headers={}, body=json.dumps({"email": "", "password": "admin-test-password"}),
         config=config,
     )
     expect(status == 401, f"blank admin login expected 401 got {status}")
@@ -1653,7 +1681,7 @@ def test_rate_limit_returns_429_with_headers() -> None:
     for i in range(5):
         status, _, _ = hosted.route_arclink_hosted_api(
             conn, method="POST", path="/api/v1/auth/admin/login",
-            headers={}, body=json.dumps({"email": "ratelimit@example.test"}),
+            headers={}, body=json.dumps({"email": "ratelimit@example.test", "password": "admin-test-password"}),
             config=config,
         )
         # These will return 401 (unknown email), but rate limit counter increments
@@ -1661,7 +1689,7 @@ def test_rate_limit_returns_429_with_headers() -> None:
     # 6th attempt with same subject should be rate limited -> 429
     status, payload, headers = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/login",
-        headers={}, body=json.dumps({"email": "ratelimit@example.test"}),
+        headers={}, body=json.dumps({"email": "ratelimit@example.test", "password": "admin-test-password"}),
         config=config,
     )
     expect(status == 429, f"expected 429 got {status}: {payload}")

@@ -427,7 +427,7 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     expect("def ensure_container_user" in supervisor, supervisor)
     expect('"gateway", "run", "--replace"' in supervisor, supervisor)
     expect('"--host",\n                        "0.0.0.0"' in supervisor, supervisor)
-    expect("arclink_basic_auth_proxy.py" in supervisor, supervisor)
+    expect("arclink_dashboard_auth_proxy.py" in supervisor, supervisor)
     expect('"docker",\n                    "run"' in supervisor, supervisor)
     expect('"--network"' in supervisor and "ARCLINK_DOCKER_NETWORK" in supervisor, supervisor)
     expect('"ARCLINK_DOCKER_CONTAINER_NAME"' in supervisor, supervisor)
@@ -440,7 +440,7 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     expect('ARCLINK_AGENT_SERVICE_MANAGER:-systemd' in installer, installer)
     expect("def _ensure_docker_user_ready" in provisioner, provisioner)
     expect('"ARCLINK_AGENT_SERVICE_MANAGER": "docker-supervisor"' in provisioner, provisioner)
-    expect("arclink_basic_auth_proxy.py" in supervisor and "arclink-web-access.json" in supervisor, supervisor)
+    expect("arclink_dashboard_auth_proxy.py" in supervisor and "arclink-web-access.json" in supervisor, supervisor)
     print("PASS test_docker_agent_supervisor_replaces_user_systemd_units")
 
 

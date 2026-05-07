@@ -12,6 +12,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [kind, setKind] = useState<LoginKind>("user");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -20,7 +21,7 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await api.login(kind, { email });
+      const res = await api.login(kind, kind === "admin" ? { email, password } : { email });
       if (res.status === 201) {
         router.push(kind === "admin" ? "/admin" : "/dashboard");
       } else {
@@ -71,6 +72,20 @@ export default function LoginPage() {
               placeholder="you@company.com"
             />
           </div>
+          {kind === "admin" && (
+            <div>
+              <label htmlFor="password" className="block text-sm text-soft-white/60">Password</label>
+              <input
+                id="password"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-soft-white outline-none focus:border-signal-orange"
+                placeholder="Admin password"
+              />
+            </div>
+          )}
           <button
             type="submit"
             disabled={loading}

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import base64
 import http.client
 import http.server
 import importlib.util
@@ -10,9 +9,10 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import urlencode
 
 REPO = Path(__file__).resolve().parents[1]
-PROXY_PY = REPO / "python" / "arclink_basic_auth_proxy.py"
+PROXY_PY = REPO / "python" / "arclink_dashboard_auth_proxy.py"
 
 
 def load_module(path: Path, name: str):
@@ -67,69 +67,94 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
         return
 
 
-def request(port: int, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], str]:
+def request(
+    port: int,
+    path: str,
+    *,
+    method: str = "GET",
+    body: bytes | str | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], str]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        connection.request("GET", path, headers=headers or {})
+        payload = body.encode("utf-8") if isinstance(body, str) else body
+        connection.request(method, path, body=payload, headers=headers or {})
         response = connection.getresponse()
-        body = response.read().decode("utf-8", "replace")
-        return response.status, dict(response.getheaders()), body
+        response_body = response.read().decode("utf-8", "replace")
+        return response.status, dict(response.getheaders()), response_body
     finally:
         connection.close()
 
 
-def basic_header(username: str, password: str) -> str:
-    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-    return f"Basic {token}"
+def start_proxy(proxy_mod, access_file: Path):
+    backend = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), TestBackend)
+    backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
+    backend_thread.start()
+
+    handler = type(
+        "ConfiguredProxyHandler",
+        (proxy_mod.ProxyHandler,),
+        {
+            "access_file": access_file,
+            "target": f"http://127.0.0.1:{backend.server_port}",
+            "realm": "Hermes",
+        },
+    )
+    proxy = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    proxy_thread.start()
+    return backend, backend_thread, proxy, proxy_thread
 
 
-def test_proxy_allows_hermes_bearer_api_calls_after_basic_login() -> None:
-    proxy_mod = load_module(PROXY_PY, "arclink_basic_auth_proxy_test")
+def stop_proxy(backend, backend_thread, proxy, proxy_thread) -> None:
+    proxy.shutdown()
+    proxy.server_close()
+    proxy_thread.join(timeout=5)
+    backend.shutdown()
+    backend.server_close()
+    backend_thread.join(timeout=5)
+
+
+def login(port: int, *, username: str = "alex", password: str = "test-password") -> str:
+    body = urlencode({"username": username, "password": password, "next": "/"})
+    status, headers, _body = request(
+        port,
+        "/__arclink/login",
+        method="POST",
+        body=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    expect(status == 303, f"expected login redirect, saw {status} {headers}")
+    cookie = headers.get("Set-Cookie") or ""
+    expect(cookie.startswith("arclink_dash_session="), headers)
+    return cookie
+
+
+def test_proxy_allows_hermes_bearer_api_calls_after_session_login() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_test")
     with tempfile.TemporaryDirectory() as tmp:
         access_file = Path(tmp) / "arclink-web-access.json"
         access_file.write_text(
-            json.dumps({"username": "alex", "password": "test-password"}),
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
             encoding="utf-8",
         )
 
-        backend = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), TestBackend)
-        backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
-        backend_thread.start()
-
-        handler = type(
-            "ConfiguredProxyHandler",
-            (proxy_mod.ProxyHandler,),
-            {
-                "access_file": access_file,
-                "target": f"http://127.0.0.1:{backend.server_port}",
-                "realm": "ArcLink Hermes",
-            },
-        )
-        proxy = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
-        proxy_thread.start()
-
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
         try:
-            status, headers, _body = request(proxy.server_port, "/")
-            expect(status == 401, f"expected 401 for unauthenticated request, saw {status} {headers}")
-            expect(headers.get("WWW-Authenticate") == 'Basic realm="ArcLink Hermes"', headers)
+            status, headers, body = request(proxy.server_port, "/")
+            expect(status == 401, f"expected 401 login gate, saw {status} {headers}")
+            expect("WWW-Authenticate" not in headers, headers)
+            expect("<form" in body and "password" in body.lower(), body)
 
-            status, headers, _body = request(
-                proxy.server_port,
-                "/",
-                headers={"Authorization": basic_header("alex", "test-password")},
-            )
-            expect(status == 200, f"expected successful dashboard response, saw {status} {headers}")
-            cookie = headers.get("Set-Cookie")
-            expect(cookie is not None and cookie.startswith(f"{proxy_mod.SESSION_COOKIE_NAME}="), headers)
+            cookie = login(proxy.server_port)
 
             status, headers, body = request(
                 proxy.server_port,
                 "/api/private",
                 headers={"Authorization": "Bearer hermes-session-token"},
             )
-            expect(status == 401, f"expected proxy challenge without cookie, saw {status} {headers} {body!r}")
-            expect(headers.get("WWW-Authenticate") == 'Basic realm="ArcLink Hermes"', headers)
+            expect(status == 401, f"expected proxy login gate without cookie, saw {status} {headers} {body!r}")
+            expect("WWW-Authenticate" not in headers, headers)
 
             status, headers, body = request(
                 proxy.server_port,
@@ -145,64 +170,39 @@ def test_proxy_allows_hermes_bearer_api_calls_after_basic_login() -> None:
                 TestBackend.last_cookie in (None, ""),
                 f"expected proxy session cookie to stay at the proxy, saw {TestBackend.last_cookie!r}",
             )
-            print("PASS test_proxy_allows_hermes_bearer_api_calls_after_basic_login")
+            print("PASS test_proxy_allows_hermes_bearer_api_calls_after_session_login")
         finally:
-            proxy.shutdown()
-            proxy.server_close()
-            proxy_thread.join(timeout=5)
-            backend.shutdown()
-            backend.server_close()
-            backend_thread.join(timeout=5)
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
-def test_proxy_injects_dashboard_plugin_deeplink_helper() -> None:
-    proxy_mod = load_module(PROXY_PY, "arclink_basic_auth_proxy_deeplink_test")
+def test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_deeplink_test")
     with tempfile.TemporaryDirectory() as tmp:
         access_file = Path(tmp) / "arclink-web-access.json"
         access_file.write_text(
-            json.dumps({"username": "alex", "password": "test-password"}),
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
             encoding="utf-8",
         )
 
-        backend = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), TestBackend)
-        backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
-        backend_thread.start()
-
-        handler = type(
-            "ConfiguredProxyHandler",
-            (proxy_mod.ProxyHandler,),
-            {
-                "access_file": access_file,
-                "target": f"http://127.0.0.1:{backend.server_port}",
-                "realm": "ArcLink Hermes",
-            },
-        )
-        proxy = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
-        proxy_thread.start()
-
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
         try:
-            status, headers, body = request(
-                proxy.server_port,
-                "/drive",
-                headers={"Authorization": basic_header("alex", "test-password")},
-            )
+            status, headers, _body = request(proxy.server_port, "/drive", headers={"Authorization": "Basic tainted"})
+            expect(status == 401, f"expected Basic header to be ignored, saw {status} {headers}")
+            expect("WWW-Authenticate" not in headers, headers)
+
+            cookie = login(proxy.server_port)
+            status, headers, body = request(proxy.server_port, "/drive", headers={"Cookie": cookie})
             expect(status == 200, f"expected successful dashboard response, saw {status} {headers}")
             expect("data-arclink-plugin-deeplink" in body, body)
-            expect('target="/drive"' in body or "target='/drive'" in body or 'target=\"/drive\"' in body, body)
+            expect('target="/drive"' in body or "target='/drive'" in body or 'target=\\"/drive\\"' in body, body)
             expect(headers.get("Content-Length") == str(len(body.encode("utf-8"))), headers)
-            print("PASS test_proxy_injects_dashboard_plugin_deeplink_helper")
+            print("PASS test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper")
         finally:
-            proxy.shutdown()
-            proxy.server_close()
-            proxy_thread.join(timeout=5)
-            backend.shutdown()
-            backend.server_close()
-            backend_thread.join(timeout=5)
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
-def test_proxy_can_run_dashboard_helpers_without_basic_auth() -> None:
-    proxy_mod = load_module(PROXY_PY, "arclink_basic_auth_proxy_no_auth_test")
+def test_proxy_can_run_dashboard_helpers_without_auth() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_no_auth_test")
     with tempfile.TemporaryDirectory() as tmp:
         access_file = Path(tmp) / "arclink-web-access.json"
         access_file.write_text(
@@ -220,7 +220,7 @@ def test_proxy_can_run_dashboard_helpers_without_basic_auth() -> None:
             {
                 "access_file": access_file,
                 "target": f"http://127.0.0.1:{backend.server_port}",
-                "realm": "ArcLink Hermes",
+                "realm": "Hermes",
                 "require_auth": False,
             },
         )
@@ -233,21 +233,16 @@ def test_proxy_can_run_dashboard_helpers_without_basic_auth() -> None:
             expect(status == 200, f"expected no-auth dashboard response, saw {status} {headers} {body!r}")
             expect("WWW-Authenticate" not in headers, headers)
             expect("data-arclink-plugin-deeplink" in body, body)
-            print("PASS test_proxy_can_run_dashboard_helpers_without_basic_auth")
+            print("PASS test_proxy_can_run_dashboard_helpers_without_auth")
         finally:
-            proxy.shutdown()
-            proxy.server_close()
-            proxy_thread.join(timeout=5)
-            backend.shutdown()
-            backend.server_close()
-            backend_thread.join(timeout=5)
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
 def main() -> int:
-    test_proxy_allows_hermes_bearer_api_calls_after_basic_login()
-    test_proxy_injects_dashboard_plugin_deeplink_helper()
-    test_proxy_can_run_dashboard_helpers_without_basic_auth()
-    print("PASS all 3 basic-auth-proxy regression tests")
+    test_proxy_allows_hermes_bearer_api_calls_after_session_login()
+    test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
+    test_proxy_can_run_dashboard_helpers_without_auth()
+    print("PASS all 3 dashboard-auth-proxy regression tests")
     return 0
 
 

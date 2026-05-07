@@ -536,10 +536,15 @@
                   },
                   "mfa_verified": {
                     "type": "boolean"
+                  },
+                  "password": {
+                    "format": "password",
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "email"
+                  "email",
+                  "password"
                 ],
                 "type": "object"
               }

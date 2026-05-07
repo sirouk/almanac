@@ -250,6 +250,47 @@ def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> No
     print("PASS test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema")
 
 
+def test_admin_passwords_are_hashed_and_required_for_login() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_admin_password_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_admin_password_test")
+    conn = memory_db(control)
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_password",
+        email="admin-password@example.test",
+        role="owner",
+        password="admin-test-password",
+    )
+    stored = conn.execute("SELECT password_hash FROM arclink_admins WHERE admin_id = 'admin_password'").fetchone()
+    expect("admin-test-password" not in str(stored["password_hash"]), str(stored["password_hash"]))
+    expect(api.verify_arclink_admin_password("admin-test-password", str(stored["password_hash"])), str(stored["password_hash"]))
+    try:
+        api.create_arclink_admin_login_session_api(
+            conn,
+            email="admin-password@example.test",
+            password="wrong-password",
+            login_subject="admin-password@example.test",
+        )
+    except api.ArcLinkApiAuthError as exc:
+        expect("Invalid ArcLink admin credentials" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected wrong admin password to fail")
+    response = api.create_arclink_admin_login_session_api(
+        conn,
+        email="admin-password@example.test",
+        password="admin-test-password",
+        login_subject="admin-password@example.test",
+    )
+    expect(response.status == 201 and response.payload["session"]["admin_id"] == "admin_password", str(response))
+    updated = api.set_arclink_admin_password(
+        conn,
+        email="admin-password@example.test",
+        password="admin-test-password-rotated",
+    )
+    expect(updated["password"]["configured"], str(updated))
+    print("PASS test_admin_passwords_are_hashed_and_required_for_login")
+
+
 def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_transport_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_transport_test")
@@ -382,10 +423,11 @@ def main() -> int:
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
     test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema()
+    test_admin_passwords_are_hashed_and_required_for_login()
     test_api_transport_helpers_extract_credentials_and_shape_safe_errors()
     test_revoke_session_rejects_invalid_kind_before_update_or_audit()
     test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit()
-    print("PASS all 7 ArcLink API/auth tests")
+    print("PASS all 8 ArcLink API/auth tests")
     return 0
 
 

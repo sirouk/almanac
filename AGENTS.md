@@ -504,6 +504,11 @@ New and refreshed agents should get these defaults from the outset:
 - `drive`, `code`, and `terminal` dashboard plugins installed and enabled
   so Hermes shows `Drive`, `Code`, and `Terminal` sidebar tabs without
   ArcLink patching Hermes core dashboard code.
+- Per-agent Hermes dashboard access is gated by
+  `python/arclink_dashboard_auth_proxy.py`, which uses the generated
+  `state/arclink-web-access.json` username/password plus a signed, expiring
+  session cookie. Do not reintroduce browser-facing Basic Auth for dashboard,
+  Drive, Code, Terminal, or legacy external resources.
 - Per-agent ArcLink MCP bootstrap token installed at
   `HERMES_HOME/secrets/arclink-bootstrap-token`. Agents do not pass this token
   manually; `arclink-managed-context` injects it before ArcLink MCP tool

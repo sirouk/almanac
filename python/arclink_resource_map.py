@@ -43,12 +43,6 @@ def shared_resource_lines(
             return f"https://{host}{normalized}"
         return f"https://{host}:{serve_port}{normalized}"
 
-    if nextcloud_enabled:
-        if host:
-            lines.append(f"Vault access in Nextcloud: {https_url('/')} (shared mount: /Vault)")
-        else:
-            lines.append("Vault access in Nextcloud: shared on this host (mounted as /Vault)")
-
     if host:
         lines.append(f"QMD MCP retrieval rail: {https_url(qmd_path)}")
         lines.append(f"ArcLink MCP control rail: {https_url(arclink_mcp_path)}")

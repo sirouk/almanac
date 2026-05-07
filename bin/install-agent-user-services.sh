@@ -378,7 +378,7 @@ Requires=arclink-user-agent-dashboard.service
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
 WorkingDirectory=$HERMES_HOME
-ExecStart=$PYTHON3_BIN $SHARED_REPO_DIR/python/arclink_basic_auth_proxy.py --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file $ACCESS_STATE_FILE --realm "ArcLink Hermes"
+ExecStart=$PYTHON3_BIN $SHARED_REPO_DIR/python/arclink_dashboard_auth_proxy.py --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file $ACCESS_STATE_FILE --realm "Hermes"
 Restart=always
 RestartSec=5
 

@@ -176,7 +176,7 @@ def test_generated_web_service_units_follow_access_state() -> None:
         installed_start_hook_text = installed_start_hook.read_text(encoding="utf-8")
         expect("--port 19021" in dashboard_text, dashboard_text)
         expect("--listen-port 29021" in proxy_text, proxy_text)
-        expect("arclink_basic_auth_proxy.py" in proxy_text and "--access-file" in proxy_text, proxy_text)
+        expect("arclink_dashboard_auth_proxy.py" in proxy_text and "--access-file" in proxy_text, proxy_text)
         expect("gateway run --replace" in gateway_text, gateway_text)
         expect("Environment=HERMES_CRON_SCRIPT_TIMEOUT=1800" in gateway_text, gateway_text)
         expect("Environment=TELEGRAM_REACTIONS=true" in gateway_text, gateway_text)

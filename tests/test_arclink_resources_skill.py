@@ -47,7 +47,7 @@ def test_arclink_resources_skill_renders_local_no_secret_bundle() -> None:
                 {
                     "resource-ref": (
                         "Canonical user access rails and shared ArcLink addresses:\n"
-                        "- Vault access in Nextcloud: https://arclink.example.test:8445/ (shared mount: /Vault)\n"
+                        "- Legacy Nextcloud access is disabled; use Drive in Hermes.\n"
                         "- QMD MCP retrieval rail: https://arclink.example.test:8445/mcp\n"
                         "- Shared Notion SSOT: https://www.notion.so/The-ArcLink-00000000000040008000000000000003\n"
                         "- Credentials are intentionally omitted from plugin-managed context."
@@ -72,7 +72,7 @@ def test_arclink_resources_skill_renders_local_no_secret_bundle() -> None:
         expect("ArcLink resources:" in output, output)
         expect("Hermes dashboard: https://arclink.example.test:30012/" in output, output)
         expect("Dashboard username: operator2" in output, output)
-        expect("Nextcloud login: operator2" in output, output)
+        expect("Nextcloud login:" not in output, output)
         expect(f"Workspace root: {user_home}" in output, output)
         expect(f"ArcLink vault: {user_home / 'ArcLink'}" in output, output)
         expect("Shared Notion SSOT: https://www.notion.so/The-ArcLink-00000000000040008000000000000003" in output, output)

@@ -28,9 +28,9 @@ hermes dashboard \
   --no-open &
 hermes_pid="$!"
 
-python3 ./python/arclink_basic_auth_proxy.py \
+python3 ./python/arclink_dashboard_auth_proxy.py \
   --listen-host "$listen_host" \
   --listen-port "$listen_port" \
   --target "http://$backend_host:$backend_port" \
   --access-file "$access_file" \
-  --realm "ArcLink Hermes"
+  --realm "Hermes"

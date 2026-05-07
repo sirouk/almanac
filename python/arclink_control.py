@@ -1007,6 +1007,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           email TEXT NOT NULL,
           role TEXT NOT NULL,
           status TEXT NOT NULL,
+          password_hash TEXT NOT NULL DEFAULT '',
           role_scope_json TEXT NOT NULL DEFAULT '{}',
           totp_enabled INTEGER NOT NULL DEFAULT 0,
           totp_secret_ref TEXT NOT NULL DEFAULT '',
@@ -1416,6 +1417,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     _ensure_column(conn, "arclink_users", "entitlement_state", "TEXT NOT NULL DEFAULT 'none'")
     _ensure_column(conn, "arclink_users", "entitlement_updated_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_admins", "password_hash", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_admins", "role_scope_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "arclink_admins", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "arclink_admins", "totp_secret_ref", "TEXT NOT NULL DEFAULT ''")
@@ -13882,7 +13884,7 @@ def build_managed_memory_payload(
         "- Use arclink-ssot-connect only for optional user-owned Notion MCP setup; it is not the default shared ArcLink Notion knowledge rail.\n"
         "- Use arclink-notion-mcp only as an optional personal Notion helper after that user-owned Notion MCP is actually live; do not treat it as the default shared ArcLink workspace-search lane.\n"
         "- For org-wide new Notion pages or databases, use the brokered ssot.write rail so creations are parented under the shared ArcLink page and inherit org access; do not use personal Notion MCP for shared SSOT creation.\n"
-        "- Use arclink-resources for /arclink-resources, dashboard/code workspace links, Nextcloud login usernames, remote helper setup, backup setup, and the user-visible ~/ArcLink vault path.\n"
+        "- Use arclink-resources for /arclink-resources, dashboard/code workspace links, remote helper setup, backup setup, and the user-visible ~/ArcLink vault path.\n"
         "- Use arclink-first-contact for ArcLink setup or diagnostic checks.\n"
         "- Org-published Hermes skills live under ~/ArcLink/Agents_Skills/*/skills and are wired into skills.external_dirs during install/refresh; use skills_list/skill_view when the skill is active, and qmd vault.search-and-fetch for source-level review or edits.\n"
         "- The shared vault does not require a fixed Projects/Repos taxonomy; qmd indexes text-like files anywhere under the vault root, and .vault files only define subscription/notification lanes.\n"

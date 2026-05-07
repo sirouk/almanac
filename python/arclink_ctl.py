@@ -101,6 +101,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text.")
     subparsers = parser.add_subparsers(dest="domain", required=True)
 
+    admin = subparsers.add_parser("admin")
+    admin_sub = admin.add_subparsers(dest="action", required=True)
+    admin_password = admin_sub.add_parser("set-password")
+    admin_password.add_argument("email")
+    admin_password.add_argument("--password-file", default="", help="Read the new password from a local file.")
+    admin_password.add_argument("--password", default="", help=argparse.SUPPRESS)
+    admin_password.add_argument("--generate", action="store_true", help="Generate a new password.")
+    admin_password.add_argument("--write-password-file", default="", help="Write a generated password to this local file with 0600 permissions.")
+
     token = subparsers.add_parser("token")
     token_sub = token.add_subparsers(dest="action", required=True)
     token_sub.add_parser("list")
@@ -388,6 +397,44 @@ def dump_output(args: argparse.Namespace, payload: object) -> None:
         print(payload)
         return
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _write_private_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        if not text.endswith("\n"):
+            handle.write("\n")
+    os.chmod(path, 0o600)
+
+
+def _resolve_admin_password_arg(args: argparse.Namespace) -> tuple[str, str]:
+    if args.password and args.password_file:
+        raise SystemExit("Use either --password or --password-file, not both.")
+    if args.generate and (args.password or args.password_file):
+        raise SystemExit("Use --generate by itself, or provide an explicit password.")
+    if args.password:
+        return str(args.password), "argument"
+    if args.password_file:
+        try:
+            password = Path(args.password_file).expanduser().read_text(encoding="utf-8").splitlines()[0]
+        except (OSError, IndexError) as exc:
+            raise SystemExit(f"failed to read admin password file: {exc}") from exc
+        return password, "file"
+    if args.generate:
+        password = generate_raw_token(24)
+        if not args.write_password_file:
+            raise SystemExit("--generate requires --write-password-file so the password is not printed or lost")
+        _write_private_text(Path(args.write_password_file).expanduser(), password)
+        return password, "generated-file"
+    if not sys.stdin.isatty():
+        raise SystemExit("admin set-password needs --password-file or --generate when stdin is not interactive")
+    first = getpass.getpass("New admin password: ")
+    second = getpass.getpass("Confirm admin password: ")
+    if first != second:
+        raise SystemExit("passwords do not match")
+    return first, "prompt"
 
 
 def _redacted_email(value: str) -> str:
@@ -2016,6 +2063,19 @@ def main() -> None:
         dump_output(args, org_profile_preview(cfg, args.file, as_json=bool(args.json)))
         return
     with connect_db(cfg) as conn:
+        if args.domain == "admin" and args.action == "set-password":
+            from arclink_api_auth import set_arclink_admin_password
+
+            password, source = _resolve_admin_password_arg(args)
+            admin = set_arclink_admin_password(conn, email=args.email, password=password)
+            payload: dict[str, Any] = {
+                "ok": True,
+                "admin": admin,
+                "password_source": source,
+                "password_written_to": str(Path(args.write_password_file).expanduser()) if args.write_password_file else "",
+            }
+            dump_output(args, payload)
+            return
         if args.domain == "org-profile" and args.action == "apply":
             dump_output(args, org_profile_apply(conn, cfg, args.file, actor=args.actor, yes=args.yes))
             return

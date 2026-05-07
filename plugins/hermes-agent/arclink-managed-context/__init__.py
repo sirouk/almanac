@@ -165,6 +165,7 @@ _HUMAN_SHARED_RESOURCE_SKIP_PREFIXES = (
     "code workspace:",
     "workspace root:",
     "arclink vault:",
+    "vault access in nextcloud:",
     "qmd mcp retrieval rail:",
     "arclink mcp control rail:",
     "credentials are",
@@ -1005,18 +1006,11 @@ def _human_shared_resource_lines(
         lowered = line.lower()
         if any(lowered.startswith(prefix) for prefix in _HUMAN_SHARED_RESOURCE_SKIP_PREFIXES):
             continue
+        if "nextcloud" in lowered:
+            continue
         if "password" in lowered or "secret" in lowered or "credential" in lowered:
             continue
         _append_unique(lines, seen, line)
-
-    if not any(line.lower().startswith("vault access in nextcloud:") for line in lines):
-        host = _clean_resource_value(access_payload.get("tailscale_host"), limit=160)
-        if host:
-            _append_unique(
-                lines,
-                seen,
-                f"Vault access in Nextcloud: https://{host}:8445/ (shared mount: /Vault)",
-            )
 
     vault_root = _vault_root_for_home(home_root)
     _append_unique(lines, seen, f"Vault path in VS Code and shell: {vault_root}")
@@ -1055,7 +1049,7 @@ def _remote_cli_lines(
     )
     return [
         f"Run: `curl -fsSL {setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`",
-        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Curator will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
+        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Raven will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
         f"Use the generated `{wrapper_name}` wrapper, not your local `hermes` command.",
         f"Remote SSH target after key install: {remote_user}@{remote_host}",
     ]
@@ -1071,10 +1065,6 @@ def _resource_bundle(
     dashboard_url = _clean_resource_value(access_payload.get("dashboard_url"), limit=_MAX_URL_FIELD_CHARS)
     code_url = _clean_resource_value(access_payload.get("code_url"), limit=_MAX_URL_FIELD_CHARS)
     username = _clean_resource_value(access_payload.get("username") or access_payload.get("unix_user"), limit=80)
-    nextcloud_username = _clean_resource_value(
-        access_payload.get("nextcloud_username") or username,
-        limit=80,
-    )
     home_root = _home_root(access_payload)
     vault_root = _vault_root_for_home(home_root)
 
@@ -1082,8 +1072,6 @@ def _resource_bundle(
         lines.append(f"- Hermes dashboard: {dashboard_url}")
     if username:
         lines.append(f"- Dashboard username: {username}")
-    if nextcloud_username:
-        lines.append(f"- Nextcloud login: {nextcloud_username}")
     if code_url:
         lines.append(f"- Code workspace: {code_url}")
     if home_root:

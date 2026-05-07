@@ -15,9 +15,8 @@ Hermes `v2026.4.30` or newer.
 - Vault uses the first existing directory from `DRIVE_ROOT`,
   `KNOWLEDGE_VAULT_ROOT`, `AGENT_VAULT_DIR`, `VAULT_DIR`, `~/Vault`, or
   `$HERMES_HOME/Vault`.
-- Optional WebDAV/Nextcloud preview uses `NEXTCLOUD_URL` or
-  `DRIVE_NEXTCLOUD_URL` with sanitized server-side access state from
-  `$HERMES_HOME/state/web-access.json`.
+- Drive uses local roots only; legacy Nextcloud/WebDAV browser access is not
+  required.
 
 ## Behavior
 

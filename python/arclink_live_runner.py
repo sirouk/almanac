@@ -193,18 +193,11 @@ def _browser_runner_script() -> str:
           if (lower.startsWith("cookie:")) {
             return { Cookie: raw.slice(7) };
           }
-          if (lower.startsWith("basic ") || lower.startsWith("bearer ")) {
+          if (lower.startsWith("bearer ")) {
             return { Authorization: raw };
           }
           if (lower.startsWith("bearer:")) {
             return { Authorization: "Bearer " + raw.slice(7) };
-          }
-          if (lower.startsWith("basic:")) {
-            const payload = raw.slice(6);
-            return { Authorization: "Basic " + Buffer.from(payload, "utf8").toString("base64") };
-          }
-          if (raw.includes(":")) {
-            return { Authorization: "Basic " + Buffer.from(raw, "utf8").toString("base64") };
           }
           return { Authorization: "Bearer " + raw };
         }

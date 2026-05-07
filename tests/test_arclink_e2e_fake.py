@@ -134,10 +134,12 @@ def test_full_fake_journey():
     control.upsert_arclink_service_health(
         conn, deployment_id=deployment_id, service_name="qmd-mcp", status="healthy",
     )
+    api.set_arclink_user_password(conn, user_id=user_id, password="alice-dashboard-password")
 
     # ---- 7. User login ---------------------------------------------------
     status, payload, _ = _api(hosted, conn, config, "POST", "/auth/user/login", body={
         "email": "alice@example.test",
+        "password": "alice-dashboard-password",
     })
     expect(status == 201, f"user login: expected 201 got {status}: {payload}")
     user_session = payload["session"]

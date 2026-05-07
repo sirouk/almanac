@@ -422,6 +422,7 @@ def _handle_user_login(
     result = create_arclink_user_login_session_api(
         conn,
         email=str(body.get("email") or ""),
+        password=str(body.get("password") or ""),
         login_subject=str(body.get("login_subject") or body.get("email") or ""),
         metadata=body.get("metadata"),
     )
@@ -853,9 +854,10 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["auth"],
         "requestBody": _openapi_json_body({
             "email": {"type": "string", "format": "email"},
+            "password": {"type": "string", "format": "password"},
             "login_subject": {"type": "string"},
             "metadata": {"type": "object"},
-        }, required=["email"]),
+        }, required=["email", "password"]),
         "responses": _RESP_CREATED_UNAUTH,
     },
     "user_logout": {

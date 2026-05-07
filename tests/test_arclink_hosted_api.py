@@ -588,6 +588,7 @@ def test_user_portal_link_route() -> None:
 
 def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_userlogin_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_userlogin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_userlogin_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_userlogin_test")
     conn = memory_db(control)
@@ -596,6 +597,18 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
         "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
     })
     prepared = seed_paid_deployment(control, onboarding, conn)
+    api.set_arclink_user_password(conn, user_id=prepared["user_id"], password="hosted-user-password")
+
+    # Email-only login is not enough to create a session.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/user/login",
+        headers={},
+        body=json.dumps({"email": "hosted-user@example.test"}),
+        config=config,
+    )
+    expect(status == 401, f"email-only login expected 401 got {status}: {payload}")
 
     # Login
     status, payload, headers = hosted.route_arclink_hosted_api(
@@ -603,7 +616,7 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
         method="POST",
         path="/api/v1/auth/user/login",
         headers={},
-        body=json.dumps({"email": "hosted-user@example.test"}),
+        body=json.dumps({"email": "hosted-user@example.test", "password": "hosted-user-password"}),
         config=config,
     )
     expect(status == 201, f"expected 201 got {status}: {payload}")
@@ -1615,7 +1628,7 @@ def test_login_rejects_unknown_email() -> None:
     # User login with unknown email -> 401
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/user/login",
-        headers={}, body=json.dumps({"email": "nonexistent@example.test"}),
+        headers={}, body=json.dumps({"email": "nonexistent@example.test", "password": "user-test-password"}),
         config=config,
     )
     expect(status == 401, f"user login expected 401 got {status}: {payload}")

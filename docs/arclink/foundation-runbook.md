@@ -306,9 +306,9 @@ Hosted API boundary:
   `ARCLINK_DEFAULT_PRICE_ID`, `ARCLINK_FIRST_AGENT_PRICE_ID`, and
   `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`.
 - Public onboarding routes (`/onboarding/start`, `/onboarding/answer`,
-  `/onboarding/checkout`), admin login, and the Stripe webhook endpoint require
-  no session authentication. Admin login still requires the stored admin
-  password and is rate-limited.
+  `/onboarding/checkout`), login routes, and the Stripe webhook endpoint require
+  no existing session. Admin and user login still require the stored password
+  for that principal and are rate-limited.
 - User dashboard and admin dashboard reads require session credentials via
   `Authorization` bearer token and `X-ArcLink-Session-Id` header.
 - Admin mutation routes (`/admin/actions`, `/admin/sessions/revoke`) require

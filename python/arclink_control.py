@@ -931,6 +931,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           email TEXT NOT NULL DEFAULT '',
           display_name TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL,
+          password_hash TEXT NOT NULL DEFAULT '',
           stripe_customer_id TEXT NOT NULL DEFAULT '',
           entitlement_state TEXT NOT NULL DEFAULT 'none',
           entitlement_updated_at TEXT NOT NULL DEFAULT '',
@@ -1417,6 +1418,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     _ensure_column(conn, "arclink_users", "entitlement_state", "TEXT NOT NULL DEFAULT 'none'")
     _ensure_column(conn, "arclink_users", "entitlement_updated_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_users", "password_hash", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_admins", "password_hash", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_admins", "role_scope_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "arclink_admins", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")

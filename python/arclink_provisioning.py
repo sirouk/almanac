@@ -188,6 +188,11 @@ def _secret_ref(metadata: Mapping[str, Any], key: str, default: str) -> str:
 def _render_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
     return {
         "chutes_api_key": _secret_ref(metadata, "chutes_secret_ref", f"secret://arclink/chutes/{deployment_id}"),
+        "dashboard_password": _secret_ref(
+            metadata,
+            "dashboard_password_ref",
+            f"secret://arclink/dashboard/{deployment_id}/password",
+        ),
         "nextcloud_admin_password": _secret_ref(
             metadata,
             "nextcloud_admin_password_ref",
@@ -560,12 +565,16 @@ def _render_services(
                 "ARCLINK_CHUTES_DEFAULT_MODEL": env["ARCLINK_CHUTES_DEFAULT_MODEL"],
                 "ARCLINK_MODEL_REASONING_DEFAULT": env["ARCLINK_MODEL_REASONING_DEFAULT"],
                 "ARCLINK_CHUTES_API_KEY_FILE": secret_target["chutes_api_key"],
+                "ARCLINK_DASHBOARD_PASSWORD_FILE": secret_target["dashboard_password"],
             },
             volumes=[
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
                 {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
             ],
-            secrets=[{"source": "chutes_api_key", "target": secret_target["chutes_api_key"]}],
+            secrets=[
+                {"source": "chutes_api_key", "target": secret_target["chutes_api_key"]},
+                {"source": "dashboard_password", "target": secret_target["dashboard_password"]},
+            ],
             deploy=_limits("managed-context-install"),
         ),
     }
@@ -794,6 +803,7 @@ def render_arclink_provisioning_intent(
                 name
                 for name in (
                     "chutes_api_key",
+                    "dashboard_password",
                     "telegram_bot_token",
                     "discord_bot_token",
                     "notion_token",

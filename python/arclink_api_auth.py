@@ -31,8 +31,10 @@ ARCLINK_SESSION_ID_HEADER = "x-arclink-session-id"
 ARCLINK_SESSION_TOKEN_HEADER = "x-arclink-session-token"
 ARCLINK_CSRF_HEADER = "x-arclink-csrf-token"
 GENERIC_ARCLINK_API_ERROR = "Request blocked. Check input and try again."
-ARCLINK_ADMIN_PASSWORD_ALGORITHM = "pbkdf2_sha256"
-ARCLINK_ADMIN_PASSWORD_ITERATIONS = 390_000
+ARCLINK_PASSWORD_ALGORITHM = "pbkdf2_sha256"
+ARCLINK_PASSWORD_ITERATIONS = 390_000
+ARCLINK_ADMIN_PASSWORD_ALGORITHM = ARCLINK_PASSWORD_ALGORITHM
+ARCLINK_ADMIN_PASSWORD_ITERATIONS = ARCLINK_PASSWORD_ITERATIONS
 
 
 class ArcLinkApiAuthError(ValueError):
@@ -145,24 +147,24 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
 
 
-def hash_arclink_admin_password(password: str) -> str:
+def hash_arclink_password(password: str, *, label: str = "ArcLink password") -> str:
     raw = str(password or "")
     if len(raw) < 12:
-        raise ArcLinkApiAuthError("ArcLink admin password must be at least 12 characters")
+        raise ArcLinkApiAuthError(f"{label} must be at least 12 characters")
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
         raw.encode("utf-8"),
         salt.encode("ascii"),
-        ARCLINK_ADMIN_PASSWORD_ITERATIONS,
+        ARCLINK_PASSWORD_ITERATIONS,
     ).hex()
-    return f"{ARCLINK_ADMIN_PASSWORD_ALGORITHM}${ARCLINK_ADMIN_PASSWORD_ITERATIONS}${salt}${digest}"
+    return f"{ARCLINK_PASSWORD_ALGORITHM}${ARCLINK_PASSWORD_ITERATIONS}${salt}${digest}"
 
 
-def verify_arclink_admin_password(password: str, password_hash: str) -> bool:
+def verify_arclink_password(password: str, password_hash: str) -> bool:
     stored = str(password_hash or "").strip()
     parts = stored.split("$")
-    if len(parts) != 4 or parts[0] != ARCLINK_ADMIN_PASSWORD_ALGORITHM:
+    if len(parts) != 4 or parts[0] != ARCLINK_PASSWORD_ALGORITHM:
         return False
     _algorithm, iterations_raw, salt, digest = parts
     try:
@@ -178,6 +180,14 @@ def verify_arclink_admin_password(password: str, password_hash: str) -> bool:
         iterations,
     ).hex()
     return hmac.compare_digest(candidate, digest)
+
+
+def hash_arclink_admin_password(password: str) -> str:
+    return hash_arclink_password(password, label="ArcLink admin password")
+
+
+def verify_arclink_admin_password(password: str, password_hash: str) -> bool:
+    return verify_arclink_password(password, password_hash)
 
 
 def _new_id(prefix: str) -> str:
@@ -326,6 +336,52 @@ def set_arclink_admin_password(
     if commit:
         conn.commit()
     return sanitized_arclink_admin(conn, admin_id=target_admin)
+
+
+def set_arclink_user_password(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str = "",
+    email: str = "",
+    password: str = "",
+    password_hash: str = "",
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_email = str(email or "").strip().lower()
+    if clean_user:
+        row = conn.execute("SELECT user_id FROM arclink_users WHERE user_id = ?", (clean_user,)).fetchone()
+    elif clean_email:
+        row = conn.execute("SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?)", (clean_email,)).fetchone()
+    else:
+        raise ArcLinkApiAuthError("ArcLink user password update requires a user id or email")
+    if row is None:
+        raise KeyError(clean_user or clean_email)
+    target_user = str(row["user_id"] or "")
+    clean_password_hash = str(password_hash or "").strip()
+    if password:
+        clean_password_hash = hash_arclink_password(password, label="ArcLink user password")
+    if not clean_password_hash:
+        raise ArcLinkApiAuthError("ArcLink user password update requires password material")
+    conn.execute(
+        "UPDATE arclink_users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
+        (clean_password_hash, utc_now_iso(), target_user),
+    )
+    if commit:
+        conn.commit()
+    row = conn.execute(
+        "SELECT user_id, email, password_hash, updated_at FROM arclink_users WHERE user_id = ?",
+        (target_user,),
+    ).fetchone()
+    user = rowdict(row)
+    return {
+        "user_id": str(user.get("user_id") or ""),
+        "email": str(user.get("email") or ""),
+        "password": {
+            "configured": bool(str(user.get("password_hash") or "").strip()),
+            "updated_at": str(user.get("updated_at") or ""),
+        },
+    }
 
 
 def grant_arclink_admin_role(
@@ -553,6 +609,7 @@ def create_arclink_user_login_session_api(
     conn: sqlite3.Connection,
     *,
     email: str,
+    password: str,
     login_subject: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
@@ -562,11 +619,15 @@ def create_arclink_user_login_session_api(
         raise ArcLinkApiAuthError("ArcLink user login requires an email")
     check_arclink_rate_limit(conn, scope="user_login", subject=clean_subject, limit=10, window_seconds=900)
     row = conn.execute(
-        "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?) AND status = 'active'",
+        "SELECT user_id, password_hash FROM arclink_users WHERE LOWER(email) = LOWER(?) AND status = 'active'",
         (clean_email,),
     ).fetchone()
     if row is None:
-        raise ArcLinkApiAuthError("ArcLink user login principal not found")
+        raise ArcLinkApiAuthError("Invalid ArcLink user credentials")
+    if not str(row["password_hash"] or "").strip():
+        raise ArcLinkApiAuthError("ArcLink user password is not configured")
+    if not verify_arclink_password(str(password or ""), str(row["password_hash"] or "")):
+        raise ArcLinkApiAuthError("Invalid ArcLink user credentials")
     session = create_arclink_user_session(
         conn,
         user_id=str(row["user_id"] or ""),

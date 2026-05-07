@@ -264,7 +264,7 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("Vault layout is organization-defined" in managed_payload["vault-ref"], managed_payload["vault-ref"])
             expect("resource-ref" in managed_payload, managed_payload)
             expect("Hermes dashboard: https://arclink.example.test:30042/" in managed_payload["resource-ref"], managed_payload["resource-ref"])
-            expect("Code workspace: https://arclink.example.test:40042/" in managed_payload["resource-ref"], managed_payload["resource-ref"])
+            expect("Code plugin: https://arclink.example.test:40042/" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect(f"ArcLink vault: {root / 'home-test' / 'ArcLink'}" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect("Shared Notion SSOT: https://www.notion.so/Acme-SSOT-1234567890abcdef1234567890abcdef" in managed_payload["resource-ref"], managed_payload["resource-ref"])
             expect("Credentials are intentionally omitted from plugin-managed context." in managed_payload["resource-ref"], managed_payload["resource-ref"])

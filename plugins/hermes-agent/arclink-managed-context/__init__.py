@@ -1073,7 +1073,7 @@ def _resource_bundle(
     if username:
         lines.append(f"- Dashboard username: {username}")
     if code_url:
-        lines.append(f"- Code workspace: {code_url}")
+        lines.append(f"- Code plugin: {code_url}")
     if home_root:
         lines.append(f"- Workspace root: {home_root}")
     lines.append(f"- ArcLink vault: {vault_root}")

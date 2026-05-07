@@ -73,6 +73,32 @@ function deploymentTitle(dep: Deployment) {
   return dep.hostname || (dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : dep.deployment_id);
 }
 
+function urlJoin(base: string, path = "") {
+  const cleanBase = (base || "").trim();
+  if (!cleanBase) return "";
+  if (!path) return cleanBase;
+  return `${cleanBase.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function hermesBaseUrl(dep: Deployment) {
+  const urls = dep.access?.urls || {};
+  if (urls.hermes) return urls.hermes;
+  if (dep.hostname) return `https://${dep.hostname}:8443/`;
+  return "";
+}
+
+function hermesPluginLinks(dep: Deployment) {
+  const urls = dep.access?.urls || {};
+  const base = hermesBaseUrl(dep);
+  const dashboard = base || urls.dashboard || "";
+  return [
+    { name: "Hermes Dashboard", href: dashboard },
+    { name: "Drive", href: base ? urlJoin(base, "drive") : (urls.files || "") },
+    { name: "Code", href: base ? urlJoin(base, "code") : (urls.code || "") },
+    { name: "Terminal", href: base ? urlJoin(base, "terminal") : (urls.terminal || "") },
+  ];
+}
+
 function formatDate(value?: string) {
   if (!value) return "-";
   const date = new Date(value);
@@ -301,18 +327,10 @@ export default function DashboardPage() {
             <div className="space-y-6">
               <h1 className="font-display text-2xl font-bold">Services</h1>
               <p className="text-sm text-soft-white/60">
-                Deep links to your deployment services. Available once provisioning completes.
+                Authenticated Hermes dashboard surfaces. Drive, Code, and Terminal are native plugins inside the same protected agent dashboard.
               </p>
               {data.deployments?.map((dep) => {
-                const host = dep.hostname || "";
-                const provisioned = dep.status === "active" || dep.status === "running";
-                const urls = dep.access?.urls || {};
-                const services = [
-                  { name: "Hermes", href: urls.hermes || (provisioned && host ? `https://${host}:8443/` : "") },
-                  { name: "Drive", href: urls.files || (provisioned && host ? `https://${host}:8443/drive` : "") },
-                  { name: "Code", href: urls.code || (provisioned && host ? `https://${host}:8443/code` : "") },
-                  { name: "Health", href: urls.dashboard || (provisioned && host ? `https://${host}/u/${dep.prefix || dep.deployment_id}` : "") },
-                ];
+                const services = hermesPluginLinks(dep);
                 return (
                   <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -355,8 +373,8 @@ export default function DashboardPage() {
               {data.deployments?.map((dep) => {
                 const host = dep.hostname || "";
                 const provisioned = dep.status === "active" || dep.status === "running";
-                const vaultHealth = dep.service_health?.find((s) => s.service_name === "nextcloud");
-                const vaultUrl = dep.access?.urls?.files || (provisioned && host ? `https://${host}:8443/drive` : "");
+                const vaultHealth = dep.service_health?.find((s) => s.service_name === "hermes-dashboard" || s.service_name === "qmd-mcp");
+                const vaultUrl = hermesPluginLinks(dep).find((link) => link.name === "Drive")?.href || (provisioned && host ? `https://${host}:8443/drive` : "");
                 return (
                   <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -573,7 +591,7 @@ function InfoPanel({ title, value, detail }: { title: string; value: string; det
 
 function DeploymentOverview({ dep }: { dep: Deployment }) {
   const services = dep.service_health || [];
-  const urls = dep.access?.urls || {};
+  const links = hermesPluginLinks(dep).filter((link) => link.href);
   return (
     <div className="border border-border bg-surface/85 p-4">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -599,9 +617,9 @@ function DeploymentOverview({ dep }: { dep: Deployment }) {
         <div className="border border-border/70 bg-carbon/80 p-3">
           <p className="text-xs uppercase tracking-wide text-soft-white/35">Access</p>
           <div className="mt-3 grid gap-2">
-            {Object.entries(urls).length ? Object.entries(urls).map(([key, value]) => (
-              <a key={key} href={value} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between border border-border bg-jet/45 px-3 py-2 text-sm text-soft-white/75 transition hover:border-signal-orange/60 hover:text-signal-orange">
-                <span className="capitalize">{key.replaceAll("_", " ")}</span>
+            {links.length ? links.map((link) => (
+              <a key={link.name} href={link.href} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between border border-border bg-jet/45 px-3 py-2 text-sm text-soft-white/75 transition hover:border-signal-orange/60 hover:text-signal-orange">
+                <span>{link.name}</span>
                 <span className="text-xs text-soft-white/35">open</span>
               </a>
             )) : (

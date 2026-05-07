@@ -53,6 +53,7 @@ from arclink_provisioning import (
 )
 from arclink_adapters import DnsRecord
 from arclink_onboarding import record_arclink_onboarding_first_agent_contact
+from arclink_api_auth import set_arclink_user_password
 
 
 class ArcLinkSovereignWorkerError(RuntimeError):
@@ -426,6 +427,7 @@ def _apply_deployment(
             idempotency_key=f"arclink:sovereign:compose:{deployment_id}",
         )
     )
+    _sync_dashboard_password_hash_from_secret(conn, deployment=deployment, worker=worker, intent=intent)
     _record_service_status_after_compose(
         conn,
         deployment_id=deployment_id,
@@ -506,6 +508,28 @@ def _secret_refs(intent: Mapping[str, Any]) -> list[str]:
         if isinstance(spec, Mapping) and spec.get("secret_ref"):
             refs.append(str(spec["secret_ref"]))
     return refs
+
+
+def _sync_dashboard_password_hash_from_secret(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    intent: Mapping[str, Any],
+) -> None:
+    secret_refs = intent.get("secret_refs") if isinstance(intent.get("secret_refs"), Mapping) else {}
+    secret_ref = str(secret_refs.get("dashboard_password") or "").strip()
+    user_id = str(deployment.get("user_id") or "").strip()
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    if not secret_ref or not user_id or not deployment_id:
+        return
+    resolver = SovereignSecretResolver(
+        env=worker.env,
+        secret_store_dir=worker.secret_store_dir / deployment_id,
+        materialization_root=Path("/tmp/arclink-dashboard-password-sync"),
+    )
+    password = resolver._value_for_ref(secret_ref)
+    set_arclink_user_password(conn, user_id=user_id, password=password)
 
 
 def _ensure_apply_job(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any]:
@@ -717,12 +741,12 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     lines = [
         "Agent online.",
         "",
-        "I'm Raven. Your ArcLink agent is ready: files, code, memory, and deployment health are lit.",
+        "I'm Raven. Your ArcLink agent is ready: Drive, Code, Terminal, memory, and deployment health are lit.",
         "",
     ]
     for label, url in (
         ("Dashboard", dashboard),
-        ("Files", files),
+        ("Drive", files),
         ("Code", code),
         ("Hermes", hermes),
     ):

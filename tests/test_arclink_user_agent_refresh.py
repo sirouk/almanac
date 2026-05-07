@@ -49,7 +49,7 @@ def write_fake_rpc_client(path: Path) -> None:
         "        'agent_id': 'agent-guide',\n"
         "        'arclink-skill-ref': 'Use arclink-qmd-mcp for retrieval and arclink-vault-reconciler for drift repair.',\n"
         "        'vault-ref': 'Vault root: /srv/arclink/vault\\nDedicated agent name: Guide',\n"
-        "        'resource-ref': 'Canonical user access rails and shared ArcLink addresses:\\n- Hermes dashboard: https://arclink.example.test:30011/\\n- Code workspace: https://arclink.example.test:40011/\\n- Credentials are intentionally omitted from plugin-managed context.',\n"
+        "        'resource-ref': 'Canonical user access rails and shared ArcLink addresses:\\n- Hermes dashboard: https://arclink.example.test:30011/\\n- Code plugin: https://arclink.example.test:40011/\\n- Credentials are intentionally omitted from plugin-managed context.',\n"
         "        'qmd-ref': 'qmd MCP (deep retrieval): https://arclink.example.test/mcp',\n"
         "        'notion-ref': 'Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via ArcLink MCP.',\n"
         "        'vault-topology': 'Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\\n  + Projects: Active project workspaces\\n  - Teams: Team coordination',\n"
@@ -125,7 +125,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
                     "agent_id": "agent-guide",
                     "arclink-skill-ref": "Use arclink-qmd-mcp for retrieval and arclink-vault-reconciler for drift repair.",
                     "vault-ref": "Vault root: /srv/arclink/vault\nDedicated agent name: Guide",
-                    "resource-ref": "Canonical user access rails and shared ArcLink addresses:\n- Hermes dashboard: https://arclink.example.test:30011/\n- Code workspace: https://arclink.example.test:40011/\n- Credentials are intentionally omitted from plugin-managed context.",
+                    "resource-ref": "Canonical user access rails and shared ArcLink addresses:\n- Hermes dashboard: https://arclink.example.test:30011/\n- Code plugin: https://arclink.example.test:40011/\n- Credentials are intentionally omitted from plugin-managed context.",
                     "qmd-ref": "qmd MCP (deep retrieval): https://arclink.example.test/mcp",
                     "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query via ArcLink MCP.",
                     "vault-topology": "Subscribed vaults (+ = subscribed, · = default, - = unsubscribed):\n  + Projects: Active project workspaces\n  - Teams: Team coordination",
@@ -215,7 +215,7 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         expect("notion.search / notion.fetch / notion.query" in state_payload["notion-ref"], state_payload)
         expect("Example Unicorn launch" in state_payload["today-plate"], state_payload)
         expect("Hermes dashboard: https://arclink.example.test:30011/" in state_payload["resource-ref"], state_payload)
-        expect("Code workspace: https://arclink.example.test:40011/" in state_payload["resource-ref"], state_payload)
+        expect("Code plugin: https://arclink.example.test:40011/" in state_payload["resource-ref"], state_payload)
         expect(len(str(state_payload.get("managed_memory_revision") or "")) >= 12, state_payload)
 
         memory_entries = [entry.strip() for entry in memory_path.read_text(encoding="utf-8").split("\n§\n") if entry.strip()]

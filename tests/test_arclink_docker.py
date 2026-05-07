@@ -194,6 +194,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_publish_tailnet_deployment_apps()" in body and "tailscale serve --bg --yes --https" in body, body)
     expect("docker_refresh_deployment_service_health()" in body and "docker compose" in body and "upsert_arclink_service_health" in body, body)
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
+    expect("sync-dashboard-user-passwords.py" in body and "control-provisioner" in body, body)
     expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
     expect("--force-recreate dashboard" in body, body)
     expect("--force-recreate nextcloud" in body, body)

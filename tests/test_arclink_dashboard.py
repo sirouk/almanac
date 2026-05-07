@@ -109,6 +109,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
             "bot_setup",
             "files",
             "code",
+            "terminal",
             "hermes",
             "qmd_memory",
             "skills",
@@ -125,8 +126,11 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     section_index = {section["section"]: section for section in deployment["sections"]}
     expect(deployment["deployment_id"] == prepared["deployment_id"], str(deployment))
     expect(deployment["access"]["urls"]["dashboard"] == "https://u-amber-vault-1a2b.example.test", str(deployment))
-    expect(section_index["files"]["url"] == "https://u-amber-vault-1a2b.example.test/drive", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://u-amber-vault-1a2b.example.test/code", str(section_index["code"]))
+    expect(section_index["files"]["label"] == "Drive", str(section_index["files"]))
+    expect(section_index["files"]["url"] == "https://hermes-amber-vault-1a2b.example.test/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://hermes-amber-vault-1a2b.example.test/code", str(section_index["code"]))
+    expect(section_index["terminal"]["url"] == "https://hermes-amber-vault-1a2b.example.test/terminal", str(section_index["terminal"]))
+    expect(section_index["hermes"]["label"] == "Hermes Dashboard", str(section_index["hermes"]))
     expect(section_index["hermes"]["url"] == "https://hermes-amber-vault-1a2b.example.test", str(section_index["hermes"]))
     expect(section_index["security"]["status"] == "masked", str(section_index["security"]))
     expect(section_index["support"]["status"] == "available", str(section_index["support"]))
@@ -183,8 +187,9 @@ def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
     deployment = view["deployments"][0]
     section_index = {section["section"]: section for section in deployment["sections"]}
     expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(deployment))
-    expect(section_index["files"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(section_index["code"]))
+    expect(section_index["files"]["url"] == "https://worker.example.test:8443/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://worker.example.test:8443/code", str(section_index["code"]))
+    expect(section_index["terminal"]["url"] == "https://worker.example.test:8443/terminal", str(section_index["terminal"]))
     print("PASS test_user_dashboard_prefers_stored_tailnet_app_urls")
 
 
@@ -220,7 +225,7 @@ def test_user_dashboard_withholds_unpublished_tailnet_app_urls() -> None:
     deployment = view["deployments"][0]
     section_index = {section["section"]: section for section in deployment["sections"]}
     links = {link["role"]: link["url"] for link in section_index["access_links"]["links"]}
-    expect(links == {"dashboard": "https://worker.example.test/u/amber-vault-1a2b", "notion": "https://worker.example.test/u/amber-vault-1a2b/notion/webhook"}, str(links))
+    expect(links == {"Hermes Dashboard": "https://worker.example.test/u/amber-vault-1a2b"}, str(links))
     expect(section_index["files"]["status"] == "pending" and not section_index["files"]["url"], str(section_index["files"]))
     expect(section_index["code"]["status"] == "pending" and not section_index["code"]["url"], str(section_index["code"]))
     expect(section_index["hermes"]["status"] == "pending" and not section_index["hermes"]["url"], str(section_index["hermes"]))

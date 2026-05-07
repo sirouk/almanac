@@ -76,7 +76,7 @@ def managed_resource_lines(
 
     code_url = str(payload.get("code_url") or "").strip()
     if code_url:
-        lines.append(f"Code workspace: {code_url}")
+        lines.append(f"Code plugin: {code_url}")
 
     workspace_root_text = str(workspace_root or "").strip()
     if workspace_root_text:

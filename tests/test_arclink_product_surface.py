@@ -108,8 +108,8 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
     user = surface.handle_arclink_product_surface_request(conn, method="GET", path=f"/user?user_id={prepared['user_id']}")
     expect(user.status == 200, user.body)
     expect("fixture-core-1a2b" in user.body and "qmd freshness" in user.body, user.body)
-    expect("https://u-fixture-core-1a2b.example.test" in user.body, user.body)
-    for label in ("Files", "Code", "Hermes", "Security", "Support"):
+    expect("https://hermes-fixture-core-1a2b.example.test" in user.body, user.body)
+    for label in ("Drive", "Code", "Terminal", "Hermes Dashboard", "Security", "Support"):
         expect(label in user.body, user.body)
 
     admin = surface.handle_arclink_product_surface_request(conn, method="GET", path="/admin")

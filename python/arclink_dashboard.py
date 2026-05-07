@@ -36,6 +36,7 @@ ARCLINK_USER_DASHBOARD_SECTIONS = (
     "bot_setup",
     "files",
     "code",
+    "terminal",
     "hermes",
     "qmd_memory",
     "skills",
@@ -289,6 +290,16 @@ def _user_dashboard_sections(
     qmd = next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""})
     memory = next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""})
     health_index = {str(item["service_name"]): item for item in health}
+    hermes_url = str(urls.get("hermes") or "").rstrip("/")
+    drive_url = f"{hermes_url}/drive" if hermes_url else str(urls.get("files") or "")
+    code_url = f"{hermes_url}/code" if hermes_url else str(urls.get("code") or "")
+    terminal_url = f"{hermes_url}/terminal" if hermes_url else str(urls.get("terminal") or "")
+    plugin_links = [
+        {"role": "Hermes Dashboard", "url": str(urls.get("hermes") or urls.get("dashboard") or "")},
+        {"role": "Drive", "url": drive_url},
+        {"role": "Code", "url": code_url},
+        {"role": "Terminal", "url": terminal_url},
+    ]
     return [
         {
             "section": "deployment_health",
@@ -300,7 +311,7 @@ def _user_dashboard_sections(
             "section": "access_links",
             "label": "Access Links",
             "status": "ready" if urls else "pending",
-            "links": [{"role": role, "url": url} for role, url in urls.items()],
+            "links": [link for link in plugin_links if link["url"]],
         },
         {
             "section": "bot_setup",
@@ -311,19 +322,25 @@ def _user_dashboard_sections(
         },
         {
             "section": "files",
-            "label": "Files",
-            "status": "ready" if urls.get("files") else "pending",
-            "url": str(urls.get("files") or ""),
+            "label": "Drive",
+            "status": "ready" if drive_url else "pending",
+            "url": drive_url,
         },
         {
             "section": "code",
             "label": "Code",
-            "status": "ready" if urls.get("code") else "pending",
-            "url": str(urls.get("code") or ""),
+            "status": "ready" if code_url else "pending",
+            "url": code_url,
+        },
+        {
+            "section": "terminal",
+            "label": "Terminal",
+            "status": "ready" if terminal_url else "pending",
+            "url": terminal_url,
         },
         {
             "section": "hermes",
-            "label": "Hermes",
+            "label": "Hermes Dashboard",
             "status": "ready" if urls.get("hermes") else "pending",
             "url": str(urls.get("hermes") or ""),
         },

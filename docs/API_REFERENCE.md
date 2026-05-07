@@ -7,7 +7,7 @@
 
 ## Authentication
 
-Sessions are issued via `/auth/admin/login` and `/auth/user/login`. Credentials are delivered as cookies (`arclink_{kind}_session_id`, `arclink_{kind}_session_token`, `arclink_{kind}_csrf`). Mutations require `X-ArcLink-CSRF-Token` header matching the session.
+Sessions are issued via `/auth/admin/login` and `/auth/user/login`. Both routes require email plus password. Credentials are delivered as cookies (`arclink_{kind}_session_id`, `arclink_{kind}_session_token`, `arclink_{kind}_csrf`). Mutations require `X-ArcLink-CSRF-Token` header matching the session.
 
 ### Headers
 
@@ -51,7 +51,7 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | POST | `/webhooks/telegram` | Telegram Bot API webhook |
 | POST | `/webhooks/discord` | Discord interaction webhook |
 | POST | `/auth/admin/login` | Create admin session |
-| POST | `/auth/user/login` | Create user session |
+| POST | `/auth/user/login` | Create user session with email plus dashboard password |
 | GET | `/health` | Liveness check (DB connectivity) |
 | GET | `/openapi.json` | OpenAPI 3.1 spec (machine-readable route catalog) |
 

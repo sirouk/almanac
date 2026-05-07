@@ -106,6 +106,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["nextcloud_db_password"]["secret_ref"] == "secret://arclink/nextcloud/dep_1/db-password", str(compose_secrets))
     expect(compose_secrets["nextcloud_db_password"]["target"] == "/run/secrets/nextcloud_db_password", str(compose_secrets))
     expect(compose_secrets["nextcloud_admin_password"]["target"] == "/run/secrets/nextcloud_admin_password", str(compose_secrets))
+    expect(compose_secrets["dashboard_password"]["target"] == "/run/secrets/dashboard_password", str(compose_secrets))
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
@@ -158,11 +159,13 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(managed_installer_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["RUNTIME_DIR"] == "/opt/arclink/runtime", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["VAULT_DIR"] == "/srv/vault", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_PASSWORD_FILE"] == "/run/secrets/dashboard_password", str(services["managed-context-install"]))
     expect(
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",
         str(services["managed-context-install"]),
     )
     expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
+    expect({"source": "dashboard_password", "target": "/run/secrets/dashboard_password"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))
     expect(
@@ -174,6 +177,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     )
     expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect("chutes_api_key" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
+    expect("dashboard_password" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
     expect(services["hermes-gateway"]["labels"] == {}, str(services["hermes-gateway"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.docker.network"] == "arclink_default", str(services["hermes-dashboard"]))
@@ -328,13 +332,13 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
     }, str(services["nextcloud-db"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/nextcloud_db_password", str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["NEXTCLOUD_ADMIN_PASSWORD_FILE"] == "/run/secrets/nextcloud_admin_password", str(services["nextcloud"]))
-    for secret_name in ("nextcloud_db_password", "nextcloud_admin_password"):
+    for secret_name in ("nextcloud_db_password", "nextcloud_admin_password", "dashboard_password"):
         expect(compose_secrets[secret_name]["secret_ref"].startswith("secret://"), str(compose_secrets[secret_name]))
         expect(compose_secrets[secret_name]["target"] == f"/run/secrets/{secret_name}", str(compose_secrets[secret_name]))
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect(
-        intent["runtime_resolution"]["app_ref_resolver_required"] == ["chutes_api_key", "notion_webhook_secret"],
+        intent["runtime_resolution"]["app_ref_resolver_required"] == ["chutes_api_key", "dashboard_password", "notion_webhook_secret"],
         str(intent["runtime_resolution"]),
     )
     print("PASS test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit")

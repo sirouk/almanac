@@ -2072,7 +2072,7 @@ def test_arclink_managed_context_answers_resource_request_without_secrets() -> N
                     "resource-ref": (
                         "Canonical user access rails and shared ArcLink addresses:\n"
                         "- Hermes dashboard: https://old.example/dashboard\n"
-                        "- Code workspace: https://old.example/code\n"
+                        "- Code plugin: https://old.example/code\n"
                         "- Workspace root: /home/arclink/internal\n"
                         "- ArcLink vault: /home/arclink/internal/vault\n"
                         "- Legacy Nextcloud access is disabled; use Drive in Hermes.\n"
@@ -2136,7 +2136,7 @@ def test_arclink_managed_context_answers_resource_request_without_secrets() -> N
             expect("Hermes dashboard: https://arclink.example.test:30011/" in context, context)
             expect("Dashboard username: alex" in context, context)
             expect("Nextcloud login:" not in context, context)
-            expect("Code workspace: https://arclink.example.test:40011/" in context, context)
+            expect("Code plugin: https://arclink.example.test:40011/" in context, context)
             expect(f"Workspace root: {user_home}" in context, context)
             expect(f"ArcLink vault: {user_home / 'ArcLink'}" in context, context)
             expect("Vault access in Nextcloud:" not in context, context)

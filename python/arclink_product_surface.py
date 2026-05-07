@@ -456,12 +456,16 @@ def _user_dashboard(conn: sqlite3.Connection, user_id: str = "") -> ArcLinkSurfa
     deployments = view["deployments"]
     cards = []
     for dep in deployments:
-        urls = dep["access"]["urls"]
         health = "".join(
             f"<tr><td>{escape(item['service_name'])}</td><td>{escape(item['status'])}</td><td>{escape(item['checked_at'])}</td></tr>"
             for item in dep["service_health"]
         ) or "<tr><td colspan=\"3\">No service health yet.</td></tr>"
-        links = "".join(f"<a class=\"button secondary\" href=\"{escape(url)}\">{escape(role)}</a>" for role, url in urls.items())
+        access_section = next((section for section in dep.get("sections", []) if section.get("section") == "access_links"), {})
+        links = "".join(
+            f"<a class=\"button secondary\" href=\"{escape(str(link.get('url') or ''))}\">{escape(str(link.get('role') or ''))}</a>"
+            for link in access_section.get("links", [])
+            if str(link.get("url") or "")
+        )
         sections = "".join(
             f"<span class=\"tag\">{escape(section['label'])}: {escape(section['status'])}</span>"
             for section in dep.get("sections", [])

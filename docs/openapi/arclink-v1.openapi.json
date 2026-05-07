@@ -607,10 +607,15 @@
                   },
                   "metadata": {
                     "type": "object"
+                  },
+                  "password": {
+                    "format": "password",
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "email"
+                  "email",
+                  "password"
                 ],
                 "type": "object"
               }

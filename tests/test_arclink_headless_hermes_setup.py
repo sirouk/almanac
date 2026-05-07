@@ -210,7 +210,7 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("Notion is the shared source of truth when the operating context uses it" in soul_text, soul_text)
         expect("Check the current ArcLink verification state" in soul_text, soul_text)
         expect("Hermes dashboard:" not in soul_text, soul_text)
-        expect("Code workspace:" not in soul_text, soul_text)
+        expect("Code plugin:" not in soul_text, soul_text)
         expect("$" not in soul_text, soul_text)
 
         identity_state = json.loads(identity_state_path.read_text(encoding="utf-8"))

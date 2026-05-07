@@ -47,7 +47,19 @@ rotate an operator password without printing it into logs, run:
 ```
 
 The generated file is written with `0600` permissions. Use `--password-file`
-for an existing private secret, or run the command interactively to be prompted.
+for an existing private password file.
+
+**User dashboard passwords:** User login requires the same dashboard password
+issued for the user's Hermes dashboard. New Sovereign pods seed that password
+through a Docker secret and store only its hash in the control DB. Existing pod
+passwords are reconciled without printing secrets during Docker reconcile via:
+
+```bash
+./bin/arclink-docker.sh reconcile
+```
+
+The reconciler invokes `bin/sync-dashboard-user-passwords.py` inside the
+provisioner context so it can read deployment state roots and update hashes.
 
 **OpenAPI contract:** `GET /api/v1/openapi.json` (no auth). Static copy at
 `docs/openapi/arclink-v1.openapi.json`.

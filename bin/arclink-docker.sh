@@ -1139,6 +1139,7 @@ docker_reconcile() {
     echo "Docker agent supervisor is still reconciling; docker health will report details if it remains incomplete."
   docker_repair_deployment_dashboard_plugin_mounts || true
   docker_refresh_deployment_managed_plugins || true
+  compose_service_command control-provisioner python3 bin/sync-dashboard-user-passwords.py || true
   docker_publish_tailnet_deployment_apps || true
   docker_refresh_deployment_service_health || true
   echo "Docker agent supervisor realigned."

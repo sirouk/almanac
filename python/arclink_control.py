@@ -552,16 +552,25 @@ def connect_db(cfg: Config) -> sqlite3.Connection:
     ensure_runtime_paths(cfg)
     conn = sqlite3.connect(cfg.db_path, timeout=15.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 15000")
     default_journal_mode = "DELETE" if os.environ.get("ARCLINK_DOCKER_MODE") == "1" else "WAL"
     journal_mode = config_env_value("ARCLINK_SQLITE_JOURNAL_MODE", default_journal_mode).strip().upper()
     if journal_mode not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
         journal_mode = default_journal_mode
     try:
         conn.execute(f"PRAGMA journal_mode = {journal_mode}")
-    except sqlite3.OperationalError:
-        if journal_mode != "WAL":
+    except sqlite3.OperationalError as exc:
+        locked = "database is locked" in str(exc).lower()
+        if locked:
+            pass
+        elif journal_mode != "WAL":
             raise
-        conn.execute("PRAGMA journal_mode = DELETE")
+        else:
+            try:
+                conn.execute("PRAGMA journal_mode = DELETE")
+            except sqlite3.OperationalError as fallback_exc:
+                if "database is locked" not in str(fallback_exc).lower():
+                    raise
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
     conn.execute("PRAGMA synchronous = NORMAL")

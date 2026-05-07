@@ -943,13 +943,39 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     services = payload.get("services")
     if not isinstance(services, dict):
         continue
+    service_changed = False
+    if services.pop("code-server", None) is not None:
+        service_changed = True
     compose_secrets = payload.get("secrets")
+    if isinstance(compose_secrets, dict) and compose_secrets.pop("code_server_password", None) is not None:
+        service_changed = True
     has_chutes_secret = isinstance(compose_secrets, dict) and "chutes_api_key" in compose_secrets
+    nextcloud_service = services.get("nextcloud")
+    if isinstance(nextcloud_service, dict) and nextcloud_service.get("labels"):
+        nextcloud_service["labels"] = {}
+        service_changed = True
+    for candidate in services.values():
+        if not isinstance(candidate, dict):
+            continue
+        env = candidate.get("environment")
+        if not isinstance(env, dict):
+            continue
+        if env.pop("CODE_SERVER_PASSWORD_REF", None) is not None:
+            service_changed = True
+        hermes_url = str(env.get("ARCLINK_HERMES_URL") or "").strip().rstrip("/")
+        if hermes_url:
+            for key, suffix in (("ARCLINK_CODE_URL", "/code"), ("ARCLINK_FILES_URL", "/drive")):
+                desired_url = hermes_url + suffix
+                if env.get(key) != desired_url:
+                    env[key] = desired_url
+                    service_changed = True
     service = services.get("hermes-dashboard")
     if not isinstance(service, dict):
+        if service_changed:
+            compose_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            changed += 1
         continue
     deployment_root = compose_file.parents[1]
-    service_changed = False
     dashboard_command = ["./bin/run-hermes-dashboard-proxy.sh"]
     if service.get("command") != dashboard_command:
         service["command"] = dashboard_command
@@ -1044,9 +1070,21 @@ docker_refresh_deployment_managed_plugins() {
     env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
       docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install >/dev/null
 
+    while IFS= read -r legacy_container; do
+      [[ -n "$legacy_container" ]] || continue
+      docker rm -f "$legacy_container" >/dev/null 2>&1 || true
+    done < <(docker ps -a \
+      --filter "label=com.docker.compose.project=$project" \
+      --filter "label=com.docker.compose.service=code-server" \
+      --format '{{.Names}}' 2>/dev/null)
+
     if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq hermes-dashboard; then
       env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
         docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate hermes-dashboard >/dev/null
+    fi
+    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq dashboard; then
+      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate dashboard >/dev/null
     fi
     refreshed=$((refreshed + 1))
   done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/compose.yaml' -type f 2>/dev/null | sort)

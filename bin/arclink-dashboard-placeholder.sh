@@ -44,16 +44,17 @@ def public_state() -> dict[str, str]:
         and env("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY", "path") == "path"
     )
     dashboard_fallback = path_url(dashboard_host, prefix) if path_mode else https_host("ARCLINK_DASHBOARD_HOST")
-    files_fallback = path_url(files_host, prefix, "/files") if path_mode else https_host("ARCLINK_FILES_HOST")
-    code_fallback = path_url(code_host, prefix, "/code") if path_mode else https_host("ARCLINK_CODE_HOST")
     hermes_fallback = path_url(hermes_host, prefix, "/hermes") if path_mode else https_host("ARCLINK_HERMES_HOST")
+    hermes_url = env_url("ARCLINK_HERMES_URL", hermes_fallback).rstrip("/")
+    files_fallback = f"{hermes_url}/drive" if hermes_url else (path_url(files_host, prefix, "/drive") if path_mode else https_host("ARCLINK_FILES_HOST"))
+    code_fallback = f"{hermes_url}/code" if hermes_url else (path_url(code_host, prefix, "/code") if path_mode else https_host("ARCLINK_CODE_HOST"))
     return {
         "deployment_id": env("ARCLINK_DEPLOYMENT_ID"),
         "prefix": prefix,
         "dashboard": env_url("ARCLINK_DASHBOARD_URL", dashboard_fallback),
         "files": env_url("ARCLINK_FILES_URL", files_fallback),
         "code": env_url("ARCLINK_CODE_URL", code_fallback),
-        "hermes": env_url("ARCLINK_HERMES_URL", hermes_fallback),
+        "hermes": hermes_url,
         "provider": env("ARCLINK_PRIMARY_PROVIDER", "chutes"),
         "model": env("ARCLINK_CHUTES_DEFAULT_MODEL"),
     }
@@ -70,15 +71,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, location: str) -> None:
+        body = b""
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:
         if self.path.startswith("/health"):
             self._send(200, b'{"status":"ok"}\n', "application/json")
             return
         state = public_state()
+        hermes_url = state.get("hermes", "").rstrip("/")
+        if hermes_url:
+            suffix = ""
+            request_path = self.path.split("?", 1)[0].rstrip("/")
+            if request_path in {"/files", "/drive"}:
+                suffix = "/drive"
+            elif request_path == "/code":
+                suffix = "/code"
+            elif request_path == "/terminal":
+                suffix = "/terminal"
+            self._redirect(hermes_url + suffix)
+            return
         links = "\n".join(
-            f'<li><a href="{html.escape(url)}">{html.escape(label.title())}</a></li>'
-            for label, url in state.items()
-            if label in {"files", "code", "hermes"} and url
+            f'<li><a href="{html.escape(url)}">{html.escape(label)}</a></li>'
+            for label, url in (
+                ("Drive", state.get("files", "")),
+                ("Code", state.get("code", "")),
+                ("Hermes", state.get("hermes", "")),
+            )
+            if url
         )
         page = f"""<!doctype html>
 <html lang="en">

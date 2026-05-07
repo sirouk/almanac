@@ -24,7 +24,15 @@
     return fetch(url, Object.assign({ credentials: "same-origin" }, options || {})).then(function (response) {
       if (!response.ok) {
         return response.text().then(function (text) {
-          throw new Error(text || "request failed");
+          let message = text || "request failed";
+          try {
+            const payload = JSON.parse(text || "{}");
+            if (payload && payload.detail) message = String(payload.detail);
+          } catch (_error) {}
+          const error = new Error(message);
+          error.status = response.status;
+          error.responseText = text;
+          throw error;
         });
       }
       return response.json();
@@ -119,6 +127,11 @@
     return !!session && ["running", "starting"].indexOf(session.state) !== -1;
   }
 
+  function isMissingSessionError(error) {
+    const message = String((error && error.message) || error || "");
+    return !!error && (error.status === 404 || message.indexOf("Terminal session was not found") !== -1);
+  }
+
   function scrollbackLines(status) {
     const value = Number(status && status.limits && status.limits.scrollback_lines);
     return Number.isFinite(value) && value > 0 ? value : 10000;
@@ -189,10 +202,13 @@
     }
 
     function loadSessions(selectId) {
+      const explicitSelection = arguments.length > 0;
       return fetchJSON(api("/sessions"))
         .then(function (payload) {
           const sessions = payload.sessions || [];
-          const nextId = selectId || stateRef.current.selectedId || (sessions[0] && sessions[0].id) || "";
+          const requestedId = explicitSelection ? selectId || "" : stateRef.current.selectedId || "";
+          const hasRequested = requestedId && sessions.some(function (session) { return session.id === requestedId; });
+          const nextId = hasRequested ? requestedId : (sessions[0] && sessions[0].id) || "";
           merge({ sessions: sessions, selectedId: nextId, errorMessage: "" });
           if (nextId) {
             return loadSession(nextId);
@@ -213,6 +229,10 @@
           return payload.session || null;
         })
         .catch(function (error) {
+          if (isMissingSessionError(error)) {
+            merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
+            return loadSessions("");
+          }
           merge({ errorMessage: String(error.message || error) });
           return null;
         });
@@ -246,6 +266,11 @@
           }
         })
         .catch(function (error) {
+          if (isMissingSessionError(error)) {
+            merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
+            loadSessions("");
+            return;
+          }
           merge({ errorMessage: String(error.message || error) });
         });
     }
@@ -264,6 +289,11 @@
           }
         })
         .catch(function (error) {
+          if (isMissingSessionError(error)) {
+            merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
+            loadSessions("");
+            return;
+          }
           merge({ errorMessage: String(error.message || error) });
         });
     }
@@ -597,8 +627,8 @@
     function clearClosedSessions() {
       postJSON("/sessions/clear-closed", {})
         .then(function () {
-          merge({ contextMenu: null });
-          return loadSessions(state.selectedId);
+          merge({ contextMenu: null, selected: null, selectedId: "", errorMessage: "" });
+          return loadSessions("");
         })
         .catch(function (error) {
           merge({ errorMessage: String(error.message || error), contextMenu: null });

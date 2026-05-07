@@ -197,11 +197,13 @@ def test_docker_operator_commands_are_present() -> None:
     expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
     expect("--force-recreate dashboard" in body, body)
     expect("--force-recreate nextcloud" in body, body)
+    expect("--force-recreate memory-synth" in body, body)
     expect("Refreshed deployment-managed Hermes plugins" in body, body)
     expect("docker_repair_deployment_dashboard_plugin_mounts()" in body, body)
     expect("run-hermes-dashboard-proxy.sh" in body, body)
     expect("DRIVE_ROOT" in body and "CODE_WORKSPACE_ROOT" in body, body)
     expect("TERMINAL_ALLOW_ROOT" in body and "HERMES_TUI_DIR" in body, body)
+    expect('"VAULT_DIR": "/srv/vault"' in body and '"/srv/vault/Agents_KB/hermes-agent-docs"' in body, body)
     expect('services.pop("code-server", None)' in body, body)
     expect('compose_secrets.pop("code_server_password", None)' in body, body)
     expect('env.pop("CODE_SERVER_PASSWORD_REF", None)' in body, body)
@@ -245,6 +247,19 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker health passed" not in body.lower() or "Docker health passed." in body, body)
     expect("redact_output" in job_loop and 'cat "$output_file"' not in job_loop, "Docker job loop must redact failure output before logs/state")
     print("PASS test_docker_operator_commands_are_present")
+
+
+def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
+    body = read("bin/install-deployment-hermes-home.sh")
+    expect("sync-hermes-bundled-skills.sh" in body, body)
+    expect("install-arclink-skills.sh" in body, body)
+    expect("install-arclink-plugins.sh" in body, body)
+    expect("migrate-hermes-config.sh" in body, body)
+    expect("reconcile-vault-layout.py" in body and "--hermes-skills-dir" in body, body)
+    expect("sync-hermes-docs-into-vault.sh" in body, body)
+    expect("ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1" in body, body)
+    expect("Hermes docs sync failed; continuing" in body, body)
+    print("PASS test_deployment_hermes_home_installer_seeds_runtime_knowledge")
 
 
 def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
@@ -549,6 +564,7 @@ def main() -> int:
     test_dockerfile_installs_pinned_runtime_assets()
     test_compose_defines_full_stack_services()
     test_docker_operator_commands_are_present()
+    test_deployment_hermes_home_installer_seeds_runtime_knowledge()
     test_docker_tailnet_publish_failure_withholds_app_urls()
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
     test_docker_agent_supervisor_replaces_user_systemd_units()
@@ -559,7 +575,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 13 ArcLink Docker regression tests")
+    print("PASS all 14 ArcLink Docker regression tests")
     return 0
 
 

@@ -517,6 +517,12 @@ New and refreshed agents should get these defaults from the outset:
 - Gateway run with Hermes `gateway run --replace`.
 - Home-channel env repaired from enrollment state when available.
 
+Sovereign pod Hermes homes use the same release-aligned installer path:
+`bin/install-deployment-hermes-home.sh` syncs bundled Hermes skills,
+ArcLink skills, dashboard plugins, Hermes config migrations, primitive vault
+directories, and the Hermes docs that match the pinned runtime into the pod
+vault before Drive, Code, Terminal, qmd, and memory synthesis start using it.
+
 The Telegram `/start` behavior lives here:
 
 ```text
@@ -539,6 +545,7 @@ Per-user installation and refresh paths:
 ```text
 bin/sync-hermes-bundled-skills.sh
 bin/install-arclink-skills.sh
+bin/install-deployment-hermes-home.sh
 bin/install-agent-user-services.sh
 bin/refresh-agent-install.sh
 python/arclink_enrollment_provisioner.py

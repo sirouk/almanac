@@ -15,7 +15,31 @@ if [[ -z "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+"$REPO_DIR/bin/sync-hermes-bundled-skills.sh" "$HERMES_HOME_TARGET" "$RUNTIME_DIR_TARGET"
+"$REPO_DIR/bin/install-arclink-skills.sh" "$REPO_DIR" "$HERMES_HOME_TARGET"
 "$REPO_DIR/bin/install-arclink-plugins.sh" "$REPO_DIR" "$HERMES_HOME_TARGET"
+if [[ -x "$REPO_DIR/bin/migrate-hermes-config.sh" ]]; then
+  HERMES_HOME="$HERMES_HOME_TARGET" "$REPO_DIR/bin/migrate-hermes-config.sh" "$HERMES_HOME_TARGET" "$RUNTIME_DIR_TARGET" >/dev/null
+fi
+
+if [[ -n "${VAULT_DIR:-}" ]]; then
+  mkdir -p "$VAULT_DIR"
+  hermes_skills_args=()
+  if [[ -d "$RUNTIME_DIR_TARGET/hermes-agent-src/skills" ]]; then
+    hermes_skills_args=(--hermes-skills-dir "$RUNTIME_DIR_TARGET/hermes-agent-src/skills")
+  fi
+  "$PYTHON_BIN" "$REPO_DIR/bin/reconcile-vault-layout.py" \
+    --repo-dir "$REPO_DIR" \
+    --vault-dir "$VAULT_DIR" \
+    "${hermes_skills_args[@]}"
+  if [[ "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
+    if ! ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+      RUNTIME_DIR="$RUNTIME_DIR_TARGET" \
+      "$REPO_DIR/bin/sync-hermes-docs-into-vault.sh"; then
+      echo "Hermes docs sync failed; continuing with the existing vault contents." >&2
+    fi
+  fi
+fi
 
 mkdir -p "$HERMES_HOME_TARGET/state"
 "$PYTHON_BIN" - "$HERMES_HOME_TARGET/state/arclink-web-access.json" <<'PY'

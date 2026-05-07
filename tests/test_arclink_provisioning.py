@@ -148,9 +148,20 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/workspace"] == intent["state_roots"]["code_workspace"], str(services["hermes-dashboard"]))
-    expect(services["memory-synth"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"], str(services["memory-synth"]))
+    memory_synth_volumes = {item["target"]: item["source"] for item in services["memory-synth"]["volumes"]}
+    expect(memory_synth_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["memory-synth"]))
+    expect(memory_synth_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["memory-synth"]))
     expect("code-server" not in services, str(services))
     expect(services["managed-context-install"]["command"][:2] == ["./bin/install-deployment-hermes-home.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
+    managed_installer_volumes = {item["target"]: item["source"] for item in services["managed-context-install"]["volumes"]}
+    expect(managed_installer_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["managed-context-install"]))
+    expect(managed_installer_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["RUNTIME_DIR"] == "/opt/arclink/runtime", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["VAULT_DIR"] == "/srv/vault", str(services["managed-context-install"]))
+    expect(
+        services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",
+        str(services["managed-context-install"]),
+    )
     expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))

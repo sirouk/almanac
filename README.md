@@ -555,6 +555,23 @@ config. In the interactive flow, Shared Host Docker commands stem from the
 Shared Host Docker control center. Shared Host commands remain in Shared Host
 Mode unless the direct command includes `docker`.
 
+Hermes runtime upgrades use the same pin lane in both shared-host Docker and
+sovereign pod deployments:
+
+```bash
+./deploy.sh docker hermes-upgrade-check
+./deploy.sh docker hermes-upgrade [--ref COMMIT_OR_TAG]
+```
+
+The apply command updates `config/pins.json`, keeps `hermes-docs` inherited
+from the same `hermes-agent` ref, commits and pushes the pin bump when the
+upstream lane is configured, then re-enters `./deploy.sh docker upgrade`.
+During reconcile, active Docker agent homes and sovereign pod Hermes homes are
+refreshed from the rebuilt pinned runtime. The sovereign pod installer also
+syncs bundled Hermes skills, ArcLink skills, dashboard plugins, the primitive
+vault layout, and the matching pinned Hermes docs into the pod vault so Drive,
+Code, Terminal, qmd, and memory synthesis all see one release-aligned surface.
+
 The Docker submenu is available with:
 
 ```bash

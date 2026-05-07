@@ -1010,6 +1010,12 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         ) or service_changed
         service_changed = ensure_volume(volumes, source=str(deployment_root / "vault"), target="/srv/vault") or service_changed
         service_changed = ensure_volume(volumes, source=str(deployment_root / "workspace"), target="/workspace") or service_changed
+    memory_synth = services.get("memory-synth")
+    if isinstance(memory_synth, dict):
+        memory_volumes = memory_synth.setdefault("volumes", [])
+        if isinstance(memory_volumes, list):
+            service_changed = ensure_volume(memory_volumes, source=str(deployment_root / "vault"), target="/srv/vault") or service_changed
+            service_changed = ensure_volume(memory_volumes, source=str(deployment_root / "state" / "memory"), target="/srv/memory") or service_changed
     installer = services.get("managed-context-install")
     if isinstance(installer, dict):
         installer_changed = False
@@ -1021,6 +1027,10 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         if isinstance(installer_env, dict):
             for key, value in {
                 "HERMES_HOME": "/home/arclink/.hermes",
+                "RUNTIME_DIR": "/opt/arclink/runtime",
+                "VAULT_DIR": "/srv/vault",
+                "ARCLINK_HERMES_DOCS_STATE_DIR": "/tmp/arclink-hermes-docs-src",
+                "ARCLINK_HERMES_DOCS_VAULT_DIR": "/srv/vault/Agents_KB/hermes-agent-docs",
                 **({"ARCLINK_CHUTES_API_KEY_FILE": "/run/secrets/chutes_api_key"} if has_chutes_secret else {}),
             }.items():
                 if installer_env.get(key) != value:
@@ -1040,6 +1050,14 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
                     installer_changed = True
         if has_chutes_secret:
             installer_changed = ensure_secret(installer, source="chutes_api_key", target="/run/secrets/chutes_api_key") or installer_changed
+        installer_volumes = installer.setdefault("volumes", [])
+        if isinstance(installer_volumes, list):
+            installer_changed = ensure_volume(
+                installer_volumes,
+                source=str(deployment_root / "state" / "hermes-home"),
+                target="/home/arclink/.hermes",
+            ) or installer_changed
+            installer_changed = ensure_volume(installer_volumes, source=str(deployment_root / "vault"), target="/srv/vault") or installer_changed
         service_changed = installer_changed or service_changed
     if service_changed:
         compose_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1094,6 +1112,10 @@ docker_refresh_deployment_managed_plugins() {
     if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq nextcloud; then
       env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
         docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate nextcloud >/dev/null
+    fi
+    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq memory-synth; then
+      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate memory-synth >/dev/null
     fi
     refreshed=$((refreshed + 1))
   done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/compose.yaml' -type f 2>/dev/null | sort)

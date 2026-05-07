@@ -136,7 +136,7 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 ### ArcLink Substrate (existing, unchanged)
 
 ArcLink reuses the shared-host Docker Compose orchestration, Hermes runtime, qmd
-retrieval, vault watching, memory synthesis, Nextcloud, code-server, Curator,
+retrieval, vault watching, memory synthesis, Nextcloud, dashboard plugins, Curator,
 notification delivery, and health monitoring. These services run inside
 per-deployment containers rendered by the ArcLink provisioning layer.
 
@@ -148,7 +148,7 @@ core patches:
 - `arclink-drive` owns the native file-manager surface. It prefers a mounted
   local vault, can use sanitized Nextcloud WebDAV access state when available,
   and exposes browse, bounded preview, download, upload, folder creation,
-  rename, move, favorite, trash, and restore contracts. The local backend keeps
+  rename, move, trash, and restore contracts. The local backend keeps
   trash recoverable under `.arclink-trash`; WebDAV delete is direct provider
   delete and must remain UI-confirmed.
 - `arclink-code` owns the native code workspace. It uses

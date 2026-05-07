@@ -35,7 +35,6 @@ Docker volumes follow the naming convention:
 - Per-deployment secrets use `secret://...` references in database rows.
 - Compose secrets are mounted at `/run/secrets/{name}` inside containers.
 - Images supporting `_FILE` env vars (Postgres, Nextcloud) read from mounted files.
-- code-server uses an explicit entrypoint resolver for password injection.
 - No plaintext secret values in database, logs, API responses, or Compose intent.
 
 ## Backup Plan

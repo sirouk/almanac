@@ -125,8 +125,8 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     section_index = {section["section"]: section for section in deployment["sections"]}
     expect(deployment["deployment_id"] == prepared["deployment_id"], str(deployment))
     expect(deployment["access"]["urls"]["dashboard"] == "https://u-amber-vault-1a2b.example.test", str(deployment))
-    expect(section_index["files"]["url"] == "https://files-amber-vault-1a2b.example.test", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://code-amber-vault-1a2b.example.test", str(section_index["code"]))
+    expect(section_index["files"]["url"] == "https://u-amber-vault-1a2b.example.test/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://u-amber-vault-1a2b.example.test/code", str(section_index["code"]))
     expect(section_index["hermes"]["url"] == "https://hermes-amber-vault-1a2b.example.test", str(section_index["hermes"]))
     expect(section_index["security"]["status"] == "masked", str(section_index["security"]))
     expect(section_index["support"]["status"] == "available", str(section_index["support"]))
@@ -152,8 +152,8 @@ def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
     prepared = seed_dashboard(control, onboarding, conn)
     urls = {
         "dashboard": "https://worker.example.test/u/amber-vault-1a2b",
-        "files": "https://worker.example.test:8444/",
-        "code": "https://worker.example.test:8445/",
+        "files": "https://worker.example.test/u/amber-vault-1a2b/drive",
+        "code": "https://worker.example.test/u/amber-vault-1a2b/code",
         "hermes": "https://worker.example.test:8443/",
         "notion": "https://worker.example.test/u/amber-vault-1a2b/notion/webhook",
     }
@@ -169,7 +169,7 @@ def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
                     "ingress_mode": "tailscale",
                     "tailscale_dns_name": "worker.example.test",
                     "tailscale_host_strategy": "path",
-                    "tailnet_service_ports": {"hermes": 8443, "files": 8444, "code": 8445},
+                    "tailnet_service_ports": {"hermes": 8443},
                     "access_urls": urls,
                 },
                 sort_keys=True,
@@ -183,8 +183,8 @@ def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
     deployment = view["deployments"][0]
     section_index = {section["section"]: section for section in deployment["sections"]}
     expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(deployment))
-    expect(section_index["files"]["url"] == "https://worker.example.test:8444/", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://worker.example.test:8445/", str(section_index["code"]))
+    expect(section_index["files"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(section_index["code"]))
     print("PASS test_user_dashboard_prefers_stored_tailnet_app_urls")
 
 

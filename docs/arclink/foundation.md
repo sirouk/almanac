@@ -86,7 +86,7 @@ wired in.
 
 The renderer deliberately keeps Docker Compose as the MVP substrate instead of
 introducing a second scheduler. That preserves the current Hermes, qmd, vault
-watch, memory synthesis, Nextcloud, code-server, health, notification, bot
+watch, memory synthesis, Nextcloud, dashboard-native Drive/Code/Terminal plugins, health, notification, bot
 gateway, and managed-context rails while making per-deployment intent explicit.
 
 Dry-run output uses dedicated per-deployment host roots derived from deployment
@@ -100,7 +100,7 @@ the MVP isolation contract explicit in Compose and avoids depending on a shared
 database or cache before cross-tenant isolation is proven.
 
 Chutes, Stripe, Cloudflare/domain ingress, Tailscale ingress, bot, Notion,
-code-server, and Nextcloud credentials are represented only by `secret://...`
+Nextcloud and app credentials are represented only by `secret://...`
 references. The provisioning
 validator rejects plaintext-looking secret values in rendered output and marks
 the provisioning job failed so the same idempotency key can be resumed after
@@ -110,7 +110,7 @@ admin and dashboard inspection.
 Secret runtime resolution prefers native file-based image contracts where they
 exist. Postgres and Nextcloud receive Compose secrets through their documented
 `*_FILE` environment variables. Images and app commands without compatible file
-env support, such as code-server's password and ArcLink app provider tokens,
+env support, such as ArcLink app provider tokens,
 stay behind explicit resolver metadata until live execution installs a wrapper
 or secret materialization step. This keeps the dry-run contract executable for
 stock images without leaking plaintext into persisted Compose intent.
@@ -277,7 +277,7 @@ ArcLink installs native Hermes dashboard plugins for the agent workspace:
 - `arclink-drive` provides `ArcLink Drive`, a file-manager surface over the
   mounted vault or sanitized Nextcloud WebDAV state. Current API capabilities
   include status, listing, bounded text preview, download, upload, folder
-  creation, rename, move, favorites, local trash, and local restore.
+  creation, rename, move, local trash, and local restore.
 - `arclink-code` provides `ArcLink Code`, a native workspace browser/editor.
   It uses `ARCLINK_CODE_WORKSPACE_ROOT`, opens bounded text files, writes
   manual saves atomically, rejects stale saves when the expected file hash no

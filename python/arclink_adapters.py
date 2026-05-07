@@ -274,8 +274,10 @@ def arclink_access_urls(
         if strategy == "path":
             prefixes = arclink_role_path_prefixes(prefix)
             urls = {role: f"https://{hostnames[role]}{prefixes[role]}" for role in hostnames}
+            urls["files"] = f"{urls['dashboard'].rstrip('/')}/drive"
+            urls["code"] = f"{urls['dashboard'].rstrip('/')}/code"
             ports = tailnet_service_ports or {}
-            for role in ("files", "code", "hermes"):
+            for role in ("hermes",):
                 try:
                     port = int(ports.get(role) or 0)
                 except (TypeError, ValueError):
@@ -283,10 +285,16 @@ def arclink_access_urls(
                 if 0 < port < 65536:
                     urls[role] = f"https://{hostnames[role]}:{port}/"
             return urls
-        return {role: f"https://{hostname}" for role, hostname in hostnames.items()}
+        urls = {role: f"https://{hostname}" for role, hostname in hostnames.items()}
+        urls["files"] = f"{urls['dashboard'].rstrip('/')}/drive"
+        urls["code"] = f"{urls['dashboard'].rstrip('/')}/code"
+        return urls
     if mode != "domain":
         raise ValueError("ArcLink ingress mode must be domain or tailscale")
-    return {role: f"https://{hostname}" for role, hostname in arclink_hostnames(prefix, base_domain).items()}
+    urls = {role: f"https://{hostname}" for role, hostname in arclink_hostnames(prefix, base_domain).items()}
+    urls["files"] = f"{urls['dashboard'].rstrip('/')}/drive"
+    urls["code"] = f"{urls['dashboard'].rstrip('/')}/code"
+    return urls
 
 
 def render_traefik_http_labels(

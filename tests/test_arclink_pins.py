@@ -6,9 +6,8 @@ Locks in:
     required fields (matches the schema's allOf if/then rules).
   - bin/pins.sh round-trips a value (get → set → get) without corrupting
     sibling components.
-  - bin/common.sh resolves ARCLINK_HERMES_AGENT_REF and
-    ARCLINK_AGENT_CODE_SERVER_IMAGE through pins.json (not the literal
-    fallback constants).
+  - bin/common.sh resolves ARCLINK_HERMES_AGENT_REF through pins.json
+    (not the literal fallback constants).
 """
 from __future__ import annotations
 
@@ -42,7 +41,6 @@ def test_pins_json_parses_and_has_required_components() -> None:
     required_components = {
         "hermes-agent",
         "hermes-docs",
-        "code-server",
         "nvm",
         "node",
         "python",
@@ -159,22 +157,18 @@ def test_common_sh_reads_hermes_pin_from_pins_json() -> None:
     data = json.loads(PINS_JSON.read_text())
     expected_ref = data["components"]["hermes-agent"]["ref"]
     expected_docs_ref = data["components"]["hermes-docs"]["ref"]
-    expected_image = data["components"]["code-server"]["image"]
-    expected_tag = data["components"]["code-server"]["tag"]
 
     out = subprocess.check_output([
         "bash", "-c",
         f"set -e; cd {REPO}; "
         "ARCLINK_HERMES_AGENT_REF=0000000000000000000000000000000000000000; "
         "ARCLINK_HERMES_DOCS_REF=1111111111111111111111111111111111111111; "
-        "ARCLINK_AGENT_CODE_SERVER_IMAGE=docker.io/example/stale:0.0.0; "
         f"source {COMMON_SH} 2>/dev/null || true; "
-        "echo $ARCLINK_HERMES_AGENT_REF; echo $ARCLINK_HERMES_DOCS_REF; echo $ARCLINK_AGENT_CODE_SERVER_IMAGE"
+        "echo $ARCLINK_HERMES_AGENT_REF; echo $ARCLINK_HERMES_DOCS_REF; echo ${ARCLINK_AGENT_CODE_SERVER_IMAGE:-}"
     ], text=True).splitlines()
     expect(out[0] == expected_ref, f"hermes pin: got {out[0]!r}, expected {expected_ref!r}")
     expect(out[1] == expected_docs_ref, f"hermes docs pin: got {out[1]!r}, expected {expected_docs_ref!r}")
-    expect(out[2] == f"{expected_image}:{expected_tag}",
-           f"code-server image: got {out[2]!r}, expected {expected_image}:{expected_tag}")
+    expect(out[2] == "", f"legacy code-server image env should not be synthesized, got {out[2]!r}")
     print("PASS test_common_sh_reads_hermes_pin_from_pins_json")
 
 

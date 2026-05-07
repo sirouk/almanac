@@ -77,7 +77,7 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
 5. **Provisioning intent**
    - `python/arclink_provisioning.py` renders the per-user pod intent:
      dashboard, Hermes gateway/dashboard, QMD, vault watch, memory synth,
-     Nextcloud, code-server, notification delivery, health watch, managed
+     Nextcloud, dashboard-native Drive/Code/Terminal plugins, notification delivery, health watch, managed
      context install, DNS records, Traefik labels, and secret references.
    - It rejects plaintext secret material. Secrets must be references or
      materialized files.

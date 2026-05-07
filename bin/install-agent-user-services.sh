@@ -386,31 +386,7 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
-  cat >"$TARGET_DIR/arclink-user-agent-code.service" <<EOF
-[Unit]
-Description=ArcLink agent code workspace for $AGENT_ID
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Environment=HERMES_HOME=$HERMES_HOME
-WorkingDirectory=$HERMES_HOME
-ExecStart=$SHARED_REPO_DIR/bin/run-agent-code-server.sh $ACCESS_STATE_FILE $HOME $HERMES_HOME
-ExecStop=$PODMAN_BIN stop -t 10 $($PYTHON3_BIN - "$ACCESS_STATE_FILE" <<'PY'
-import json
-import sys
-from pathlib import Path
-state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(state.get("code_container_name") or "arclink-agent-code")
-PY
-)
-Restart=always
-RestartSec=10
-TimeoutStartSec=300
-
-[Install]
-WantedBy=default.target
-EOF
+  rm -f "$TARGET_DIR/arclink-user-agent-code.service"
 else
   rm -f \
     "$TARGET_DIR/arclink-user-agent-dashboard.service" \
@@ -447,8 +423,7 @@ if [[ -f "$TARGET_DIR/arclink-user-agent-dashboard.service" ]]; then
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart arclink-user-agent-dashboard.service >/dev/null
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable arclink-user-agent-dashboard-proxy.service >/dev/null
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart arclink-user-agent-dashboard-proxy.service >/dev/null
-  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user enable arclink-user-agent-code.service >/dev/null
-  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user restart arclink-user-agent-code.service >/dev/null
+  env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now arclink-user-agent-code.service >/dev/null 2>&1 || true
 else
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now arclink-user-agent-dashboard-proxy.service >/dev/null 2>&1 || true
   env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path" systemctl --user disable --now arclink-user-agent-dashboard.service >/dev/null 2>&1 || true

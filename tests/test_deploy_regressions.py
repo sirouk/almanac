@@ -2522,9 +2522,9 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "refresh-agent-install should repair old user service units and restart gateways when the bundled skills env is added",
     )
     expect(
-        'restart arclink-user-agent-code.service' in refresh_helper
-        and 'code workspace' in refresh_helper,
-        "refresh-agent-install should restart the code workspace so launcher/mount fixes take effect",
+        'disable --now arclink-user-agent-code.service' in refresh_helper
+        and 'restart arclink-user-agent-code.service' not in refresh_helper,
+        "refresh-agent-install should retire the legacy code-server unit now that Code is dashboard-native",
     )
     expect(
         "shared_hermes_runtime_commit" in text

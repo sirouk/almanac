@@ -101,7 +101,7 @@ def _used_ports(conn, *, current_agent_id: str) -> set[int]:
         if not agent_id or agent_id == current_agent_id:
             continue
         state = load_access_state(Path(str(row["hermes_home"] or "")))
-        for key in ("dashboard_backend_port", "dashboard_proxy_port", "code_port"):
+        for key in ("dashboard_backend_port", "dashboard_proxy_port"):
             try:
                 value = int(state.get(key) or 0)
             except (TypeError, ValueError):
@@ -335,38 +335,35 @@ def _run_tailscale_serve(*args: str) -> None:
 
 def publish_tailscale_https(access: dict[str, Any]) -> dict[str, Any]:
     dashboard_port = int(access["dashboard_proxy_port"])
-    code_port = int(access["code_port"])
     dashboard_label = str(access.get("dashboard_label") or "agent-dashboard")
-    code_label = str(access.get("code_label") or "agent-code")
-    for label in (dashboard_label, code_label):
+    for label in (dashboard_label, str(access.get("code_label") or "")):
+        if not label:
+            continue
         try:
             _run_tailscale_serve("--https=443", f"--set-path=/{safe_slug(label, fallback='agent')}", "off")
         except Exception:
             pass
-    for port in (dashboard_port, code_port):
+    for port in (dashboard_port, int(access.get("code_port") or 0)):
+        if port <= 0:
+            continue
         try:
             _run_tailscale_serve(f"--https={port}", "off")
         except Exception:
             pass
     # Hermes dashboard assumes it owns "/" for static assets, routes, and API
-    # calls, so publish each access surface on its own HTTPS port.
+    # calls. Publish one authenticated dashboard surface and route ArcLink
+    # plugins through dashboard paths instead of exposing legacy sidecars.
     _run_tailscale_serve(
         "--bg",
         "--yes",
         f"--https={dashboard_port}",
         f"http://127.0.0.1:{dashboard_port}",
     )
-    _run_tailscale_serve(
-        "--bg",
-        "--yes",
-        f"--https={code_port}",
-        f"http://127.0.0.1:{code_port}",
-    )
     dns_name = detect_tailscale_dns_name()
     if dns_name:
         access["tailscale_host"] = dns_name
         access["dashboard_url"] = f"https://{dns_name}:{dashboard_port}/"
-        access["code_url"] = f"https://{dns_name}:{code_port}/"
+        access["code_url"] = f"https://{dns_name}:{dashboard_port}/code"
     return access
 
 
@@ -442,7 +439,7 @@ def ensure_access_state(
     reserved_now.difference_update(
         {
             int(existing.get(key) or 0)
-            for key in ("dashboard_backend_port", "dashboard_proxy_port", "code_port")
+            for key in ("dashboard_backend_port", "dashboard_proxy_port")
             if str(existing.get(key) or "").strip()
         }
     )
@@ -450,7 +447,6 @@ def ensure_access_state(
     username = str(existing.get("username") or access_username(unix_user))
     url_slug = str(existing.get("url_slug") or access_url_slug(unix_user))
     dashboard_label = str(existing.get("dashboard_label") or f"agent-{url_slug}-dash")
-    code_label = str(existing.get("code_label") or f"agent-{url_slug}-code")
     password = str(existing.get("password") or secrets.token_urlsafe(18))
     dashboard_backend_port = _preserve_or_allocate_port(
         existing=existing.get("dashboard_backend_port"),
@@ -468,15 +464,8 @@ def ensure_access_state(
         span=cfg.agent_port_slot_span,
         slot=slot,
     )
-    code_port = _preserve_or_allocate_port(
-        existing=existing.get("code_port"),
-        reserved_other=reserved_other,
-        reserved_now=reserved_now,
-        base=cfg.agent_code_port_base,
-        span=cfg.agent_port_slot_span,
-        slot=slot,
-    )
     tailscale_host = str(existing.get("tailscale_host") or detect_tailscale_dns_name())
+    dashboard_local_url = f"http://127.0.0.1:{dashboard_proxy_port}/"
     payload = {
         "agent_id": agent_id,
         "unix_user": unix_user,
@@ -485,21 +474,17 @@ def ensure_access_state(
         "password": password,
         "dashboard_backend_port": dashboard_backend_port,
         "dashboard_proxy_port": dashboard_proxy_port,
-        "code_port": code_port,
-        "dashboard_local_url": f"http://127.0.0.1:{dashboard_proxy_port}/",
-        "code_local_url": f"http://127.0.0.1:{code_port}/",
-        "dashboard_url": f"http://127.0.0.1:{dashboard_proxy_port}/",
-        "code_url": f"http://127.0.0.1:{code_port}/",
+        "dashboard_local_url": dashboard_local_url,
+        "code_local_url": f"{dashboard_local_url.rstrip('/')}/code",
+        "dashboard_url": dashboard_local_url,
+        "code_url": f"{dashboard_local_url.rstrip('/')}/code",
         "tailscale_host": tailscale_host,
         "dashboard_label": dashboard_label,
-        "code_label": code_label,
-        "code_container_name": f"arclink-agent-code-{safe_slug(agent_id, fallback='agent')}",
-        "code_server_image": cfg.agent_code_server_image,
         "updated_at": utc_now_iso(),
     }
     if cfg.agent_enable_tailscale_serve and tailscale_host:
         payload["dashboard_url"] = f"https://{tailscale_host}:{dashboard_proxy_port}/"
-        payload["code_url"] = f"https://{tailscale_host}:{code_port}/"
+        payload["code_url"] = f"https://{tailscale_host}:{dashboard_proxy_port}/code"
     _write_access_state(state_path, payload, uid=owner_uid, gid=owner_gid)
     return payload
 

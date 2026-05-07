@@ -115,8 +115,6 @@ def test_generated_web_service_units_follow_access_state() -> None:
                 {
                     "dashboard_backend_port": 19021,
                     "dashboard_proxy_port": 29021,
-                    "code_port": 39021,
-                    "code_container_name": "arclink-agent-code-agent-test",
                 }
             ),
             encoding="utf-8",
@@ -158,7 +156,7 @@ def test_generated_web_service_units_follow_access_state() -> None:
         hermes_arclink = hermes_home / "ArcLink"
         expect(dashboard_unit.is_file(), f"expected dashboard unit: {dashboard_unit}")
         expect(proxy_unit.is_file(), f"expected dashboard proxy unit: {proxy_unit}")
-        expect(code_unit.is_file(), f"expected code unit: {code_unit}")
+        expect(not code_unit.exists(), f"legacy code-server unit should be removed: {code_unit}")
         expect(gateway_unit.is_file(), f"expected gateway unit: {gateway_unit}")
         expect(local_wrapper.is_file(), f"expected local Hermes wrapper: {local_wrapper}")
         expect(backup_wrapper.is_file(), f"expected local backup wrapper: {backup_wrapper}")
@@ -171,7 +169,6 @@ def test_generated_web_service_units_follow_access_state() -> None:
 
         dashboard_text = dashboard_unit.read_text(encoding="utf-8")
         proxy_text = proxy_unit.read_text(encoding="utf-8")
-        code_text = code_unit.read_text(encoding="utf-8")
         gateway_text = gateway_unit.read_text(encoding="utf-8")
         local_wrapper_text = local_wrapper.read_text(encoding="utf-8")
         backup_wrapper_text = backup_wrapper.read_text(encoding="utf-8")
@@ -179,8 +176,7 @@ def test_generated_web_service_units_follow_access_state() -> None:
         installed_start_hook_text = installed_start_hook.read_text(encoding="utf-8")
         expect("--port 19021" in dashboard_text, dashboard_text)
         expect("--listen-port 29021" in proxy_text, proxy_text)
-        expect("run-agent-code-server.sh" in code_text, code_text)
-        expect("arclink-agent-code-agent-test" in code_text, code_text)
+        expect("arclink_basic_auth_proxy.py" in proxy_text and "--access-file" in proxy_text, proxy_text)
         expect("gateway run --replace" in gateway_text, gateway_text)
         expect("Environment=HERMES_CRON_SCRIPT_TIMEOUT=1800" in gateway_text, gateway_text)
         expect("Environment=TELEGRAM_REACTIONS=true" in gateway_text, gateway_text)

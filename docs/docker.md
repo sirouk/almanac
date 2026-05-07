@@ -81,7 +81,7 @@ qmd MCP, Notion webhook, Nextcloud, Postgres, Redis, vault watching, recurring
 job containers, memory synthesis, and the Docker agent supervisor. The
 supervisor replaces the Shared Host per-user systemd units for enrolled agents:
 it reconciles refresh, Hermes gateway, dashboard, authenticated dashboard proxy,
-cron tick, and code-server workspace processes from the control-plane state.
+cron tick, and dashboard-native plugin surfaces from the control-plane state.
 
 The `memory-synth` job mirrors the Shared Host `arclink-memory-synth.timer`: it
 uses the configured `ARCLINK_MEMORY_SYNTH_*` values, or falls back to
@@ -229,7 +229,6 @@ volumes, but bind-mounted `arclink-priv/` state remains on disk.
 - Secrets belong in mounted runtime config, not in the image.
 - Tailscale ingress is optional and remains an integration choice outside the
   default local Docker stack.
-- Agent code-server workspaces are launched by the Docker supervisor through the
-  host Docker socket, using the same access-state ports and credentials as the
-  Shared Host path.
+- ArcLink Drive, Code, and Terminal are exposed as authenticated Hermes
+  dashboard plugin routes, not separate sidecar IDE ports.
 - The Docker app image installs Hermes and qmd from `config/pins.json`.

@@ -12,7 +12,7 @@ end with honest evidence.
   guidance, and billing portal state are all visible from the user dashboard.
 - The user dashboard shows ArcLink's real technology without hiding it:
   Hermes, qmd, Chutes inference provider state, vaults, memory stubs, skills,
-  Nextcloud, code-server, bots, service health, and deployment state.
+  Nextcloud, dashboard-native Code, bots, service health, and deployment state.
 - Fake/local adapters are labeled as fake/local. Live claims require live E2E
   proof.
 - Mobile views prioritize status, alerts, search, and primary recovery

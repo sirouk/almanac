@@ -552,19 +552,7 @@ __pins_get_or_default() {
 ARCLINK_HERMES_AGENT_REF="$(__pins_get_or_default hermes-agent ref "${ARCLINK_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
 ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
-ARCLINK_AGENT_CODE_PORT_BASE="${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
 ARCLINK_AGENT_PORT_SLOT_SPAN="${ARCLINK_AGENT_PORT_SLOT_SPAN:-5000}"
-__arclink_code_server_image_fallback="docker.io/codercom/code-server"
-__arclink_code_server_tag_fallback="4.116.0"
-if [[ -n "${ARCLINK_AGENT_CODE_SERVER_IMAGE:-}" && "$ARCLINK_AGENT_CODE_SERVER_IMAGE" == *:* ]]; then
-  __arclink_code_server_image_fallback="${ARCLINK_AGENT_CODE_SERVER_IMAGE%:*}"
-  __arclink_code_server_tag_fallback="${ARCLINK_AGENT_CODE_SERVER_IMAGE##*:}"
-fi
-__arclink_code_server_image_default="$(__pins_get_or_default code-server image "$__arclink_code_server_image_fallback")"
-__arclink_code_server_tag_default="$(__pins_get_or_default code-server tag "$__arclink_code_server_tag_fallback")"
-ARCLINK_AGENT_CODE_SERVER_IMAGE="${__arclink_code_server_image_default}:${__arclink_code_server_tag_default}"
-unset __arclink_code_server_image_default __arclink_code_server_tag_default
-unset __arclink_code_server_image_fallback __arclink_code_server_tag_fallback
 ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
 ARCLINK_HERMES_DOCS_SYNC_ENABLED="${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}"
 ARCLINK_HERMES_DOCS_REPO_URL="${ARCLINK_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"

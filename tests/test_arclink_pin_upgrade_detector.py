@@ -125,7 +125,6 @@ def test_detector_first_run_inserts_state_and_queues_one_digest_notification() -
                     "components": {
                         "hermes-agent": {"kind": "git-commit", "ref": "aaaa1111" + "a" * 32},
                         "hermes-docs":  {"kind": "git-commit", "ref": "aaaa1111" + "a" * 32, "inherits_from": "hermes-agent"},
-                        "code-server":  {"kind": "container-image", "tag": "4.116.0"},
                         "nvm":          {"kind": "git-tag", "tag": "v0.40.3"},
                         "node":         {"kind": "nvm-version", "version": "22"},
                         "qmd":          {"kind": "npm", "version": "latest"},

@@ -30,12 +30,6 @@
       "inherits_from": "hermes-agent",
       "description": "Hermes user docs are synced into the vault, defaulting to Agents_KB/hermes-agent-docs/ as agent operating knowledge. Defaults to the same ref as hermes-agent so docs and runtime can't drift; override only when intentionally previewing newer docs or using a different vault layout."
     },
-    "code-server": {
-      "kind": "container-image",
-      "image": "docker.io/codercom/code-server",
-      "tag": "4.116.0",
-      "description": "Per-agent in-vault IDE container that the agent dashboard launches for code-server-backed sessions."
-    },
     "nvm": {
       "kind": "git-tag",
       "repo": "https://github.com/nvm-sh/nvm",

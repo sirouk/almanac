@@ -33,6 +33,22 @@
     return parts[parts.length - 1] || "/";
   }
 
+  function itemRoot(item) {
+    return String((item && (item.root || item.root_id)) || "workspace");
+  }
+
+  function itemKey(item) {
+    return itemRoot(item) + ":" + String((item && item.path) || "/");
+  }
+
+  function pathKey(root, path) {
+    return String(root || "workspace") + ":" + String(path || "/");
+  }
+
+  function repoKey(repo) {
+    return String((repo && (repo.root_id || repo.root)) || "workspace") + ":" + String((repo && repo.path) || "/");
+  }
+
   function dirname(path) {
     const clean = String(path || "").replace(/^\/+|\/+$/g, "");
     const parts = clean ? clean.split("/") : [];
@@ -148,7 +164,11 @@
   }
 
   function downloadUrl(item) {
-    return api("/download?path=" + encodeURIComponent(item.path || ""));
+    return api("/download?path=" + encodeURIComponent(item.path || "") + "&root=" + encodeURIComponent(itemRoot(item)));
+  }
+
+  function previewUrl(item) {
+    return api("/preview?path=" + encodeURIComponent(item.path || "") + "&root=" + encodeURIComponent(itemRoot(item)));
   }
 
   function changeSort(a, b) {
@@ -159,6 +179,7 @@
     const statePair = useState({
       loading: true,
       status: null,
+      root: "workspace",
       path: "/",
       items: [],
       openFile: null,
@@ -175,8 +196,8 @@
       errorMessage: "",
       diff: null,
       fileTabs: [],
-      tree: null,
-      expanded: { "/": true },
+      trees: {},
+      expanded: {},
       contextMenu: null,
       searchQuery: "",
       searchResults: [],
@@ -184,6 +205,7 @@
       lastGitResult: null,
       theme: "dark",
       sourcePickerOpen: false,
+      sourcePickerRoot: "workspace",
       sourcePickerPath: "/",
       sourcePickerMessage: "",
       previewFullscreen: false,
@@ -202,36 +224,43 @@
       return window.confirm("Discard unsaved edits before opening another file?");
     }
 
-    function loadItems(nextPath) {
+    function loadItems(nextPath, nextRoot) {
       const targetPath = nextPath || state.path;
-      patch({ loading: true, path: targetPath, errorMessage: "" });
-      fetchJSON(api("/items?path=" + encodeURIComponent(targetPath)))
+      const targetRoot = nextRoot || state.root || "workspace";
+      patch({ loading: true, root: targetRoot, path: targetPath, errorMessage: "" });
+      fetchJSON(api("/items?path=" + encodeURIComponent(targetPath) + "&root=" + encodeURIComponent(targetRoot)))
         .then(function (data) {
-          patch({ loading: false, path: data.path || targetPath, items: data.items || [] });
-          loadTree();
+          patch({ loading: false, root: data.root || targetRoot, path: data.path || targetPath, items: data.items || [] });
+          loadTree(data.root || targetRoot);
         })
         .catch(function (error) {
           patch({ loading: false, items: [], errorMessage: error.message || "Unable to load files" });
         });
     }
 
-    function loadTree() {
-      fetchJSON(api("/tree?path=" + encodeURIComponent("/") + "&depth=3"))
+    function loadTree(root) {
+      const targetRoot = root || state.root || "workspace";
+      fetchJSON(api("/tree?path=" + encodeURIComponent("/") + "&root=" + encodeURIComponent(targetRoot) + "&depth=3"))
         .then(function (data) {
           patch(function (current) {
-            const expanded = Object.assign({ "/": true }, current.expanded || {});
-            return { tree: data.tree || null, expanded: expanded };
+            const trees = Object.assign({}, current.trees || {});
+            trees[data.root || targetRoot] = data.tree || null;
+            return { trees: trees };
           });
         })
         .catch(function () {
-          patch({ tree: null });
+          patch(function (current) {
+            const trees = Object.assign({}, current.trees || {});
+            trees[targetRoot] = null;
+            return { trees: trees };
+          });
         });
     }
 
-    function loadSource(repoPath) {
-      if (!repoPath) return;
+    function loadSource(repo) {
+      if (!repo) return;
       patch({ sourceBusy: true, errorMessage: "" });
-      fetchJSON(api("/git/status?repo=" + encodeURIComponent(repoPath)))
+      fetchJSON(api("/git/status?repo=" + encodeURIComponent(repo.path || "/") + "&root=" + encodeURIComponent(repo.root_id || repo.root || "workspace")))
         .then(function (data) {
           patch({ sourceBusy: false, source: data });
         })
@@ -242,7 +271,7 @@
 
     function openRepo(repo) {
       patch({ repo: repo, leftPanel: "source", gitMessage: "", source: null, sourcePickerOpen: false, sourcePickerMessage: "" });
-      loadSource(repo.path);
+      loadSource(repo);
     }
 
     function closeRepo() {
@@ -253,10 +282,10 @@
       fetchJSON(api("/repos"))
         .then(function (data) {
           const repos = data.repos || [];
-          const currentRepo = state.repo && repos.filter(function (repo) { return repo.path === state.repo.path; })[0];
+          const currentRepo = state.repo && repos.filter(function (repo) { return repoKey(repo) === repoKey(state.repo); })[0];
           const nextRepo = currentRepo || (selectFirst && repos.length ? repos[0] : null);
           patch({ repos: repos, repo: nextRepo });
-          if (nextRepo) loadSource(nextRepo.path);
+          if (nextRepo) loadSource(nextRepo);
         })
         .catch(function (error) {
           patch({ repos: [], repo: null, source: null, errorMessage: error.message || "Unable to scan repositories" });
@@ -264,27 +293,32 @@
     }
 
     function openSourcePicker() {
-      patch({ sourcePickerOpen: true, sourcePickerPath: state.repo ? state.repo.path : "/", sourcePickerMessage: "" });
-      if (!state.tree) loadTree();
+      const sourceRoot = state.repo ? (state.repo.root_id || state.repo.root || "workspace") : state.root || "workspace";
+      patch({ sourcePickerOpen: true, sourcePickerRoot: sourceRoot, sourcePickerPath: state.repo ? state.repo.path : "/", sourcePickerMessage: "" });
+      const roots = (state.status && state.status.roots) || [];
+      roots.forEach(function (root) {
+        if (root.available) loadTree(root.id);
+      });
     }
 
-    function openRepositoryFromPicker(path) {
+    function openRepositoryFromPicker(path, root) {
       const targetPath = path || state.sourcePickerPath || "/";
+      const targetRoot = root || state.sourcePickerRoot || "workspace";
       patch({ sourceBusy: true, sourcePickerMessage: "" });
       fetchJSON(api("/repos/open"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: targetPath }),
+        body: JSON.stringify({ path: targetPath, root: targetRoot }),
       })
         .then(function (data) {
           const repo = data.repo;
           patch(function (current) {
             const repos = (current.repos || []).filter(function (candidate) {
-              return candidate.path !== repo.path;
+              return repoKey(candidate) !== repoKey(repo);
             });
             repos.push(repo);
             repos.sort(function (a, b) {
-              return String(a.path).localeCompare(String(b.path));
+              return String(a.root_label + ":" + a.path).localeCompare(String(b.root_label + ":" + b.path));
             });
             return {
               repos: repos,
@@ -306,10 +340,22 @@
     function loadStatus() {
       SDK.fetchJSON(api("/status"))
         .then(function (status) {
-          patch({ status: status, loading: false });
+          const roots = status.roots || [];
+          const defaultRoot = (roots.filter(function (root) { return root.id === "workspace" && root.available; })[0] || roots.filter(function (root) { return root.available; })[0] || {}).id || "workspace";
+          patch({ status: status, loading: false, root: defaultRoot });
           if (status.available) {
-            loadItems("/");
+            roots.forEach(function (root) {
+              if (root.available) loadTree(root.id);
+            });
+            loadItems("/", defaultRoot);
             loadRepos(true);
+            const params = new URLSearchParams(window.location.search || "");
+            const path = params.get("path");
+            const root = params.get("root") || defaultRoot;
+            if (path) {
+              loadItems(parentPath(path), root);
+              openItem({ path: path, root: root, name: basename(path), kind: "file", text: true }, true);
+            }
           }
         })
         .catch(function () {
@@ -321,10 +367,10 @@
       if (!file || !file.path) return;
       patch(function (current) {
         const existing = (current.fileTabs || []).filter(function (tab) {
-          return tab.path === file.path;
+          return itemKey(tab) === itemKey(file);
         })[0] || {};
         let tabs = (current.fileTabs || []).filter(function (tab) {
-          return tab.path !== file.path;
+          return itemKey(tab) !== itemKey(file);
         });
         const isPinned = !!(pinned || existing.pinned || existing.dirty);
         if (!isPinned) {
@@ -333,6 +379,7 @@
           });
         }
         tabs.push({
+          root: itemRoot(file),
           path: file.path,
           name: file.name || basename(file.path),
           dirty: !!existing.dirty,
@@ -355,7 +402,7 @@
       patch(function (current) {
         return {
           fileTabs: (current.fileTabs || []).map(function (tab) {
-            return tab.path === path ? Object.assign({}, tab, { dirty: dirty }) : tab;
+            return tab.path === path && itemRoot(tab) === (state.openFile ? itemRoot(state.openFile) : itemRoot(tab)) ? Object.assign({}, tab, { dirty: dirty }) : tab;
           }),
         };
       });
@@ -365,17 +412,18 @@
       patch(function (current) {
         return {
           fileTabs: (current.fileTabs || []).map(function (tab) {
-            return tab.path === path ? Object.assign({}, tab, { content: content, dirty: dirty }) : tab;
+            return tab.path === path && itemRoot(tab) === (current.openFile ? itemRoot(current.openFile) : itemRoot(tab)) ? Object.assign({}, tab, { content: content, dirty: dirty }) : tab;
           }),
         };
       });
     }
 
-    function pinTab(path) {
+    function pinTab(path, root) {
+      const targetKey = pathKey(root || (state.openFile && itemRoot(state.openFile)) || state.root || "workspace", path);
       patch(function (current) {
         return {
           fileTabs: (current.fileTabs || []).map(function (tab) {
-            return tab.path === path ? Object.assign({}, tab, { pinned: true }) : tab;
+            return itemKey(tab) === targetKey ? Object.assign({}, tab, { pinned: true }) : tab;
           }),
         };
       });
@@ -386,9 +434,9 @@
       if (tab.dirty && !window.confirm("Close " + tab.name + " without saving?")) return;
       patch(function (current) {
         const tabs = (current.fileTabs || []).filter(function (candidate) {
-          return candidate.path !== tab.path;
+          return itemKey(candidate) !== itemKey(tab);
         });
-        const active = current.openFile && current.openFile.path === tab.path;
+        const active = current.openFile && itemKey(current.openFile) === itemKey(tab);
         const next = active ? tabs[tabs.length - 1] : null;
         return {
           fileTabs: tabs,
@@ -405,8 +453,9 @@
     function openDroppedTab(event) {
       event.preventDefault();
       const path = event.dataTransfer && event.dataTransfer.getData("text/arclink-code-path");
+      const root = event.dataTransfer && event.dataTransfer.getData("text/arclink-code-root");
       if (!path || path === "/") return;
-      openItem({ path: path, name: basename(path), kind: "file", text: true }, true);
+      openItem({ path: path, root: root || state.root || "workspace", name: basename(path), kind: "file", text: true }, true);
     }
 
     function openPreviewFile(item, pinned) {
@@ -416,19 +465,20 @@
         return;
       }
       const previewFile = Object.assign({}, item, {
+        root: itemRoot(item),
         kind: "file",
         name: item.name || basename(item.path),
         editable: false,
         previewKind: kind,
-        previewUrl: item.previewUrl || downloadUrl(item),
+        previewUrl: item.previewUrl || previewUrl(item),
         previewContent: item.previewContent,
       });
       patch(function (current) {
         let tabs = (current.fileTabs || []).filter(function (tab) {
-          return tab.path !== previewFile.path;
+          return itemKey(tab) !== itemKey(previewFile);
         });
         const existing = (current.fileTabs || []).filter(function (tab) {
-          return tab.path === previewFile.path;
+          return itemKey(tab) === itemKey(previewFile);
         })[0] || {};
         const isPinned = !!(pinned || existing.pinned);
         if (!isPinned) {
@@ -437,6 +487,7 @@
           });
         }
         tabs.push({
+          root: itemRoot(previewFile),
           path: previewFile.path,
           name: previewFile.name,
           dirty: false,
@@ -470,7 +521,7 @@
         return;
       }
       if (kind === "text" || kind === "markdown") {
-        fetch(downloadUrl(item), { credentials: "same-origin" })
+        fetch(previewUrl(item), { credentials: "same-origin" })
           .then(function (response) {
             if (!response.ok) throw new Error(message || "Text preview unavailable");
             return response.text();
@@ -489,11 +540,11 @@
     function openItem(item, pinned) {
       patch({ contextMenu: null });
       if (item.kind === "folder") {
-        loadItems(item.path);
+        loadItems(item.path, itemRoot(item));
         patch(function (current) {
           const expanded = Object.assign({}, current.expanded || {});
-          expanded[item.path] = true;
-          return { expanded: expanded };
+          expanded[itemKey(item)] = true;
+          return { expanded: expanded, root: itemRoot(item) };
         });
         return;
       }
@@ -503,10 +554,10 @@
         return;
       }
       const existingTab = (state.fileTabs || []).filter(function (tab) {
-        return tab.path === item.path;
+        return itemKey(tab) === itemKey(item);
       })[0];
       if (existingTab) {
-        if (pinned) pinTab(existingTab.path);
+        if (pinned) pinTab(existingTab.path, itemRoot(existingTab));
         patch({
           openFile: Object.assign({}, existingTab, { editable: existingTab.editable !== false }),
           content: existingTab.content || "",
@@ -516,14 +567,14 @@
         });
         return;
       }
-      fetchJSON(api("/file?path=" + encodeURIComponent(item.path)))
+      fetchJSON(api("/file?path=" + encodeURIComponent(item.path) + "&root=" + encodeURIComponent(itemRoot(item))))
         .then(function (data) {
           const content = data.content || "";
           const file = Object.assign({ kind: "file" }, data);
           const kind = previewKind(file);
           patch(function (current) {
             let tabs = (current.fileTabs || []).filter(function (tab) {
-              return tab.path !== data.path;
+              return itemKey(tab) !== itemKey(data);
             });
             if (!pinned) {
               tabs = tabs.filter(function (tab) {
@@ -531,6 +582,7 @@
               });
             }
             tabs.push({
+              root: itemRoot(data),
               path: data.path,
               name: data.name || basename(data.path),
               dirty: false,
@@ -541,12 +593,12 @@
               language: data.language || "plaintext",
               editable: true,
               previewKind: kind,
-              previewUrl: downloadUrl(data),
+              previewUrl: previewUrl(data),
               previewMode: false,
             });
             return {
               fileTabs: tabs.slice(-8),
-              openFile: Object.assign({}, data, { kind: "file", editable: true, previewKind: kind, previewUrl: downloadUrl(data), previewMode: false }),
+              openFile: Object.assign({}, data, { kind: "file", editable: true, previewKind: kind, previewUrl: previewUrl(data), previewMode: false }),
               content: content,
               savedContent: content,
               dirty: false,
@@ -566,7 +618,7 @@
       fetchJSON(api("/save"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: state.openFile.path, content: state.content, expected_hash: state.openFile.hash || "" }),
+        body: JSON.stringify({ path: state.openFile.path, root: itemRoot(state.openFile), content: state.content, expected_hash: state.openFile.hash || "" }),
       })
         .then(function (data) {
           patch(function (current) {
@@ -576,14 +628,14 @@
               dirty: false,
               openFile: Object.assign({}, current.openFile, { hash: data.hash, modified: data.modified }),
               fileTabs: (current.fileTabs || []).map(function (tab) {
-                return current.openFile && tab.path === current.openFile.path
+                return current.openFile && itemKey(tab) === itemKey(current.openFile)
                   ? Object.assign({}, tab, { dirty: false, content: current.content, savedContent: current.content, hash: data.hash })
                   : tab;
               }),
             };
           });
-          loadItems(state.path);
-          if (state.repo) loadSource(state.repo.path);
+          loadItems(state.path, state.root);
+          if (state.repo) loadSource(state.repo);
         })
         .catch(function (error) {
           patch({ busy: false, errorMessage: error.message || "Save failed" });
@@ -595,14 +647,15 @@
       const name = (window.prompt("File name") || "").trim();
       if (!name) return;
       const path = joinPath(state.path, name);
+      const root = state.root || "workspace";
       patch(function (current) {
         const tabs = (current.fileTabs || []).filter(function (tab) {
-          return tab.path !== path;
+          return itemKey(tab) !== pathKey(root, path);
         });
-        tabs.push({ path: path, name: name, dirty: true, pinned: true, content: "", savedContent: "", hash: "", language: "plaintext", editable: true });
+        tabs.push({ root: root, path: path, name: name, dirty: true, pinned: true, content: "", savedContent: "", hash: "", language: "plaintext", editable: true });
         return {
           fileTabs: tabs.slice(-8),
-          openFile: { path: path, name: name, language: "plaintext", editable: true },
+          openFile: { root: root, path: path, name: name, language: "plaintext", editable: true },
           content: "",
           savedContent: "",
           dirty: true,
@@ -621,7 +674,7 @@
       })
         .then(function () {
           patch({ busy: false });
-          if (endpoint === "/ops/trash" && state.openFile && payload.path === state.openFile.path) {
+          if (endpoint === "/ops/trash" && state.openFile && payload.path === state.openFile.path && (payload.root || "workspace") === itemRoot(state.openFile)) {
             patch(function (current) {
               return {
                 openFile: null,
@@ -629,13 +682,13 @@
                 savedContent: "",
                 dirty: false,
                 diff: null,
-                fileTabs: (current.fileTabs || []).filter(function (tab) { return tab.path !== payload.path; }),
+                fileTabs: (current.fileTabs || []).filter(function (tab) { return itemKey(tab) !== pathKey(payload.root || "workspace", payload.path); }),
               };
             });
           }
-          loadItems(state.path);
-          loadTree();
-          if (state.repo) loadSource(state.repo.path);
+          loadItems(state.path, state.root);
+          loadTree(payload.root || state.root);
+          if (state.repo) loadSource(state.repo);
           if (state.searchQuery) runSearch(state.searchQuery);
         })
         .catch(function (error) {
@@ -646,21 +699,21 @@
     function renameItem(item) {
       const name = (window.prompt("Rename", item.name) || "").trim();
       if (!name || name === item.name) return;
-      fileOperation("/ops/rename", { path: item.path, name: name });
+      fileOperation("/ops/rename", { path: item.path, root: itemRoot(item), name: name });
     }
 
     function moveItem(item) {
       const destination = (window.prompt("Move to path", joinPath(parentPath(item.path), item.name)) || "").trim();
       if (!destination || destination === item.path) return;
-      fileOperation("/ops/move", { path: item.path, destination: destination }, "Move " + item.path + " to " + destination + "?");
+      fileOperation("/ops/move", { path: item.path, root: itemRoot(item), destination: destination }, "Move " + item.path + " to " + destination + "?");
     }
 
     function duplicateItem(item) {
-      fileOperation("/ops/duplicate", { path: item.path });
+      fileOperation("/ops/duplicate", { path: item.path, root: itemRoot(item) });
     }
 
     function trashItem(item) {
-      fileOperation("/ops/trash", { path: item.path, confirm: true }, "Move " + item.path + " to trash?");
+      fileOperation("/ops/trash", { path: item.path, root: itemRoot(item), confirm: true }, "Move " + item.path + " to trash?");
     }
 
     function openContextMenu(event, item) {
@@ -721,12 +774,12 @@
       }, 180);
     }
 
-    function findTreeNode(path, node) {
+    function findTreeNode(path, root, node) {
       if (!node) return null;
-      if (node.path === path) return node;
+      if (node.path === path && itemRoot(node) === root) return node;
       const children = node.children || [];
       for (let index = 0; index < children.length; index += 1) {
-        const found = findTreeNode(path, children[index]);
+        const found = findTreeNode(path, root, children[index]);
         if (found) return found;
       }
       return null;
@@ -739,11 +792,11 @@
       fetchJSON(api("/mkdir"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: joinPath(state.path, name) }),
+        body: JSON.stringify({ path: joinPath(state.path, name), root: state.root || "workspace" }),
       })
         .then(function () {
           patch({ busy: false });
-          loadItems(state.path);
+          loadItems(state.path, state.root);
         })
         .catch(function (error) {
           patch({ busy: false, errorMessage: error.message || "Folder creation failed" });
@@ -757,11 +810,11 @@
       fetchJSON(api(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.assign({ repo: state.repo.path }, payload || {})),
+        body: JSON.stringify(Object.assign({ repo: state.repo.path, root: state.repo.root_id || state.repo.root || "workspace" }, payload || {})),
       })
         .then(function (data) {
           patch({ sourceBusy: false, source: data.status || state.source, lastGitResult: data.last_git_result || null });
-          loadItems(state.path);
+          loadItems(state.path, state.root);
         })
         .catch(function (error) {
           patch({ sourceBusy: false, errorMessage: error.message || "Git action failed" });
@@ -783,6 +836,8 @@
         api(
           "/git/diff?repo=" +
             encodeURIComponent(state.repo.path) +
+            "&root=" +
+            encodeURIComponent(state.repo.root_id || state.repo.root || "workspace") +
             "&path=" +
             encodeURIComponent(change.path) +
             "&staged=" +
@@ -796,6 +851,7 @@
             sourceBusy: false,
             diff: data,
             openFile: {
+              root: state.repo.root_id || state.repo.root || "workspace",
               name: basename(change.path),
               path: joinPath(state.repo.path, change.path),
               editable: false,
@@ -818,7 +874,7 @@
         return {
           openFile: Object.assign({}, current.openFile, { previewMode: nextMode }),
           fileTabs: (current.fileTabs || []).map(function (tab) {
-            return current.openFile && tab.path === current.openFile.path ? Object.assign({}, tab, { previewMode: nextMode }) : tab;
+            return current.openFile && itemKey(tab) === itemKey(current.openFile) ? Object.assign({}, tab, { previewMode: nextMode }) : tab;
           }),
         };
       });
@@ -865,7 +921,7 @@
 
     function renderPreviewBody(file) {
       const kind = file.previewKind || previewKind(file);
-      const url = file.previewUrl || downloadUrl(file);
+      const url = file.previewUrl || previewUrl(file);
       const content = file.previewContent !== undefined ? file.previewContent : state.content;
       if (file.previewMessage) return h("div", { className: "arclink-code-preview-empty" }, file.previewMessage);
       if (kind === "markdown") return renderMarkdownPreview(content);
@@ -937,9 +993,10 @@
     }
 
     function toggleExplorerNode(path) {
+      const root = arguments.length > 1 && arguments[1] ? arguments[1] : state.root || "workspace";
       patch(function (current) {
         const expanded = Object.assign({}, current.expanded || {});
-        expanded[path] = !expanded[path];
+        expanded[pathKey(root, path)] = !expanded[pathKey(root, path)];
         return { expanded: expanded };
       });
     }
@@ -947,14 +1004,16 @@
     function renderExplorer() {
       const openFile = state.openFile;
       function renderTreeNode(item, depth) {
-        const isSelected = openFile && openFile.path === item.path;
+        const root = itemRoot(item);
+        const selectedKey = pathKey(state.root, state.path);
+        const isSelected = (openFile && itemKey(openFile) === itemKey(item)) || (!openFile && selectedKey === itemKey(item));
         const children = item.children || [];
         const isFolder = item.kind === "folder";
-        const isExpanded = !!state.expanded[item.path];
-        const displayName = item.path === "/" ? "Workspace" : item.name;
+        const isExpanded = !!state.expanded[itemKey(item)];
+        const displayName = item.path === "/" ? (item.name || item.root_label || "Root") : item.name;
         return h(
           "div",
-          { key: item.path, className: "arclink-code-tree-node-wrap" },
+          { key: itemKey(item), className: "arclink-code-tree-node-wrap" },
           h(
             "div",
             {
@@ -965,17 +1024,19 @@
               },
               onDragStart: function (event) {
                 event.dataTransfer.setData("text/arclink-code-path", item.path);
+                event.dataTransfer.setData("text/arclink-code-root", root);
               },
               onDragOver: function (event) {
                 if (item.kind === "folder") event.preventDefault();
               },
               onDrop: function (event) {
                 const sourcePath = event.dataTransfer.getData("text/arclink-code-path");
-                if (!sourcePath || item.kind !== "folder" || sourcePath === item.path) return;
+                const sourceRoot = event.dataTransfer.getData("text/arclink-code-root") || root;
+                if (!sourcePath || item.kind !== "folder" || sourcePath === item.path || sourceRoot !== root) return;
                 event.preventDefault();
                 fileOperation(
                   "/ops/move",
-                  { path: sourcePath, destination: joinPath(item.path, basename(sourcePath)) },
+                  { path: sourcePath, root: root, destination: joinPath(item.path, basename(sourcePath)) },
                   "Move " + sourcePath + " into " + item.path + "?"
                 );
               },
@@ -1000,7 +1061,7 @@
                       className: "arclink-code-caret",
                       onClick: function (event) {
                         event.stopPropagation();
-                        toggleExplorerNode(item.path);
+                        toggleExplorerNode(item.path, root);
                       },
                     },
                     isExpanded ? "v" : ">"
@@ -1020,17 +1081,20 @@
         h(
           "div",
           { className: "arclink-code-treebar" },
-          h("button", { type: "button", onClick: function () { loadItems(parentPath(state.path)); }, disabled: state.path === "/" }, "Up"),
-          h("button", { type: "button", onClick: function () { loadItems(state.path); } }, "Refresh")
+          h("button", { type: "button", onClick: function () { loadItems(parentPath(state.path), state.root); }, disabled: state.path === "/" }, "Up"),
+          h("button", { type: "button", onClick: function () { loadItems(state.path, state.root); } }, "Refresh")
         ),
-        h("div", { className: "arclink-code-path" }, state.path),
+        h("div", { className: "arclink-code-path" }, (state.root === "vault" ? "Vault" : "Workspace") + " " + state.path),
         h(
           "div",
           { className: "arclink-code-items", onClick: function () { if (state.contextMenu) patch({ contextMenu: null }); } },
           state.loading
             ? h("div", { className: "arclink-code-empty" }, "Loading")
-            : state.tree
-              ? renderTreeNode(state.tree, 0)
+            : (state.status && state.status.roots || []).filter(function (root) { return root.available; }).length
+              ? (state.status.roots || []).filter(function (root) { return root.available; }).map(function (root) {
+                  const tree = (state.trees || {})[root.id] || { root: root.id, kind: "folder", path: "/", name: root.label, children: [] };
+                  return renderTreeNode(Object.assign({}, tree, { root: root.id, name: root.label }), 0);
+                })
               : h("div", { className: "arclink-code-empty" }, "No files")
         ),
         renderContextMenu()
@@ -1049,7 +1113,7 @@
         },
         h("input", {
           value: state.searchQuery,
-          placeholder: "Search workspace",
+          placeholder: "Search Workspace and Vault",
           onChange: function (event) {
             scheduleSearch(event.target.value);
           },
@@ -1068,7 +1132,7 @@
                 return h(
                   "button",
                   {
-                    key: item.path,
+                    key: itemKey(item),
                     type: "button",
                     className: "arclink-code-search-result",
                     onClick: function () {
@@ -1076,7 +1140,7 @@
                     },
                   },
                   renderFileIcon(Object.assign({ kind: "file" }, item)),
-                  h("span", null, item.path),
+                  h("span", null, (item.root_label || itemRoot(item)) + " " + item.path),
                   h("small", null, item.match || "")
                 );
               })
@@ -1156,17 +1220,17 @@
           h(
             "select",
             {
-              value: state.repo ? state.repo.path : "",
+              value: state.repo ? repoKey(state.repo) : "",
               onChange: function (event) {
                 const repo = state.repos.filter(function (candidate) {
-                  return candidate.path === event.target.value;
+                  return repoKey(candidate) === event.target.value;
                 })[0];
                 if (repo) openRepo(repo);
               },
             },
             h("option", { value: "" }, state.repos.length ? "Select source" : "No open sources"),
             state.repos.map(function (repo) {
-              return h("option", { key: repo.path, value: repo.path }, repo.path + "  " + repo.branch);
+              return h("option", { key: repoKey(repo), value: repoKey(repo) }, (repo.root_label || "Workspace") + " " + repo.path + "  " + repo.branch);
             })
           ),
           h("button", { type: "button", onClick: openSourcePicker }, "Open Source"),
@@ -1177,11 +1241,11 @@
           ? h(
               React.Fragment,
               null,
-              h("div", { className: "arclink-code-source-head" }, h("strong", null, state.repo.path), h("span", null, source.branch || state.repo.branch || "")),
+              h("div", { className: "arclink-code-source-head" }, h("strong", null, (state.repo.root_label || "Workspace") + " " + state.repo.path), h("span", null, source.branch || state.repo.branch || "")),
               h(
                 "div",
                 { className: "arclink-code-source-actions" },
-                h("button", { type: "button", onClick: function () { loadSource(state.repo.path); }, disabled: state.sourceBusy }, "Refresh"),
+                h("button", { type: "button", onClick: function () { loadSource(state.repo); }, disabled: state.sourceBusy }, "Refresh"),
                 h("button", { type: "button", onClick: function () { gitAction("/git/stage", { all: true }); }, disabled: state.sourceBusy || !hasChanges }, "Stage All"),
                 h("button", { type: "button", onClick: function () { gitAction("/git/unstage", { all: true }); }, disabled: state.sourceBusy || !hasStaged }, "Unstage All"),
                 h("button", {
@@ -1242,19 +1306,17 @@
 
     function renderSourcePicker() {
       if (!state.sourcePickerOpen) return null;
-      const roots = [{ label: "Workspace", path: "/" }];
-      if (status.vault_display_path && status.vault_display_path !== "/") {
-        roots.push({ label: "Vault", path: status.vault_display_path });
-      }
+      const roots = (status.roots || []).filter(function (root) { return root.available; });
       function renderPickerNode(item, depth, label) {
+        const root = itemRoot(item);
         const children = (item.children || []).filter(function (child) {
           return child.kind === "folder";
         });
-        const isExpanded = !!state.expanded[item.path];
-        const isSelected = state.sourcePickerPath === item.path;
+        const isExpanded = !!state.expanded[itemKey(item)];
+        const isSelected = state.sourcePickerPath === item.path && state.sourcePickerRoot === root;
         return h(
           "div",
-          { key: "picker:" + item.path, className: "arclink-code-picker-node-wrap" },
+          { key: "picker:" + itemKey(item), className: "arclink-code-picker-node-wrap" },
           h(
             "button",
             {
@@ -1262,10 +1324,10 @@
               className: "arclink-code-picker-node " + (isSelected ? "selected" : ""),
               style: { paddingLeft: 0.4 + depth * 0.8 + "rem" },
               onClick: function () {
-                patch({ sourcePickerPath: item.path, sourcePickerMessage: "" });
+                patch({ sourcePickerRoot: root, sourcePickerPath: item.path, sourcePickerMessage: "" });
               },
               onDoubleClick: function () {
-                openRepositoryFromPicker(item.path);
+                openRepositoryFromPicker(item.path, root);
               },
             },
             item.kind === "folder"
@@ -1275,7 +1337,7 @@
                     className: "arclink-code-caret",
                     onClick: function (event) {
                       event.stopPropagation();
-                      toggleExplorerNode(item.path);
+                      toggleExplorerNode(item.path, root);
                     },
                   },
                   isExpanded ? "v" : ">"
@@ -1303,17 +1365,17 @@
             "div",
             { className: "arclink-code-picker" },
             roots.map(function (root) {
-              const node = findTreeNode(root.path, state.tree) || { kind: "folder", path: root.path, name: root.label, children: [] };
-              return renderPickerNode(Object.assign({}, node, { name: root.label }), 0, root.label);
+              const tree = (state.trees || {})[root.id] || { root: root.id, kind: "folder", path: "/", name: root.label, children: [] };
+              return renderPickerNode(Object.assign({}, tree, { root: root.id, name: root.label }), 0, root.label);
             })
           ),
-          h("div", { className: "arclink-code-picker-path" }, state.sourcePickerPath || "/"),
+          h("div", { className: "arclink-code-picker-path" }, (state.sourcePickerRoot === "vault" ? "Vault" : "Workspace") + " " + (state.sourcePickerPath || "/")),
           state.sourcePickerMessage ? h("div", { className: "arclink-code-picker-message" }, state.sourcePickerMessage) : null,
           h(
             "div",
             { className: "arclink-code-modal-actions" },
             h("button", { type: "button", onClick: function () { patch({ sourcePickerOpen: false, sourcePickerMessage: "" }); } }, "Cancel"),
-            h("button", { type: "button", onClick: function () { openRepositoryFromPicker(state.sourcePickerPath); }, disabled: state.sourceBusy }, "Open")
+            h("button", { type: "button", onClick: function () { openRepositoryFromPicker(state.sourcePickerPath, state.sourcePickerRoot); }, disabled: state.sourceBusy }, "Open")
           )
         )
       );
@@ -1361,8 +1423,7 @@
           }, state.theme === "dark" ? "Light" : "Dark"),
           h("button", { type: "button", onClick: createFile, disabled: !status.available }, "New File"),
           h("button", { type: "button", onClick: createFolder, disabled: !status.available }, "New Folder"),
-          h("button", { type: "button", onClick: saveFile, disabled: !openFile || !state.dirty || state.busy }, "Save"),
-          status.url ? h("a", { href: status.url, target: "_blank", rel: "noreferrer" }, "Full IDE") : null
+          h("button", { type: "button", onClick: saveFile, disabled: !openFile || !state.dirty || state.busy }, "Save")
         )
       ),
       state.errorMessage ? h("div", { className: "arclink-code-error" }, state.errorMessage) : null,
@@ -1410,8 +1471,8 @@
 	                          return h(
 	                            "span",
 	                            {
-	                              key: tab.path,
-	                              className: "arclink-code-tab-item " + (openFile.path === tab.path ? "active" : "") + (tab.pinned ? " pinned" : " preview"),
+	                              key: itemKey(tab),
+	                              className: "arclink-code-tab-item " + (itemKey(openFile) === itemKey(tab) ? "active" : "") + (tab.pinned ? " pinned" : " preview"),
 	                            },
 	                            h(
 	                              "button",
@@ -1420,13 +1481,14 @@
 	                                className: "arclink-code-tab-button",
 	                                title: tab.pinned ? "Pinned tab" : "Preview tab. Double-click to pin.",
 	                                onClick: function () {
-	                                  openItem({ path: tab.path, name: tab.name, kind: "file", text: true });
+	                                  openItem({ root: itemRoot(tab), path: tab.path, name: tab.name, kind: "file", text: true });
 	                                },
 	                                onDoubleClick: function () {
-	                                  pinTab(tab.path);
+	                                  patch({ openFile: Object.assign({}, tab, { editable: tab.editable !== false }) });
+	                                  pinTab(tab.path, itemRoot(tab));
 	                                },
 	                              },
-	                              (tab.dirty || (tab.path === openFile.path && state.dirty) ? "* " : "") + tab.name
+	                              (tab.dirty || (itemKey(tab) === itemKey(openFile) && state.dirty) ? "* " : "") + tab.name
 	                            ),
 	                            h(
 	                              "button",
@@ -1480,7 +1542,7 @@
                 "div",
                 { className: "arclink-code-statusbar" },
                 h("span", null, openFile ? openFile.language || "plaintext" : "No file"),
-                h("span", null, state.repo ? state.repo.path : "No repository"),
+                h("span", null, state.repo ? (state.repo.root_label || "Workspace") + " " + state.repo.path : "No repository"),
                 h("span", null, state.dirty ? "Dirty" : "Manual save")
               )
             )

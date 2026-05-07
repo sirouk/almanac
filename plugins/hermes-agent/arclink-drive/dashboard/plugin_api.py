@@ -271,7 +271,7 @@ def _root_capabilities(*, available: bool, backend: str, webdav_available: bool 
         "download": local or backend == "nextcloud-webdav",
         "drag_drop_upload": local or backend == "nextcloud-webdav",
         "duplicate": local,
-        "favorites": local or backend == "nextcloud-webdav",
+        "favorites": False,
         "folders": local or backend == "nextcloud-webdav",
         "move": local or backend == "nextcloud-webdav",
         "new_file": local,

@@ -154,7 +154,7 @@ Provisioning secret resolution is intentionally split by image support. Stock
 images that support file-backed credentials, including Postgres and Nextcloud,
 must receive Compose secret mounts through their documented `_FILE`
 environment variables. Images or app commands without `_FILE` support, such as
-code-server password injection and custom ArcLink app tokens, require an
+custom ArcLink app tokens, require an
 explicit resolver step that materializes the mounted secret file or a
 `secret://` reference at container start. This keeps dry-run output secret-free
 while avoiding plaintext environment values in executable Compose intent.

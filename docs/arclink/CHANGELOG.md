@@ -5,7 +5,7 @@
 - **ArcLink Drive**: `plugins/hermes-agent/arclink-drive/` is now documented as
   the ArcLink-owned Hermes dashboard file manager. It supports local vault and
   sanitized Nextcloud WebDAV backends, bounded preview/download/upload, folder
-  creation, rename/move, favorites, local trash, and local restore. WebDAV
+  creation, rename/move, local trash, and local restore. WebDAV
   credentials stay server-side in the plugin API.
 - **ArcLink Code**: `plugins/hermes-agent/arclink-code/` is now documented as
   the native Hermes code workspace. It uses the deployment workspace root,
@@ -203,8 +203,7 @@ fake adapter coverage.
 - `arclink_provisioning.py` now renders per-service `deploy.resources.limits`
   (memory and CPU) for all 13 Compose services via `ARCLINK_DEFAULT_RESOURCE_LIMITS`.
 - Healthchecks added for data/web services: `nextcloud-db` (pg_isready),
-  `nextcloud-redis` (redis-cli ping), `nextcloud` (curl status.php),
-  `code-server` (curl healthz).
+  `nextcloud-redis` (redis-cli ping), and `nextcloud` (curl status.php).
 - `_service()` helper accepts optional `deploy` and `healthcheck` dicts.
 - New test: `test_rendered_services_include_resource_limits_and_healthchecks`
   verifies every service has limits, data services have healthchecks, app-only

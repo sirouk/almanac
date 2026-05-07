@@ -306,7 +306,6 @@ arclink-user-agent-activate.path
 arclink-user-agent-gateway.service
 arclink-user-agent-dashboard.service
 arclink-user-agent-dashboard-proxy.service
-arclink-user-agent-code.service
 arclink-user-agent-backup.service        # manual immediate backup fallback
 Hermes cron job in HERMES_HOME/cron/jobs.json: ArcLink private Hermes-home backup
 ```

@@ -31,7 +31,6 @@ ARCLINK_PROVISIONING_SERVICE_NAMES = (
     "nextcloud-db",
     "nextcloud-redis",
     "nextcloud",
-    "code-server",
     "notion-webhook",
     "notification-delivery",
     "health-watch",
@@ -199,11 +198,6 @@ def _render_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict
             "nextcloud_db_password_ref",
             f"secret://arclink/nextcloud/{deployment_id}/db-password",
         ),
-        "code_server_password": _secret_ref(
-            metadata,
-            "code_server_password_ref",
-            f"secret://arclink/code-server/{deployment_id}/password",
-        ),
         "telegram_bot_token": str(metadata.get("telegram_bot_token_ref") or "").strip(),
         "discord_bot_token": str(metadata.get("discord_bot_token_ref") or "").strip(),
         "notion_token": str(metadata.get("notion_token_ref") or "").strip(),
@@ -253,7 +247,7 @@ def _clean_tailnet_service_ports(value: Any) -> dict[str, int]:
     if not isinstance(value, Mapping):
         return {}
     ports: dict[str, int] = {}
-    for role in ("files", "code", "hermes"):
+    for role in ("hermes",):
         try:
             port = int(value.get(role) or 0)
         except (TypeError, ValueError):
@@ -388,7 +382,6 @@ ARCLINK_DEFAULT_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "nextcloud-db":            _resource_limit("512M", "0.5"),
     "nextcloud-redis":         _resource_limit("128M", "0.25"),
     "nextcloud":               _resource_limit("512M", "1.0"),
-    "code-server":             _resource_limit("1G",   "1.0"),
     "notion-webhook":          _resource_limit("128M", "0.25"),
     "notification-delivery":   _resource_limit("128M", "0.25"),
     "health-watch":            _resource_limit("128M", "0.25"),
@@ -400,7 +393,6 @@ ARCLINK_DEFAULT_HEALTHCHECKS: dict[str, dict[str, str]] = {
     "nextcloud-db":    {"test": "pg_isready -U nextcloud", "interval": "30s", "timeout": "5s", "retries": "3"},
     "nextcloud-redis": {"test": "redis-cli ping", "interval": "30s", "timeout": "5s", "retries": "3"},
     "nextcloud":       {"test": "curl -f http://localhost/status.php || exit 1", "interval": "60s", "timeout": "10s", "retries": "3"},
-    "code-server":     {"test": "curl -f http://localhost:8080/healthz || exit 1", "interval": "60s", "timeout": "5s", "retries": "3"},
 }
 
 
@@ -515,7 +507,7 @@ def _render_services(
                 {"source": roots["nextcloud_html"], "target": "/var/www/html"},
                 {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
             ],
-            labels=labels["files"],
+            labels=labels.get("files", {}),
             depends_on=["nextcloud-db", "nextcloud-redis"],
             secrets=[
                 {"source": "nextcloud_db_password", "target": secret_target["nextcloud_db_password"]},
@@ -524,23 +516,6 @@ def _render_services(
             deploy=_limits("nextcloud"),
             healthcheck=_hc("nextcloud"),
             networks=_control_network(prefix, "nextcloud"),
-        ),
-        "code-server": _service(
-            image="${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}",
-            entrypoint=["/bin/sh", "-lc"],
-            command=[
-                f"PASSWORD=\"$(cat {secret_target['code_server_password']})\" "
-                f"exec code-server --bind-addr 0.0.0.0:8080 {CONTAINER_CODE_WORKSPACE_DIR}",
-            ],
-            environment={
-                "ARCLINK_DEPLOYMENT_ID": deployment_id,
-            },
-            volumes=[{"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR}],
-            labels=labels["code"],
-            secrets=[{"source": "code_server_password", "target": secret_target["code_server_password"]}],
-            deploy=_limits("code-server"),
-            healthcheck=_hc("code-server"),
-            networks=_control_network(prefix, "code"),
         ),
         "notion-webhook": _service(
             image=app_image,
@@ -733,7 +708,6 @@ def render_arclink_provisioning_intent(
         "ARCLINK_CHUTES_API_KEY_FILE": compose_secrets["chutes_api_key"]["target"],
         "NEXTCLOUD_ADMIN_PASSWORD_REF": secret_refs["nextcloud_admin_password"],
         "NEXTCLOUD_DB_PASSWORD_REF": secret_refs["nextcloud_db_password"],
-        "CODE_SERVER_PASSWORD_REF": secret_refs["code_server_password"],
         "HERMES_HOME": CONTAINER_HERMES_HOME,
         "VAULT_DIR": CONTAINER_VAULT_DIR,
         "ARCLINK_DRIVE_ROOT": CONTAINER_VAULT_DIR,
@@ -801,12 +775,7 @@ def render_arclink_provisioning_intent(
                 "nextcloud-db": ["POSTGRES_PASSWORD_FILE"],
                 "nextcloud": ["POSTGRES_PASSWORD_FILE", "NEXTCLOUD_ADMIN_PASSWORD_FILE"],
             },
-            "entrypoint_file_resolver": {
-                "code-server": {
-                    "env_var": "PASSWORD",
-                    "source_file": compose_secrets["code_server_password"]["target"],
-                }
-            },
+            "entrypoint_file_resolver": {},
             "app_ref_resolver_required": [
                 name
                 for name in (

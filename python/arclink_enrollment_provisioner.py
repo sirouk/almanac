@@ -911,13 +911,6 @@ def _provision_user_access_surfaces(
         uid=uid,
         unit_name="arclink-user-agent-dashboard-proxy.service",
     )
-    _assert_user_unit_active(
-        unix_user=unix_user,
-        home=home,
-        hermes_home=hermes_home,
-        uid=uid,
-        unit_name="arclink-user-agent-code.service",
-    )
     wait_for_http(
         str(access["dashboard_local_url"]),
         expected_statuses={200},
@@ -927,6 +920,8 @@ def _provision_user_access_surfaces(
     wait_for_http(
         str(access["code_local_url"]),
         expected_statuses={200, 302},
+        username=str(access["username"]),
+        password=str(access["password"]),
     )
     if cfg.agent_enable_tailscale_serve:
         access = publish_tailscale_https(access)

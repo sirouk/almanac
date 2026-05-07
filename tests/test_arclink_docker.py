@@ -278,7 +278,7 @@ def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
         (bin_dir / "tailscale").write_text(
             "#!/usr/bin/env bash\n"
             f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log_path))}\n"
-            "case \"$*\" in *--https=8444*) exit 1 ;; *) exit 0 ;; esac\n",
+            "exit 0\n",
             encoding="utf-8",
         )
         (bin_dir / "tailscale").chmod(0o755)
@@ -312,12 +312,13 @@ docker_publish_tailnet_deployment_apps
         expect(result.returncode == 0, f"tailnet publish probe failed: stdout={result.stdout!r} stderr={result.stderr!r}")
         with sqlite3.connect(db_path) as conn:
             metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()[0])
-        expect(metadata["tailnet_app_publication"]["status"] == "unavailable", str(metadata))
-        expect("files" in metadata["tailnet_app_publication"]["failed_roles"], str(metadata))
-        expect("access_urls" not in metadata, str(metadata))
-        expect(metadata["tailnet_service_ports"] == {"code": 8445, "files": 8444, "hermes": 8443}, str(metadata))
-        expect(not (root / "nextcloud-called").exists(), "Nextcloud overwrite must not be configured for unpublished files URL")
-        print("PASS test_docker_tailnet_publish_failure_withholds_app_urls")
+        expect(metadata["tailnet_app_publication"]["status"] == "published", str(metadata))
+        expect(metadata["tailnet_app_publication"]["failed_roles"] == [], str(metadata))
+        expect(metadata["access_urls"]["files"] == "https://worker.example.ts.net/u/amber-vault-1a2b/drive", str(metadata))
+        expect(metadata["access_urls"]["code"] == "https://worker.example.ts.net/u/amber-vault-1a2b/code", str(metadata))
+        expect(metadata["tailnet_service_ports"] == {"hermes": 8443}, str(metadata))
+        expect(not (root / "nextcloud-called").exists(), "Nextcloud overwrite must not be configured for dashboard-native Drive")
+        print("PASS test_docker_tailnet_publish_uses_dashboard_native_plugin_urls")
 
 
 def test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config() -> None:
@@ -400,7 +401,6 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     supervisor = read("python/arclink_docker_agent_supervisor.py")
     installer = read("bin/install-agent-user-services.sh")
     provisioner = read("python/arclink_enrollment_provisioner.py")
-    code_runner = read("bin/run-agent-code-server.sh")
     expect("def ensure_container_user" in supervisor, supervisor)
     expect('"gateway", "run", "--replace"' in supervisor, supervisor)
     expect('"--host",\n                        "0.0.0.0"' in supervisor, supervisor)
@@ -408,7 +408,7 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     expect('"docker",\n                    "run"' in supervisor, supervisor)
     expect('"--network"' in supervisor and "ARCLINK_DOCKER_NETWORK" in supervisor, supervisor)
     expect('"ARCLINK_DOCKER_CONTAINER_NAME"' in supervisor, supervisor)
-    expect("run-agent-code-server.sh" in supervisor, supervisor)
+    expect("run-agent-code-server.sh" not in supervisor, supervisor)
     expect('"cron", "tick"' in supervisor, supervisor)
     expect("ensure_agent_mcp_auth" in supervisor and "ensure_agent_mcp_bootstrap_token" in supervisor, supervisor)
     expect('"docker-agent-supervisor"' in supervisor, supervisor)
@@ -417,8 +417,7 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     expect('ARCLINK_AGENT_SERVICE_MANAGER:-systemd' in installer, installer)
     expect("def _ensure_docker_user_ready" in provisioner, provisioner)
     expect('"ARCLINK_AGENT_SERVICE_MANAGER": "docker-supervisor"' in provisioner, provisioner)
-    expect("docker_host_path()" in code_runner, code_runner)
-    expect("ARCLINK_DOCKER_HOST_PRIV_DIR" in code_runner, code_runner)
+    expect("arclink_basic_auth_proxy.py" in supervisor and "arclink-web-access.json" in supervisor, supervisor)
     print("PASS test_docker_agent_supervisor_replaces_user_systemd_units")
 
 
@@ -511,8 +510,8 @@ def test_sovereign_ingress_docs_cover_domain_and_tailscale_modes() -> None:
     live = read("docs/arclink/live-e2e-secrets-needed.md")
     plan = read("IMPLEMENTATION_PLAN.md")
     expect("ARCLINK_INGRESS_MODE=domain" in ingress and "ARCLINK_INGRESS_MODE=tailscale" in ingress, ingress)
-    expect("u-{prefix}.{base_domain}" in ingress and "files-{prefix}.{base_domain}" in ingress, ingress)
-    expect("https://{tailscale_dns_name}/u/{prefix}/files" in ingress, ingress)
+    expect("u-{prefix}.{base_domain}" in ingress and "hermes-{prefix}.{base_domain}" in ingress, ingress)
+    expect("https://{tailscale_dns_name}/u/{prefix}/drive" in ingress, ingress)
     expect("cloudflare_access_tcp" in ingress and "tailscale_direct_ssh" in ingress, ingress)
     expect("Domain mode:" in live and "Tailscale mode:" in live, live)
     expect("domain-or-Tailscale ingress" in plan, plan)

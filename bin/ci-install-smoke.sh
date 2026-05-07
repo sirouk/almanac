@@ -536,9 +536,8 @@ assert_agent_access_surfaces() {
   local agent_id="$2"
   local hermes_home="$3"
   local access_file="$hermes_home/state/arclink-web-access.json"
-  local username="" password="" dashboard_backend_port="" dashboard_proxy_port="" code_port="" dashboard_url="" code_url="" dashboard_label="" code_label="" code_container_name="" code_server_image=""
-  local before_signature="" after_signature="" home_dir="" uid=""
-  local podman_bin=""
+  local username="" password="" dashboard_backend_port="" dashboard_proxy_port="" dashboard_url="" code_url="" dashboard_label=""
+  local before_signature="" after_signature=""
 
   wait_for_file "$access_file" 240 2
   eval "$(
@@ -554,20 +553,16 @@ for key in (
     "password",
     "dashboard_backend_port",
     "dashboard_proxy_port",
-    "code_port",
     "dashboard_url",
     "code_url",
     "dashboard_label",
-    "code_label",
-    "code_container_name",
-    "code_server_image",
 ):
     print(f"{key}={shlex.quote(str(state.get(key, '')))}")
 PY
   )"
 
   if [[ -z "$username" || -z "$password" ]]; then
-    echo "Expected dashboard/code credentials to be written for $agent_id." >&2
+    echo "Expected dashboard credentials to be written for $agent_id." >&2
     return 1
   fi
   if [[ "$username" != "$unix_user" ]]; then
@@ -581,16 +576,14 @@ PY
 
   wait_for_port 127.0.0.1 "$dashboard_backend_port" 120 2
   wait_for_port 127.0.0.1 "$dashboard_proxy_port" 180 2
-  wait_for_port 127.0.0.1 "$code_port" 300 2
   wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard.service" 120 2
   wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard-proxy.service" 120 2
-  wait_for_user_unit_active "$unix_user" "arclink-user-agent-code.service" 180 2
 
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "401" "" "" 90 2
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/" "200" "$username:$password" "" 90 2
   wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/api/status" "200" "$username:$password" "" 90 2
   assert_dashboard_proxy_bearer_flow "http://127.0.0.1:$dashboard_proxy_port/" "$username" "$password"
-  wait_for_http_status "http://127.0.0.1:$code_port/" "200,302,303" "" "" 180 2
+  wait_for_http_status "http://127.0.0.1:$dashboard_proxy_port/code" "200" "$username:$password" "" 180 2
 
   before_signature="$(
     python3 - "$access_file" <<'PY'
@@ -599,14 +592,13 @@ import sys
 from pathlib import Path
 
 state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print("|".join(str(state.get(key, "")) for key in ("username", "password", "dashboard_backend_port", "dashboard_proxy_port", "code_port")))
+print("|".join(str(state.get(key, "")) for key in ("username", "password", "dashboard_backend_port", "dashboard_proxy_port", "code_url")))
 PY
   )"
 
   ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/arclink-ctl" user sync-access "$unix_user" --agent-id "$agent_id" >/dev/null
   wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard.service" 120 2
   wait_for_user_unit_active "$unix_user" "arclink-user-agent-dashboard-proxy.service" 120 2
-  wait_for_user_unit_active "$unix_user" "arclink-user-agent-code.service" 180 2
 
   after_signature="$(
     python3 - "$access_file" <<'PY'
@@ -615,7 +607,7 @@ import sys
 from pathlib import Path
 
 state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print("|".join(str(state.get(key, "")) for key in ("username", "password", "dashboard_backend_port", "dashboard_proxy_port", "code_port")))
+print("|".join(str(state.get(key, "")) for key in ("username", "password", "dashboard_backend_port", "dashboard_proxy_port", "code_url")))
 PY
   )"
   if [[ "$before_signature" != "$after_signature" ]]; then
@@ -625,79 +617,43 @@ PY
     return 1
   fi
 
-  home_dir="$(getent passwd "$unix_user" | cut -d: -f6)"
-  uid="$(id -u "$unix_user")"
-  podman_bin="$(command -v podman || true)"
-  if [[ -z "$podman_bin" ]]; then
-    podman_bin="/usr/bin/podman"
-  fi
-  python3 - "$(
-    run_login_user_command "$unix_user" "$podman_bin" inspect "$code_container_name"
-  )" "$home_dir" "$password" "$code_server_image" <<'PY'
-import json
-import sys
-
-inspect_json, home_dir, password, image_name = sys.argv[1:5]
-payload = json.loads(inspect_json)
-if not payload:
-    raise SystemExit("expected podman inspect data for code container")
-container = payload[0]
-state = container.get("State") or {}
-if state.get("Status") != "running":
-    raise SystemExit(f"expected code container running, saw {state.get('Status')!r}")
-mounts = container.get("Mounts") or []
-if not any(mount.get("Destination") == "/workspace" and mount.get("Source") == home_dir for mount in mounts):
-    raise SystemExit(f"expected /workspace bind mount from {home_dir}")
-env = (container.get("Config") or {}).get("Env") or []
-if f"PASSWORD={password}" not in env:
-    raise SystemExit("expected code container PASSWORD env to match shared access password")
-image = container.get("ImageName") or ""
-if image_name and image_name not in image:
-    raise SystemExit(f"expected code container image {image_name!r}, saw {image!r}")
-cmd = " ".join((container.get("Config") or {}).get("Cmd") or [])
-for marker in ("--auth", "password", "/workspace"):
-    if marker not in cmd:
-        raise SystemExit(f"expected code-server command marker {marker!r}, saw {cmd!r}")
-PY
-
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
+    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" <<'PY'
 import sys
 from urllib.parse import urlparse
 
-dashboard_url, code_url, dashboard_port, code_port = sys.argv[1:5]
-expected = (
-    (dashboard_url, dashboard_port),
-    (code_url, code_port),
-)
-for url, port in expected:
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.port != int(port) or parsed.path != "/":
-        raise SystemExit(f"expected tailscale https URL on port {port!r}, saw {url!r}")
+dashboard_url, code_url, dashboard_port = sys.argv[1:4]
+parsed = urlparse(dashboard_url)
+if parsed.scheme != "https" or parsed.port != int(dashboard_port) or parsed.path != "/":
+    raise SystemExit(f"expected dashboard tailscale https URL on port {dashboard_port!r}, saw {dashboard_url!r}")
+expected_code = dashboard_url.rstrip("/") + "/code"
+if code_url != expected_code:
+    raise SystemExit(f"expected dashboard-native Code URL {expected_code!r}, saw {code_url!r}")
 PY
     wait_for_http_status "$dashboard_url" "401" "" "" 90 2
     wait_for_http_status "$dashboard_url" "200" "$username:$password" "" 90 2
     wait_for_http_status "${dashboard_url}api/status" "200" "$username:$password" "" 90 2
-    wait_for_http_status "$code_url" "200,302,303" "" "" 180 2
+    wait_for_http_status "$code_url" "200" "$username:$password" "" 180 2
   else
-    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" "$code_port" <<'PY'
+    python3 - "$dashboard_url" "$code_url" "$dashboard_proxy_port" <<'PY'
 import sys
 
-dashboard_url, code_url, dashboard_port, code_port = sys.argv[1:5]
-expected = (
-    (dashboard_url, dashboard_port),
-    (code_url, code_port),
-)
-for url, port in expected:
-    target = f"http://127.0.0.1:{port}/"
-    if url != target:
-        raise SystemExit(f"expected local URL {target!r}, saw {url!r}")
+dashboard_url, code_url, dashboard_port = sys.argv[1:4]
+target = f"http://127.0.0.1:{dashboard_port}/"
+if dashboard_url != target:
+    raise SystemExit(f"expected local dashboard URL {target!r}, saw {dashboard_url!r}")
+expected_code = target.rstrip("/") + "/code"
+if code_url != expected_code:
+    raise SystemExit(f"expected dashboard-native Code URL {expected_code!r}, saw {code_url!r}")
 PY
   fi
 
   run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-dashboard.service >/dev/null
   run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-dashboard-proxy.service >/dev/null
-  run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-code.service >/dev/null
+  if run_login_user_systemctl "$unix_user" is-enabled arclink-user-agent-code.service >/dev/null 2>&1; then
+    echo "Legacy code-server user unit should not be enabled for $agent_id." >&2
+    return 1
+  fi
 }
 
 qmd_mcp_query_files() {

@@ -596,7 +596,7 @@ import sys
 from typing import Any, Mapping
 
 db_path, base_port_raw = sys.argv[1:3]
-roles = ("hermes", "files", "code")
+roles = ("hermes",)
 try:
     base_port = int(base_port_raw)
 except ValueError:
@@ -658,14 +658,12 @@ with sqlite3.connect(db_path) as conn:
                     str(row["deployment_id"]),
                     prefix,
                     str(ports["hermes"]),
-                    str(ports["files"]),
-                    str(ports["code"]),
                 ]
             )
         )
 PY
 
-  while IFS=$'\t' read -r deployment_id prefix hermes_port files_port code_port; do
+  while IFS=$'\t' read -r deployment_id prefix hermes_port; do
     [[ -n "$deployment_id" && -n "$prefix" ]] || continue
     local status="published"
     local successful_roles=()
@@ -674,22 +672,9 @@ PY
     else
       status="unavailable"
     fi
-    if tailscale serve --bg --yes --https="$files_port" "http://127.0.0.1:$web_port/u/$prefix/files" >/dev/null; then
-      successful_roles+=(files)
-    else
-      status="unavailable"
-    fi
-    if tailscale serve --bg --yes --https="$code_port" "http://127.0.0.1:$web_port/u/$prefix/code" >/dev/null; then
-      successful_roles+=(code)
-    else
-      status="unavailable"
-    fi
     docker_record_tailnet_deployment_app_publish \
       "$db_path" "$deployment_id" "$host" "$prefix" \
-      "$hermes_port" "$files_port" "$code_port" "$status" "${successful_roles[*]}"
-    if [[ "$status" == "published" ]]; then
-      docker_configure_deployment_nextcloud_overwrite "$deployment_id" "$host:$files_port" "https://$host:$files_port" || true
-    fi
+      "$hermes_port" "$status" "${successful_roles[*]}"
   done <"$routes_file"
   rm -f "$routes_file"
 }
@@ -700,14 +685,12 @@ docker_record_tailnet_deployment_app_publish() {
   local host="$3"
   local prefix="$4"
   local hermes_port="$5"
-  local files_port="$6"
-  local code_port="$7"
-  local status="$8"
-  local successful_roles="${9:-}"
+  local status="$6"
+  local successful_roles="${7:-}"
 
   PYTHONPATH="$REPO_DIR/python" python3 - \
     "$db_path" "$deployment_id" "$host" "$prefix" \
-    "$hermes_port" "$files_port" "$code_port" "$status" "$successful_roles" <<'PY'
+    "$hermes_port" "$status" "$successful_roles" <<'PY'
 from __future__ import annotations
 
 import json
@@ -717,8 +700,8 @@ from typing import Any
 
 from arclink_control import utc_now_iso
 
-db_path, deployment_id, host, prefix, hermes_port, files_port, code_port, status, successful_raw = sys.argv[1:10]
-roles = ("hermes", "files", "code")
+db_path, deployment_id, host, prefix, hermes_port, status, successful_raw = sys.argv[1:8]
+roles = ("hermes",)
 
 
 def valid_port(value: Any) -> int:
@@ -731,8 +714,6 @@ def valid_port(value: Any) -> int:
 
 ports = {
     "hermes": valid_port(hermes_port),
-    "files": valid_port(files_port),
-    "code": valid_port(code_port),
 }
 if set(ports.values()) == {0}:
     raise SystemExit(0)
@@ -772,8 +753,8 @@ with sqlite3.connect(db_path) as conn:
         metadata["access_urls"] = {
             "dashboard": f"https://{host}/u/{prefix}",
             "hermes": f"https://{host}:{ports['hermes']}/",
-            "files": f"https://{host}:{ports['files']}/",
-            "code": f"https://{host}:{ports['code']}/",
+            "files": f"https://{host}/u/{prefix}/drive",
+            "code": f"https://{host}/u/{prefix}/code",
             "notion": f"https://{host}/u/{prefix}/notion/webhook",
         }
     else:
@@ -1750,7 +1731,6 @@ component_for_upgrade_command() {
     nextcloud-upgrade|nextcloud-upgrade-check) printf '%s\n' "nextcloud" ;;
     postgres-upgrade|postgres-upgrade-check) printf '%s\n' "postgres" ;;
     redis-upgrade|redis-upgrade-check) printf '%s\n' "redis" ;;
-    code-server-upgrade|code-server-upgrade-check) printf '%s\n' "code-server" ;;
     nvm-upgrade|nvm-upgrade-check) printf '%s\n' "nvm" ;;
     node-upgrade|node-upgrade-check) printf '%s\n' "node" ;;
     *) printf '%s\n' "" ;;
@@ -1909,10 +1889,10 @@ main() {
     pin-upgrade-notify)
       docker_pin_upgrade_notify "$@"
       ;;
-    hermes-upgrade-check|qmd-upgrade-check|nextcloud-upgrade-check|postgres-upgrade-check|redis-upgrade-check|code-server-upgrade-check|nvm-upgrade-check|node-upgrade-check)
+    hermes-upgrade-check|qmd-upgrade-check|nextcloud-upgrade-check|postgres-upgrade-check|redis-upgrade-check|nvm-upgrade-check|node-upgrade-check)
       docker_component_upgrade_check "$command" "$@"
       ;;
-    hermes-upgrade|qmd-upgrade|nextcloud-upgrade|postgres-upgrade|redis-upgrade|code-server-upgrade|nvm-upgrade|node-upgrade)
+    hermes-upgrade|qmd-upgrade|nextcloud-upgrade|postgres-upgrade|redis-upgrade|nvm-upgrade|node-upgrade)
       docker_component_upgrade_apply "$command" "$@"
       ;;
     teardown)

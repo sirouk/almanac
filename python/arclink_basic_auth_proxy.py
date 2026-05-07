@@ -35,7 +35,10 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def load_access(path: Path) -> tuple[str, str]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "", ""
     return str(data.get("username") or ""), str(data.get("password") or "")
 
 
@@ -73,6 +76,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not self.require_auth:
             return AuthState(ok=True)
         username, password = load_access(self.access_file)
+        if not username or not password:
+            return AuthState(ok=False)
         header = self.headers.get("Authorization") or ""
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         expected = f"Basic {token}"

@@ -219,9 +219,7 @@ ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-${__arclink_upstream_branch_
 unset __arclink_upstream_branch_default
 ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
-ARCLINK_AGENT_CODE_PORT_BASE="${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
 ARCLINK_AGENT_PORT_SLOT_SPAN="${ARCLINK_AGENT_PORT_SLOT_SPAN:-5000}"
-ARCLINK_AGENT_CODE_SERVER_IMAGE="${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}"
 ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}"
 ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-}"
 ARCLINK_OPERATOR_ARTIFACT_FILE="${ARCLINK_OPERATOR_ARTIFACT_FILE:-$BOOTSTRAP_DIR/.arclink-operator.env}"
@@ -562,8 +560,6 @@ Pinned-component upgrades (config/pins.json is the source of truth):
   deploy.sh postgres-upgrade --tag TAG
   deploy.sh redis-upgrade-check
   deploy.sh redis-upgrade --tag TAG
-  deploy.sh code-server-upgrade-check
-  deploy.sh code-server-upgrade --tag TAG
   deploy.sh nvm-upgrade-check                  # latest semver tag of nvm-sh/nvm
   deploy.sh nvm-upgrade [--tag TAG]
   deploy.sh node-upgrade-check                 # latest patch within pinned major
@@ -618,13 +614,13 @@ while [[ $# -gt 0 ]]; do
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
+    docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
       MODE="$1"
       shift
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    install|upgrade|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    install|upgrade|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       MODE="$1"
       shift
       ;;
@@ -2102,7 +2098,6 @@ emit_runtime_config() {
   local hermes_agent_ref=""
   local hermes_docs_repo_url=""
   local hermes_docs_ref=""
-  local code_server_image=""
 
   normalize_runtime_config_defaults
   hermes_agent_ref="$(deploy_pin_get_or_default hermes-agent ref "${ARCLINK_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
@@ -2112,7 +2107,6 @@ emit_runtime_config() {
   else
     hermes_docs_ref="${ARCLINK_HERMES_DOCS_REF:-$hermes_agent_ref}"
   fi
-  code_server_image="$(deploy_pin_image_or_default code-server "${ARCLINK_AGENT_CODE_SERVER_IMAGE:-docker.io/codercom/code-server:4.116.0}")"
   if declare -F normalize_http_path >/dev/null 2>&1; then
     notion_funnel_path="$(normalize_http_path "$notion_funnel_path")"
   elif [[ "$notion_funnel_path" != /* ]]; then
@@ -2314,9 +2308,7 @@ emit_runtime_config() {
     write_kv ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE "${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}"
     write_kv ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE "${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
     write_kv ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE "${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
-    write_kv ARCLINK_AGENT_CODE_PORT_BASE "${ARCLINK_AGENT_CODE_PORT_BASE:-39000}"
     write_kv ARCLINK_AGENT_PORT_SLOT_SPAN "${ARCLINK_AGENT_PORT_SLOT_SPAN:-5000}"
-    write_kv ARCLINK_AGENT_CODE_SERVER_IMAGE "$code_server_image"
     write_kv ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE "$ENABLE_TAILSCALE_SERVE"
     write_kv ARCLINK_RELEASE_STATE_FILE "${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
     write_kv ENABLE_NEXTCLOUD "$ENABLE_NEXTCLOUD"
@@ -6733,7 +6725,6 @@ _pins_managed_components() {
   printf '%s\n' \
     hermes-agent \
     hermes-docs \
-    code-server \
     nvm \
     node \
     qmd \
@@ -6793,8 +6784,6 @@ run_postgres_upgrade_check()     { _run_component_check postgres "$@"; }
 run_postgres_upgrade()           { _run_component_apply postgres "$@"; }
 run_redis_upgrade_check()        { _run_component_check redis "$@"; }
 run_redis_upgrade()              { _run_component_apply redis "$@"; }
-run_code_server_upgrade_check()  { _run_component_check code-server "$@"; }
-run_code_server_upgrade()        { _run_component_apply code-server "$@"; }
 run_nvm_upgrade_check()          { _run_component_check nvm "$@"; }
 run_nvm_upgrade()                { _run_component_apply nvm "$@"; }
 run_node_upgrade_check()         { _run_component_check node "$@"; }
@@ -8202,8 +8191,6 @@ docker_command_from_mode() {
     docker-postgres-upgrade-check) printf '%s\n' "postgres-upgrade-check" ;;
     docker-redis-upgrade) printf '%s\n' "redis-upgrade" ;;
     docker-redis-upgrade-check) printf '%s\n' "redis-upgrade-check" ;;
-    docker-code-server-upgrade) printf '%s\n' "code-server-upgrade" ;;
-    docker-code-server-upgrade-check) printf '%s\n' "code-server-upgrade-check" ;;
     docker-nvm-upgrade) printf '%s\n' "nvm-upgrade" ;;
     docker-nvm-upgrade-check) printf '%s\n' "nvm-upgrade-check" ;;
     docker-node-upgrade) printf '%s\n' "node-upgrade" ;;
@@ -9509,7 +9496,7 @@ run_docker_deploy_flow() {
     reconfigure)
       run_docker_reconfigure_flow
       ;;
-    bootstrap|write-config|config|build|up|reconcile|down|ps|ports|logs|health|record-release|live-smoke|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|code-server-upgrade|code-server-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    bootstrap|write-config|config|build|up|reconcile|down|ps|ports|logs|health|record-release|live-smoke|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       run_arclink_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
       ;;
     *)
@@ -9616,7 +9603,7 @@ case "$MODE" in
   control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-teardown|control-write-config|control-remove)
     run_control_deploy_flow
     ;;
-  docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-code-server-upgrade|docker-code-server-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
+  docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
     run_docker_deploy_flow
     ;;
   install|write-config)
@@ -9680,8 +9667,6 @@ case "$MODE" in
   postgres-upgrade)            run_postgres_upgrade ;;
   redis-upgrade-check)         run_redis_upgrade_check ;;
   redis-upgrade)               run_redis_upgrade ;;
-  code-server-upgrade-check)   run_code_server_upgrade_check ;;
-  code-server-upgrade)         run_code_server_upgrade ;;
   nvm-upgrade-check)           run_nvm_upgrade_check ;;
   nvm-upgrade)                 run_nvm_upgrade ;;
   node-upgrade-check)          run_node_upgrade_check ;;

@@ -239,22 +239,16 @@
 
     function selectFolder(rootId, path) {
       const folder = normalizeFolder(path || "/");
-      const key = treeKey(rootId, folder);
-      patch(function (current) {
-        const nextExpanded = Object.assign({}, current.expanded || {});
-        nextExpanded[key] = true;
-        return {
-          root: rootId,
-          path: folder,
-          query: "",
-          favoritesOnly: false,
-          location: "files",
-          selected: null,
-          selectedPaths: {},
-          selectionAnchor: null,
-          preview: null,
-          expanded: nextExpanded,
-        };
+      patch({
+        root: rootId,
+        path: folder,
+        query: "",
+        favoritesOnly: false,
+        location: "files",
+        selected: null,
+        selectedPaths: {},
+        selectionAnchor: null,
+        preview: null,
       });
       loadTreeNode(rootId, folder);
       loadItems(folder, "", false, rootId);
@@ -350,17 +344,10 @@
             return String(candidate.id || candidate.label || "").toLowerCase().indexOf("workspace") !== -1;
           })[0];
           const root = (preferredRoot && preferredRoot.id) || status.default_root || (roots[0] && roots[0].id) || "";
-          const expanded = {};
-          roots.forEach(function (candidate) {
-            expanded[treeKey(candidate.id, "/")] = true;
-          });
-          patch({ status: status, roots: roots, root: root, loading: false, expanded: expanded });
+          patch({ status: status, roots: roots, root: root, loading: false, expanded: {} });
           if (status.available) {
             const params = new URLSearchParams({ path: "/", query: "" });
             if (root) params.set("root", root);
-            roots.forEach(function (candidate) {
-              loadTreeNode(candidate.id, "/");
-            });
             fetchJSON(api("/items?" + params.toString()))
               .then(function (data) {
                 patch({ loading: false, items: decorateItems(root, data.items || []), path: data.path || "/", location: "files", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null });
@@ -573,9 +560,13 @@
     }
 
     function selectedPathList() {
-      return Object.keys(state.selectedPaths || {}).filter(function (path) {
-        return state.selectedPaths[path];
-      });
+      return Object.keys(state.selectedPaths || {})
+        .filter(function (key) {
+          return state.selectedPaths[key];
+        })
+        .map(function (key) {
+          return key.split(":").slice(1).join(":") || "/";
+        });
     }
 
     function selectListItem(item, event, index, list) {
@@ -583,30 +574,41 @@
       const ranged = !!(event && event.shiftKey && state.selectionAnchor);
       const items = list || [];
       let next = additive ? Object.assign({}, state.selectedPaths || {}) : {};
+      const selectedKey = itemKey(item);
+      const selectedRoot = itemRoot(item);
+      if (Object.keys(next).some(function (key) { return key.split(":")[0] !== selectedRoot; })) {
+        next = {};
+      }
       if (ranged) {
-        const anchorPath = state.selectionAnchor.path;
+        const anchorPath = state.selectionAnchor.key || state.selectionAnchor.path;
         const anchorIndex = items.findIndex(function (candidate) {
-          return candidate.path === anchorPath;
+          return itemKey(candidate) === anchorPath || candidate.path === anchorPath;
         });
         const start = Math.max(0, Math.min(anchorIndex === -1 ? index : anchorIndex, index));
         const end = Math.max(anchorIndex === -1 ? index : anchorIndex, index);
         for (let cursor = start; cursor <= end; cursor += 1) {
-          if (items[cursor]) next[items[cursor].path] = true;
+          if (items[cursor]) next[itemKey(items[cursor])] = true;
         }
       } else if (additive) {
-        if (next[item.path]) {
-          delete next[item.path];
+        if (next[selectedKey]) {
+          delete next[selectedKey];
         } else {
-          next[item.path] = true;
+          next[selectedKey] = true;
         }
       } else {
-        next[item.path] = true;
+        next[selectedKey] = true;
       }
-      patch({ selectedPaths: next, selected: item, selectionAnchor: { path: item.path, index: index }, preview: null });
+      patch({ root: selectedRoot || state.root, selectedPaths: next, selected: item, selectionAnchor: { key: selectedKey, path: item.path, index: index }, preview: null });
     }
 
     function handleListItemClick(item, event, index, list) {
       selectListItem(item, event, index, list);
+    }
+
+    function codeEditUrl(item) {
+      if (!item || item.kind !== "file") return "";
+      const params = new URLSearchParams({ root: itemRoot(item) || state.root || "", path: item.path || "" });
+      return "/code?" + params.toString();
     }
 
     function trashSelected() {
@@ -704,8 +706,8 @@
       const parts = String(state.path || "/").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
       const rootLabel = currentRoot.label || state.root || "Drive";
       const nodes = [
-        h("button", { key: "drive", type: "button", onClick: function () { loadItems("/", "", false); } }, "Drive"),
-        h("button", { key: "root", type: "button", onClick: function () { loadItems("/", "", false); } }, rootLabel),
+        h("button", { key: "drive", type: "button", onClick: function () { loadItems("/", "", false, state.root); } }, "Drive"),
+        h("button", { key: "root", type: "button", onClick: function () { loadItems("/", "", false, state.root); } }, rootLabel),
       ];
       if (state.location === "trash") {
         nodes.push(h("button", { key: "trash", type: "button", onClick: loadTrash }, "Trash"));
@@ -714,7 +716,7 @@
       let current = "";
       parts.forEach(function (part) {
         current += "/" + part;
-        nodes.push(h("button", { key: current, type: "button", onClick: function () { loadItems(current, "", false); } }, part));
+        nodes.push(h("button", { key: current, type: "button", onClick: function () { loadItems(current, "", false, state.root); } }, part));
       });
       return nodes;
     }
@@ -726,7 +728,7 @@
         selected: item,
         contextMenu: {
           item: item,
-          mode: selectedPathList().length > 1 && state.selectedPaths[item.path] ? "selection" : "item",
+          mode: selectedPathList().length > 1 && state.selectedPaths[itemKey(item)] ? "selection" : "item",
           x: event.clientX,
           y: event.clientY,
         },
@@ -947,7 +949,11 @@
             className: "arclink-drive-tree-node " + (selectedTree ? "active " : "") + (selectedItem ? "selected" : ""),
             style: { paddingLeft: 0.2 + depth * 0.9 + "rem" },
             onClick: function () {
-              selectItemOnly(Object.assign({}, item, { root: rootId }));
+              if (item.kind === "folder") {
+                selectFolder(rootId, item.path);
+              } else {
+                selectItemOnly(Object.assign({}, item, { root: rootId }));
+              }
             },
             onDoubleClick: function () {
               openItem(Object.assign({}, item, { root: rootId }));
@@ -964,28 +970,6 @@
             },
             onDragEnd: function () {
               patch({ draggingItem: null, dropActive: false });
-            },
-            onDragOver: function (event) {
-              if (item.kind === "folder" && state.draggingItem) {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-              }
-            },
-            onDrop: function (event) {
-              if (item.kind !== "folder") return;
-              event.preventDefault();
-              event.stopPropagation();
-              const sourcePath = event.dataTransfer.getData("application/x-arclink-drive-path");
-              const sourceRoot = event.dataTransfer.getData("application/x-arclink-drive-root") || rootId;
-              if (sourcePath) {
-                if (sourceRoot !== rootId) {
-                  patch({ errorMessage: "Move between Drive roots is not enabled yet. Copy between roots instead." });
-                  return;
-                }
-                moveDraggedPath(sourcePath, item.path, sourceRoot);
-                return;
-              }
-              uploadFiles(event.dataTransfer.files, item.path, rootId);
             },
           },
           renderCaret(rootId, item, depth),
@@ -1010,7 +994,7 @@
             className: "arclink-drive-tree-node root " + (active ? "active " : "") + (selectedRoot ? "selected" : ""),
             style: { paddingLeft: "0.2rem" },
             onClick: function () {
-              selectRootOnly(root);
+              selectFolder(rootId, "/");
             },
             onDoubleClick: function () {
               selectFolder(rootId, "/");
@@ -1133,37 +1117,6 @@
         onClick: function () {
           if (state.contextMenu) patch({ contextMenu: null });
         },
-        onDragOver: function (event) {
-          if (state.location !== "trash" && (hasFiles(event) || state.draggingItem)) {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = hasFiles(event) ? "copy" : "move";
-          }
-        },
-        onDragEnter: function (event) {
-          if (state.location !== "trash" && hasFiles(event)) patch({ dropActive: true });
-        },
-        onDragLeave: function (event) {
-          if (!event.currentTarget.contains(event.relatedTarget)) patch({ dropActive: false });
-        },
-        onDrop: function (event) {
-          event.preventDefault();
-          if (state.location === "trash") {
-            patch({ dropActive: false });
-            return;
-          }
-          const sourcePath = event.dataTransfer.getData("application/x-arclink-drive-path");
-          const sourceRoot = event.dataTransfer.getData("application/x-arclink-drive-root") || state.root;
-          patch({ dropActive: false });
-          if (sourcePath) {
-            if (sourceRoot !== state.root) {
-              patch({ errorMessage: "Move between Drive roots is not enabled yet. Copy between roots instead." });
-              return;
-            }
-            moveDraggedPath(sourcePath, state.path, sourceRoot);
-            return;
-          }
-          uploadFiles(event.dataTransfer.files, state.path, state.root);
-        },
       },
       h(
         "header",
@@ -1172,6 +1125,7 @@
           "div",
           { className: "arclink-drive-title" },
           h("h1", null, "ArcLink Drive"),
+          h("div", { className: "arclink-drive-path" }, breadcrumbs()),
           h("p", null, currentRoot.label ? currentRoot.label + " - " + (currentRoot.path || "/") : status.backend ? status.backend + " - " + (status.local_root || status.mount || "/") : "Agent knowledge")
         ),
         h(
@@ -1180,10 +1134,7 @@
           h("button", { type: "button", onClick: createFolder, disabled: !canWrite }, "New Folder"),
           h("button", { type: "button", onClick: createFile, disabled: !canWrite }, "New File"),
           h("button", { type: "button", onClick: function () { fileInput.current && fileInput.current.click(); }, disabled: !canWrite }, "Upload"),
-          h("button", { type: "button", onClick: function () { loadItems(state.path); }, disabled: !status.available }, "Refresh"),
-          status.url
-            ? h("a", { href: status.url, target: "_blank", rel: "noreferrer" }, "Open")
-            : null,
+          h("button", { type: "button", onClick: function () { loadItems(state.path, "", false, state.root); }, disabled: !status.available }, "Refresh"),
           h("input", {
             ref: fileInput,
             type: "file",
@@ -1205,6 +1156,21 @@
               "aside",
               { className: "arclink-drive-browser" },
               h("div", { className: "arclink-drive-panel-label" }, "Files"),
+              state.location === "trash"
+                ? null
+                : h("input", {
+                    className: "arclink-drive-search",
+                    value: state.query,
+                    placeholder: "Search Workspace and Vault",
+                    onChange: function (event) {
+                      const value = event.target.value;
+                      patch({ query: value });
+                      window.clearTimeout(DrivePage._timer);
+                      DrivePage._timer = window.setTimeout(function () {
+                        searchAllRoots(value, state.favoritesOnly);
+                      }, 180);
+                    },
+                  }),
               h("div", { className: "arclink-drive-tree" }, orderedRoots(state.roots).map(renderRootTree)),
               selectedCount
                 ? h("div", { className: "arclink-drive-selection" },
@@ -1228,14 +1194,46 @@
             ),
             h(
               "section",
-              { className: "arclink-drive-content" + (selected ? " has-selection" : "") },
+              {
+                className: "arclink-drive-content" + (selected ? " has-selection" : ""),
+                onDragOver: function (event) {
+                  if (state.location !== "trash" && (hasFiles(event) || state.draggingItem)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = hasFiles(event) ? "copy" : "move";
+                  }
+                },
+                onDragEnter: function (event) {
+                  if (state.location !== "trash" && hasFiles(event)) patch({ dropActive: true });
+                },
+                onDragLeave: function (event) {
+                  if (!event.currentTarget.contains(event.relatedTarget)) patch({ dropActive: false });
+                },
+                onDrop: function (event) {
+                  event.preventDefault();
+                  if (state.location === "trash") {
+                    patch({ dropActive: false });
+                    return;
+                  }
+                  const sourcePath = event.dataTransfer.getData("application/x-arclink-drive-path");
+                  const sourceRoot = event.dataTransfer.getData("application/x-arclink-drive-root") || state.root;
+                  patch({ dropActive: false });
+                  if (sourcePath) {
+                    if (sourceRoot !== state.root) {
+                      patch({ errorMessage: "Move between Drive roots is not enabled yet. Copy between roots instead." });
+                      return;
+                    }
+                    moveDraggedPath(sourcePath, state.path, sourceRoot);
+                    return;
+                  }
+                  uploadFiles(event.dataTransfer.files, state.path, state.root);
+                },
+              },
               h(
                 "div",
                 { className: "arclink-drive-content-head" },
                 h(
                   "div",
                   null,
-                  h("div", { className: "arclink-drive-path" }, breadcrumbs()),
                   h(
                     "p",
                     { className: "arclink-drive-current-summary" },
@@ -1259,28 +1257,7 @@
                   h("button", { type: "button", onClick: function () { patch({ view: state.view === "list" ? "grid" : "list" }); } }, state.view === "list" ? "Grid" : "List")
                 )
               ),
-              state.location === "trash"
-                ? null
-                : h("input", {
-                    className: "arclink-drive-search",
-                    value: state.query,
-                    placeholder: "Search Workspace and Vault",
-                    onChange: function (event) {
-                      const value = event.target.value;
-                      patch({ query: value });
-                      window.clearTimeout(DrivePage._timer);
-                      DrivePage._timer = window.setTimeout(function () {
-                        searchAllRoots(value, state.favoritesOnly);
-                      }, 180);
-                    },
-                  }),
-              state.location === "trash"
-                ? null
-                : h(
-                    "div",
-                    { className: "arclink-drive-drop-hint", onContextMenu: openBackgroundContextMenu },
-                    "Drop files here to upload. Drop Drive items on folders in the tree or list to move them after confirmation."
-                  ),
+              renderDetailsPanel(),
               h(
                 "div",
                 { className: "arclink-drive-items " + state.view, onContextMenu: openBackgroundContextMenu },
@@ -1291,13 +1268,13 @@
                         return h(
                           "button",
                           {
-                            key: item.path,
+                            key: itemKey(item),
                             type: "button",
                             draggable: true,
                             className:
                               "arclink-drive-item " +
-                              (selected && selected.path === item.path ? "selected " : "") +
-                              (state.selectedPaths[item.path] ? "checked " : "") +
+                              (selected && itemKey(selected) === itemKey(item) ? "selected " : "") +
+                              (state.selectedPaths[itemKey(item)] ? "checked " : "") +
                               (state.draggingItem === item.path ? "dragging" : ""),
                             onClick: function (event) {
                               handleListItemClick(item, event, index, visibleItems);
@@ -1351,8 +1328,7 @@
                         );
                       })
                     : h("div", { className: "arclink-drive-empty" }, state.query ? "No search results" : "Empty")
-              ),
-              renderDetailsPanel()
+              )
             )
           )
         : h("div", { className: "arclink-drive-empty full" }, "ArcLink Drive is not available"),
@@ -1431,8 +1407,10 @@
                     h("button", { type: "button", role: "menuitem", onClick: function () { patch({ selectedPaths: {}, contextMenu: null }); } }, "Clear Selection")
                   )
                 : h(React.Fragment, null,
-                    h("button", { type: "button", role: "menuitem", onClick: function () { openItem(contextItem); } }, "Open"),
                     contextItem.trashed ? h("button", { type: "button", role: "menuitem", onClick: function () { restoreItem(contextItem); } }, "Restore") : null,
+                    !contextItem.trashed && contextItem.kind === "file"
+                      ? h("a", { role: "menuitem", href: codeEditUrl(contextItem) }, "Edit in Code")
+                      : null,
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { renameItem(contextItem); } }, "Rename"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { duplicateItem(contextItem); } }, "Duplicate"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { copyItemWithPrompt(contextItem); } }, "Copy To..."),

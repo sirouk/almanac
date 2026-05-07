@@ -386,9 +386,7 @@ class Config:
     model_presets: dict[str, str]
     agent_dashboard_backend_port_base: int
     agent_dashboard_proxy_port_base: int
-    agent_code_port_base: int
     agent_port_slot_span: int
-    agent_code_server_image: str
     agent_enable_tailscale_serve: bool
 
     @classmethod
@@ -533,12 +531,7 @@ class Config:
             model_presets=model_presets,
             agent_dashboard_backend_port_base=int(env.get("ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE", "19000")),
             agent_dashboard_proxy_port_base=int(env.get("ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE", "29000")),
-            agent_code_port_base=int(env.get("ARCLINK_AGENT_CODE_PORT_BASE", "39000")),
             agent_port_slot_span=int(env.get("ARCLINK_AGENT_PORT_SLOT_SPAN", "5000")),
-            agent_code_server_image=env.get(
-                "ARCLINK_AGENT_CODE_SERVER_IMAGE",
-                "docker.io/codercom/code-server:4.116.0",
-            ),
             agent_enable_tailscale_serve=agent_enable_tailscale_serve,
         )
 

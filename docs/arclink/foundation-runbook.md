@@ -171,21 +171,21 @@ Provisioning dry run:
   and `error` values are cleared before the next attempt.
 - Intent renders host state roots separately from container runtime paths.
 - Intent renders dashboard, Hermes gateway/dashboard, qmd, vault watch, memory
-  synthesis, dedicated Nextcloud DB/Redis/app services, code-server,
+  synthesis, dedicated Nextcloud DB/Redis/app services, dashboard-native Code,
   notification delivery, health watch, and managed-context installation.
 - Hermes dashboard receives the deployment vault and code workspace mounts.
   The rendered environment sets `VAULT_DIR`, `ARCLINK_DRIVE_ROOT`, and
   `ARCLINK_CODE_WORKSPACE_ROOT` so ArcLink Drive and ArcLink Code operate
   inside deployment-owned roots.
 - Access URL metadata is rendered for dashboard, files, code, and Hermes. In
-  Tailscale path mode, per-service tailnet HTTPS ports may override path URLs
-  for files, code, and Hermes while the user dashboard stays under
-  `/u/<prefix>`.
+  Tailscale path mode, a per-service tailnet HTTPS port may override the Hermes
+  path URL while files and code stay under the authenticated user dashboard at
+  `/u/<prefix>/drive` and `/u/<prefix>/code`.
 - Nextcloud overwrite settings are applied only when the files URL is a
   root-level HTTPS host or host:port. Path-prefixed URLs are not written as
   Nextcloud canonical overwrite hosts.
 - Nextcloud and Postgres use file-backed secret environment variables through
-  Compose secrets. code-server uses an explicit entrypoint file resolver.
+  Compose secrets.
 - App/provider tokens remain resolver-required references until live execution
   supplies a safe materialization step.
 - Service-health placeholders and timeline events are recorded for admin and

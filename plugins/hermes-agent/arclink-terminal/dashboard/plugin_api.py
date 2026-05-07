@@ -10,6 +10,8 @@ import pty
 import re
 import signal
 import shlex
+import struct
+import termios
 from pathlib import Path
 import shutil
 import subprocess
@@ -56,6 +58,9 @@ _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
 _DEFAULT_TUI_COMMAND = "/opt/arclink/runtime/hermes-venv/bin/hermes"
 _DEFAULT_TUI_DIR = "/opt/arclink/runtime/hermes-agent-src/ui-tui"
+_DEFAULT_ROWS = 32
+_DEFAULT_COLS = 132
+_CPR_QUERY = b"\x1b[6n"
 _RUNTIMES: dict[str, dict[str, Any]] = {}
 
 
@@ -263,6 +268,25 @@ def _sanitize_scrollback(value: Any) -> str:
     return encoded.decode("utf-8", errors="ignore")
 
 
+def _set_pty_size(fd: int, rows: int = _DEFAULT_ROWS, cols: int = _DEFAULT_COLS) -> None:
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except Exception:
+        pass
+
+
+def _answer_terminal_queries(fd: int, chunk: bytes) -> bytes:
+    if _CPR_QUERY not in chunk:
+        return chunk
+    while _CPR_QUERY in chunk:
+        chunk = chunk.replace(_CPR_QUERY, b"", 1)
+        try:
+            os.write(fd, b"\x1b[1;1R")
+        except OSError:
+            break
+    return chunk
+
+
 def _load_sessions() -> dict[str, Any]:
     payload = _load_json(_sessions_path())
     sessions = payload.get("sessions")
@@ -353,6 +377,10 @@ def _read_runtime(entry: dict[str, Any]) -> bool:
             break
         if not chunk:
             break
+        chunk = _answer_terminal_queries(fd, chunk)
+        if not chunk:
+            changed = True
+            continue
         total += len(chunk)
         _append_scrollback(entry, chunk.decode("utf-8", errors="replace"))
         changed = True
@@ -420,8 +448,15 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     entry["cwd"] = cwd_display
     session_id = str(entry.get("id") or "")
     master_fd, slave_fd = pty.openpty()
+    _set_pty_size(master_fd)
+    _set_pty_size(slave_fd)
     env = os.environ.copy()
-    env["TERM"] = env.get("TERM") or "xterm-256color"
+    if str(env.get("TERM") or "").strip().lower() in {"", "dumb", "unknown"}:
+        env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = env.get("COLORTERM") or "truecolor"
+    env["COLUMNS"] = str(_DEFAULT_COLS)
+    env["LINES"] = str(_DEFAULT_ROWS)
+    env["TERM_PROGRAM"] = "ArcLinkTerminal"
     env["PS1"] = "$ "
     if mode == "tui":
         env.setdefault("HERMES_TUI_DIR", _DEFAULT_TUI_DIR)

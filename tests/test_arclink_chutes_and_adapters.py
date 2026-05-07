@@ -158,8 +158,8 @@ def test_tailscale_path_access_urls_can_use_dedicated_tls_ports() -> None:
     )
     expect(urls["dashboard"] == "https://worker.example.test/u/abc123", str(urls))
     expect(urls["hermes"] == "https://worker.example.test:8443/", str(urls))
-    expect(urls["files"] == "https://worker.example.test:8444/", str(urls))
-    expect(urls["code"] == "https://worker.example.test:8445/", str(urls))
+    expect(urls["files"] == "https://worker.example.test/u/abc123/drive", str(urls))
+    expect(urls["code"] == "https://worker.example.test/u/abc123/code", str(urls))
     print("PASS test_tailscale_path_access_urls_can_use_dedicated_tls_ports")
 
 

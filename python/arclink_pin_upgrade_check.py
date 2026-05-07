@@ -58,7 +58,6 @@ COMPONENT_UPGRADE_SH = REPO_ROOT / "bin" / "component-upgrade.sh"
 MANAGED_COMPONENTS = (
     "hermes-agent",
     "hermes-docs",
-    "code-server",
     "nvm",
     "node",
     "qmd",

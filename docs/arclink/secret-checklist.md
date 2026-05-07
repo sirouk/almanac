@@ -25,7 +25,6 @@ These are generated or resolved during provisioning and stored as
 |--------|---------|
 | Postgres password | Per-deployment Nextcloud DB |
 | Nextcloud admin password | Per-deployment Nextcloud admin |
-| code-server password | Per-deployment workspace access |
 | Chutes per-deployment API key | Per-deployment model inference |
 | App/provider tokens | Per-deployment service auth |
 

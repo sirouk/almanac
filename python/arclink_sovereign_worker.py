@@ -306,7 +306,7 @@ def _tailnet_ports_from_metadata(metadata: Mapping[str, Any]) -> dict[str, int]:
     raw = metadata.get("tailnet_service_ports")
     if not isinstance(raw, Mapping):
         return {}
-    roles = ("hermes", "files", "code")
+    roles = ("hermes",)
     return {role: port for role in roles if (port := _tailnet_port(raw.get(role)))}
 
 
@@ -318,7 +318,7 @@ def _ensure_tailnet_service_ports(
 ) -> dict[str, Any]:
     if worker.ingress_mode != "tailscale" or worker.tailscale_host_strategy != "path":
         return dict(deployment)
-    roles = ("hermes", "files", "code")
+    roles = ("hermes",)
     deployment_id = str(deployment["deployment_id"])
     metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
     ports = _tailnet_ports_from_metadata(metadata)

@@ -2,7 +2,7 @@
 
 ArcLink is the self-serve private AI deployment product being built from the
 shared-host substrate. It keeps the proven Hermes, qmd, vault, memory,
-Nextcloud, code-server, Notion, bot, health, and deploy machinery, then adds
+dashboard plugins, Notion, bot, health, and deploy machinery, then adds
 ArcLink product identity, hosted API contracts, Stripe entitlements,
 domain-or-Tailscale ingress intent, Chutes-first provider defaults, responsive
 user and admin dashboards, fleet operations, rollout records, and a
@@ -410,7 +410,7 @@ backup jobs when their credentials/config are present. Docker install starts the
 Curator profile services after operator setup when the configured credentials
 allow them to run. Enrolled agents run under the Docker agent supervisor instead
 of per-user systemd units: refresh, Hermes gateway, dashboard, authenticated
-dashboard proxy, cron ticks, and code-server workspace processes are reconciled
+dashboard proxy, cron ticks, and dashboard-native plugin surfaces are reconciled
 from the same control-plane state.
 
 ### Containerized Requirements
@@ -529,8 +529,8 @@ those interactive phases.
 
 Docker agent homes are stored under `arclink-priv/state/docker/users/`, so
 container recreation does not erase enrolled-agent Hermes homes. Agent dashboard
-and code-server ports are published one surface at a time from the access-state
-ports ArcLink allocates, so a single occupied port cannot block the whole stack.
+ports are published from the access-state ports ArcLink allocates; Drive, Code,
+and Terminal stay under the authenticated dashboard surface.
 
 The Docker path keeps the same operator vocabulary for container-native work:
 
@@ -671,13 +671,12 @@ An enrolled user gets:
 - A Unix account on the shared host.
 - A private `HERMES_HOME` under `~/.local/share/arclink-agent/hermes-home`.
 - A chat bot lane on Discord or Telegram.
-- User systemd services for refresh, gateway, dashboard, and code workspace
+- User systemd services for refresh, gateway, and the authenticated dashboard
   when enabled.
 - Hermes dashboard plugins for `ArcLink Drive`, `ArcLink Code`, and the
   managed-pty `ArcLink Terminal`, so native workspace surfaces appear in the
   Hermes sidebar without patching Hermes core.
-- A `~/ArcLink` symlink to the shared vault for VS Code / code-server file
-  explorer convenience.
+- A `~/ArcLink` symlink to the shared vault for local shell/editor convenience.
 - `$HERMES_HOME/ArcLink` and `$HERMES_HOME/Vault` symlinks for agent-local
   discovery and compatibility with existing instructions.
 - Optional Nextcloud user access.

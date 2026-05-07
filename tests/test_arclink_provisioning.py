@@ -92,7 +92,6 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         "nextcloud-db",
         "nextcloud-redis",
         "nextcloud",
-        "code-server",
         "notion-webhook",
         "notification-delivery",
         "health-watch",
@@ -107,7 +106,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["nextcloud_db_password"]["secret_ref"] == "secret://arclink/nextcloud/dep_1/db-password", str(compose_secrets))
     expect(compose_secrets["nextcloud_db_password"]["target"] == "/run/secrets/nextcloud_db_password", str(compose_secrets))
     expect(compose_secrets["nextcloud_admin_password"]["target"] == "/run/secrets/nextcloud_admin_password", str(compose_secrets))
-    expect(compose_secrets["code_server_password"]["target"] == "/run/secrets/code_server_password", str(compose_secrets))
+    expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
@@ -146,10 +145,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/workspace"] == intent["state_roots"]["code_workspace"], str(services["hermes-dashboard"]))
     expect(services["memory-synth"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"], str(services["memory-synth"]))
-    expect("PASSWORD_REF" not in services["code-server"]["environment"], str(services["code-server"]))
-    expect(services["code-server"]["entrypoint"] == ["/bin/sh", "-lc"], str(services["code-server"]))
-    expect("cat /run/secrets/code_server_password" in " ".join(services["code-server"]["command"]), str(services["code-server"]))
-    expect(services["code-server"]["volumes"][0]["target"] == intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"], str(services["code-server"]))
+    expect("code-server" not in services, str(services))
     expect(services["managed-context-install"]["command"][:2] == ["./bin/install-deployment-hermes-home.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
     expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
@@ -161,17 +157,15 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         ],
         str(intent["runtime_resolution"]),
     )
-    expect(
-        intent["runtime_resolution"]["entrypoint_file_resolver"]["code-server"]["source_file"] == "/run/secrets/code_server_password",
-        str(intent["runtime_resolution"]),
-    )
+    expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect("chutes_api_key" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
     expect(services["hermes-gateway"]["labels"] == {}, str(services["hermes-gateway"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.docker.network"] == "arclink_default", str(services["hermes-dashboard"]))
-    expect(services["nextcloud"]["labels"]["traefik.docker.network"] == "arclink_default", str(services["nextcloud"]))
-    expect(intent["dns"]["files"]["hostname"] == "files-amber-vault-1a2b.example.test", str(intent["dns"]))
-    expect(intent["access"]["urls"]["code"] == "https://code-amber-vault-1a2b.example.test", str(intent["access"]))
+    expect(services["nextcloud"]["labels"] == {}, str(services["nextcloud"]))
+    expect(set(intent["dns"]) == {"dashboard", "hermes"}, str(intent["dns"]))
+    expect(intent["access"]["urls"]["files"] == "https://u-amber-vault-1a2b.example.test/drive", str(intent["access"]))
+    expect(intent["access"]["urls"]["code"] == "https://u-amber-vault-1a2b.example.test/code", str(intent["access"]))
     expect(intent["access"]["urls"]["notion"] == "https://u-amber-vault-1a2b.example.test/notion/webhook", str(intent["access"]))
     expect(intent["access"]["ssh"]["strategy"] == "cloudflare_access_tcp", str(intent["access"]))
     expect(intent["integrations"]["notion"]["mode"] == "per_deployment", str(intent["integrations"]))
@@ -319,16 +313,11 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
     }, str(services["nextcloud-db"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/nextcloud_db_password", str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["NEXTCLOUD_ADMIN_PASSWORD_FILE"] == "/run/secrets/nextcloud_admin_password", str(services["nextcloud"]))
-    for secret_name in ("nextcloud_db_password", "nextcloud_admin_password", "code_server_password"):
+    for secret_name in ("nextcloud_db_password", "nextcloud_admin_password"):
         expect(compose_secrets[secret_name]["secret_ref"].startswith("secret://"), str(compose_secrets[secret_name]))
         expect(compose_secrets[secret_name]["target"] == f"/run/secrets/{secret_name}", str(compose_secrets[secret_name]))
-    expect(
-        intent["runtime_resolution"]["entrypoint_file_resolver"]["code-server"] == {
-            "env_var": "PASSWORD",
-            "source_file": "/run/secrets/code_server_password",
-        },
-        str(intent["runtime_resolution"]),
-    )
+    expect("code_server_password" not in compose_secrets, str(compose_secrets))
+    expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect(
         intent["runtime_resolution"]["app_ref_resolver_required"] == ["chutes_api_key", "notion_webhook_secret"],
         str(intent["runtime_resolution"]),
@@ -387,7 +376,7 @@ def test_rendered_services_include_resource_limits_and_healthchecks() -> None:
         expect("memory" in limits and "cpus" in limits, f"{name} missing limits: {limits}")
 
     # Specific healthchecks on data/web services
-    for name in ("nextcloud-db", "nextcloud-redis", "nextcloud", "code-server"):
+    for name in ("nextcloud-db", "nextcloud-redis", "nextcloud"):
         expect("healthcheck" in services[name], f"{name} missing healthcheck")
         hc = services[name]["healthcheck"]
         expect("test" in hc and "interval" in hc, f"{name} healthcheck incomplete: {hc}")
@@ -422,18 +411,13 @@ def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
     expect(intent["dns"] == {}, str(intent["dns"]))
     expect(intent["execution"]["dns_provider"] == "tailscale", str(intent["execution"]))
     expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
-    expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/files", str(intent["access"]))
+    expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(intent["access"]))
+    expect(intent["access"]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(intent["access"]))
     expect(intent["access"]["urls"]["notion"] == "https://worker.example.test/u/amber-vault-1a2b/notion/webhook", str(intent["access"]))
     expect(intent["access"]["ssh"]["strategy"] == "tailscale_direct_ssh", str(intent["access"]))
     expect(intent["access"]["ssh"]["command_hint"] == "ssh arc-amber-vault-1a2b@worker.example.test", str(intent["access"]))
     labels = intent["compose"]["services"]["nextcloud"]["labels"]
-    expect(
-        labels["traefik.http.routers.arclink-amber-vault-1a2b-files.rule"]
-        == "Host(`worker.example.test`) && PathPrefix(`/u/amber-vault-1a2b/files`)",
-        str(labels),
-    )
-    expect(labels["traefik.http.routers.arclink-amber-vault-1a2b-files.priority"] == "100", str(labels))
-    expect("stripprefix.prefixes" in ".".join(labels), str(labels))
+    expect(labels == {}, str(labels))
     dashboard_labels = intent["compose"]["services"]["dashboard"]["labels"]
     expect(
         dashboard_labels["traefik.http.routers.arclink-amber-vault-1a2b-dashboard.priority"] == "10",
@@ -474,14 +458,14 @@ def test_tailscale_ingress_uses_dedicated_app_ports_when_recorded() -> None:
     services = intent["compose"]["services"]
     expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
     expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(intent["access"]))
-    expect(intent["access"]["urls"]["files"] == "https://worker.example.test:8444/", str(intent["access"]))
-    expect(intent["access"]["urls"]["code"] == "https://worker.example.test:8445/", str(intent["access"]))
+    expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(intent["access"]))
+    expect(intent["access"]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(intent["access"]))
     expect(env["ARCLINK_HERMES_URL"] == "https://worker.example.test:8443/", str(env))
-    expect(env["ARCLINK_FILES_URL"] == "https://worker.example.test:8444/", str(env))
+    expect(env["ARCLINK_FILES_URL"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(env))
     nextcloud_env = services["nextcloud"]["environment"]
-    expect(nextcloud_env["OVERWRITEPROTOCOL"] == "https", str(nextcloud_env))
-    expect(nextcloud_env["OVERWRITEHOST"] == "worker.example.test:8444", str(nextcloud_env))
-    expect(nextcloud_env["OVERWRITECLIURL"] == "https://worker.example.test:8444", str(nextcloud_env))
+    expect("OVERWRITEPROTOCOL" not in nextcloud_env, str(nextcloud_env))
+    expect("OVERWRITEHOST" not in nextcloud_env, str(nextcloud_env))
+    expect("OVERWRITECLIURL" not in nextcloud_env, str(nextcloud_env))
     print("PASS test_tailscale_ingress_uses_dedicated_app_ports_when_recorded")
 
 

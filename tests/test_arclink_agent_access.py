@@ -82,7 +82,7 @@ def insert_agent(mod, conn, *, agent_id: str, unix_user: str, hermes_home: Path)
     conn.commit()
 
 
-def test_access_state_persists_password_and_ports() -> None:
+def test_access_state_persists_password_and_dashboard_ports() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     control = load_module(CONTROL_PY, "arclink_control")
@@ -119,8 +119,10 @@ def test_access_state_persists_password_and_ports() -> None:
 
             expect(first["password"] == second["password"], f"password should persist: {first} vs {second}")
             expect(first["dashboard_proxy_port"] == second["dashboard_proxy_port"], f"dashboard port should persist: {first} vs {second}")
+            expect("code_port" not in first, f"code-server port should not be allocated anymore: {first}")
+            expect(first["code_url"] == f"{first['dashboard_local_url'].rstrip('/')}/code", first)
             expect((hermes_home / "state" / "arclink-web-access.json").is_file(), "expected persisted access state file")
-            print("PASS test_access_state_persists_password_and_ports")
+            print("PASS test_access_state_persists_password_and_dashboard_ports")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -169,7 +171,8 @@ def test_access_state_avoids_ports_reserved_by_other_agents() -> None:
 
             expect(state["dashboard_backend_port"] != 19077, f"expected collision avoidance for dashboard backend: {state}")
             expect(state["dashboard_proxy_port"] != 29077, f"expected collision avoidance for dashboard proxy: {state}")
-            expect(state["code_port"] != 39077, f"expected collision avoidance for code port: {state}")
+            expect("code_port" not in state, f"new access state should not allocate legacy code-server ports: {state}")
+            expect(state["code_url"].endswith("/code"), f"Code should live under dashboard path: {state}")
             print("PASS test_access_state_avoids_ports_reserved_by_other_agents")
         finally:
             os.environ.clear()
@@ -207,16 +210,16 @@ def test_access_state_uses_tailscale_port_urls_when_enabled() -> None:
             )
 
             expect(state["dashboard_label"] == "agent-current-dash", state)
-            expect(state["code_label"] == "agent-current-code", state)
+            expect("code_label" not in state, state)
             expect(state["dashboard_url"] == f"https://arclink.example.test:{state['dashboard_proxy_port']}/", state)
-            expect(state["code_url"] == f"https://arclink.example.test:{state['code_port']}/", state)
+            expect(state["code_url"] == f"https://arclink.example.test:{state['dashboard_proxy_port']}/code", state)
             print("PASS test_access_state_uses_tailscale_port_urls_when_enabled")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
 
 
-def test_publish_tailscale_https_uses_dedicated_ports() -> None:
+def test_publish_tailscale_https_uses_dashboard_port_for_plugins() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     access_mod = load_module(ACCESS_PY, "arclink_agent_access_publish_paths")
@@ -234,15 +237,15 @@ def test_publish_tailscale_https_uses_dedicated_ports() -> None:
 
     expect(
         ("--bg", "--yes", "--https=30011", "http://127.0.0.1:30011") in calls,
-        f"expected dedicated dashboard port publish, saw {calls!r}",
+        f"expected authenticated dashboard port publish, saw {calls!r}",
     )
     expect(
-        ("--bg", "--yes", "--https=40011", "http://127.0.0.1:40011") in calls,
-        f"expected dedicated code port publish, saw {calls!r}",
+        ("--bg", "--yes", "--https=40011", "http://127.0.0.1:40011") not in calls,
+        f"legacy code-server port should not be published, saw {calls!r}",
     )
     expect(updated["dashboard_url"] == "https://arclink.example.test:30011/", updated)
-    expect(updated["code_url"] == "https://arclink.example.test:40011/", updated)
-    print("PASS test_publish_tailscale_https_uses_dedicated_ports")
+    expect(updated["code_url"] == "https://arclink.example.test:30011/code", updated)
+    print("PASS test_publish_tailscale_https_uses_dashboard_port_for_plugins")
 
 
 def test_clear_tailscale_https_removes_dedicated_ports() -> None:
@@ -302,10 +305,10 @@ def test_docker_port_allocation_skips_host_listeners() -> None:
 
 
 def main() -> int:
-    test_access_state_persists_password_and_ports()
+    test_access_state_persists_password_and_dashboard_ports()
     test_access_state_avoids_ports_reserved_by_other_agents()
     test_access_state_uses_tailscale_port_urls_when_enabled()
-    test_publish_tailscale_https_uses_dedicated_ports()
+    test_publish_tailscale_https_uses_dashboard_port_for_plugins()
     test_clear_tailscale_https_removes_dedicated_ports()
     test_docker_port_allocation_skips_host_listeners()
     print("PASS all 6 agent-access regression tests")

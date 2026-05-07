@@ -288,19 +288,6 @@ def desired_specs(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: P
                 root_env,
                 cfg.repo_dir,
             )
-        if access.get("code_port"):
-            root_env = env.copy()
-            root_env.update({"HOME": "/root", "HERMES_HOME": str(hermes_home)})
-            specs[f"{agent['agent_id']}:code"] = (
-                [
-                    str(cfg.repo_dir / "bin" / "run-agent-code-server.sh"),
-                    str(hermes_home / "state" / "arclink-web-access.json"),
-                    str(home),
-                    str(hermes_home),
-                ],
-                root_env,
-                hermes_home,
-            )
     return specs
 
 

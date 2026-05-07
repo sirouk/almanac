@@ -216,7 +216,7 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   exit 1
 fi
 
-if [[ "$ENABLE_NEXTCLOUD" != "1" || "$ENABLE_TAILSCALE_SERVE" != "1" ]]; then
+if [[ "$ENABLE_TAILSCALE_SERVE" != "1" ]]; then
   exit 0
 fi
 
@@ -232,8 +232,9 @@ fi
 
 detect_tailscale_runtime || true
 
-run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" "http://127.0.0.1:${NEXTCLOUD_PORT}"
-run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_QMD_PATH}" "http://127.0.0.1:${QMD_MCP_PORT}/mcp"
-run_serve_cmd tailscale serve --bg --yes --https="${TAILSCALE_SERVE_PORT:-443}" --set-path "${TAILSCALE_ARCLINK_MCP_PATH}" "http://127.0.0.1:${ARCLINK_MCP_PORT}/mcp"
-verify_serve_config
+# ArcLink Drive and Code now live behind the authenticated Hermes dashboard
+# plugin surface. Do not publish raw Nextcloud or internal MCP routes through
+# Tailscale Serve; clear the legacy bundle when this host still owns it.
+"$SCRIPT_DIR/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true
+echo "ArcLink no longer publishes Nextcloud or internal MCP routes through Tailscale Serve."
 print_serve_summary

@@ -162,7 +162,6 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     rows = [
         {"Service": "dashboard", "State": "running", "Health": "", "Status": "Up 1 second", "Name": "dashboard-1", "Project": "p"},
         {"Service": "nextcloud", "State": "running", "Health": "healthy", "Status": "Up 1 second (healthy)", "Name": "nextcloud-1", "Project": "p"},
-        {"Service": "code-server", "State": "running", "Health": "starting", "Status": "Up 1 second (health: starting)", "Name": "code-1", "Project": "p"},
         {"Service": "managed-context-install", "State": "exited", "Health": "", "ExitCode": 0, "Status": "Exited (0)", "Name": "managed-1", "Project": "p"},
     ]
     runner = ComposePsRunner("\n".join(json.dumps(row) for row in rows))
@@ -198,7 +197,6 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     }
     expect(statuses["dashboard"] == "healthy", str(statuses))
     expect(statuses["nextcloud"] == "healthy", str(statuses))
-    expect(statuses["code-server"] == "starting", str(statuses))
     expect(statuses["managed-context-install"] == "healthy", str(statuses))
     expect(statuses["notification-delivery"] == "missing", str(statuses))
     expect(("ps", "--all", "--format", "json") in [tuple(run["args"]) for run in runner.runs], str(runner.runs))
@@ -235,12 +233,12 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     expect(results[0]["dns_records"] == [], str(results))
     expect(results[0]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1234", str(results))
     expect(results[0]["urls"]["hermes"] == "https://worker.example.test:8443/", str(results))
-    expect(results[0]["urls"]["files"] == "https://worker.example.test:8444/", str(results))
-    expect(results[0]["urls"]["code"] == "https://worker.example.test:8445/", str(results))
+    expect(results[0]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1234/drive", str(results))
+    expect(results[0]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1234/code", str(results))
     metadata = json.loads(
         conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
     )
-    expect(metadata["tailnet_service_ports"] == {"code": 8445, "files": 8444, "hermes": 8443}, str(metadata))
+    expect(metadata["tailnet_service_ports"] == {"hermes": 8443}, str(metadata))
     dns_count = conn.execute("SELECT COUNT(*) AS c FROM arclink_dns_records").fetchone()["c"]
     expect(dns_count == 0, str(dns_count))
     event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'sovereign_pod_applied'").fetchone()

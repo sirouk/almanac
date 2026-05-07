@@ -50,7 +50,7 @@ Per-pod services:
 - Memory synthesis and hot memory stubs through managed context
 - Skills lane for installable and upgradeable agent capabilities
 - Nextcloud files UI for vault/files
-- code-server browser IDE
+- ArcLink Code dashboard plugin
 - Private bot gateway for the user's agent
 - Notion integration with webhook verification and dashboard-secret handling
 - Private GitHub backup for Hermes home and configuration snapshots
@@ -59,8 +59,6 @@ Per-pod services:
 Per-pod hostname target:
 
 - `u-<prefix>.arclink.online` - unified dashboard
-- `files-<prefix>.arclink.online` - Nextcloud
-- `code-<prefix>.arclink.online` - code-server
 - `hermes-<prefix>.arclink.online` - Hermes
 - Future: `mcp-<prefix>.arclink.online`
 

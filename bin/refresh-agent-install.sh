@@ -534,7 +534,7 @@ try_user_systemctl "user manager daemon-reload" daemon-reload
 try_user_systemctl "plugin-managed context refresh service" start arclink-user-agent-refresh.service
 ensure_gateway_running_without_interrupting_active_turns
 try_user_systemctl "Hermes dashboard/proxy" restart arclink-user-agent-dashboard.service arclink-user-agent-dashboard-proxy.service
-try_user_systemctl "code workspace" restart arclink-user-agent-code.service
+run_user_systemctl disable --now arclink-user-agent-code.service >/dev/null 2>&1 || true
 
 cat <<EOF
 Refreshed ArcLink install for $UNIX_USER

@@ -51,9 +51,42 @@
   }
 
   function displayScrollback(text) {
-    return String(text || "")
+    const stripped = String(text || "")
       .replace(new RegExp("\\x1b\\][^\\x07]*(\\x07|\\x1b\\\\)", "g"), "")
       .replace(new RegExp("\\x1b\\[[0-?]*[ -/]*[@-~]", "g"), "");
+    const lines = [""];
+    let row = 0;
+    let col = 0;
+    for (let index = 0; index < stripped.length; index += 1) {
+      const char = stripped[index];
+      if (char === "\r") {
+        col = 0;
+        continue;
+      }
+      if (char === "\n") {
+        row += 1;
+        lines[row] = lines[row] || "";
+        col = 0;
+        continue;
+      }
+      if (char === "\b" || char === "\x7f") {
+        if (col > 0) {
+          const line = lines[row] || "";
+          lines[row] = line.slice(0, col - 1) + line.slice(col);
+          col -= 1;
+        }
+        continue;
+      }
+      if (char < " " && char !== "\t") continue;
+      const line = lines[row] || "";
+      if (col >= line.length) {
+        lines[row] = line + " ".repeat(col - line.length) + char;
+      } else {
+        lines[row] = line.slice(0, col) + char + line.slice(col + 1);
+      }
+      col += char === "\t" ? 4 : 1;
+    }
+    return lines.join("\n");
   }
 
   function TerminalPage() {
@@ -450,7 +483,7 @@
                 h(
                   "div",
                   { className: "arclink-terminal-session-tools" },
-                  h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !(capabilities.machine_terminal_sessions || capabilities.ssh_sessions) }, "+"),
+                  h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !(capabilities.machine_terminal_sessions || capabilities.ssh_sessions) }, "+SSH"),
                   h("button", { type: "button", title: "Open Hermes TUI", onClick: function () { createSession("tui"); }, disabled: !capabilities.hermes_tui_sessions }, "+ TUI")
                 )
               ),

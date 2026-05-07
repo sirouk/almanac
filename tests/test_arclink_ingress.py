@@ -56,9 +56,10 @@ def test_dns_reconciler_persists_desired_records_and_records_drift_events() -> N
     )
     drift_kinds = {(item.kind, item.hostname) for item in drift}
     expect(("changed", "u-abc123.example.test") in drift_kinds, str(drift))
-    expect(("missing", "files-abc123.example.test") in drift_kinds, str(drift))
+    expect(("missing", "hermes-abc123.example.test") in drift_kinds, str(drift))
+    expect(("missing", "files-abc123.example.test") not in drift_kinds, str(drift))
     records = conn.execute("SELECT hostname, record_type, target, status FROM arclink_dns_records ORDER BY hostname").fetchall()
-    expect(len(records) == 4, str([dict(row) for row in records]))
+    expect(len(records) == 2, str([dict(row) for row in records]))
     expect({row["status"] for row in records} == {"desired"}, str([dict(row) for row in records]))
     events = conn.execute("SELECT event_type, metadata_json FROM arclink_events WHERE subject_id = 'dep_1'").fetchall()
     expect(len(events) == len(drift), str([dict(row) for row in events]))
@@ -66,13 +67,13 @@ def test_dns_reconciler_persists_desired_records_and_records_drift_events() -> N
     print("PASS test_dns_reconciler_persists_desired_records_and_records_drift_events")
 
 
-def test_traefik_dynamic_labels_match_golden_file_for_all_host_roles() -> None:
+def test_traefik_dynamic_labels_match_golden_file_for_public_host_roles() -> None:
     ingress = load_module("arclink_ingress.py", "arclink_ingress_traefik_test")
     actual = ingress.render_traefik_dynamic_labels(prefix="amber-vault-1a2b", base_domain="example.test")
     expected = json.loads((FIXTURES / "arclink_traefik_labels.golden.json").read_text(encoding="utf-8"))
     expect(actual == expected, json.dumps(actual, sort_keys=True, indent=2))
-    expect(set(actual) == {"dashboard", "files", "code", "hermes"}, str(actual))
-    print("PASS test_traefik_dynamic_labels_match_golden_file_for_all_host_roles")
+    expect(set(actual) == {"dashboard", "hermes"}, str(actual))
+    print("PASS test_traefik_dynamic_labels_match_golden_file_for_public_host_roles")
 
 
 def test_dns_provision_creates_records_and_marks_provisioned() -> None:
@@ -90,8 +91,8 @@ def test_dns_provision_creates_records_and_marks_provisioned() -> None:
         target="edge.example.test",
         cloudflare=cloudflare,
     )
-    expect(len(records) == 4, str(records))
-    expect(len(cloudflare.records) == 4, str(cloudflare.records))
+    expect(len(records) == 2, str(records))
+    expect(len(cloudflare.records) == 2, str(cloudflare.records))
     db_records = conn.execute(
         "SELECT status FROM arclink_dns_records WHERE deployment_id = 'dep_prov_1'"
     ).fetchall()
@@ -115,14 +116,14 @@ def test_dns_teardown_removes_records_and_marks_torn_down() -> None:
         conn, deployment_id="dep_tear_1", prefix="teartest",
         base_domain="example.test", target="edge.example.test", cloudflare=cloudflare,
     )
-    expect(len(cloudflare.records) == 4, "expected 4 records after provision")
+    expect(len(cloudflare.records) == 2, "expected 2 records after provision")
 
     # Then teardown
     removed = ingress.teardown_arclink_dns(
         conn, deployment_id="dep_tear_1", prefix="teartest",
         base_domain="example.test", cloudflare=cloudflare,
     )
-    expect(len(removed) == 4, f"expected 4 removed, got {len(removed)}")
+    expect(len(removed) == 2, f"expected 2 removed, got {len(removed)}")
     expect(len(cloudflare.records) == 0, "expected 0 records after teardown")
     db_records = conn.execute(
         "SELECT status FROM arclink_dns_records WHERE deployment_id = 'dep_tear_1'"
@@ -151,7 +152,7 @@ def test_dns_provision_is_idempotent_on_retry() -> None:
         conn, deployment_id="dep_retry", prefix="retrytest",
         base_domain="example.test", target="edge2.example.test", cloudflare=cloudflare,
     )
-    expect(len(cloudflare.records) == 4, "expected 4 records")
+    expect(len(cloudflare.records) == 2, "expected 2 records")
     # All should point to new target
     for rec in cloudflare.records.values():
         expect(rec.target == "edge2.example.test", f"expected updated target, got {rec.target}")
@@ -160,7 +161,7 @@ def test_dns_provision_is_idempotent_on_retry() -> None:
 
 def main() -> int:
     test_dns_reconciler_persists_desired_records_and_records_drift_events()
-    test_traefik_dynamic_labels_match_golden_file_for_all_host_roles()
+    test_traefik_dynamic_labels_match_golden_file_for_public_host_roles()
     test_dns_provision_creates_records_and_marks_provisioned()
     test_dns_teardown_removes_records_and_marks_torn_down()
     test_dns_provision_is_idempotent_on_retry()

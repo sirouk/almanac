@@ -16,7 +16,7 @@ from arclink_adapters import (
 )
 
 
-ARCLINK_HOST_ROLES = ("dashboard", "files", "code", "hermes")
+ARCLINK_HOST_ROLES = ("dashboard", "hermes")
 ARCLINK_DEFAULT_SERVICE_PORTS = {
     "dashboard": 3000,
     "files": 80,
@@ -39,6 +39,7 @@ def desired_arclink_dns_records(*, prefix: str, base_domain: str, target: str) -
     return {
         role: DnsRecord(hostname=hostname, record_type="CNAME", target=clean_target, proxied=True)
         for role, hostname in arclink_hostnames(prefix, base_domain).items()
+        if role in ARCLINK_HOST_ROLES
     }
 
 

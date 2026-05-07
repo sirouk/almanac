@@ -22,9 +22,7 @@ deployment ID. Hostnames follow the current code shape:
 
 | Hostname | Service |
 |----------|---------|
-| `u-{prefix}.{base_domain}` | User dashboard |
-| `files-{prefix}.{base_domain}` | Nextcloud file access |
-| `code-{prefix}.{base_domain}` | code-server workspace |
+| `u-{prefix}.{base_domain}` | User dashboard with ArcLink Drive and Code plugin routes |
 | `hermes-{prefix}.{base_domain}` | Hermes agent gateway |
 
 `ARCLINK_BASE_DOMAIN` sets the base domain. `ARCLINK_EDGE_TARGET` sets the
@@ -46,14 +44,14 @@ Tailscale name can be resolved and certificated. Access URLs are rendered as:
 | URL | Service |
 |-----|---------|
 | `https://{tailscale_dns_name}/u/{prefix}` | User dashboard |
-| `https://{tailscale_dns_name}/u/{prefix}/files` | Nextcloud file access |
-| `https://{tailscale_dns_name}/u/{prefix}/code` | code-server workspace |
+| `https://{tailscale_dns_name}/u/{prefix}/drive` | ArcLink Drive plugin inside the authenticated dashboard |
+| `https://{tailscale_dns_name}/u/{prefix}/code` | ArcLink Code plugin inside the authenticated dashboard |
 | `https://{tailscale_dns_name}/u/{prefix}/hermes` | Hermes agent gateway |
 | `https://{tailscale_dns_name}/u/{prefix}/notion/webhook` | Per-deployment Notion callback |
 
 The optional `subdomain` strategy renders `u-{prefix}.{tailscale_dns_name}`,
-`files-{prefix}.{tailscale_dns_name}`, `code-{prefix}.{tailscale_dns_name}`,
-and `hermes-{prefix}.{tailscale_dns_name}`. Use it only when the operator has
+and `hermes-{prefix}.{tailscale_dns_name}`. Drive and Code remain dashboard
+plugin paths in this mode too. Use subdomains only when the operator has
 confirmed that DNS and certificates for that shape actually work in the
 tailnet.
 

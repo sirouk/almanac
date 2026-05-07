@@ -1203,7 +1203,7 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect('"New machine terminal"' in body and "+SSH" in body, "Terminal UI should use +SSH for a local machine shell")
     expect("startRenameSession" in body and "editingSessionId" in body, "Terminal UI should support inline session renaming")
     expect("window.prompt(\"SSH target\"" not in body and "target: \"\"" in body, "Terminal UI should not prompt for an SSH target")
-    expect("+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
+    expect("+TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
     expect("scrollback" in body and "hermes-terminal-screen" in body, "Terminal UI should render bounded scrollback")
     expect("syncTerminalOutput" in body and "scrollToBottom" in body, "Terminal UI should stream scrollback into xterm")
     expect("registerCsiHandler" in body and "acceptReports" in body and "disableStdin" in body, "Terminal UI should answer live cursor reports without replaying stale reports")

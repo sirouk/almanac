@@ -33,8 +33,17 @@ if [[ -n "${VAULT_DIR:-}" ]]; then
     --vault-dir "$VAULT_DIR" \
     "${hermes_skills_args[@]}"
   if [[ "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
-    if ! ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+    docs_state_dir="${ARCLINK_HERMES_DOCS_STATE_DIR:-/tmp/arclink-hermes-docs-src}"
+    docs_vault_dir="${ARCLINK_HERMES_DOCS_VAULT_DIR:-$VAULT_DIR/Agents_KB/hermes-agent-docs}"
+    if ! ARCLINK_CONFIG_FILE=/dev/null \
+      ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1 \
+      ARCLINK_PRIV_DIR=/tmp/arclink-priv \
+      ARCLINK_PRIV_CONFIG_DIR=/tmp/arclink-priv/config \
+      STATE_DIR=/tmp/arclink-state \
       RUNTIME_DIR="$RUNTIME_DIR_TARGET" \
+      VAULT_DIR="$VAULT_DIR" \
+      ARCLINK_HERMES_DOCS_STATE_DIR="$docs_state_dir" \
+      ARCLINK_HERMES_DOCS_VAULT_DIR="$docs_vault_dir" \
       "$REPO_DIR/bin/sync-hermes-docs-into-vault.sh"; then
       echo "Hermes docs sync failed; continuing with the existing vault contents." >&2
     fi

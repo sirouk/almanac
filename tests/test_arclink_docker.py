@@ -257,7 +257,9 @@ def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
     expect("migrate-hermes-config.sh" in body, body)
     expect("reconcile-vault-layout.py" in body and "--hermes-skills-dir" in body, body)
     expect("sync-hermes-docs-into-vault.sh" in body, body)
+    expect("ARCLINK_CONFIG_FILE=/dev/null" in body, body)
     expect("ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1" in body, body)
+    expect('ARCLINK_HERMES_DOCS_VAULT_DIR="$docs_vault_dir"' in body, body)
     expect("Hermes docs sync failed; continuing" in body, body)
     print("PASS test_deployment_hermes_home_installer_seeds_runtime_knowledge")
 

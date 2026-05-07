@@ -69,6 +69,22 @@ function healthSummary(deployments: Deployment[] = []) {
   return { total: services.length, healthy, attention };
 }
 
+function deploymentRank(dep: Deployment) {
+  const status = (dep.status || "").toLowerCase();
+  if (["active", "running", "ready", "healthy"].includes(status)) return 0;
+  if (["provisioning", "provisioning_ready", "starting", "pending"].includes(status)) return 1;
+  if (["entitlement_required", "blocked", "failed", "unhealthy"].includes(status)) return 3;
+  return 2;
+}
+
+function orderedDeployments(deployments: Deployment[] = []) {
+  return [...deployments].sort((a, b) => {
+    const rankDelta = deploymentRank(a) - deploymentRank(b);
+    if (rankDelta !== 0) return rankDelta;
+    return deploymentTitle(a).localeCompare(deploymentTitle(b));
+  });
+}
+
 function deploymentTitle(dep: Deployment) {
   return dep.hostname || (dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : dep.deployment_id);
 }
@@ -151,7 +167,7 @@ export default function DashboardPage() {
     );
   }
 
-  const deployments = data?.deployments ?? [];
+  const deployments = orderedDeployments(data?.deployments ?? []);
   const activeDeployment = deployments[0];
   const health = healthSummary(deployments);
   const entitlementState = data?.entitlement?.state || billing?.entitlement?.state || "unknown";

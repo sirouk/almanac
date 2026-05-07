@@ -1157,7 +1157,7 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
     browser_auth = _provider_auth_state(session)
     if state == "awaiting-name":
         return (
-            "Hi, I’m ArcLink’s Curator. I’ll help set up your private agent lane one step at a time.\n\n"
+            "Hi, I’m Raven, the ArcLink Curator. I’ll help set up your private agent lane one step at a time.\n\n"
             "First up: what should I call you?"
         )
     if state == "awaiting-profile-match":

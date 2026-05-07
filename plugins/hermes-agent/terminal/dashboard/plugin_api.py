@@ -506,6 +506,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     env["COLORTERM"] = env.get("COLORTERM") or "truecolor"
     env["COLUMNS"] = str(cols)
     env["LINES"] = str(rows)
+    env["HERMES_HOME"] = str(_hermes_home())
     env["TERM_PROGRAM"] = "HermesTerminal"
     env["PS1"] = "$ "
     if mode == "tui":
@@ -589,6 +590,7 @@ def _status_payload() -> dict[str, Any]:
             "group_sessions": available,
             "reorder_sessions": available,
             "confirm_close_or_kill": True,
+            "control_key_input": available,
             "direct_input": available,
             "xtermjs_terminal_emulator": available,
             "resize": available,

@@ -577,7 +577,7 @@
       const additive = !!(event && (event.ctrlKey || event.metaKey));
       const ranged = !!(event && event.shiftKey && state.selectionAnchor);
       const items = list || [];
-      let next = additive ? Object.assign({}, state.selectedPaths || {}) : {};
+      let next = (additive || ranged) ? Object.assign({}, state.selectedPaths || {}) : {};
       const selectedKey = itemKey(item);
       const selectedRoot = itemRoot(item);
       if (Object.keys(next).some(function (key) { return key.split(":")[0] !== selectedRoot; })) {
@@ -602,7 +602,13 @@
       } else {
         next[selectedKey] = true;
       }
-      patch({ root: selectedRoot || state.root, selectedPaths: next, selected: item, selectionAnchor: { key: selectedKey, path: item.path, index: index }, preview: null });
+      patch({
+        root: selectedRoot || state.root,
+        selectedPaths: next,
+        selected: item,
+        selectionAnchor: ranged ? state.selectionAnchor : { key: selectedKey, path: item.path, index: index },
+        preview: null,
+      });
     }
 
     function handleListItemClick(item, event, index, list) {
@@ -710,7 +716,6 @@
       const parts = String(state.path || "/").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
       const rootLabel = currentRoot.label || state.root || "Drive";
       const nodes = [
-        h("button", { key: "drive", type: "button", onClick: function () { loadItems("/", "", false, state.root); } }, "Drive"),
         h("button", { key: "root", type: "button", onClick: function () { loadItems("/", "", false, state.root); } }, rootLabel),
       ];
       if (state.location === "trash") {
@@ -1261,7 +1266,6 @@
                   h("button", { type: "button", onClick: function () { patch({ view: state.view === "list" ? "grid" : "list" }); } }, state.view === "list" ? "Grid" : "List")
                 )
               ),
-              renderDetailsPanel(),
               h(
                 "div",
                 { className: "hermes-drive-items " + state.view, onContextMenu: openBackgroundContextMenu },
@@ -1332,7 +1336,8 @@
                         );
                       })
                     : h("div", { className: "hermes-drive-empty" }, state.query ? "No search results" : "Empty")
-              )
+              ),
+              renderDetailsPanel()
             )
           )
         : h("div", { className: "hermes-drive-empty full" }, "Drive is not available"),

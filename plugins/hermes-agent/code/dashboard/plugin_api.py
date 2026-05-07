@@ -333,7 +333,24 @@ def _is_text_file(path: Path) -> bool:
     if path.suffix.lower() in _TEXT_EXTENSIONS:
         return True
     mime = mimetypes.guess_type(str(path))[0] or ""
-    return mime.startswith("text/") or mime in {"application/json", "application/xml"}
+    if mime.startswith("text/") or mime in {"application/json", "application/xml"}:
+        return True
+    try:
+        with path.open("rb") as handle:
+            sample = handle.read(min(_MAX_TEXT_BYTES, 8192))
+    except OSError:
+        return False
+    if b"\x00" in sample:
+        return False
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        try:
+            sample.decode("utf-16")
+            return True
+        except UnicodeDecodeError:
+            return False
 
 
 def _language_for(path: str) -> str:
@@ -487,6 +504,17 @@ def _run_git(repo: Path, args: list[str], *, check: bool = True) -> str:
         detail = (result.stderr or result.stdout or "git command failed").strip()
         raise HTTPException(status_code=400, detail=detail[:500])
     return result.stdout
+
+
+def _repo_has_head(repo: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"],
+        text=True,
+        capture_output=True,
+        timeout=_GIT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _read_repo_text(path: Path) -> str:
@@ -773,11 +801,18 @@ async def git_stage(request: Request) -> dict[str, Any]:
 async def git_unstage(request: Request) -> dict[str, Any]:
     payload = await request.json()
     repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    has_head = _repo_has_head(repo)
     if bool(payload.get("all")):
-        _run_git(repo, ["restore", "--staged", "."])
+        if has_head:
+            _run_git(repo, ["restore", "--staged", "."])
+        else:
+            _run_git(repo, ["rm", "-r", "--cached", "--ignore-unmatch", "."])
     else:
         path = _clean_repo_file_path(payload.get("path"))
-        _run_git(repo, ["restore", "--staged", "--", path])
+        if has_head:
+            _run_git(repo, ["restore", "--staged", "--", path])
+        else:
+            _run_git(repo, ["rm", "-r", "--cached", "--ignore-unmatch", "--", path])
     return {"ok": True, "status": _git_status_payload(repo, relative, root_ctx), "last_git_result": _git_action_result("unstage")}
 
 

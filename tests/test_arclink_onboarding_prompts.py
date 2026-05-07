@@ -85,7 +85,7 @@ def test_discord_prompt_and_operator_review_reflect_primary_control_channel() ->
                     "answers": {},
                 },
             )
-            expect("ArcLink’s Curator" in opening, opening)
+            expect("Raven, the ArcLink Curator" in opening, opening)
             expect("First up" in opening, opening)
 
             purpose_prompt = onboarding.session_prompt(

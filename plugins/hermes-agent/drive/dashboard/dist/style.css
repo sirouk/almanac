@@ -372,7 +372,8 @@
 
 .hermes-drive-content.has-selection .hermes-drive-items {
   flex: 0 1 auto;
-  max-height: min(36dvh, 20rem);
+  max-height: min(38dvh, 22rem);
+  min-height: 7rem;
 }
 
 .hermes-drive-items.grid {
@@ -436,10 +437,12 @@
 
 .hermes-drive-details {
   border-top: 1px solid color-mix(in srgb, var(--midground-base) 13%, transparent);
+  flex: 1 1 auto;
   flex-wrap: wrap;
   justify-content: space-between;
   margin-top: 0.75rem;
   min-height: 3.2rem;
+  overflow: hidden;
   padding-top: 0.75rem;
 }
 
@@ -465,11 +468,13 @@
 .hermes-drive-preview {
   border-top: 1px solid color-mix(in srgb, var(--midground-base) 10%, transparent);
   display: flex;
-  flex: 1 0 100%;
+  flex: 1 1 100%;
   flex-direction: column;
   gap: 0.55rem;
   margin-top: 0.55rem;
+  min-height: 16rem;
   min-width: 0;
+  overflow: hidden;
   padding-top: 0.6rem;
 }
 
@@ -517,25 +522,31 @@
 }
 
 .hermes-drive-text-preview {
+  flex: 1 1 auto;
   color: color-mix(in srgb, var(--midground-base) 90%, var(--background-base));
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.75rem;
   line-height: 1.48;
   margin: 0;
-  max-height: 18rem;
+  max-height: none;
+  min-height: 0;
   overflow: auto;
   padding: 0.65rem;
   white-space: pre-wrap;
 }
 
 .hermes-drive-pdf-preview {
-  height: min(58dvh, 34rem);
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
   width: 100%;
 }
 
 .hermes-drive-media-preview {
   display: block;
-  max-height: min(58dvh, 34rem);
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
   max-width: 100%;
   object-fit: contain;
   width: 100%;
@@ -557,7 +568,7 @@
   position: fixed;
   right: 0;
   top: 0;
-  z-index: 60;
+  z-index: 10000;
 }
 
 .hermes-drive-preview-fullscreen .hermes-drive-text-preview,

@@ -771,7 +771,7 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
 
 def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> None:
     body = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
-    expect('h("button", { key: "drive"' in body and "Drive" in body, "Drive breadcrumb root should be browser-visible")
+    expect('h("button", { key: "drive"' not in body, "Drive breadcrumb should start at the active root, not a redundant Drive tile")
     expect('h("button", { key: "root"' in body and "rootLabel" in body, "selected root should be part of breadcrumbs")
     expect('function loadTrash()' in body and 'api("/trash?"' in body, "Drive UI should load backend trash records")
     expect('function restoreItem(item)' in body and 'requestJSON("/restore"' in body, "Drive UI should expose restore")
@@ -788,15 +788,21 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
     expect("function previewKind(item)" in body and 'api("/preview?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/preview routes")
     expect("function itemKey(item)" in body and "state.selectedPaths[itemKey(item)]" in body, "Drive UI row rendering should not call an undefined selection key helper")
+    selection_block = body.split("function selectListItem", 1)[1].split("function handleListItemClick", 1)[0]
+    expect("let next = (additive || ranged)" in selection_block, "Drive shift-range selection should extend existing selected paths")
+    expect("selectionAnchor: ranged ? state.selectionAnchor" in selection_block, "Drive shift-range selection should keep the original anchor while growing")
     click_handler = body.split("function handleListItemClick", 1)[1].split("function trashSelected", 1)[0]
     expect("openItem" not in click_handler and "selectListItem(item, event, index, list)" in click_handler, "Drive single-click should select folders instead of opening them")
     expect("onDoubleClick: function ()" in body and "openItem(item);" in body, "Drive double-click should open folder rows")
     expect('has-selection' in body, "Drive content pane should make room for metadata and preview after selection")
+    content_block = body.split('className: "hermes-drive-content"', 1)[1].split("renderFullscreenPreview()", 1)[0]
+    expect(content_block.find('className: "hermes-drive-items ') < content_block.find("renderDetailsPanel()"), "Drive preview/details should render below the scrollable file list")
     expect("hermes-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
     expect("paddingLeft: 0.2 + depth * 0.9" in body and "marginLeft: depth * 14" not in body, "Drive tree indentation should move the full row, not only the caret")
     style = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".hermes-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
     expect(".hermes-drive-content.has-selection .hermes-drive-items" in style, "Drive CSS should keep selected-item previews visible")
+    expect("z-index: 10000" in style, "Drive fullscreen preview should sit above the Hermes nav")
     expect(".hermes-drive-pdf-preview" in style and ".hermes-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
 
@@ -809,6 +815,10 @@ def test_arclink_code_native_editor_guards_conflicting_saves() -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         source = workspace / "app.py"
         source.write_text("print('one')\n", encoding="utf-8")
+        extensionless = workspace / "NOTES_PRIVATE"
+        extensionless.write_text("plain text without a known extension\n", encoding="utf-8")
+        binary = workspace / "binary.unknown"
+        binary.write_bytes(b"plain\x00binary")
         pdf = workspace / "guide.pdf"
         pdf.write_bytes(b"%PDF-1.4\n%ArcLink preview proof\n")
 
@@ -826,6 +836,15 @@ def test_arclink_code_native_editor_guards_conflicting_saves() -> None:
             opened = asyncio.run(code_api.file(path="/app.py"))
             expect(opened["language"] == "python", str(opened))
             expect(opened["hash"], str(opened))
+            opened_extensionless = asyncio.run(code_api.file(path="/NOTES_PRIVATE"))
+            expect(opened_extensionless["language"] == "plaintext", str(opened_extensionless))
+            expect("plain text without a known extension" in opened_extensionless["content"], str(opened_extensionless))
+            try:
+                asyncio.run(code_api.file(path="/binary.unknown"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 415, f"expected binary-looking unknown file to be rejected, got {exc!r}")
+            else:
+                raise AssertionError("expected binary-looking unknown file to be rejected")
             downloaded = asyncio.run(code_api.download(path="/guide.pdf"))
             expect(getattr(downloaded, "path", "") == str(pdf), f"expected download response for PDF, got {downloaded!r}")
             previewed = asyncio.run(code_api.preview(path="/guide.pdf"))
@@ -986,6 +1005,16 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
             unstaged = asyncio.run(code_api.git_unstage(JsonRequest({"repo": "/demo", "path": "app.py"})))
             expect(any(item["path"] == "app.py" for item in unstaged["status"]["unstaged"]), str(unstaged))
 
+            fresh_repo = workspace / "fresh"
+            fresh_repo.mkdir()
+            (fresh_repo / "README.md").write_text("# Fresh\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=fresh_repo, text=True, capture_output=True, check=True)
+            no_head_staged = asyncio.run(code_api.git_stage(JsonRequest({"repo": "/fresh", "path": "README.md"})))
+            expect(any(item["path"] == "README.md" for item in no_head_staged["status"]["staged"]), str(no_head_staged))
+            no_head_unstaged = asyncio.run(code_api.git_unstage(JsonRequest({"repo": "/fresh", "path": "README.md"})))
+            expect((fresh_repo / "README.md").exists(), "unstage in a no-commit repo must not delete the worktree file")
+            expect(any(item["path"] == "README.md" for item in no_head_unstaged["status"]["untracked"]), str(no_head_unstaged))
+
             try:
                 asyncio.run(code_api.git_diff(repo="/demo", path="../outside.py"))
             except Exception as exc:
@@ -1035,6 +1064,8 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect('"/ops/trash"' in body and "Move \" + item.path + \" to trash?" in body, "Code UI should confirmation-gate trash")
     expect('"/search?q="' in body and "renderSearch()" in body, "Code UI should expose workspace search")
     expect('"/repos/open"' in body and "Open Source" in body and "Sources" in body, "Code UI should expose explicit Sources picker")
+    expect("function sourceIconButton" in body and "Refresh status" in body and "Stage all" in body and "Unstage all" in body, "Source-control bulk actions should use compact icon controls")
+    expect("function buildChangeTree" in body and "function renderChangeTreeNode" in body and "hermes-code-change-folder" in body, "Source-control changes should render as a folder tree")
     expect("renderSearchBox()" in body and "state.leftPanel === \"search\"" not in body, "Code UI should use inline search instead of a separate Search panel")
     expect("onDrop: openDroppedTab" in body, "Code UI should open files dropped on the tab strip")
     expect('"/git/ignore"' in body and '"/git/pull"' in body and '"/git/push"' in body, "Code UI should expose richer source-control actions")
@@ -1046,6 +1077,7 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     style = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".hermes-code-diff-panes" in style, "Code CSS should style split diff panes")
     expect(".hermes-code-tree-node" in style and ".hermes-code-context-menu" in style, "Code CSS should style nested Explorer and context menus")
+    expect(".hermes-code-change-tree" in style and ".hermes-code-icon-button" in style, "Code CSS should style source-control tree and icon actions")
     expect(".hermes-code-search" in style and ".hermes-code-statusbar" in style, "Code CSS should style search and status bar")
     expect(".hermes-code-fileicon.long-ext" in style and ".hermes-code-pdf-preview" in style, "Code CSS should style compact icons and PDF preview tabs")
     expect(".hermes-code-theme-light" in style, "Code CSS should include a light theme")
@@ -1087,6 +1119,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["browser_cpr_response"] is True, str(status))
             expect(status["capabilities"]["xtermjs_terminal_emulator"] is True, str(status))
             expect(status["capabilities"]["background_pty_reader"] is True, str(status))
+            expect(status["capabilities"]["control_key_input"] is True, str(status))
             expect(status["limits"]["scrollback_lines"] == 10000, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
 
@@ -1215,6 +1248,9 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("+TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
     expect("scrollback" in body and "hermes-terminal-screen" in body, "Terminal UI should render bounded scrollback")
     expect("syncTerminalOutput" in body and "scrollToBottom" in body, "Terminal UI should stream scrollback into xterm")
+    expect("terminalCache" in body and "detachTerminal" in body, "Terminal UI should keep xterm buffers warm when the page is revisited")
+    expect("onScroll" in body and "SESSION_VIEWPORT_STORAGE_PREFIX" in body, "Terminal UI should remember scroll viewport per session")
+    expect("attachCustomKeyEventHandler" in body and '\\x03' in body and "controlInputForKey" in body, "Terminal UI should forward Ctrl+C and related control keys to the PTY")
     expect("registerCsiHandler" in body and "acceptReports" in body and "disableStdin" in body, "Terminal UI should answer live cursor reports without replaying stale reports")
     expect("freshSessionRef" in body, "Terminal UI should allow initial TUI cursor negotiation for newly created sessions")
     expect("ResizeObserver" in body and '"/resize"' in body, "Terminal UI should resize the PTY to its browser viewport")
@@ -1231,6 +1267,7 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
+    expect('env["HERMES_HOME"] = str(_hermes_home())' in api_body, "Terminal TUI sessions should reuse the dashboard agent Hermes home")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
     expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")
     expect((PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "vendor" / "xterm.js").is_file(), "Terminal plugin should vendor xterm.js")

@@ -1148,6 +1148,108 @@
       );
     }
 
+    function sourceIconButton(label, icon, onClick, disabled, className) {
+      return h(
+        "button",
+        {
+          type: "button",
+          className: "hermes-code-icon-button" + (className ? " " + className : ""),
+          title: label,
+          "aria-label": label,
+          onClick: onClick,
+          disabled: !!disabled,
+        },
+        icon
+      );
+    }
+
+    function buildChangeTree(changes) {
+      const root = { name: "", path: "", folders: {}, files: [] };
+      changes.slice().sort(changeSort).forEach(function (change) {
+        const parts = String(change.path || "").split("/").filter(Boolean);
+        let node = root;
+        for (let index = 0; index < Math.max(0, parts.length - 1); index += 1) {
+          const part = parts[index];
+          const childPath = node.path ? node.path + "/" + part : part;
+          node.folders[part] = node.folders[part] || { name: part, path: childPath, folders: {}, files: [] };
+          node = node.folders[part];
+        }
+        node.files.push(change);
+      });
+      return root;
+    }
+
+    function renderChangeActions(change, mode) {
+      return h(
+        "span",
+        { className: "hermes-code-change-actions" },
+        mode === "staged"
+          ? h("span", { title: "Unstage", onClick: function (event) { event.stopPropagation(); gitAction("/git/unstage", { path: change.path }); } }, "-")
+          : h("span", { title: "Stage", onClick: function (event) { event.stopPropagation(); gitAction("/git/stage", { path: change.path }); } }, "+"),
+        mode === "staged"
+          ? null
+          : h(
+              React.Fragment,
+              null,
+              change.untracked
+                ? h("span", { title: "Ignore", onClick: function (event) { event.stopPropagation(); gitAction("/git/ignore", { path: change.path }); } }, "I")
+                : null,
+              h("span", {
+                title: "Discard",
+                onClick: function (event) {
+                  event.stopPropagation();
+                  gitAction(
+                    "/git/discard",
+                    { path: change.path, untracked: change.untracked, confirm: true },
+                    "Discard changes in " + change.path + "?"
+                  );
+                },
+              }, "U")
+            )
+      );
+    }
+
+    function renderChangeTreeNode(node, mode, depth) {
+      const folderNames = Object.keys(node.folders || {}).sort(function (a, b) { return a.localeCompare(b); });
+      return h(
+        "div",
+        { className: "hermes-code-change-tree-node", key: mode + ":folder:" + node.path },
+        node.name
+          ? h(
+              "div",
+              { className: "hermes-code-change-folder", style: { paddingLeft: 0.35 + depth * 0.85 + "rem" } },
+              renderFileIcon({ kind: "folder", name: node.name }),
+              h("span", null, node.name)
+            )
+          : null,
+        folderNames.map(function (name) {
+          return renderChangeTreeNode(node.folders[name], mode, depth + (node.name ? 1 : 0));
+        }),
+        (node.files || []).map(function (change) {
+          return h(
+            "button",
+            {
+              key: mode + ":file:" + change.path + ":" + change.status,
+              type: "button",
+              className: "hermes-code-change",
+              style: { paddingLeft: 0.45 + (depth + (node.name ? 1 : 0)) * 0.85 + "rem" },
+              onClick: function () {
+                openChange(change);
+              },
+            },
+            h("span", { className: "hermes-code-change-status" }, change.status.trim() || change.status),
+            h(
+              "span",
+              { className: "hermes-code-change-name" },
+              h("span", null, basename(change.path)),
+              change.old_path ? h("small", null, "from " + change.old_path) : null
+            ),
+            renderChangeActions(change, mode)
+          );
+        })
+      );
+    }
+
     function renderChangeGroup(title, changes, mode) {
       const sorted = changes.slice().sort(changeSort);
       return h(
@@ -1155,54 +1257,7 @@
         { className: "hermes-code-source-group" },
         h("div", { className: "hermes-code-source-group-title" }, h("span", null, title), h("strong", null, sorted.length)),
         sorted.length
-          ? sorted.map(function (change) {
-              const dir = dirname(change.path);
-              return h(
-                "button",
-                {
-                  key: title + ":" + change.path + ":" + change.status,
-                  type: "button",
-                  className: "hermes-code-change",
-                  onClick: function () {
-                    openChange(change);
-                  },
-                },
-                h("span", { className: "hermes-code-change-status" }, change.status.trim() || change.status),
-                h(
-                  "span",
-                  { className: "hermes-code-change-name" },
-                  dir ? h("small", null, dir + "/") : null,
-                  h("span", null, basename(change.path)),
-                  change.old_path ? h("small", null, " from " + change.old_path) : null
-                ),
-                h(
-                  "span",
-                  { className: "hermes-code-change-actions" },
-                  mode === "staged"
-                    ? h("span", { onClick: function (event) { event.stopPropagation(); gitAction("/git/unstage", { path: change.path }); } }, "-")
-                    : h("span", { onClick: function (event) { event.stopPropagation(); gitAction("/git/stage", { path: change.path }); } }, "+"),
-                  mode === "staged"
-                    ? null
-                    : h(
-                        React.Fragment,
-                        null,
-                        change.untracked
-                          ? h("span", { onClick: function (event) { event.stopPropagation(); gitAction("/git/ignore", { path: change.path }); } }, "Ignore")
-                          : null,
-                        h("span", {
-                          onClick: function (event) {
-                            event.stopPropagation();
-                            gitAction(
-                              "/git/discard",
-                              { path: change.path, untracked: change.untracked, confirm: true },
-                              "Discard changes in " + change.path + "?"
-                            );
-                          },
-                        }, "Undo")
-                      )
-                )
-              );
-            })
+          ? h("div", { className: "hermes-code-change-tree" }, renderChangeTreeNode(buildChangeTree(sorted), mode, 0))
           : h("div", { className: "hermes-code-source-empty" }, "No files")
       );
     }
@@ -1211,12 +1266,21 @@
       const source = state.source || { staged: [], unstaged: [], untracked: [], clean: true };
       const hasStaged = source.staged && source.staged.length;
       const hasChanges = (source.staged || []).length + (source.unstaged || []).length + (source.untracked || []).length;
+      const repoLabel = state.repo ? (state.repo.root_label || "Workspace") + " " + state.repo.path : "";
+      const branchLabel = source.branch || (state.repo && state.repo.branch) || "";
       return h(
-        React.Fragment,
-        null,
+        "div",
+        { className: "hermes-code-source-panel" },
         h(
           "div",
           { className: "hermes-code-repo-row" },
+          h(
+            "div",
+            { className: "hermes-code-repo-top-actions" },
+            h("button", { type: "button", onClick: openSourcePicker }, "Open Source"),
+            sourceIconButton("Refresh sources", "↻", function () { loadRepos(false); }, state.sourceBusy),
+            sourceIconButton("Close source", "×", closeRepo, !state.repo)
+          ),
           h(
             "select",
             {
@@ -1232,43 +1296,27 @@
             state.repos.map(function (repo) {
               return h("option", { key: repoKey(repo), value: repoKey(repo) }, (repo.root_label || "Workspace") + " " + repo.path + "  " + repo.branch);
             })
-          ),
-          h("button", { type: "button", onClick: openSourcePicker }, "Open Source"),
-          h("button", { type: "button", onClick: function () { loadRepos(false); } }, "Refresh"),
-          h("button", { type: "button", onClick: closeRepo, disabled: !state.repo }, "Close")
+          )
         ),
         state.repo
           ? h(
               React.Fragment,
               null,
-              h("div", { className: "hermes-code-source-head" }, h("strong", null, (state.repo.root_label || "Workspace") + " " + state.repo.path), h("span", null, source.branch || state.repo.branch || "")),
               h(
                 "div",
                 { className: "hermes-code-source-actions" },
-                h("button", { type: "button", onClick: function () { loadSource(state.repo); }, disabled: state.sourceBusy }, "Refresh"),
-                h("button", { type: "button", onClick: function () { gitAction("/git/stage", { all: true }); }, disabled: state.sourceBusy || !hasChanges }, "Stage All"),
-                h("button", { type: "button", onClick: function () { gitAction("/git/unstage", { all: true }); }, disabled: state.sourceBusy || !hasStaged }, "Unstage All"),
-                h("button", {
-                  type: "button",
-                  onClick: function () {
+                sourceIconButton("Refresh status", "↻", function () { loadSource(state.repo); }, state.sourceBusy),
+                sourceIconButton("Stage all", "+", function () { gitAction("/git/stage", { all: true }); }, state.sourceBusy || !hasChanges),
+                sourceIconButton("Unstage all", "-", function () { gitAction("/git/unstage", { all: true }); }, state.sourceBusy || !hasStaged),
+                sourceIconButton("Pull", "↓", function () {
                     gitAction("/git/pull", { confirm: true }, "Pull with fast-forward only?");
-                  },
-                  disabled: state.sourceBusy,
-                }, "Pull"),
-                h("button", {
-                  type: "button",
-                  onClick: function () {
+                  }, state.sourceBusy),
+                sourceIconButton("Push", "↑", function () {
                     gitAction("/git/push", { confirm: true }, "Push committed changes to the configured remote?");
-                  },
-                  disabled: state.sourceBusy,
-                }, "Push"),
-                h("button", {
-                  type: "button",
-                  onClick: function () {
+                  }, state.sourceBusy),
+                sourceIconButton("Discard all", "!", function () {
                     gitAction("/git/discard", { all: true, confirm: true }, "Discard all unstaged and untracked changes?");
-                  },
-                  disabled: state.sourceBusy || !hasChanges,
-                }, "Discard All")
+                  }, state.sourceBusy || !hasChanges, "danger")
               ),
               h(
                 "div",
@@ -1294,7 +1342,8 @@
                     renderChangeGroup("Staged", source.staged || [], "staged"),
                     renderChangeGroup("Changes", source.unstaged || [], "unstaged"),
                     renderChangeGroup("Untracked", source.untracked || [], "untracked")
-                  )
+                  ),
+              h("div", { className: "hermes-code-source-head" }, h("strong", null, repoLabel), h("span", null, branchLabel))
             )
           : h(
               "div",

@@ -423,7 +423,7 @@ def _resolve_admin_password_arg(args: argparse.Namespace) -> tuple[str, str]:
             raise SystemExit(f"failed to read admin password file: {exc}") from exc
         return password, "file"
     if args.generate:
-        password = generate_raw_token(24)
+        password = generate_raw_token()
         if not args.write_password_file:
             raise SystemExit("--generate requires --write-password-file so the password is not printed or lost")
         _write_private_text(Path(args.write_password_file).expanduser(), password)

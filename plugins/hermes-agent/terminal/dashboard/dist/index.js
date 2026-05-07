@@ -8,6 +8,7 @@
   const useRef = SDK.hooks.useRef || React.useRef;
   const useState = SDK.hooks.useState;
   const VENDOR_BASE = "/dashboard-plugins/" + PLUGIN + "/dist/vendor/";
+  const SELECTED_SESSION_STORAGE_KEY = "hermes-terminal.selectedSessionId";
 
   let terminalVendorPromise = null;
 
@@ -132,6 +133,24 @@
     return !!error && (error.status === 404 || message.indexOf("Terminal session was not found") !== -1);
   }
 
+  function storedSelectedSessionId() {
+    try {
+      return String(window.localStorage.getItem(SELECTED_SESSION_STORAGE_KEY) || "");
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function rememberSelectedSessionId(sessionId) {
+    try {
+      if (sessionId) {
+        window.localStorage.setItem(SELECTED_SESSION_STORAGE_KEY, sessionId);
+      } else {
+        window.localStorage.removeItem(SELECTED_SESSION_STORAGE_KEY);
+      }
+    } catch (_error) {}
+  }
+
   function scrollbackLines(status) {
     const value = Number(status && status.limits && status.limits.scrollback_lines);
     return Number.isFinite(value) && value > 0 ? value : 10000;
@@ -190,6 +209,7 @@
     const resizeSignatureRef = useRef("");
     const selectionRef = useRef("");
     const freshSessionRef = useRef({});
+    const focusSessionRef = useRef("");
 
     useEffect(function () {
       stateRef.current = state;
@@ -201,17 +221,21 @@
       });
     }
 
-    function loadSessions(selectId) {
+    function loadSessions(selectId, options) {
+      const opts = options || {};
       const explicitSelection = arguments.length > 0;
+      const callSelectedId = stateRef.current.selectedId || "";
       return fetchJSON(api("/sessions"))
         .then(function (payload) {
+          if (!opts.force && callSelectedId !== (stateRef.current.selectedId || "")) return null;
           const sessions = payload.sessions || [];
-          const requestedId = explicitSelection ? selectId || "" : stateRef.current.selectedId || "";
+          const requestedId = explicitSelection ? selectId || "" : stateRef.current.selectedId || storedSelectedSessionId();
           const hasRequested = requestedId && sessions.some(function (session) { return session.id === requestedId; });
           const nextId = hasRequested ? requestedId : (sessions[0] && sessions[0].id) || "";
+          rememberSelectedSessionId(nextId);
           merge({ sessions: sessions, selectedId: nextId, errorMessage: "" });
           if (nextId) {
-            return loadSession(nextId);
+            return loadSession(nextId, { force: !!opts.force });
           }
           merge({ selected: null });
           return null;
@@ -221,21 +245,32 @@
         });
     }
 
-    function loadSession(sessionId) {
+    function loadSession(sessionId, options) {
+      const opts = options || {};
       if (!sessionId) return Promise.resolve(null);
       return fetchJSON(api("/sessions/" + encodeURIComponent(sessionId)))
         .then(function (payload) {
+          if (!opts.force && stateRef.current.selectedId !== sessionId) return payload.session || null;
+          rememberSelectedSessionId(sessionId);
           merge({ selected: payload.session || null, selectedId: sessionId, errorMessage: "" });
           return payload.session || null;
         })
         .catch(function (error) {
           if (isMissingSessionError(error)) {
             merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
-            return loadSessions("");
+            return loadSessions("", { force: true });
           }
           merge({ errorMessage: String(error.message || error) });
           return null;
         });
+    }
+
+    function selectSession(sessionId, options) {
+      if (!sessionId) return Promise.resolve(null);
+      if (options && options.focus) focusSessionRef.current = sessionId;
+      rememberSelectedSessionId(sessionId);
+      merge({ selectedId: sessionId, contextMenu: null });
+      return loadSession(sessionId, { force: true });
     }
 
     function disposeTerminal() {
@@ -268,7 +303,7 @@
         .catch(function (error) {
           if (isMissingSessionError(error)) {
             merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
-            loadSessions("");
+            loadSessions("", { force: true });
             return;
           }
           merge({ errorMessage: String(error.message || error) });
@@ -291,7 +326,7 @@
         .catch(function (error) {
           if (isMissingSessionError(error)) {
             merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
-            loadSessions("");
+            loadSessions("", { force: true });
             return;
           }
           merge({ errorMessage: String(error.message || error) });
@@ -357,6 +392,12 @@
       const current = terminalRef.current || {};
       if (current.term && current.sessionId === session.id) {
         syncTerminalOutput(session);
+        if (focusSessionRef.current === session.id) {
+          focusSessionRef.current = "";
+          try {
+            current.term.focus();
+          } catch (_error) {}
+        }
         return;
       }
       disposeTerminal();
@@ -415,14 +456,17 @@
       terminalRef.current = { term: term, fit: fit, sessionId: session.id, written: "", disposables: disposables, acceptReports: false, allowInitialReports: allowInitialReports };
       fitTerminal();
       syncTerminalOutput(session);
-      term.focus();
+      if (focusSessionRef.current === session.id) {
+        focusSessionRef.current = "";
+        term.focus();
+      }
     }
 
     useEffect(function () {
       SDK.fetchJSON(api("/status"))
         .then(function (status) {
           merge({ loading: false, status: status });
-          return loadSessions("");
+          return loadSessions(storedSelectedSessionId(), { force: true });
         })
         .catch(function () {
           merge({ loading: false, status: { available: false, capabilities: {} } });
@@ -449,6 +493,7 @@
         let timer = null;
         let stream = null;
         let closed = false;
+        const streamSessionId = state.selectedId || "";
 
         function startPolling() {
           if (timer) return;
@@ -457,6 +502,8 @@
             if (selectedId) {
               loadSession(selectedId);
               loadSessions(selectedId);
+            } else {
+              loadSessions();
             }
           }, 1000);
         }
@@ -468,23 +515,25 @@
           state.status.capabilities.streaming_output &&
           window.EventSource
         ) {
-          stream = new EventSource(api("/sessions/" + encodeURIComponent(state.selectedId) + "/stream"), { withCredentials: true });
+          stream = new EventSource(api("/sessions/" + encodeURIComponent(streamSessionId) + "/stream"), { withCredentials: true });
           stream.addEventListener("open", function () {
-            if (!closed) merge({ streaming: true });
+            if (!closed && stateRef.current.selectedId === streamSessionId) merge({ streaming: true });
           });
           stream.addEventListener("session", function (event) {
-            if (closed) return;
+            if (closed || stateRef.current.selectedId !== streamSessionId) return;
             try {
               const payload = JSON.parse(event.data || "{}");
-              merge({ selected: payload.session || null, selectedId: stateRef.current.selectedId, streaming: true, errorMessage: "" });
-              loadSessions(stateRef.current.selectedId);
+              const session = payload.session || null;
+              if (!session || session.id !== streamSessionId) return;
+              merge({ selected: session, selectedId: streamSessionId, streaming: true, errorMessage: "" });
+              loadSessions(streamSessionId);
             } catch (_error) {
               startPolling();
             }
           });
           stream.addEventListener("error", function () {
             if (stream) stream.close();
-            if (!closed) merge({ streaming: false });
+            if (!closed && stateRef.current.selectedId === streamSessionId) merge({ streaming: false });
             startPolling();
           });
           startPolling();
@@ -557,7 +606,8 @@
         .then(function (payload) {
           const session = payload.session || {};
           if (session.id) freshSessionRef.current[session.id] = true;
-          return loadSessions(session.id || "");
+          if (session.id) focusSessionRef.current = session.id;
+          return loadSessions(session.id || "", { force: true });
         })
         .catch(function (error) {
           merge({ errorMessage: String(error.message || error) });
@@ -573,7 +623,7 @@
         editingSessionId: target.id,
         editingSessionName: target.name || "Terminal",
       });
-      loadSession(target.id);
+      selectSession(target.id);
     }
 
     function cancelRenameSession() {
@@ -591,7 +641,7 @@
       postJSON("/sessions/" + encodeURIComponent(selectedId) + "/rename", { name: name })
         .then(function () {
           merge({ editingSessionId: "", editingSessionName: "" });
-          return loadSessions(selectedId);
+          return loadSessions(selectedId, { force: true });
         })
         .catch(function (error) {
           merge({ errorMessage: String(error.message || error), editingSessionId: "", editingSessionName: "" });
@@ -605,7 +655,7 @@
       if (folder === null) return;
       postJSON("/sessions/" + encodeURIComponent(selected.id) + "/rename", { folder: folder })
         .then(function () {
-          return loadSessions(selected.id);
+          return loadSessions(selected.id, { force: true });
         })
         .catch(function (error) {
           merge({ errorMessage: String(error.message || error) });
@@ -617,7 +667,7 @@
       if (!selected) return;
       postJSON("/sessions/" + encodeURIComponent(selected.id) + "/rename", { order: Number(selected.order || 0) + delta })
         .then(function () {
-          return loadSessions(selected.id);
+          return loadSessions(selected.id, { force: true });
         })
         .catch(function (error) {
           merge({ errorMessage: String(error.message || error) });
@@ -628,7 +678,8 @@
       postJSON("/sessions/clear-closed", {})
         .then(function () {
           merge({ contextMenu: null, selected: null, selectedId: "", errorMessage: "" });
-          return loadSessions("");
+          rememberSelectedSessionId("");
+          return loadSessions("", { force: true });
         })
         .catch(function (error) {
           merge({ errorMessage: String(error.message || error), contextMenu: null });
@@ -641,7 +692,8 @@
       postJSON("/sessions/" + encodeURIComponent(selected.id) + "/close", { confirm: true })
         .then(function () {
           merge({ confirmClose: null, selected: null, selectedId: "" });
-          return loadSessions("");
+          rememberSelectedSessionId("");
+          return loadSessions("", { force: true });
         })
         .catch(function (error) {
           merge({ confirmClose: null, errorMessage: String(error.message || error) });
@@ -651,8 +703,9 @@
     function openSessionMenu(event, session) {
       event.preventDefault();
       event.stopPropagation();
+      rememberSelectedSessionId(session.id);
       merge({ selected: Object.assign({}, state.selected || {}, session), selectedId: session.id, contextMenu: { session: session, x: event.clientX, y: event.clientY } });
-      loadSession(session.id);
+      loadSession(session.id, { force: true });
     }
 
     function renderSessionMenu() {
@@ -753,10 +806,9 @@
                             onContextMenu: function (event) {
                               openSessionMenu(event, session);
                             },
-                            onClick: function () {
-                              merge({ selectedId: session.id, contextMenu: null });
-                              loadSession(session.id);
-                            },
+	                            onClick: function () {
+	                              selectSession(session.id, { focus: true });
+	                            },
                           },
                           h(
                             "span",

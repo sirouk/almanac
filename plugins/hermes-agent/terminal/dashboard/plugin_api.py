@@ -12,6 +12,7 @@ import signal
 import shlex
 import struct
 import termios
+import threading
 from pathlib import Path
 import shutil
 import subprocess
@@ -63,6 +64,7 @@ _DEFAULT_ROWS = 32
 _DEFAULT_COLS = 132
 _CPR_QUERY = b"\x1b[6n"
 _RUNTIMES: dict[str, dict[str, Any]] = {}
+_STATE_LOCK = threading.RLock()
 
 
 def _cleanup_runtimes() -> None:
@@ -296,16 +298,18 @@ def _answer_terminal_queries(fd: int, chunk: bytes) -> bytes:
 
 
 def _load_sessions() -> dict[str, Any]:
-    payload = _load_json(_sessions_path())
-    sessions = payload.get("sessions")
-    if not isinstance(sessions, list):
-        sessions = []
-    return {"version": _STATE_VERSION, "sessions": [entry for entry in sessions if isinstance(entry, dict)]}
+    with _STATE_LOCK:
+        payload = _load_json(_sessions_path())
+        sessions = payload.get("sessions")
+        if not isinstance(sessions, list):
+            sessions = []
+        return {"version": _STATE_VERSION, "sessions": [entry for entry in sessions if isinstance(entry, dict)]}
 
 
 def _save_sessions(payload: dict[str, Any]) -> None:
-    payload["version"] = _STATE_VERSION
-    _write_json_atomic(_sessions_path(), payload)
+    with _STATE_LOCK:
+        payload["version"] = _STATE_VERSION
+        _write_json_atomic(_sessions_path(), payload)
 
 
 def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) -> dict[str, Any]:
@@ -414,12 +418,40 @@ def _read_runtime(entry: dict[str, Any]) -> bool:
 
 
 def _poll_sessions(payload: dict[str, Any]) -> bool:
-    changed = False
-    for entry in payload["sessions"]:
-        changed = _read_runtime(entry) or changed
-    if changed:
-        _save_sessions(payload)
-    return changed
+    with _STATE_LOCK:
+        changed = False
+        for entry in payload["sessions"]:
+            changed = _read_runtime(entry) or changed
+        if changed:
+            _save_sessions(payload)
+        return changed
+
+
+def _reader_loop(session_id: str) -> None:
+    idle_delay = 0.08
+    while True:
+        with _STATE_LOCK:
+            payload = _load_sessions()
+            try:
+                entry = _find_session(payload, session_id)
+            except HTTPException:
+                return
+            changed = _read_runtime(entry)
+            if changed:
+                _save_sessions(payload)
+            state = str(entry.get("state") or "")
+            if state in {"closed", "exited", "detached"} or not _runtime(session_id):
+                return
+        time.sleep(idle_delay)
+
+
+def _start_reader(session_id: str) -> None:
+    runtime = _runtime(session_id)
+    if not runtime or runtime.get("reader"):
+        return
+    reader = threading.Thread(target=_reader_loop, args=(session_id,), daemon=True, name="terminal-reader-" + session_id[:16])
+    runtime["reader"] = reader
+    reader.start()
 
 
 def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
@@ -552,6 +584,7 @@ def _status_payload() -> dict[str, Any]:
             "streaming_output": available,
             "bounded_scrollback": True,
             "reload_reconnect": available,
+            "background_pty_reader": available,
             "rename_sessions": available,
             "group_sessions": available,
             "reorder_sessions": available,
@@ -591,75 +624,79 @@ async def create_session(request: Request) -> dict[str, Any]:
     if not status_payload["available"]:
         raise HTTPException(status_code=503, detail="Terminal backend is unavailable")
     body = await request.json()
-    payload = _load_sessions()
-    _poll_sessions(payload)
-    if len(_active_sessions(payload)) >= _max_sessions():
-        raise HTTPException(status_code=429, detail="Terminal session limit reached")
-    mode = _clean_session_mode(body.get("mode"))
-    cwd_path, cwd_relative = _resolve_session_cwd(mode, body.get("cwd") or "/")
-    del cwd_path
-    session_id = "term-" + uuid.uuid4().hex[:16]
-    now = _now()
-    entry = {
-        "id": session_id,
-        "name": _clean_name(body.get("name"), "Machine Terminal" if mode == "ssh" else "Hermes TUI" if mode == "tui" else "Terminal"),
-        "folder": _clean_folder(body.get("folder")),
-        "order": int(body.get("order") or len(payload["sessions"])),
-        "cwd": cwd_relative,
-        "shell": _shell_name(),
-        "backend": "managed-pty",
-        "mode": mode,
-        "target": "",
-        "state": "starting",
-        "rows": _clean_int(body.get("rows"), _DEFAULT_ROWS, 8, 200),
-        "cols": _clean_int(body.get("cols"), _DEFAULT_COLS, 20, 400),
-        "created_at": now,
-        "updated_at": now,
-        "exit_code": None,
-        "scrollback": "",
-    }
-    _start_runtime(entry)
-    payload["sessions"].append(entry)
-    _save_sessions(payload)
-    return {"session": _session_payload(entry)}
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        _poll_sessions(payload)
+        if len(_active_sessions(payload)) >= _max_sessions():
+            raise HTTPException(status_code=429, detail="Terminal session limit reached")
+        mode = _clean_session_mode(body.get("mode"))
+        cwd_path, cwd_relative = _resolve_session_cwd(mode, body.get("cwd") or "/")
+        del cwd_path
+        session_id = "term-" + uuid.uuid4().hex[:16]
+        now = _now()
+        entry = {
+            "id": session_id,
+            "name": _clean_name(body.get("name"), "Machine Terminal" if mode == "ssh" else "Hermes TUI" if mode == "tui" else "Terminal"),
+            "folder": _clean_folder(body.get("folder")),
+            "order": int(body.get("order") or len(payload["sessions"])),
+            "cwd": cwd_relative,
+            "shell": _shell_name(),
+            "backend": "managed-pty",
+            "mode": mode,
+            "target": "",
+            "state": "starting",
+            "rows": _clean_int(body.get("rows"), _DEFAULT_ROWS, 8, 200),
+            "cols": _clean_int(body.get("cols"), _DEFAULT_COLS, 20, 400),
+            "created_at": now,
+            "updated_at": now,
+            "exit_code": None,
+            "scrollback": "",
+        }
+        _start_runtime(entry)
+        payload["sessions"].append(entry)
+        _save_sessions(payload)
+        _start_reader(session_id)
+        return {"session": _session_payload(entry)}
 
 
 @router.post("/sessions/{session_id}/resize")
 async def resize_session(session_id: str, request: Request) -> dict[str, Any]:
-    payload = _load_sessions()
-    entry = _find_session(payload, _clean_session_id(session_id))
     body = await request.json()
-    rows = _clean_int(body.get("rows"), _DEFAULT_ROWS, 8, 200)
-    cols = _clean_int(body.get("cols"), _DEFAULT_COLS, 20, 400)
-    entry["rows"] = rows
-    entry["cols"] = cols
-    entry["updated_at"] = _now()
-    runtime = _runtime(session_id)
-    if runtime:
-        runtime["rows"] = rows
-        runtime["cols"] = cols
-        _set_pty_size(int(runtime["fd"]), rows, cols)
-        process: subprocess.Popen[bytes] = runtime["process"]
-        try:
-            os.killpg(process.pid, signal.SIGWINCH)
-        except Exception:
-            pass
-    _poll_sessions(payload)
-    _save_sessions(payload)
-    return {"session": _session_payload(entry)}
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        entry = _find_session(payload, _clean_session_id(session_id))
+        rows = _clean_int(body.get("rows"), _DEFAULT_ROWS, 8, 200)
+        cols = _clean_int(body.get("cols"), _DEFAULT_COLS, 20, 400)
+        entry["rows"] = rows
+        entry["cols"] = cols
+        entry["updated_at"] = _now()
+        runtime = _runtime(session_id)
+        if runtime:
+            runtime["rows"] = rows
+            runtime["cols"] = cols
+            _set_pty_size(int(runtime["fd"]), rows, cols)
+            process: subprocess.Popen[bytes] = runtime["process"]
+            try:
+                os.killpg(process.pid, signal.SIGWINCH)
+            except Exception:
+                pass
+        _poll_sessions(payload)
+        _save_sessions(payload)
+        return {"session": _session_payload(entry)}
 
 
 @router.post("/sessions/clear-closed")
 async def clear_closed_sessions() -> dict[str, Any]:
-    payload = _load_sessions()
-    before = len(payload["sessions"])
-    payload["sessions"] = [
-        entry for entry in payload["sessions"]
-        if str(entry.get("state") or "") not in {"closed", "exited", "detached"}
-    ]
-    removed = before - len(payload["sessions"])
-    _save_sessions(payload)
-    return {"ok": True, "removed": removed, "sessions": [_session_payload(entry, include_scrollback=False) for entry in payload["sessions"]]}
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        before = len(payload["sessions"])
+        payload["sessions"] = [
+            entry for entry in payload["sessions"]
+            if str(entry.get("state") or "") not in {"closed", "exited", "detached"}
+        ]
+        removed = before - len(payload["sessions"])
+        _save_sessions(payload)
+        return {"ok": True, "removed": removed, "sessions": [_session_payload(entry, include_scrollback=False) for entry in payload["sessions"]]}
 
 
 @router.get("/sessions/{session_id}")
@@ -726,77 +763,80 @@ async def stream_session(session_id: str, request: Request) -> StreamingResponse
 
 @router.post("/sessions/{session_id}/input")
 async def send_input(session_id: str, request: Request) -> dict[str, Any]:
-    payload = _load_sessions()
-    entry = _find_session(payload, _clean_session_id(session_id))
-    _poll_sessions(payload)
-    if str(entry.get("state") or "") not in {"starting", "running"}:
-        raise HTTPException(status_code=409, detail="Terminal session is not running")
-    runtime = _runtime(session_id)
-    if not runtime:
-        entry["state"] = "detached"
-        _save_sessions(payload)
-        raise HTTPException(status_code=409, detail="Terminal session is detached")
     body = await request.json()
-    text = str(body.get("input") or "")
-    if not text:
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        entry = _find_session(payload, _clean_session_id(session_id))
+        _poll_sessions(payload)
+        if str(entry.get("state") or "") not in {"starting", "running"}:
+            raise HTTPException(status_code=409, detail="Terminal session is not running")
+        runtime = _runtime(session_id)
+        if not runtime:
+            entry["state"] = "detached"
+            _save_sessions(payload)
+            raise HTTPException(status_code=409, detail="Terminal session is detached")
+        text = str(body.get("input") or "")
+        if not text:
+            return {"session": _session_payload(entry)}
+        encoded = text.encode("utf-8", errors="ignore")
+        if len(encoded) > _MAX_INPUT_BYTES:
+            raise HTTPException(status_code=413, detail="Terminal input is too large")
+        try:
+            os.write(int(runtime["fd"]), encoded)
+        except OSError as exc:
+            _append_scrollback(entry, "\n[terminal input error: " + _redact_text(exc) + "]\n")
+            _save_sessions(payload)
+            raise HTTPException(status_code=503, detail="Terminal input failed")
+        time.sleep(0.05)
+        _poll_sessions(payload)
+        entry = _find_session(payload, session_id)
         return {"session": _session_payload(entry)}
-    encoded = text.encode("utf-8", errors="ignore")
-    if len(encoded) > _MAX_INPUT_BYTES:
-        raise HTTPException(status_code=413, detail="Terminal input is too large")
-    try:
-        os.write(int(runtime["fd"]), encoded)
-    except OSError as exc:
-        _append_scrollback(entry, "\n[terminal input error: " + _redact_text(exc) + "]\n")
-        _save_sessions(payload)
-        raise HTTPException(status_code=503, detail="Terminal input failed")
-    time.sleep(0.05)
-    _poll_sessions(payload)
-    entry = _find_session(payload, session_id)
-    return {"session": _session_payload(entry)}
 
 
 @router.post("/sessions/{session_id}/rename")
 async def rename_session(session_id: str, request: Request) -> dict[str, Any]:
-    payload = _load_sessions()
-    entry = _find_session(payload, _clean_session_id(session_id))
     body = await request.json()
-    if "name" in body:
-        entry["name"] = _clean_name(body.get("name"), "Terminal")
-    if "folder" in body:
-        entry["folder"] = _clean_folder(body.get("folder"))
-    if "order" in body:
-        entry["order"] = int(body.get("order") or 0)
-    entry["updated_at"] = _now()
-    _poll_sessions(payload)
-    _save_sessions(payload)
-    return {"session": _session_payload(entry)}
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        entry = _find_session(payload, _clean_session_id(session_id))
+        if "name" in body:
+            entry["name"] = _clean_name(body.get("name"), "Terminal")
+        if "folder" in body:
+            entry["folder"] = _clean_folder(body.get("folder"))
+        if "order" in body:
+            entry["order"] = int(body.get("order") or 0)
+        entry["updated_at"] = _now()
+        _poll_sessions(payload)
+        _save_sessions(payload)
+        return {"session": _session_payload(entry)}
 
 
 @router.post("/sessions/{session_id}/close")
 async def close_session(session_id: str, request: Request) -> dict[str, Any]:
-    payload = _load_sessions()
-    entry = _find_session(payload, _clean_session_id(session_id))
     body = await request.json()
-    if body.get("confirm") is not True:
-        raise HTTPException(status_code=400, detail="Closing a terminal session requires confirmation")
-    runtime = _runtime(session_id)
-    if runtime:
-        process: subprocess.Popen[bytes] = runtime["process"]
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=2)
-        except Exception:
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        entry = _find_session(payload, _clean_session_id(session_id))
+        if body.get("confirm") is not True:
+            raise HTTPException(status_code=400, detail="Closing a terminal session requires confirmation")
+        runtime = _runtime(session_id)
+        if runtime:
+            process: subprocess.Popen[bytes] = runtime["process"]
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=2)
             except Exception:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+            try:
+                os.close(int(runtime["fd"]))
+            except OSError:
                 pass
-        try:
-            os.close(int(runtime["fd"]))
-        except OSError:
-            pass
-        _RUNTIMES.pop(session_id, None)
-    entry["state"] = "closed"
-    entry["exit_code"] = entry.get("exit_code")
-    _append_scrollback(entry, "\n[terminal session closed]\n")
-    _save_sessions(payload)
-    return {"session": _session_payload(entry)}
+            _RUNTIMES.pop(session_id, None)
+        entry["state"] = "closed"
+        entry["exit_code"] = entry.get("exit_code")
+        _append_scrollback(entry, "\n[terminal session closed]\n")
+        _save_sessions(payload)
+        return {"session": _session_payload(entry)}

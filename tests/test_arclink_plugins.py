@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -1085,6 +1086,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["resize"] is True, str(status))
             expect(status["capabilities"]["browser_cpr_response"] is True, str(status))
             expect(status["capabilities"]["xtermjs_terminal_emulator"] is True, str(status))
+            expect(status["capabilities"]["background_pty_reader"] is True, str(status))
             expect(status["limits"]["scrollback_lines"] == 10000, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
 
@@ -1124,6 +1126,13 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(any(item["id"] == session_id for item in sessions["sessions"]), str(sessions))
             revisited = asyncio.run(terminal_api.get_session(session_id=session_id))
             expect("terminal-proof" in revisited["session"]["scrollback"], revisited["session"]["scrollback"])
+            asyncio.run(
+                terminal_api.send_input(session_id, JsonRequest({"input": "sleep 0.2; printf 'background-proof\\n'\n"}))
+            )
+            time.sleep(0.5)
+            background_payload = terminal_api._load_sessions()
+            background_entry = next(item for item in background_payload["sessions"] if item["id"] == session_id)
+            expect("background-proof" in background_entry["scrollback"], background_entry["scrollback"])
 
             resized = asyncio.run(terminal_api.resize_session(session_id, JsonRequest({"rows": 20, "cols": 100})))
             expect(resized["session"]["rows"] == 20 and resized["session"]["cols"] == 100, str(resized))
@@ -1209,6 +1218,9 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("registerCsiHandler" in body and "acceptReports" in body and "disableStdin" in body, "Terminal UI should answer live cursor reports without replaying stale reports")
     expect("freshSessionRef" in body, "Terminal UI should allow initial TUI cursor negotiation for newly created sessions")
     expect("ResizeObserver" in body and '"/resize"' in body, "Terminal UI should resize the PTY to its browser viewport")
+    expect("SELECTED_SESSION_STORAGE_KEY" in body and "storedSelectedSessionId" in body, "Terminal UI should remember the operator-selected session across refresh/login")
+    expect("streamSessionId" in body and "session.id !== streamSessionId" in body and "stateRef.current.selectedId !== streamSessionId" in body, "Terminal UI should ignore stale output from inactive sessions")
+    expect("focusSessionRef" in body and "term.focus()" in body, "Terminal UI should focus only explicit user-selected sessions")
     expect("isMissingSessionError" in body and "Terminal session was not found" in body, "Terminal UI should quietly recover from cleared or missing selected sessions")
     expect("explicitSelection" in body and "hasRequested" in body, "Terminal UI should reconcile selected sessions against the live session list")
     expect('selected: null, selectedId: "", errorMessage: ""' in body, "Terminal clear-closed should not leave a ghost selected terminal")
@@ -1217,6 +1229,7 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("_CPR_QUERY" in api_body and "browser_cpr_response" in api_body and "xtermjs_terminal_emulator" in api_body, "Terminal API should preserve cursor-position requests for browser-side response")
     expect("_DEFAULT_SCROLLBACK_LINES" in api_body and "TERMINAL_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded browser scrollback limit")
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
+    expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
     expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")

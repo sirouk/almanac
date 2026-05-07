@@ -786,6 +786,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect('"selection"' in body and "Trash Selected" in body and "Restore Selected" in body, "Drive selected group context menu should expose batch actions")
     expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
     expect("function previewKind(item)" in body and 'api("/preview?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/preview routes")
+    expect("function itemKey(item)" in body and "state.selectedPaths[itemKey(item)]" in body, "Drive UI row rendering should not call an undefined selection key helper")
     click_handler = body.split("function handleListItemClick", 1)[1].split("function trashSelected", 1)[0]
     expect("openItem" not in click_handler and "selectListItem(item, event, index, list)" in click_handler, "Drive single-click should select folders instead of opening them")
     expect("onDoubleClick: function ()" in body and "openItem(item);" in body, "Drive double-click should open folder rows")

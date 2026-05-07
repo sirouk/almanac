@@ -202,6 +202,10 @@
       return itemRoot(item) + "|" + (item && item.path ? item.path : "");
     }
 
+    function itemKey(item) {
+      return itemRoot(item) + ":" + (item && item.path ? item.path : "");
+    }
+
     function decorateItems(rootId, items) {
       return (items || []).map(function (item) {
         return Object.assign({}, item, { root: rootId || item.root || state.root });

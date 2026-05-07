@@ -196,6 +196,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
     expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
     expect("--force-recreate dashboard" in body, body)
+    expect("--force-recreate nextcloud" in body, body)
     expect("Refreshed deployment-managed Hermes plugins" in body, body)
     expect("docker_repair_deployment_dashboard_plugin_mounts()" in body, body)
     expect("run-hermes-dashboard-proxy.sh" in body, body)

@@ -79,6 +79,10 @@ describe("Page content smoke checks", () => {
     }
     assert.ok(content.includes("api.userDashboard"), "missing dashboard API call");
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
+    assert.ok(content.includes("ArcLink Drive"), "dashboard should link to ArcLink Drive");
+    assert.ok(content.includes("ArcLink Code"), "dashboard should link to ArcLink Code");
+    assert.ok(!content.includes("Files (Nextcloud)"), "dashboard should not advertise legacy Nextcloud access");
+    assert.ok(!content.includes("Code (code-server)"), "dashboard should not advertise legacy code-server access");
   });
 
   it("Admin page has all required tabs", () => {

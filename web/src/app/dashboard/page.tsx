@@ -306,21 +306,21 @@ export default function DashboardPage() {
               {data.deployments?.map((dep) => {
                 const host = dep.hostname || "";
                 const provisioned = dep.status === "active" || dep.status === "running";
+                const urls = dep.access?.urls || {};
                 const services = [
-                  { name: "Hermes", path: "/hermes" },
-                  { name: "Files (Nextcloud)", path: ":8443" },
-                  { name: "Code (code-server)", path: ":8080" },
-                  { name: "Bot Setup", path: "/bot" },
-                  { name: "Health", path: "/health" },
+                  { name: "Hermes", href: urls.hermes || (provisioned && host ? `https://${host}:8443/` : "") },
+                  { name: "ArcLink Drive", href: urls.files || (provisioned && host ? `https://${host}:8443/drive` : "") },
+                  { name: "ArcLink Code", href: urls.code || (provisioned && host ? `https://${host}:8443/code` : "") },
+                  { name: "Health", href: urls.dashboard || (provisioned && host ? `https://${host}/u/${dep.prefix || dep.deployment_id}` : "") },
                 ];
                 return (
                   <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {services.map((svc) =>
-                        provisioned && host ? (
+                        svc.href ? (
                           <a
                             key={svc.name}
-                            href={`https://${host}${svc.path}`}
+                            href={svc.href}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="rounded border border-border bg-carbon px-3 py-2 text-sm text-signal-orange hover:opacity-80 transition"
@@ -348,15 +348,15 @@ export default function DashboardPage() {
 
           {activeTab === "vault" && data && (
             <div className="space-y-6">
-              <h1 className="font-display text-2xl font-bold">Vault &amp; Files</h1>
+              <h1 className="font-display text-2xl font-bold">ArcLink Drive</h1>
               <p className="text-sm text-soft-white/60">
-                Per-deployment Nextcloud file vault for documents, configs, and persistent storage.
+                Per-deployment workspace and vault access through the authenticated Hermes dashboard.
               </p>
               {data.deployments?.map((dep) => {
                 const host = dep.hostname || "";
                 const provisioned = dep.status === "active" || dep.status === "running";
                 const vaultHealth = dep.service_health?.find((s) => s.service_name === "nextcloud");
-                const vaultUrl = dep.access?.urls?.files || (provisioned && host ? `https://${host}:8443` : "");
+                const vaultUrl = dep.access?.urls?.files || (provisioned && host ? `https://${host}:8443/drive` : "");
                 return (
                   <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -371,7 +371,7 @@ export default function DashboardPage() {
                         <p className="text-xs text-soft-white/60">Access</p>
                         {vaultUrl ? (
                           <a href={vaultUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-signal-orange hover:underline">
-                            Open Files →
+                            Open Drive →
                           </a>
                         ) : (
                           <p className="text-sm text-soft-white/30">Available after provisioning</p>

@@ -1086,6 +1086,10 @@ docker_refresh_deployment_managed_plugins() {
       env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
         docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate dashboard >/dev/null
     fi
+    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq nextcloud; then
+      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate nextcloud >/dev/null
+    fi
     refreshed=$((refreshed + 1))
   done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/compose.yaml' -type f 2>/dev/null | sort)
 

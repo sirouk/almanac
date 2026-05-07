@@ -1,7 +1,7 @@
 {
-  "name": "arclink-drive",
-  "label": "ArcLink Drive",
-  "description": "Native ArcLink file manager for agent knowledge.",
+  "name": "drive",
+  "label": "Drive",
+  "description": "Native file manager for Hermes knowledge and workspace files.",
   "icon": "FolderOpen",
   "version": "1.0.0",
   "tab": {

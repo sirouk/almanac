@@ -22,7 +22,7 @@ deployment ID. Hostnames follow the current code shape:
 
 | Hostname | Service |
 |----------|---------|
-| `u-{prefix}.{base_domain}` | User dashboard with ArcLink Drive and Code plugin routes |
+| `u-{prefix}.{base_domain}` | User dashboard with Drive and Code plugin routes |
 | `hermes-{prefix}.{base_domain}` | Hermes agent gateway |
 
 `ARCLINK_BASE_DOMAIN` sets the base domain. `ARCLINK_EDGE_TARGET` sets the
@@ -44,8 +44,8 @@ Tailscale name can be resolved and certificated. Access URLs are rendered as:
 | URL | Service |
 |-----|---------|
 | `https://{tailscale_dns_name}/u/{prefix}` | User dashboard |
-| `https://{tailscale_dns_name}/u/{prefix}/drive` | ArcLink Drive plugin inside the authenticated dashboard |
-| `https://{tailscale_dns_name}/u/{prefix}/code` | ArcLink Code plugin inside the authenticated dashboard |
+| `https://{tailscale_dns_name}/u/{prefix}/drive` | Drive plugin inside the authenticated dashboard |
+| `https://{tailscale_dns_name}/u/{prefix}/code` | Code plugin inside the authenticated dashboard |
 | `https://{tailscale_dns_name}/u/{prefix}/hermes` | Hermes agent gateway |
 | `https://{tailscale_dns_name}/u/{prefix}/notion/webhook` | Per-deployment Notion callback |
 

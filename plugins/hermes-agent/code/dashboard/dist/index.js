@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const PLUGIN = "arclink-code";
+  const PLUGIN = "code";
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const React = SDK.React;
   const useEffect = SDK.hooks.useEffect;
@@ -131,7 +131,7 @@
       "span",
       {
         className:
-          "arclink-code-fileicon " +
+          "hermes-code-fileicon " +
           (item.kind === "folder" ? "folder" : "file") +
           " " +
           fileKindClass(item) +
@@ -139,7 +139,7 @@
         style: item.kind === "folder" ? null : { "--file-accent": extensionColor(item) },
         title: item.kind === "folder" ? "Folder" : label ? label + " file" : "File",
       },
-      item.kind === "folder" ? null : h("span", { className: "arclink-code-fileext" }, label)
+      item.kind === "folder" ? null : h("span", { className: "hermes-code-fileext" }, label)
     );
   }
 
@@ -452,8 +452,8 @@
 
     function openDroppedTab(event) {
       event.preventDefault();
-      const path = event.dataTransfer && event.dataTransfer.getData("text/arclink-code-path");
-      const root = event.dataTransfer && event.dataTransfer.getData("text/arclink-code-root");
+      const path = event.dataTransfer && event.dataTransfer.getData("text/hermes-code-path");
+      const root = event.dataTransfer && event.dataTransfer.getData("text/hermes-code-root");
       if (!path || path === "/") return;
       openItem({ path: path, root: root || state.root || "workspace", name: basename(path), kind: "file", text: true }, true);
     }
@@ -738,7 +738,7 @@
       return h(
         "div",
         {
-          className: "arclink-code-context-menu",
+          className: "hermes-code-context-menu",
           style: { left: state.contextMenu.x + "px", top: state.contextMenu.y + "px" },
           role: "menu",
         },
@@ -913,40 +913,40 @@
           nodes.push(h("li", { key: "li:" + index }, bullet[1]));
           return;
         }
-        nodes.push(line.trim() ? h("p", { key: "p:" + index }, line) : h("div", { key: "sp:" + index, className: "arclink-code-markdown-space" }));
+        nodes.push(line.trim() ? h("p", { key: "p:" + index }, line) : h("div", { key: "sp:" + index, className: "hermes-code-markdown-space" }));
       });
       flushCode("tail");
-      return h("div", { className: "arclink-code-markdown-preview" }, nodes);
+      return h("div", { className: "hermes-code-markdown-preview" }, nodes);
     }
 
     function renderPreviewBody(file) {
       const kind = file.previewKind || previewKind(file);
       const url = file.previewUrl || previewUrl(file);
       const content = file.previewContent !== undefined ? file.previewContent : state.content;
-      if (file.previewMessage) return h("div", { className: "arclink-code-preview-empty" }, file.previewMessage);
+      if (file.previewMessage) return h("div", { className: "hermes-code-preview-empty" }, file.previewMessage);
       if (kind === "markdown") return renderMarkdownPreview(content);
-      if (kind === "text") return h("pre", { className: "arclink-code-text-preview" }, content || "");
+      if (kind === "text") return h("pre", { className: "hermes-code-text-preview" }, content || "");
       if (kind === "pdf") {
         return h(
           "object",
-          { className: "arclink-code-pdf-preview", data: url, type: "application/pdf" },
+          { className: "hermes-code-pdf-preview", data: url, type: "application/pdf" },
           h("a", { href: url, target: "_blank", rel: "noreferrer" }, "Open PDF")
         );
       }
-      if (kind === "image") return h("img", { className: "arclink-code-media-preview", src: url, alt: file.name || "Preview" });
-      if (kind === "audio") return h("audio", { className: "arclink-code-audio-preview", src: url, controls: true });
-      if (kind === "video") return h("video", { className: "arclink-code-media-preview", src: url, controls: true });
-      return h("div", { className: "arclink-code-preview-empty" }, "Preview unavailable");
+      if (kind === "image") return h("img", { className: "hermes-code-media-preview", src: url, alt: file.name || "Preview" });
+      if (kind === "audio") return h("audio", { className: "hermes-code-audio-preview", src: url, controls: true });
+      if (kind === "video") return h("video", { className: "hermes-code-media-preview", src: url, controls: true });
+      return h("div", { className: "hermes-code-preview-empty" }, "Preview unavailable");
     }
 
     function renderCodePreview(file) {
       const kind = file.previewKind || previewKind(file);
       return h(
         "div",
-        { className: "arclink-code-preview" },
+        { className: "hermes-code-preview" },
         h(
           "div",
-          { className: "arclink-code-preview-head" },
+          { className: "hermes-code-preview-head" },
           h("strong", null, kind === "markdown" ? "Markdown Preview" : kind ? kind.charAt(0).toUpperCase() + kind.slice(1) + " Preview" : "Preview"),
           h("span", null, file.name || basename(file.path)),
           canPreviewFile(file)
@@ -961,10 +961,10 @@
       if (!state.previewFullscreen || !state.openFile) return null;
       return h(
         "div",
-        { className: "arclink-code-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
+        { className: "hermes-code-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
         h(
           "div",
-          { className: "arclink-code-preview-fullbar" },
+          { className: "hermes-code-preview-fullbar" },
           h("strong", null, state.openFile.name || basename(state.openFile.path)),
           h("button", { type: "button", onClick: function () { patch({ previewFullscreen: false }); } }, "Close")
         ),
@@ -975,20 +975,20 @@
     function renderDiff(diff) {
       return h(
         "div",
-        { className: "arclink-code-diff" },
+        { className: "hermes-code-diff" },
         h(
           "div",
-          { className: "arclink-code-diff-head" },
+          { className: "hermes-code-diff-head" },
           h("strong", null, diff.path),
           h("span", null, diff.mode)
         ),
         h(
           "div",
-          { className: "arclink-code-diff-panes" },
+          { className: "hermes-code-diff-panes" },
           h("pre", null, diff.before || ""),
           h("pre", null, diff.after || "")
         ),
-        h("pre", { className: "arclink-code-diff-unified" }, diff.diff || "No text diff available")
+        h("pre", { className: "hermes-code-diff-unified" }, diff.diff || "No text diff available")
       );
     }
 
@@ -1013,25 +1013,25 @@
         const displayName = item.path === "/" ? (item.name || item.root_label || "Root") : item.name;
         return h(
           "div",
-          { key: itemKey(item), className: "arclink-code-tree-node-wrap" },
+          { key: itemKey(item), className: "hermes-code-tree-node-wrap" },
           h(
             "div",
             {
-              className: "arclink-code-item arclink-code-tree-node " + (isSelected ? "selected" : ""),
+              className: "hermes-code-item hermes-code-tree-node " + (isSelected ? "selected" : ""),
               draggable: item.path !== "/",
               onContextMenu: function (event) {
                 openContextMenu(event, item);
               },
               onDragStart: function (event) {
-                event.dataTransfer.setData("text/arclink-code-path", item.path);
-                event.dataTransfer.setData("text/arclink-code-root", root);
+                event.dataTransfer.setData("text/hermes-code-path", item.path);
+                event.dataTransfer.setData("text/hermes-code-root", root);
               },
               onDragOver: function (event) {
                 if (item.kind === "folder") event.preventDefault();
               },
               onDrop: function (event) {
-                const sourcePath = event.dataTransfer.getData("text/arclink-code-path");
-                const sourceRoot = event.dataTransfer.getData("text/arclink-code-root") || root;
+                const sourcePath = event.dataTransfer.getData("text/hermes-code-path");
+                const sourceRoot = event.dataTransfer.getData("text/hermes-code-root") || root;
                 if (!sourcePath || item.kind !== "folder" || sourcePath === item.path || sourceRoot !== root) return;
                 event.preventDefault();
                 fileOperation(
@@ -1045,7 +1045,7 @@
               "button",
               {
                 type: "button",
-                className: "arclink-code-item-open",
+                className: "hermes-code-item-open",
                 style: { paddingLeft: 0.42 + depth * 0.8 + "rem" },
                 onClick: function () {
                   openItem(item);
@@ -1058,7 +1058,7 @@
                 ? h(
                     "span",
                     {
-                      className: "arclink-code-caret",
+                      className: "hermes-code-caret",
                       onClick: function (event) {
                         event.stopPropagation();
                         toggleExplorerNode(item.path, root);
@@ -1066,13 +1066,13 @@
                     },
                     isExpanded ? "v" : ">"
                   )
-                : h("span", { className: "arclink-code-caret spacer" }),
+                : h("span", { className: "hermes-code-caret spacer" }),
               renderFileIcon(item),
-              h("span", { className: "arclink-code-item-name" }, displayName),
-              h("span", { className: "arclink-code-item-lang" }, item.kind === "folder" ? (children.length ? children.length : "") : item.language)
+              h("span", { className: "hermes-code-item-name" }, displayName),
+              h("span", { className: "hermes-code-item-lang" }, item.kind === "folder" ? (children.length ? children.length : "") : item.language)
             )
           ),
-          isFolder && isExpanded && children.length ? h("div", { className: "arclink-code-tree-children" }, children.map(function (child) { return renderTreeNode(child, depth + 1); })) : null
+          isFolder && isExpanded && children.length ? h("div", { className: "hermes-code-tree-children" }, children.map(function (child) { return renderTreeNode(child, depth + 1); })) : null
         );
       }
       return h(
@@ -1080,22 +1080,22 @@
         null,
         h(
           "div",
-          { className: "arclink-code-treebar" },
+          { className: "hermes-code-treebar" },
           h("button", { type: "button", onClick: function () { loadItems(parentPath(state.path), state.root); }, disabled: state.path === "/" }, "Up"),
           h("button", { type: "button", onClick: function () { loadItems(state.path, state.root); } }, "Refresh")
         ),
-        h("div", { className: "arclink-code-path" }, (state.root === "vault" ? "Vault" : "Workspace") + " " + state.path),
+        h("div", { className: "hermes-code-path" }, (state.root === "vault" ? "Vault" : "Workspace") + " " + state.path),
         h(
           "div",
-          { className: "arclink-code-items", onClick: function () { if (state.contextMenu) patch({ contextMenu: null }); } },
+          { className: "hermes-code-items", onClick: function () { if (state.contextMenu) patch({ contextMenu: null }); } },
           state.loading
-            ? h("div", { className: "arclink-code-empty" }, "Loading")
+            ? h("div", { className: "hermes-code-empty" }, "Loading")
             : (state.status && state.status.roots || []).filter(function (root) { return root.available; }).length
               ? (state.status.roots || []).filter(function (root) { return root.available; }).map(function (root) {
                   const tree = (state.trees || {})[root.id] || { root: root.id, kind: "folder", path: "/", name: root.label, children: [] };
                   return renderTreeNode(Object.assign({}, tree, { root: root.id, name: root.label }), 0);
                 })
-              : h("div", { className: "arclink-code-empty" }, "No files")
+              : h("div", { className: "hermes-code-empty" }, "No files")
         ),
         renderContextMenu()
       );
@@ -1105,7 +1105,7 @@
       return h(
         "form",
         {
-          className: "arclink-code-search",
+          className: "hermes-code-search",
           onSubmit: function (event) {
             event.preventDefault();
             runSearch(state.searchQuery);
@@ -1124,9 +1124,9 @@
     function renderSearch() {
       return h(
         "div",
-        { className: "arclink-code-search-results" },
+        { className: "hermes-code-search-results" },
         state.searchBusy
-          ? h("div", { className: "arclink-code-empty" }, "Searching")
+          ? h("div", { className: "hermes-code-empty" }, "Searching")
           : state.searchResults.length
             ? state.searchResults.map(function (item) {
                 return h(
@@ -1134,7 +1134,7 @@
                   {
                     key: itemKey(item),
                     type: "button",
-                    className: "arclink-code-search-result",
+                    className: "hermes-code-search-result",
                     onClick: function () {
                       openItem(item);
                     },
@@ -1144,7 +1144,7 @@
                   h("small", null, item.match || "")
                 );
               })
-            : h("div", { className: "arclink-code-empty" }, "No search results")
+            : h("div", { className: "hermes-code-empty" }, "No search results")
       );
     }
 
@@ -1152,8 +1152,8 @@
       const sorted = changes.slice().sort(changeSort);
       return h(
         "section",
-        { className: "arclink-code-source-group" },
-        h("div", { className: "arclink-code-source-group-title" }, h("span", null, title), h("strong", null, sorted.length)),
+        { className: "hermes-code-source-group" },
+        h("div", { className: "hermes-code-source-group-title" }, h("span", null, title), h("strong", null, sorted.length)),
         sorted.length
           ? sorted.map(function (change) {
               const dir = dirname(change.path);
@@ -1162,22 +1162,22 @@
                 {
                   key: title + ":" + change.path + ":" + change.status,
                   type: "button",
-                  className: "arclink-code-change",
+                  className: "hermes-code-change",
                   onClick: function () {
                     openChange(change);
                   },
                 },
-                h("span", { className: "arclink-code-change-status" }, change.status.trim() || change.status),
+                h("span", { className: "hermes-code-change-status" }, change.status.trim() || change.status),
                 h(
                   "span",
-                  { className: "arclink-code-change-name" },
+                  { className: "hermes-code-change-name" },
                   dir ? h("small", null, dir + "/") : null,
                   h("span", null, basename(change.path)),
                   change.old_path ? h("small", null, " from " + change.old_path) : null
                 ),
                 h(
                   "span",
-                  { className: "arclink-code-change-actions" },
+                  { className: "hermes-code-change-actions" },
                   mode === "staged"
                     ? h("span", { onClick: function (event) { event.stopPropagation(); gitAction("/git/unstage", { path: change.path }); } }, "-")
                     : h("span", { onClick: function (event) { event.stopPropagation(); gitAction("/git/stage", { path: change.path }); } }, "+"),
@@ -1203,7 +1203,7 @@
                 )
               );
             })
-          : h("div", { className: "arclink-code-source-empty" }, "No files")
+          : h("div", { className: "hermes-code-source-empty" }, "No files")
       );
     }
 
@@ -1216,7 +1216,7 @@
         null,
         h(
           "div",
-          { className: "arclink-code-repo-row" },
+          { className: "hermes-code-repo-row" },
           h(
             "select",
             {
@@ -1241,10 +1241,10 @@
           ? h(
               React.Fragment,
               null,
-              h("div", { className: "arclink-code-source-head" }, h("strong", null, (state.repo.root_label || "Workspace") + " " + state.repo.path), h("span", null, source.branch || state.repo.branch || "")),
+              h("div", { className: "hermes-code-source-head" }, h("strong", null, (state.repo.root_label || "Workspace") + " " + state.repo.path), h("span", null, source.branch || state.repo.branch || "")),
               h(
                 "div",
-                { className: "arclink-code-source-actions" },
+                { className: "hermes-code-source-actions" },
                 h("button", { type: "button", onClick: function () { loadSource(state.repo); }, disabled: state.sourceBusy }, "Refresh"),
                 h("button", { type: "button", onClick: function () { gitAction("/git/stage", { all: true }); }, disabled: state.sourceBusy || !hasChanges }, "Stage All"),
                 h("button", { type: "button", onClick: function () { gitAction("/git/unstage", { all: true }); }, disabled: state.sourceBusy || !hasStaged }, "Unstage All"),
@@ -1272,7 +1272,7 @@
               ),
               h(
                 "div",
-                { className: "arclink-code-commit" },
+                { className: "hermes-code-commit" },
                 h("input", {
                   value: state.gitMessage,
                   placeholder: "Commit message",
@@ -1283,11 +1283,11 @@
                 h("button", { type: "button", onClick: commitStaged, disabled: !hasStaged || !state.gitMessage.trim() || state.sourceBusy }, "Commit")
               ),
               state.lastGitResult
-                ? h("div", { className: "arclink-code-last-git-result" }, state.lastGitResult.command + ": " + state.lastGitResult.summary)
+                ? h("div", { className: "hermes-code-last-git-result" }, state.lastGitResult.command + ": " + state.lastGitResult.summary)
                 : null,
-              state.sourceBusy ? h("div", { className: "arclink-code-source-empty" }, "Refreshing") : null,
+              state.sourceBusy ? h("div", { className: "hermes-code-source-empty" }, "Refreshing") : null,
               source.clean
-                ? h("div", { className: "arclink-code-source-empty" }, "No pending changes")
+                ? h("div", { className: "hermes-code-source-empty" }, "No pending changes")
                 : h(
                     React.Fragment,
                     null,
@@ -1298,7 +1298,7 @@
             )
           : h(
               "div",
-              { className: "arclink-code-empty" },
+              { className: "hermes-code-empty" },
               state.repos.length ? "Open a source to view changes" : "No open sources"
             )
       );
@@ -1316,12 +1316,12 @@
         const isSelected = state.sourcePickerPath === item.path && state.sourcePickerRoot === root;
         return h(
           "div",
-          { key: "picker:" + itemKey(item), className: "arclink-code-picker-node-wrap" },
+          { key: "picker:" + itemKey(item), className: "hermes-code-picker-node-wrap" },
           h(
             "button",
             {
               type: "button",
-              className: "arclink-code-picker-node " + (isSelected ? "selected" : ""),
+              className: "hermes-code-picker-node " + (isSelected ? "selected" : ""),
               style: { paddingLeft: 0.4 + depth * 0.8 + "rem" },
               onClick: function () {
                 patch({ sourcePickerRoot: root, sourcePickerPath: item.path, sourcePickerMessage: "" });
@@ -1334,7 +1334,7 @@
               ? h(
                   "span",
                   {
-                    className: "arclink-code-caret",
+                    className: "hermes-code-caret",
                     onClick: function (event) {
                       event.stopPropagation();
                       toggleExplorerNode(item.path, root);
@@ -1342,12 +1342,12 @@
                   },
                   isExpanded ? "v" : ">"
                 )
-              : h("span", { className: "arclink-code-caret spacer" }),
+              : h("span", { className: "hermes-code-caret spacer" }),
             renderFileIcon(Object.assign({}, item, { kind: "folder" })),
-            h("span", { className: "arclink-code-item-name" }, label || item.name || item.path)
+            h("span", { className: "hermes-code-item-name" }, label || item.name || item.path)
           ),
           isExpanded && children.length
-            ? h("div", { className: "arclink-code-picker-children" }, children.map(function (child) {
+            ? h("div", { className: "hermes-code-picker-children" }, children.map(function (child) {
                 return renderPickerNode(child, depth + 1);
               }))
             : null
@@ -1355,25 +1355,25 @@
       }
       return h(
         "div",
-        { className: "arclink-code-modal-backdrop", role: "presentation" },
+        { className: "hermes-code-modal-backdrop", role: "presentation" },
         h(
           "section",
-          { className: "arclink-code-modal", role: "dialog", "aria-modal": "true", "aria-label": "Open source repository" },
+          { className: "hermes-code-modal", role: "dialog", "aria-modal": "true", "aria-label": "Open source repository" },
           h("h2", null, "Open Source"),
           h("p", null, "Choose a Workspace or Vault folder that contains a .git directory."),
           h(
             "div",
-            { className: "arclink-code-picker" },
+            { className: "hermes-code-picker" },
             roots.map(function (root) {
               const tree = (state.trees || {})[root.id] || { root: root.id, kind: "folder", path: "/", name: root.label, children: [] };
               return renderPickerNode(Object.assign({}, tree, { root: root.id, name: root.label }), 0, root.label);
             })
           ),
-          h("div", { className: "arclink-code-picker-path" }, (state.sourcePickerRoot === "vault" ? "Vault" : "Workspace") + " " + (state.sourcePickerPath || "/")),
-          state.sourcePickerMessage ? h("div", { className: "arclink-code-picker-message" }, state.sourcePickerMessage) : null,
+          h("div", { className: "hermes-code-picker-path" }, (state.sourcePickerRoot === "vault" ? "Vault" : "Workspace") + " " + (state.sourcePickerPath || "/")),
+          state.sourcePickerMessage ? h("div", { className: "hermes-code-picker-message" }, state.sourcePickerMessage) : null,
           h(
             "div",
-            { className: "arclink-code-modal-actions" },
+            { className: "hermes-code-modal-actions" },
             h("button", { type: "button", onClick: function () { patch({ sourcePickerOpen: false, sourcePickerMessage: "" }); } }, "Cancel"),
             h("button", { type: "button", onClick: function () { openRepositoryFromPicker(state.sourcePickerPath, state.sourcePickerRoot); }, disabled: state.sourceBusy }, "Open")
           )
@@ -1402,19 +1402,19 @@
 
     return h(
       "section",
-      { className: "arclink-code arclink-code-theme-" + state.theme },
+      { className: "hermes-code hermes-code-theme-" + state.theme },
       h(
         "header",
-        { className: "arclink-code-toolbar" },
+        { className: "hermes-code-toolbar" },
         h(
           "div",
-          { className: "arclink-code-title" },
-          h("h1", null, "ArcLink Code"),
+          { className: "hermes-code-title" },
+          h("h1", null, "Code"),
           h("p", null, status.workspace_root || "Workspace")
         ),
         h(
           "div",
-          { className: "arclink-code-actions" },
+          { className: "hermes-code-actions" },
           h("button", {
             type: "button",
             onClick: function () {
@@ -1426,18 +1426,18 @@
           h("button", { type: "button", onClick: saveFile, disabled: !openFile || !state.dirty || state.busy }, "Save")
         )
       ),
-      state.errorMessage ? h("div", { className: "arclink-code-error" }, state.errorMessage) : null,
+      state.errorMessage ? h("div", { className: "hermes-code-error" }, state.errorMessage) : null,
       status.available
         ? h(
             "div",
-            { className: "arclink-code-main" },
+            { className: "hermes-code-main" },
             h(
               "aside",
-              { className: "arclink-code-tree" },
+              { className: "hermes-code-tree" },
               renderSearchBox(),
               h(
                 "div",
-                { className: "arclink-code-panel-tabs" },
+                { className: "hermes-code-panel-tabs" },
                 h("button", { type: "button", className: state.leftPanel === "explorer" ? "active" : "", onClick: function () { patch({ leftPanel: "explorer" }); } }, "Explorer"),
                 h("button", { type: "button", className: state.leftPanel === "source" ? "active" : "", onClick: function () { patch({ leftPanel: "source" }); } }, "Sources")
               ),
@@ -1445,7 +1445,7 @@
             ),
             h(
               "section",
-              { className: "arclink-code-editor" },
+              { className: "hermes-code-editor" },
               state.diff
                 ? renderDiff(state.diff)
                 : openFile
@@ -1454,13 +1454,13 @@
                     null,
 	                    h(
 	                      "div",
-	                      { className: "arclink-code-tab" },
+	                      { className: "hermes-code-tab" },
 	                      h(
 	                        "div",
 	                        {
-	                          className: "arclink-code-tab-list",
+	                          className: "hermes-code-tab-list",
 	                          onDragOver: function (event) {
-	                            if (event.dataTransfer && event.dataTransfer.types && Array.prototype.slice.call(event.dataTransfer.types).indexOf("text/arclink-code-path") !== -1) {
+	                            if (event.dataTransfer && event.dataTransfer.types && Array.prototype.slice.call(event.dataTransfer.types).indexOf("text/hermes-code-path") !== -1) {
 	                              event.preventDefault();
 	                            }
 	                          },
@@ -1472,13 +1472,13 @@
 	                            "span",
 	                            {
 	                              key: itemKey(tab),
-	                              className: "arclink-code-tab-item " + (itemKey(openFile) === itemKey(tab) ? "active" : "") + (tab.pinned ? " pinned" : " preview"),
+	                              className: "hermes-code-tab-item " + (itemKey(openFile) === itemKey(tab) ? "active" : "") + (tab.pinned ? " pinned" : " preview"),
 	                            },
 	                            h(
 	                              "button",
 	                              {
 	                                type: "button",
-	                                className: "arclink-code-tab-button",
+	                                className: "hermes-code-tab-button",
 	                                title: tab.pinned ? "Pinned tab" : "Preview tab. Double-click to pin.",
 	                                onClick: function () {
 	                                  openItem({ root: itemRoot(tab), path: tab.path, name: tab.name, kind: "file", text: true });
@@ -1494,7 +1494,7 @@
 	                              "button",
 	                              {
 	                                type: "button",
-	                                className: "arclink-code-tab-close",
+	                                className: "hermes-code-tab-close",
 	                                "aria-label": "Close " + tab.name,
 	                                onClick: function (event) {
 	                                  closeTab(tab, event);
@@ -1509,7 +1509,7 @@
 	                    ),
 	                    h(
 	                      "div",
-	                      { className: "arclink-code-save-note" },
+	                      { className: "hermes-code-save-note" },
 	                      h("span", null, "Auto-save is off. Save writes only when you click Save or press Cmd/Ctrl+S."),
 	                      canPreviewFile(openFile) && openFile.editable !== false
 	                        ? h("button", { type: "button", onClick: togglePreviewMode }, openFile.previewMode ? "Edit" : "Preview")
@@ -1521,7 +1521,7 @@
 	                    openFile.editable === false || openFile.previewMode
                       ? renderCodePreview(openFile)
                       : h("textarea", {
-                          className: "arclink-code-textarea",
+                          className: "hermes-code-textarea",
                           spellCheck: "false",
                           value: state.content,
                           onChange: function (event) {
@@ -1537,17 +1537,17 @@
                           },
                         })
                   )
-                : h("div", { className: "arclink-code-empty full" }, "Open a file"),
+                : h("div", { className: "hermes-code-empty full" }, "Open a file"),
               h(
                 "div",
-                { className: "arclink-code-statusbar" },
+                { className: "hermes-code-statusbar" },
                 h("span", null, openFile ? openFile.language || "plaintext" : "No file"),
                 h("span", null, state.repo ? (state.repo.root_label || "Workspace") + " " + state.repo.path : "No repository"),
                 h("span", null, state.dirty ? "Dirty" : "Manual save")
               )
             )
           )
-        : h("div", { className: "arclink-code-empty full" }, "ArcLink Code is not available"),
+        : h("div", { className: "hermes-code-empty full" }, "Code is not available"),
       renderSourcePicker(),
       renderFullscreenPreview()
     );

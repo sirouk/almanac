@@ -50,7 +50,7 @@ Per-pod services:
 - Memory synthesis and hot memory stubs through managed context
 - Skills lane for installable and upgradeable agent capabilities
 - Nextcloud files UI for vault/files
-- ArcLink Code dashboard plugin
+- Code dashboard plugin
 - Private bot gateway for the user's agent
 - Notion integration with webhook verification and dashboard-secret handling
 - Private GitHub backup for Hermes home and configuration snapshots
@@ -119,7 +119,7 @@ Hermes Agent - I give each operator a private assistant with memory, skills, and
 SOTA Model Rails - I start on Chutes and keep BYOK lanes open for the frontier models you trust.
 qmd Retrieval - I keep the vault searchable so agents can pull the right context fast.
 Managed Memory - I keep lightweight memory stubs hot so the agent stays oriented.
-Files & Code - I wire in ArcLink Drive and ArcLink Code so your agent has hands, not just words.
+Files & Code - I wire in Drive and Code so your agent has hands, not just words.
 Health & Ops - I watch DNS, billing, provisioning, and services so the launch path stays visible.
 ```
 

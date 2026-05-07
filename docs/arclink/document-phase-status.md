@@ -16,10 +16,10 @@ and documentation rather than adding brittle inventory counts.
 | File | Change | Rationale |
 | --- | --- | --- |
 | `docs/API_REFERENCE.md` | Added missing `GET /openapi.json` (public) and `GET /admin/scale-operations` (admin) routes; added scale-operations to the web client integration table | These routes exist in the hosted API `_ROUTES` dict but were absent from the reference doc |
-| `docs/arclink/architecture.md` | Added 6 missing modules to the module map (`arclink_boundary`, `arclink_host_readiness`, `arclink_diagnostics`, `arclink_live_runner`, `arclink_live_journey`, `arclink_evidence`); updated arclink-terminal description from "scaffolded only" to managed-pty persistent sessions with same-origin SSE streaming and polling fallback; expanded the route table from representative rows to the canonical hosted API route catalog matching `_ROUTES` in `arclink_hosted_api.py`; fixed stale route paths (`/admin/login` -> `/auth/admin/login`, `/stripe/webhook` -> `/webhooks/stripe`) | Module map and route table were incomplete and had path discrepancies vs. the actual code |
+| `docs/arclink/architecture.md` | Added 6 missing modules to the module map (`arclink_boundary`, `arclink_host_readiness`, `arclink_diagnostics`, `arclink_live_runner`, `arclink_live_journey`, `arclink_evidence`); updated terminal plugin description from "scaffolded only" to managed-pty persistent sessions with same-origin SSE streaming and polling fallback; expanded the route table from representative rows to the canonical hosted API route catalog matching `_ROUTES` in `arclink_hosted_api.py`; fixed stale route paths (`/admin/login` -> `/auth/admin/login`, `/stripe/webhook` -> `/webhooks/stripe`) | Module map and route table were incomplete and had path discrepancies vs. the actual code |
 | `docs/arclink/document-phase-status.md` | Replaced prior status with this current audit | Prior status described the workspace plugin pass, not the current alignment audit |
 | `PROMPT_document.md` and `ralphie.sh` | Strengthened the document phase prompt so it self-directs from repo context and avoids interactive "what should I document?" stalls | Ralphie document attempt 1 produced no artifact; future document phases should inspect plan/backlog/docs and either update docs or record why they are current |
-| `plugins/hermes-agent/arclink-terminal/README.md` | Updated Terminal transport notes for same-origin SSE streaming with polling fallback | Terminal now matches the desired persistent, kept-current dashboard session behavior more closely |
+| `plugins/hermes-agent/terminal/README.md` | Updated Terminal transport notes for same-origin SSE streaming with polling fallback | Terminal now matches the desired persistent, kept-current dashboard session behavior more closely |
 | `tests/test_arclink_plugins.py` | Updated Terminal status/UI assertions for `streaming_output`, SSE mode, and polling fallback | Tests now lock the streaming terminal contract instead of the old polling-only contract |
 
 ### Files Updated (Prior Passes)
@@ -64,7 +64,7 @@ and documentation rather than adding brittle inventory counts.
   host, and the selected Cloudflare-domain or Tailscale ingress mode).
 - The action worker has code-level batch and stale-recovery entrypoints, but no
   documented production service/timer unit is live yet.
-- ArcLink Terminal has managed-pty persistent sessions with same-origin SSE
+- Terminal has managed-pty persistent sessions with same-origin SSE
   output streaming and bounded polling fallback. tmux backend validation
   remains future work.
 

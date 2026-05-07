@@ -267,9 +267,9 @@ class TestWorkspaceProofJourney(unittest.TestCase):
         script = live_runner_mod._browser_runner_script()
         self.assertIn("async function openPluginPage", script)
         self.assertIn("a[href$='/\" + plugin + \"']", script)
-        self.assertIn('openPluginPage(page, "ArcLink Drive", "New Folder")', script)
-        self.assertIn('openPluginPage(page, "ArcLink Code", "Explorer")', script)
-        self.assertIn('openPluginPage(page, "ArcLink Terminal", "Sessions")', script)
+        self.assertIn('openPluginPage(page, "Drive", "New Folder")', script)
+        self.assertIn('openPluginPage(page, "Code", "Explorer")', script)
+        self.assertIn('openPluginPage(page, "Terminal", "Sessions")', script)
         self.assertIn("captureSanitizedScreenshot", script)
         self.assertIn("ARCLINK_WORKSPACE_PROOF_SCREENSHOT_DIR", script)
 

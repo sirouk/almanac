@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const PLUGIN = "arclink-terminal";
+  const PLUGIN = "terminal";
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const React = SDK.React;
   const useEffect = SDK.hooks.useEffect;
@@ -426,7 +426,7 @@
       return h(
         "div",
         {
-          className: "arclink-terminal-context",
+          className: "hermes-terminal-context",
           role: "menu",
           style: { left: state.contextMenu.x + "px", top: state.contextMenu.y + "px" },
           onClick: function (event) {
@@ -457,39 +457,39 @@
     return h(
       "div",
       {
-        className: "arclink-terminal",
+        className: "hermes-terminal",
         onClick: function () {
           if (state.contextMenu) merge({ contextMenu: null });
         },
       },
       h(
         "div",
-        { className: "arclink-terminal-toolbar" },
-        h("div", { className: "arclink-terminal-title" }, h("h1", null, "ArcLink Terminal"), h("p", null, status.backend || "Loading"))
+        { className: "hermes-terminal-toolbar" },
+        h("div", { className: "hermes-terminal-title" }, h("h1", null, "Terminal"), h("p", null, status.backend || "Loading"))
       ),
-      state.errorMessage ? h("div", { className: "arclink-terminal-error" }, state.errorMessage) : null,
+      state.errorMessage ? h("div", { className: "hermes-terminal-error" }, state.errorMessage) : null,
       state.loading
-        ? h("div", { className: "arclink-terminal-empty full" }, "Loading")
+        ? h("div", { className: "hermes-terminal-empty full" }, "Loading")
         : h(
             "div",
-            { className: "arclink-terminal-main" },
+            { className: "hermes-terminal-main" },
             h(
               "aside",
-              { className: "arclink-terminal-list" },
+              { className: "hermes-terminal-list" },
               h(
                 "div",
-                { className: "arclink-terminal-section" },
+                { className: "hermes-terminal-section" },
                 h("span", null, "Sessions"),
                 h(
                   "div",
-                  { className: "arclink-terminal-session-tools" },
+                  { className: "hermes-terminal-session-tools" },
                   h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !(capabilities.machine_terminal_sessions || capabilities.ssh_sessions) }, "+SSH"),
                   h("button", { type: "button", title: "Open Hermes TUI", onClick: function () { createSession("tui"); }, disabled: !capabilities.hermes_tui_sessions }, "+ TUI")
                 )
               ),
               h(
                 "div",
-                { className: "arclink-terminal-list-actions" },
+                { className: "hermes-terminal-list-actions" },
                 h(
                   "button",
                   {
@@ -506,15 +506,15 @@
                 ? grouped.map(function (group) {
                     return h(
                       "div",
-                      { key: group.folder, className: "arclink-terminal-group" },
-                      group.folder && group.folder !== "Sessions" ? h("div", { className: "arclink-terminal-group-label" }, group.folder) : null,
+                      { key: group.folder, className: "hermes-terminal-group" },
+                      group.folder && group.folder !== "Sessions" ? h("div", { className: "hermes-terminal-group-label" }, group.folder) : null,
                       group.sessions.map(function (session) {
                         return h(
                           "button",
                           {
                             key: session.id,
                             type: "button",
-                            className: "arclink-terminal-session" + (session.id === state.selectedId ? " selected" : ""),
+                            className: "hermes-terminal-session" + (session.id === state.selectedId ? " selected" : ""),
                             onContextMenu: function (event) {
                               openSessionMenu(event, session);
                             },
@@ -524,10 +524,10 @@
                               focusScreen();
                             },
                           },
-                          h("span", { className: "arclink-terminal-session-top" },
+                          h("span", { className: "hermes-terminal-session-top" },
                             state.editingSessionId === session.id
                               ? h("input", {
-                                  className: "arclink-terminal-session-rename",
+                                  className: "hermes-terminal-session-rename",
                                   value: state.editingSessionName,
                                   autoFocus: true,
                                   onClick: function (event) {
@@ -552,7 +552,7 @@
                                 })
                               : h("strong", null, session.name || "Terminal"),
                             h("span", {
-                              className: "arclink-terminal-session-close",
+                              className: "hermes-terminal-session-close",
                               onClick: function (event) {
                                 event.stopPropagation();
                                 merge({ confirmClose: session });
@@ -564,17 +564,17 @@
                       })
                     );
                   })
-                : h("div", { className: "arclink-terminal-empty" }, status.available ? "No sessions" : "Terminal unavailable")
+                : h("div", { className: "hermes-terminal-empty" }, status.available ? "No sessions" : "Terminal unavailable")
             ),
             h(
               "section",
-              { className: "arclink-terminal-pane" },
+              { className: "hermes-terminal-pane" },
               selected
                 ? h(
                     "pre",
                     {
                       ref: screenRef,
-                      className: "arclink-terminal-screen",
+                      className: "hermes-terminal-screen",
                       "data-session-state": selected.state || "",
                       tabIndex: 0,
                       onKeyDown: handleTerminalKey,
@@ -584,12 +584,12 @@
                       },
                     },
                     displayScrollback(selected.scrollback || "$ "),
-                    ["running", "starting"].indexOf(selected.state) !== -1 ? h("span", { className: "arclink-terminal-cursor" }, " ") : null
+                    ["running", "starting"].indexOf(selected.state) !== -1 ? h("span", { className: "hermes-terminal-cursor" }, " ") : null
                   )
-                : h("pre", { ref: screenRef, className: "arclink-terminal-screen muted", tabIndex: 0 }, status.available ? "$ " : "Terminal backend unavailable"),
+                : h("pre", { ref: screenRef, className: "hermes-terminal-screen muted", tabIndex: 0 }, status.available ? "$ " : "Terminal backend unavailable"),
               h(
                 "div",
-                { className: "arclink-terminal-facts" },
+                { className: "hermes-terminal-facts" },
                 h("span", null, "Workspace: " + (status.workspace_root || "")),
                 h("span", null, "Shell: " + (status.shell || "sh")),
                 h("span", null, "Transport: " + (state.streaming ? "sse" : ((status.transport && status.transport.mode) || "polling"))),
@@ -602,15 +602,15 @@
       state.confirmClose
         ? h(
             "div",
-            { className: "arclink-terminal-confirm-backdrop", role: "presentation" },
+            { className: "hermes-terminal-confirm-backdrop", role: "presentation" },
             h(
               "div",
-              { className: "arclink-terminal-confirm", role: "dialog", "aria-modal": "true", "aria-label": "Close terminal session" },
+              { className: "hermes-terminal-confirm", role: "dialog", "aria-modal": "true", "aria-label": "Close terminal session" },
               h("h2", null, "Close Session"),
               h("p", null, state.confirmClose.name || "Terminal"),
               h(
                 "div",
-                { className: "arclink-terminal-confirm-actions" },
+                { className: "hermes-terminal-confirm-actions" },
                 h("button", { type: "button", onClick: function () { merge({ confirmClose: null }); } }, "Cancel"),
                 h("button", { type: "button", className: "danger", onClick: closeSelected }, "Close")
               )

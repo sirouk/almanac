@@ -34,9 +34,9 @@ arclink_live_journey.py     Ordered live E2E journey steps (credential-gated)
 arclink_evidence.py         Evidence collection and template helpers for live proof
 plugins/hermes-agent/
   arclink-managed-context/  Managed agent context and ArcLink MCP bootstrap injection
-  arclink-drive/            Hermes dashboard file manager for vault/workspace access
-  arclink-code/             Hermes dashboard native code workspace and git surface
-  arclink-terminal/         Managed-pty persistent-session terminal surface
+  drive/            Hermes dashboard file manager for vault/workspace access
+  code/             Hermes dashboard native code workspace and git surface
+  terminal/         Managed-pty persistent-session terminal surface
 ```
 
 Python modules live under `python/` and import from `arclink_control.py` for
@@ -145,19 +145,19 @@ per-deployment containers rendered by the ArcLink provisioning layer.
 ArcLink adds dashboard workspaces through Hermes plugins rather than Hermes
 core patches:
 
-- `arclink-drive` owns the native file-manager surface. It prefers a mounted
+- `drive` owns the native file-manager surface. It prefers a mounted
   local vault, can use sanitized Nextcloud WebDAV access state when available,
   and exposes browse, bounded preview, download, upload, folder creation,
   rename, move, trash, and restore contracts. The local backend keeps
-  trash recoverable under `.arclink-trash`; WebDAV delete is direct provider
+  trash recoverable under `.drive-trash`; WebDAV delete is direct provider
   delete and must remain UI-confirmed.
-- `arclink-code` owns the native code workspace. It uses
-  `ARCLINK_CODE_WORKSPACE_ROOT`, guards text saves with a SHA-256 expected hash,
+- `code` owns the native code workspace. It uses
+  `CODE_WORKSPACE_ROOT`, guards text saves with a SHA-256 expected hash,
   scans bounded workspace depth for git repositories, and exposes source
   control status, stage, unstage, confirmed discard, and commit operations. It
   remains a lightweight native editor, not a full Monaco/VS Code workbench.
-- `arclink-terminal` owns the native terminal surface. It uses an
-  ArcLink-managed pty backend with stable session ids, persisted metadata,
+- `terminal` owns the native terminal surface. It uses a managed pty backend
+  with stable session ids, persisted metadata,
   bounded scrollback, same-origin SSE output streaming with polling fallback,
   input, rename/folder/reorder controls, confirmation-gated close, sanitized
   errors, and an unrestricted-root startup guard. It is not tmux-backed.
@@ -237,8 +237,8 @@ live-gated behavior.
   execution as a controlled runbook step until live host orchestration lands.
 - Public bots have runtime adapters with fake-mode fallback; live HTTP
   transport requires bot tokens.
-- ArcLink Drive and Code are functional first-generation Hermes plugins, but
-  not yet broad Google Drive or VS Code replacements. ArcLink Terminal has a
+- Drive and Code are functional first-generation Hermes plugins, but
+  not yet broad Google Drive or VS Code replacements. Terminal has a
   managed-pty persistent-session backend with same-origin SSE output streaming
   and bounded polling fallback. The
   workspace Docker/TLS proof runner has passed desktop and mobile checks for

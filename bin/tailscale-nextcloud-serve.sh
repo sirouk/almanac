@@ -232,7 +232,7 @@ fi
 
 detect_tailscale_runtime || true
 
-# ArcLink Drive and Code now live behind the authenticated Hermes dashboard
+# Drive and Code now live behind the authenticated Hermes dashboard
 # plugin surface. Do not publish raw Nextcloud or internal MCP routes through
 # Tailscale Serve; clear the legacy bundle when this host still owns it.
 "$SCRIPT_DIR/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true

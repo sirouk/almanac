@@ -673,8 +673,8 @@ An enrolled user gets:
 - A chat bot lane on Discord or Telegram.
 - User systemd services for refresh, gateway, and the authenticated dashboard
   when enabled.
-- Hermes dashboard plugins for `ArcLink Drive`, `ArcLink Code`, and the
-  managed-pty `ArcLink Terminal`, so native workspace surfaces appear in the
+- Hermes dashboard plugins for `Drive`, `Code`, and the managed-pty
+  `Terminal`, so native workspace surfaces appear in the
   Hermes sidebar without patching Hermes core.
 - A `~/ArcLink` symlink to the shared vault for local shell/editor convenience.
 - `$HERMES_HOME/ArcLink` and `$HERMES_HOME/Vault` symlinks for agent-local

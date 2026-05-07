@@ -109,6 +109,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
+    expect(intent["environment"]["DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
+    expect(intent["environment"]["CODE_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
+    expect(intent["environment"]["TERMINAL_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
+    expect(intent["environment"]["TERMINAL_TUI_COMMAND"] == "/opt/arclink/runtime/hermes-venv/bin/hermes", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CODE_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_TERMINAL_TUI_COMMAND"] == "/opt/arclink/runtime/hermes-venv/bin/hermes", str(intent["environment"]))
@@ -117,7 +121,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
-    for key in ("HERMES_HOME", "VAULT_DIR", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
+    for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
         expect(not intent["environment"][key].startswith("/arcdata/"), f"{key} leaked host root")
     expect(services["nextcloud"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_html"], str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_HOST"] == "nextcloud-db", str(services["nextcloud"]))

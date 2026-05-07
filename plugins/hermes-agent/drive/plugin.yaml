@@ -1,0 +1,8 @@
+name: drive
+version: 1.0.0
+description: Adds Drive to the Hermes dashboard.
+provides_tools: false
+provides_hooks: []
+provides_commands: []
+requires_env: []
+minimum_hermes_version: v2026.4.30

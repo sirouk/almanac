@@ -116,8 +116,8 @@ or secret materialization step. This keeps the dry-run contract executable for
 stock images without leaking plaintext into persisted Compose intent.
 
 Hermes dashboard intent now mounts the deployment vault at `/srv/vault` and the
-code workspace at `/workspace`, then exports `ARCLINK_DRIVE_ROOT` and
-`ARCLINK_CODE_WORKSPACE_ROOT` for ArcLink dashboard plugins. It also exports
+code workspace at `/workspace`, then exports `DRIVE_ROOT` and
+`CODE_WORKSPACE_ROOT` for ArcLink dashboard plugins. It also exports
 role-specific access URLs when ingress metadata is available. Nextcloud
 overwrite settings are derived from the files URL only when the URL is a
 root-level HTTPS host or host:port, avoiding path-prefixed overwrite URLs that
@@ -274,16 +274,16 @@ material in metadata. They do not run live Telegram or Discord clients yet.
 
 ArcLink installs native Hermes dashboard plugins for the agent workspace:
 
-- `arclink-drive` provides `ArcLink Drive`, a file-manager surface over the
+- `drive` provides `Drive`, a file-manager surface over the
   mounted vault or sanitized Nextcloud WebDAV state. Current API capabilities
   include status, listing, bounded text preview, download, upload, folder
   creation, rename, move, local trash, and local restore.
-- `arclink-code` provides `ArcLink Code`, a native workspace browser/editor.
-  It uses `ARCLINK_CODE_WORKSPACE_ROOT`, opens bounded text files, writes
+- `code` provides `Code`, a native workspace browser/editor.
+  It uses `CODE_WORKSPACE_ROOT`, opens bounded text files, writes
   manual saves atomically, rejects stale saves when the expected file hash no
   longer matches, scans for git repositories, and exposes source-control
   status, stage, unstage, confirmed discard, and commit helpers.
-- `arclink-terminal` provides the `ArcLink Terminal` tab and a sanitized status
+- `terminal` provides the `Terminal` tab and a sanitized status
   contract. The shipped backend is ArcLink-managed pty with stable session ids,
   persisted metadata, bounded scrollback, polling output, input, reload
   reconnect, rename/folder/reorder controls, confirmation-gated close, and an

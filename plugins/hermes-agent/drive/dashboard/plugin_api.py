@@ -105,7 +105,7 @@ _TEXT_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
-_TRASH_DIR_NAME = ".arclink-trash"
+_TRASH_DIR_NAME = ".drive-trash"
 _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", _TRASH_DIR_NAME}
 _MAX_TEXT_BYTES = 1_000_000
 _SEARCH_LIMIT = 300
@@ -133,6 +133,14 @@ def _clean_url(value: Any) -> str:
 def _clean_text(value: Any, limit: int = 160) -> str:
     text = " ".join(str(value or "").split())
     return text[:limit]
+
+
+def _env_first(*keys: str) -> str:
+    for key in keys:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _inline_content_disposition(filename: str) -> str:
@@ -164,8 +172,8 @@ def _first_url(payload: dict[str, Any], *keys: str) -> str:
 def _access_state() -> tuple[dict[str, Any], dict[str, Any]]:
     state_dir = _hermes_home() / "state"
     return (
-        _load_json(state_dir / "arclink-web-access.json"),
-        _load_json(state_dir / "arclink-vault-reconciler.json"),
+        _load_json(state_dir / "web-access.json"),
+        _load_json(state_dir / "vault-reconciler.json"),
     )
 
 
@@ -188,7 +196,7 @@ def _nextcloud_surface(access: dict[str, Any], managed: dict[str, Any]) -> dict[
         url = parsed_url
         source = "managed-resource-ref"
     if not url:
-        url = _clean_url(os.environ.get("ARCLINK_NEXTCLOUD_URL"))
+        url = _clean_url(_env_first("NEXTCLOUD_URL", "DRIVE_NEXTCLOUD_URL"))
         source = "env" if url else ""
 
     mount = (
@@ -212,18 +220,16 @@ def _candidate_vault_roots() -> list[Path]:
     home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     candidates: list[Path] = []
     for value in (
-        os.environ.get("ARCLINK_DRIVE_ROOT"),
-        os.environ.get("ARCLINK_KNOWLEDGE_VAULT_ROOT"),
-        os.environ.get("ARCLINK_AGENT_VAULT_DIR"),
+        os.environ.get("DRIVE_ROOT"),
+        os.environ.get("KNOWLEDGE_VAULT_ROOT"),
+        os.environ.get("AGENT_VAULT_DIR"),
         os.environ.get("VAULT_DIR"),
     ):
         if value:
             candidates.append(Path(value).expanduser())
     candidates.extend(
         [
-            home / "ArcLink",
             home / "Vault",
-            _hermes_home() / "ArcLink",
             _hermes_home() / "Vault",
         ]
     )
@@ -234,8 +240,8 @@ def _candidate_workspace_roots() -> list[Path]:
     home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     candidates: list[Path] = []
     for value in (
-        os.environ.get("ARCLINK_DRIVE_WORKSPACE_ROOT"),
-        os.environ.get("ARCLINK_CODE_WORKSPACE_ROOT"),
+        os.environ.get("DRIVE_WORKSPACE_ROOT"),
+        os.environ.get("CODE_WORKSPACE_ROOT"),
     ):
         if value:
             candidates.append(Path(value).expanduser())
@@ -338,7 +344,7 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
 
 
 def _meta_path() -> Path:
-    return _hermes_home() / "state" / "arclink-drive-meta.json"
+    return _hermes_home() / "state" / "drive-meta.json"
 
 
 def _load_meta() -> dict[str, Any]:
@@ -354,7 +360,7 @@ def _load_meta() -> dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-drive-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".drive-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -490,7 +496,7 @@ def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, m
     mime = "inode/directory" if is_dir else (mimetypes.guess_type(str(path))[0] or "application/octet-stream")
     display = _display_path(relative_path)
     return {
-        "name": path.name or "ArcLink Drive",
+        "name": path.name or "Drive",
         "root": root_id,
         "path": display,
         "kind": "folder" if is_dir else "file",
@@ -795,7 +801,7 @@ def _item_from_dav(profile: dict[str, Any], response: ET.Element, meta: dict[str
     favorite = _text_from(prop, "oc:favorite") == "1" or bool((meta.get("favorites") or {}).get(display))
     suffix = Path(relative).suffix.lower()
     return {
-        "name": posixpath.basename(relative.rstrip("/")) or "ArcLink Drive",
+        "name": posixpath.basename(relative.rstrip("/")) or "Drive",
         "path": display,
         "kind": "folder" if is_dir else "file",
         "size": 0 if is_dir else size,
@@ -843,8 +849,10 @@ def _backend() -> dict[str, Any]:
     webdav = _webdav_profile(nextcloud)
     local = _local_root()
     preferred = str(
-        os.environ.get("ARCLINK_DRIVE_BACKEND")
-        or os.environ.get("ARCLINK_KNOWLEDGE_VAULT_BACKEND")
+        _env_first(
+            "DRIVE_BACKEND",
+            "KNOWLEDGE_VAULT_BACKEND",
+        )
         or "auto"
     ).strip().lower()
     if preferred in {"nextcloud", "nextcloud-webdav", "webdav"} and webdav.get("available"):
@@ -867,8 +875,8 @@ async def status() -> dict[str, Any]:
     root = next((item for item in roots if item.get("id") == default_root), None)
     available = bool(default_root)
     return {
-        "plugin": "arclink-drive",
-        "label": "ArcLink Drive",
+        "plugin": "drive",
+        "label": "Drive",
         "version": "1.0.0",
         "status_contract": 1,
         "available": available or backend["name"] == "nextcloud-webdav",
@@ -942,7 +950,7 @@ async def content(path: str, root: str = "") -> dict[str, Any]:
             "content": body.decode("utf-8", "replace"),
             "modified": headers.get("Last-Modified", ""),
         }
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 @router.get("/download")
@@ -962,7 +970,7 @@ async def download(path: str, root: str = "") -> Any:
     if backend["name"] == "nextcloud-webdav":
         _status, body, headers = _dav_request(backend["profile"], "GET", path)
         return Response(content=body, media_type=headers.get("Content-Type") or "application/octet-stream")
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 @router.get("/preview")
@@ -995,7 +1003,7 @@ async def preview(path: str, root: str = "") -> Any:
             media_type=headers.get("Content-Type") or mimetypes.guess_type(path)[0] or "application/octet-stream",
             headers={"Content-Disposition": _inline_content_disposition(filename)},
         )
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 @router.post("/mkdir")
@@ -1019,7 +1027,7 @@ async def mkdir(request: Request) -> dict[str, Any]:
     if backend["name"] == "nextcloud-webdav":
         _dav_request(backend["profile"], "MKCOL", path)
         return {"ok": True, "path": _display_path(_clean_relative_path(path))}
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 @router.post("/move")
@@ -1041,7 +1049,7 @@ async def move(request: Request) -> dict[str, Any]:
         return _move_local("vault", backend["root"], source_path, destination_path)
     if backend["name"] == "nextcloud-webdav":
         return _move_webdav(backend["profile"], source_path, destination_path)
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 @router.post("/rename")
@@ -1060,7 +1068,7 @@ async def rename(request: Request) -> dict[str, Any]:
         return _move_local("vault", backend["root"], source_path, destination_path)
     if backend["name"] == "nextcloud-webdav":
         return _move_webdav(backend["profile"], source_path, destination_path)
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 @router.post("/favorite")
@@ -1104,7 +1112,7 @@ async def delete(request: Request) -> dict[str, Any]:
         path = _display_path(_clean_relative_path(payload.get("path")))
         _dav_request(backend["profile"], "DELETE", path)
         return {"ok": True, "path": path}
-    raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+    raise HTTPException(status_code=404, detail="Drive is not available")
 
 
 def _delete_local(root_id: str, root: Path, raw_path: Any) -> dict[str, Any]:
@@ -1234,7 +1242,7 @@ async def upload(
             _dav_request(backend["profile"], "PUT", display, body=content_bytes, headers=headers)
             uploaded.append({"path": display, "size": len(content_bytes)})
         else:
-            raise HTTPException(status_code=404, detail="ArcLink Drive is not available")
+            raise HTTPException(status_code=404, detail="Drive is not available")
     return {"ok": True, "uploaded": uploaded}
 
 

@@ -1,5 +1,0 @@
-name: arclink-terminal
-version: 0.1.0
-description: Adds ArcLink Terminal to the Hermes dashboard.
-provides_hooks: []
-provides_commands: []

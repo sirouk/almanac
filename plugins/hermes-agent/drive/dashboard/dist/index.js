@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const PLUGIN = "arclink-drive";
+  const PLUGIN = "drive";
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const React = SDK.React;
   const useEffect = SDK.hooks.useEffect;
@@ -414,7 +414,7 @@
         if (conflicts.length) {
           askConfirm({
             title: "Keep both uploads?",
-            message: conflicts.length + " uploaded file(s) already exist in " + targetFolder + ". ArcLink can keep both copies with safe copy names.",
+            message: conflicts.length + " uploaded file(s) already exist in " + targetFolder + ". Drive can keep both copies with safe copy names.",
             confirmLabel: "Keep Both",
           }).then(function (confirmed) {
             if (!confirmed) {
@@ -802,7 +802,7 @@
         "span",
         {
           className:
-            "arclink-drive-fileicon " +
+            "hermes-drive-fileicon " +
             (item.kind === "folder" ? "folder" : "file") +
             " " +
             fileKindClass(item) +
@@ -810,7 +810,7 @@
           style: item.kind === "folder" ? null : { "--file-accent": extensionColor(item) },
           title: item.kind === "folder" ? "Folder" : ext ? ext.toUpperCase() + " file" : "File",
         },
-        item.kind === "folder" ? null : h("span", { className: "arclink-drive-fileext" }, label)
+        item.kind === "folder" ? null : h("span", { className: "hermes-drive-fileext" }, label)
       );
     }
 
@@ -837,23 +837,23 @@
     }
 
     function renderPreviewBody(preview) {
-      if (!preview) return h("div", { className: "arclink-drive-preview-empty" }, "Select a previewable file.");
-      if (preview.kind === "loading") return h("div", { className: "arclink-drive-preview-empty" }, "Loading preview");
-      if (preview.kind === "unsupported") return h("div", { className: "arclink-drive-preview-empty" }, preview.message || "No preview available for this file type.");
+      if (!preview) return h("div", { className: "hermes-drive-preview-empty" }, "Select a previewable file.");
+      if (preview.kind === "loading") return h("div", { className: "hermes-drive-preview-empty" }, "Loading preview");
+      if (preview.kind === "unsupported") return h("div", { className: "hermes-drive-preview-empty" }, preview.message || "No preview available for this file type.");
       if (preview.kind === "text" || preview.kind === "markdown") {
-        return h("pre", { className: "arclink-drive-text-preview" }, preview.content || "");
+        return h("pre", { className: "hermes-drive-text-preview" }, preview.content || "");
       }
       if (preview.kind === "pdf") {
         return h(
           "iframe",
-          { className: "arclink-drive-pdf-preview", src: preview.url, title: preview.name || "PDF preview" },
+          { className: "hermes-drive-pdf-preview", src: preview.url, title: preview.name || "PDF preview" },
           h("a", { href: preview.url, target: "_blank", rel: "noreferrer" }, "Open PDF")
         );
       }
-      if (preview.kind === "image") return h("img", { className: "arclink-drive-media-preview", src: preview.url, alt: preview.name || "Preview" });
-      if (preview.kind === "audio") return h("audio", { className: "arclink-drive-audio-preview", src: preview.url, controls: true });
-      if (preview.kind === "video") return h("video", { className: "arclink-drive-media-preview", src: preview.url, controls: true });
-      return h("div", { className: "arclink-drive-preview-empty" }, "Preview unavailable");
+      if (preview.kind === "image") return h("img", { className: "hermes-drive-media-preview", src: preview.url, alt: preview.name || "Preview" });
+      if (preview.kind === "audio") return h("audio", { className: "hermes-drive-audio-preview", src: preview.url, controls: true });
+      if (preview.kind === "video") return h("video", { className: "hermes-drive-media-preview", src: preview.url, controls: true });
+      return h("div", { className: "hermes-drive-preview-empty" }, "Preview unavailable");
     }
 
     function renderPreviewPanel() {
@@ -862,10 +862,10 @@
       const canFullscreen = ["text", "markdown", "pdf", "image", "audio", "video"].indexOf(preview.kind) !== -1;
       return h(
         "section",
-        { className: "arclink-drive-preview" },
+        { className: "hermes-drive-preview" },
         h(
           "div",
-          { className: "arclink-drive-preview-head" },
+          { className: "hermes-drive-preview-head" },
           h("strong", null, preview.kind === "markdown" ? "Markdown Preview" : preview.kind.charAt(0).toUpperCase() + preview.kind.slice(1) + " Preview"),
           h(
             "span",
@@ -883,10 +883,10 @@
       const preview = state.preview;
       return h(
         "div",
-        { className: "arclink-drive-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
+        { className: "hermes-drive-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
         h(
           "div",
-          { className: "arclink-drive-preview-fullbar" },
+          { className: "hermes-drive-preview-fullbar" },
           h("strong", null, preview.name || "Preview"),
           h("button", { type: "button", onClick: function () { patch({ previewFullscreen: false }); } }, "Close")
         ),
@@ -898,13 +898,13 @@
       const path = item ? item.path : "/";
       const key = treeKey(rootId, path);
       const isFolder = !item || item.kind === "folder";
-      if (!isFolder) return h("span", { className: "arclink-drive-caret spacer" });
+      if (!isFolder) return h("span", { className: "hermes-drive-caret spacer" });
       return h(
         "button",
         {
           key: "caret",
           type: "button",
-          className: "arclink-drive-caret",
+          className: "hermes-drive-caret",
           onClick: function (event) {
             event.stopPropagation();
             toggleTree(rootId, path);
@@ -919,7 +919,7 @@
       const key = treeKey(rootId, path);
       if (!state.expanded[key]) return null;
       const children = state.treeNodes[key];
-      if (!children) return h("div", { className: "arclink-drive-tree-loading", style: { paddingLeft: (depth + 1) * 18 + "px" } }, "Loading");
+      if (!children) return h("div", { className: "hermes-drive-tree-loading", style: { paddingLeft: (depth + 1) * 18 + "px" } }, "Loading");
       const sorted = children.slice().sort(function (a, b) {
         const folderSort = (a.kind === "folder" ? 0 : 1) - (b.kind === "folder" ? 0 : 1);
         return folderSort || String(a.name).localeCompare(String(b.name));
@@ -927,7 +927,7 @@
       if (!sorted.length) return null;
       return h(
         "div",
-        { className: "arclink-drive-tree-children" },
+        { className: "hermes-drive-tree-children" },
         sorted.map(function (item) {
           return renderTreeNode(Object.assign({}, item, { root: rootId }), depth + 1);
         })
@@ -940,13 +940,13 @@
       const selectedItem = state.selected && itemRoot(state.selected) === rootId && state.selected.path === item.path;
       return h(
         "div",
-        { key: rootId + item.path, className: "arclink-drive-tree-node-wrap" },
+        { key: rootId + item.path, className: "hermes-drive-tree-node-wrap" },
         h(
           "button",
           {
             type: "button",
             draggable: true,
-            className: "arclink-drive-tree-node " + (selectedTree ? "active " : "") + (selectedItem ? "selected" : ""),
+            className: "hermes-drive-tree-node " + (selectedTree ? "active " : "") + (selectedItem ? "selected" : ""),
             style: { paddingLeft: 0.2 + depth * 0.9 + "rem" },
             onClick: function () {
               if (item.kind === "folder") {
@@ -963,8 +963,8 @@
             },
             onDragStart: function (event) {
               event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("application/x-arclink-drive-path", item.path);
-              event.dataTransfer.setData("application/x-arclink-drive-root", rootId);
+              event.dataTransfer.setData("application/x-hermes-drive-path", item.path);
+              event.dataTransfer.setData("application/x-hermes-drive-root", rootId);
               event.dataTransfer.setData("text/plain", item.path);
               patch({ draggingItem: item.path });
             },
@@ -974,7 +974,7 @@
           },
           renderCaret(rootId, item, depth),
           renderFileIcon(item),
-          h("span", { className: "arclink-drive-tree-name" }, item.name)
+          h("span", { className: "hermes-drive-tree-name" }, item.name)
         ),
         item.kind === "folder" ? renderTreeChildren(rootId, item.path, depth) : null
       );
@@ -986,12 +986,12 @@
       const selectedRoot = state.selected && itemRoot(state.selected) === rootId && state.selected.path === "/";
       return h(
         "div",
-        { key: rootId, className: "arclink-drive-tree-root" },
+        { key: rootId, className: "hermes-drive-tree-root" },
         h(
           "button",
           {
             type: "button",
-            className: "arclink-drive-tree-node root " + (active ? "active " : "") + (selectedRoot ? "selected" : ""),
+            className: "hermes-drive-tree-node root " + (active ? "active " : "") + (selectedRoot ? "selected" : ""),
             style: { paddingLeft: "0.2rem" },
             onClick: function () {
               selectFolder(rootId, "/");
@@ -1002,7 +1002,7 @@
           },
           renderCaret(rootId, null, 0),
           renderFileIcon({ kind: "folder", name: root.label || rootId }),
-          h("span", { className: "arclink-drive-tree-name" }, root.label || rootId)
+          h("span", { className: "hermes-drive-tree-name" }, root.label || rootId)
         ),
         renderTreeChildren(rootId, "/", 0)
       );
@@ -1010,16 +1010,16 @@
 
     function renderDetailsPanel() {
       if (!selected) {
-        return h("div", { className: "arclink-drive-details empty" }, "Select a file or folder to see details.");
+        return h("div", { className: "hermes-drive-details empty" }, "Select a file or folder to see details.");
       }
       const detailRoot = rootById(itemRoot(selected));
       return h(
         "div",
-        { className: "arclink-drive-details" },
-        h("div", { className: "arclink-drive-details-title" }, renderFileIcon(selected), h("strong", null, selected.name)),
+        { className: "hermes-drive-details" },
+        h("div", { className: "hermes-drive-details-title" }, renderFileIcon(selected), h("strong", null, selected.name)),
         h(
           "div",
-          { className: "arclink-drive-file-facts" },
+          { className: "hermes-drive-file-facts" },
           h("span", null, detailRoot.label || itemRoot(selected) || "Drive"),
           h("span", null, selected.kind || "item"),
           h("span", null, selected.mime || "file"),
@@ -1029,7 +1029,7 @@
         ),
         h(
           "div",
-          { className: "arclink-drive-preview-actions" },
+          { className: "hermes-drive-preview-actions" },
           selected.trashed
             ? h("button", { type: "button", onClick: function () { restoreItem(selected); } }, "Restore")
             : null,
@@ -1113,24 +1113,24 @@
     return h(
       "section",
       {
-        className: "arclink-drive" + (state.dropActive ? " dropping" : ""),
+        className: "hermes-drive" + (state.dropActive ? " dropping" : ""),
         onClick: function () {
           if (state.contextMenu) patch({ contextMenu: null });
         },
       },
       h(
         "header",
-        { className: "arclink-drive-toolbar" },
+        { className: "hermes-drive-toolbar" },
         h(
           "div",
-          { className: "arclink-drive-title" },
-          h("h1", null, "ArcLink Drive"),
-          h("div", { className: "arclink-drive-path" }, breadcrumbs()),
+          { className: "hermes-drive-title" },
+          h("h1", null, "Drive"),
+          h("div", { className: "hermes-drive-path" }, breadcrumbs()),
           h("p", null, currentRoot.label ? currentRoot.label + " - " + (currentRoot.path || "/") : status.backend ? status.backend + " - " + (status.local_root || status.mount || "/") : "Agent knowledge")
         ),
         h(
           "div",
-          { className: "arclink-drive-actions" },
+          { className: "hermes-drive-actions" },
           h("button", { type: "button", onClick: createFolder, disabled: !canWrite }, "New Folder"),
           h("button", { type: "button", onClick: createFile, disabled: !canWrite }, "New File"),
           h("button", { type: "button", onClick: function () { fileInput.current && fileInput.current.click(); }, disabled: !canWrite }, "Upload"),
@@ -1139,7 +1139,7 @@
             ref: fileInput,
             type: "file",
             multiple: true,
-            className: "arclink-drive-hidden",
+            className: "hermes-drive-hidden",
             onChange: function (event) {
               uploadFiles(event.target.files, state.path, state.root);
               event.target.value = "";
@@ -1147,19 +1147,19 @@
           })
         )
       ),
-      state.errorMessage ? h("div", { className: "arclink-drive-error" }, state.errorMessage) : null,
+      state.errorMessage ? h("div", { className: "hermes-drive-error" }, state.errorMessage) : null,
       status.available
         ? h(
             "div",
-            { className: "arclink-drive-main" },
+            { className: "hermes-drive-main" },
             h(
               "aside",
-              { className: "arclink-drive-browser" },
-              h("div", { className: "arclink-drive-panel-label" }, "Files"),
+              { className: "hermes-drive-browser" },
+              h("div", { className: "hermes-drive-panel-label" }, "Files"),
               state.location === "trash"
                 ? null
                 : h("input", {
-                    className: "arclink-drive-search",
+                    className: "hermes-drive-search",
                     value: state.query,
                     placeholder: "Search Workspace and Vault",
                     onChange: function (event) {
@@ -1171,9 +1171,9 @@
                       }, 180);
                     },
                   }),
-              h("div", { className: "arclink-drive-tree" }, orderedRoots(state.roots).map(renderRootTree)),
+              h("div", { className: "hermes-drive-tree" }, orderedRoots(state.roots).map(renderRootTree)),
               selectedCount
-                ? h("div", { className: "arclink-drive-selection" },
+                ? h("div", { className: "hermes-drive-selection" },
                     h("span", null, selectedCount + " selected"),
                     state.location === "trash"
                       ? h("button", { type: "button", onClick: restoreSelected }, "Restore")
@@ -1187,7 +1187,7 @@
                 : null,
               h(
                 "div",
-                { className: "arclink-drive-tree-tools" },
+                { className: "hermes-drive-tree-tools" },
                 h("button", { type: "button", className: state.location === "trash" ? "active" : "", onClick: loadTrash }, "Trash"),
                 h("button", { type: "button", onClick: function () { switchRoot(state.root); }, disabled: !state.root }, "Refresh")
               )
@@ -1195,7 +1195,7 @@
             h(
               "section",
               {
-                className: "arclink-drive-content" + (selected ? " has-selection" : ""),
+                className: "hermes-drive-content" + (selected ? " has-selection" : ""),
                 onDragOver: function (event) {
                   if (state.location !== "trash" && (hasFiles(event) || state.draggingItem)) {
                     event.preventDefault();
@@ -1214,8 +1214,8 @@
                     patch({ dropActive: false });
                     return;
                   }
-                  const sourcePath = event.dataTransfer.getData("application/x-arclink-drive-path");
-                  const sourceRoot = event.dataTransfer.getData("application/x-arclink-drive-root") || state.root;
+                  const sourcePath = event.dataTransfer.getData("application/x-hermes-drive-path");
+                  const sourceRoot = event.dataTransfer.getData("application/x-hermes-drive-root") || state.root;
                   patch({ dropActive: false });
                   if (sourcePath) {
                     if (sourceRoot !== state.root) {
@@ -1230,13 +1230,13 @@
               },
               h(
                 "div",
-                { className: "arclink-drive-content-head" },
+                { className: "hermes-drive-content-head" },
                 h(
                   "div",
                   null,
                   h(
                     "p",
-                    { className: "arclink-drive-current-summary" },
+                    { className: "hermes-drive-current-summary" },
                     state.location === "trash"
                       ? "Deleted items for " + (currentRoot.label || state.root || "Drive")
                       : state.query
@@ -1246,7 +1246,7 @@
                 ),
                 h(
                   "div",
-                  { className: "arclink-drive-filters" },
+                  { className: "hermes-drive-filters" },
                   h("button", { type: "button", onClick: function () { selectFolder(state.root, parentPath(state.path)); }, disabled: state.path === "/" || state.location === "trash" }, "Up"),
                   h("select", { value: state.sortKey, onChange: function (event) { patch({ sortKey: event.target.value }); } },
                     h("option", { value: "name" }, "Name"),
@@ -1260,9 +1260,9 @@
               renderDetailsPanel(),
               h(
                 "div",
-                { className: "arclink-drive-items " + state.view, onContextMenu: openBackgroundContextMenu },
+                { className: "hermes-drive-items " + state.view, onContextMenu: openBackgroundContextMenu },
                 state.loading || state.searching
-                  ? h("div", { className: "arclink-drive-empty" }, "Loading")
+                  ? h("div", { className: "hermes-drive-empty" }, "Loading")
                   : visibleItems.length
                     ? visibleItems.map(function (item, index) {
                         return h(
@@ -1272,7 +1272,7 @@
                             type: "button",
                             draggable: true,
                             className:
-                              "arclink-drive-item " +
+                              "hermes-drive-item " +
                               (selected && itemKey(selected) === itemKey(item) ? "selected " : "") +
                               (state.selectedPaths[itemKey(item)] ? "checked " : "") +
                               (state.draggingItem === item.path ? "dragging" : ""),
@@ -1287,8 +1287,8 @@
                             },
                             onDragStart: function (event) {
                               event.dataTransfer.effectAllowed = "move";
-                              event.dataTransfer.setData("application/x-arclink-drive-path", item.path);
-                              event.dataTransfer.setData("application/x-arclink-drive-root", itemRoot(item));
+                              event.dataTransfer.setData("application/x-hermes-drive-path", item.path);
+                              event.dataTransfer.setData("application/x-hermes-drive-root", itemRoot(item));
                               event.dataTransfer.setData("text/plain", item.path);
                               patch({ draggingItem: item.path });
                             },
@@ -1305,8 +1305,8 @@
                               if (item.kind !== "folder") return;
                               event.preventDefault();
                               event.stopPropagation();
-                              const sourcePath = event.dataTransfer.getData("application/x-arclink-drive-path");
-                              const sourceRoot = event.dataTransfer.getData("application/x-arclink-drive-root") || itemRoot(item);
+                              const sourcePath = event.dataTransfer.getData("application/x-hermes-drive-path");
+                              const sourceRoot = event.dataTransfer.getData("application/x-hermes-drive-root") || itemRoot(item);
                               if (sourcePath) {
                                 if (sourceRoot !== itemRoot(item)) {
                                   patch({ errorMessage: "Move between Drive roots is not enabled yet. Copy between roots instead." });
@@ -1319,28 +1319,28 @@
                             },
                           },
                           renderFileIcon(item),
-                          h("span", { className: "arclink-drive-name" }, item.name),
-                          state.query ? h("span", { className: "arclink-drive-root-chip" }, (rootById(itemRoot(item)).label || itemRoot(item) || "Drive")) : null,
-                          h("span", { className: "arclink-drive-meta" }, item.trashed ? "Deleted " + (item.deleted_at || "") : item.kind === "folder" ? "Folder" : displaySize(item.size)),
+                          h("span", { className: "hermes-drive-name" }, item.name),
+                          state.query ? h("span", { className: "hermes-drive-root-chip" }, (rootById(itemRoot(item)).label || itemRoot(item) || "Drive")) : null,
+                          h("span", { className: "hermes-drive-meta" }, item.trashed ? "Deleted " + (item.deleted_at || "") : item.kind === "folder" ? "Folder" : displaySize(item.size)),
                           item.trashed
-                            ? h("span", { className: "arclink-drive-row-action", onClick: function (event) { event.stopPropagation(); restoreItem(item); } }, "Restore")
+                            ? h("span", { className: "hermes-drive-row-action", onClick: function (event) { event.stopPropagation(); restoreItem(item); } }, "Restore")
                             : null
                         );
                       })
-                    : h("div", { className: "arclink-drive-empty" }, state.query ? "No search results" : "Empty")
+                    : h("div", { className: "hermes-drive-empty" }, state.query ? "No search results" : "Empty")
               )
             )
           )
-        : h("div", { className: "arclink-drive-empty full" }, "ArcLink Drive is not available"),
-      state.dropActive ? h("div", { className: "arclink-drive-drop-overlay" }, "Drop to upload") : null,
+        : h("div", { className: "hermes-drive-empty full" }, "Drive is not available"),
+      state.dropActive ? h("div", { className: "hermes-drive-drop-overlay" }, "Drop to upload") : null,
       renderFullscreenPreview(),
       confirmDialog
         ? h(
             "div",
-            { className: "arclink-drive-confirm-backdrop", role: "presentation" },
+            { className: "hermes-drive-confirm-backdrop", role: "presentation" },
             h(
               "section",
-              { className: "arclink-drive-confirm", role: "dialog", "aria-modal": "true", "aria-label": confirmDialog.title },
+              { className: "hermes-drive-confirm", role: "dialog", "aria-modal": "true", "aria-label": confirmDialog.title },
               h("h2", null, confirmDialog.title),
               confirmDialog.message ? h("p", null, confirmDialog.message) : null,
               confirmDialog.expectedText
@@ -1359,7 +1359,7 @@
                 : null,
               h(
                 "div",
-                { className: "arclink-drive-confirm-actions" },
+                { className: "hermes-drive-confirm-actions" },
                 h("button", { type: "button", onClick: cancelConfirm }, confirmDialog.cancelLabel || "Cancel"),
                 h(
                   "button",
@@ -1379,7 +1379,7 @@
         ? h(
             "div",
             {
-              className: "arclink-drive-context",
+              className: "hermes-drive-context",
               role: "menu",
               style: { left: state.contextMenu.x + "px", top: state.contextMenu.y + "px" },
               onClick: function (event) {
@@ -1388,7 +1388,7 @@
             },
             state.contextMenu.mode === "background"
               ? h(React.Fragment, null,
-                  h("span", { className: "arclink-drive-context-label" }, currentRoot.label || "Drive"),
+                  h("span", { className: "hermes-drive-context-label" }, currentRoot.label || "Drive"),
                   h("button", { type: "button", role: "menuitem", onClick: createFolder, disabled: !canWrite }, "New Folder"),
                   h("button", { type: "button", role: "menuitem", onClick: createFile, disabled: !canWrite }, "New File"),
                   h("button", { type: "button", role: "menuitem", onClick: function () { fileInput.current && fileInput.current.click(); patch({ contextMenu: null }); }, disabled: !canWrite }, "Upload"),
@@ -1396,7 +1396,7 @@
                 )
               : state.contextMenu.mode === "selection"
                 ? h(React.Fragment, null,
-                    h("span", { className: "arclink-drive-context-label" }, selectedCount + " selected"),
+                    h("span", { className: "hermes-drive-context-label" }, selectedCount + " selected"),
                     state.location === "trash"
                       ? h("button", { type: "button", role: "menuitem", onClick: restoreSelected }, "Restore Selected")
                       : h(React.Fragment, null,

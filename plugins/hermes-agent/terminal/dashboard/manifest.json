@@ -1,9 +1,9 @@
 {
-  "name": "arclink-terminal",
-  "label": "ArcLink Terminal",
-  "description": "Native ArcLink terminal sessions inside the Hermes dashboard.",
+  "name": "terminal",
+  "label": "Terminal",
+  "description": "Native managed terminal sessions inside the Hermes dashboard.",
   "icon": "Terminal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "tab": {
     "path": "/terminal",
     "position": "after:code"

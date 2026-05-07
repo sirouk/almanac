@@ -1,7 +1,7 @@
 {
-  "name": "arclink-code",
-  "label": "ArcLink Code",
-  "description": "Native ArcLink code workspace inside the Hermes dashboard.",
+  "name": "code",
+  "label": "Code",
+  "description": "Native code workspace and source-control surface inside Hermes.",
   "icon": "Code",
   "version": "1.0.0",
   "tab": {

@@ -62,7 +62,7 @@ authenticate dashboard sessions, or execute queued admin actions.
   path-prefix routing.
 - ArcLink workspace UX belongs in Hermes dashboard plugins, not Hermes core
   patches. Plugin status APIs must stay capability-driven and secret-free.
-- `ArcLink Terminal` provides managed-pty sessions inside the configured
+- `Terminal` provides managed-pty sessions inside the configured
   deployment/user boundary. It is bounded, polling-based, and confirmation
   gated; it is not unrestricted host-root shell access, tmux persistence, or
   true streaming transport.
@@ -105,9 +105,9 @@ ArcLink owns:
 - Hermes dashboard plugin installation, default enablement, and legacy alias
   cleanup in `bin/install-arclink-plugins.sh`.
 - ArcLink workspace plugin APIs and UI assets under
-  `plugins/hermes-agent/arclink-drive/`,
-  `plugins/hermes-agent/arclink-code/`, and
-  `plugins/hermes-agent/arclink-terminal/`.
+  `plugins/hermes-agent/drive/`,
+  `plugins/hermes-agent/code/`, and
+  `plugins/hermes-agent/terminal/`.
 - Docker plugin mount repair, managed plugin refresh, per-deployment tailnet app
   publication, and deployment service-health refresh in `bin/arclink-docker.sh`.
 - Guarded mutating executor contracts and secret materialization rules in
@@ -174,8 +174,8 @@ Provisioning dry run:
   synthesis, dedicated Nextcloud DB/Redis/app services, dashboard-native Code,
   notification delivery, health watch, and managed-context installation.
 - Hermes dashboard receives the deployment vault and code workspace mounts.
-  The rendered environment sets `VAULT_DIR`, `ARCLINK_DRIVE_ROOT`, and
-  `ARCLINK_CODE_WORKSPACE_ROOT` so ArcLink Drive and ArcLink Code operate
+  The rendered environment sets `VAULT_DIR`, `DRIVE_ROOT`, and
+  `CODE_WORKSPACE_ROOT` so Drive and Code operate
   inside deployment-owned roots.
 - Access URL metadata is rendered for dashboard, files, code, and Hermes. In
   Tailscale path mode, a per-service tailnet HTTPS port may override the Hermes
@@ -379,8 +379,8 @@ Dashboard and admin contracts:
 
 Native Hermes workspace plugins:
 
-- Refreshed agents install `arclink-drive`, `arclink-code`,
-  `arclink-terminal`, and `arclink-managed-context` by default.
+- Refreshed agents install `drive`, `code`,
+  `terminal`, and `arclink-managed-context` by default.
 - The installer removes legacy dashboard aliases `arclink-code-space` and
   `arclink-knowledge-vault` before enabling the current plugin names.
 - Drive status reports backend availability, mount, username, URL, local root,
@@ -509,14 +509,14 @@ When touching Hermes workspace plugins or their Docker mount wiring, also run:
 
 ```bash
 python3 -m py_compile \
-  plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-code/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py
+  plugins/hermes-agent/drive/dashboard/plugin_api.py \
+  plugins/hermes-agent/code/dashboard/plugin_api.py \
+  plugins/hermes-agent/terminal/dashboard/plugin_api.py
 python3 tests/test_arclink_plugins.py
 python3 tests/test_arclink_docker.py
-node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js
+node --check plugins/hermes-agent/drive/dashboard/dist/index.js
+node --check plugins/hermes-agent/code/dashboard/dist/index.js
+node --check plugins/hermes-agent/terminal/dashboard/dist/index.js
 ```
 
 Before promoting ArcLink beyond foundation work, confirm these are still true:
@@ -552,10 +552,10 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
   routing, identity-provider integration, browser-session hardening, RBAC
   policy, action execution, and frontend framework work still need explicit
   implementation.
-- ArcLink Drive and Code are first-generation native plugin surfaces. They have
+- Drive and Code are first-generation native plugin surfaces. They have
   bounded no-secret API contracts, but broader Google Drive and VS Code parity
   remains future work.
-- ArcLink Terminal is managed-pty shell access inside the configured
+- Terminal is managed-pty shell access inside the configured
   deployment/user boundary, with bounded scrollback and confirmation-gated
   lifecycle controls. It is not an unrestricted host-root shell, tmux-backed
   persistence, or true streaming transport.

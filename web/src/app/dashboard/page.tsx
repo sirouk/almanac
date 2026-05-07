@@ -309,8 +309,8 @@ export default function DashboardPage() {
                 const urls = dep.access?.urls || {};
                 const services = [
                   { name: "Hermes", href: urls.hermes || (provisioned && host ? `https://${host}:8443/` : "") },
-                  { name: "ArcLink Drive", href: urls.files || (provisioned && host ? `https://${host}:8443/drive` : "") },
-                  { name: "ArcLink Code", href: urls.code || (provisioned && host ? `https://${host}:8443/code` : "") },
+                  { name: "Drive", href: urls.files || (provisioned && host ? `https://${host}:8443/drive` : "") },
+                  { name: "Code", href: urls.code || (provisioned && host ? `https://${host}:8443/code` : "") },
                   { name: "Health", href: urls.dashboard || (provisioned && host ? `https://${host}/u/${dep.prefix || dep.deployment_id}` : "") },
                 ];
                 return (
@@ -348,7 +348,7 @@ export default function DashboardPage() {
 
           {activeTab === "vault" && data && (
             <div className="space-y-6">
-              <h1 className="font-display text-2xl font-bold">ArcLink Drive</h1>
+              <h1 className="font-display text-2xl font-bold">Drive</h1>
               <p className="text-sm text-soft-white/60">
                 Per-deployment workspace and vault access through the authenticated Hermes dashboard.
               </p>

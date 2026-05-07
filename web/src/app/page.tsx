@@ -84,7 +84,7 @@ export default function Home() {
             { title: "Frontier Model Rails", desc: "I start on a frontier-class model and keep the door open for your own Claude or OpenAI keys when you want them." },
             { title: "Document Retrieval", desc: "I keep your files searchable so the agent pulls the right context fast." },
             { title: "Live Memory", desc: "I keep your agent's working memory hot so it stays oriented across sessions." },
-            { title: "Files & Code", desc: "I wire in ArcLink Drive and ArcLink Code so your agent has hands, not just words." },
+            { title: "Files & Code", desc: "I wire in Drive and Code so your agent has hands, not just words." },
             { title: "Health & Ops", desc: "I watch payments, provisioning, DNS, and service health so the launch path stays visible." },
           ].map((f) => (
             <div key={f.title} className="rounded-lg border border-border bg-surface p-6">

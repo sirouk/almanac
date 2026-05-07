@@ -12,18 +12,22 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO / "bin" / "install-arclink-plugins.sh"
+WORKSPACE_INSTALL_SCRIPT = REPO / "bin" / "install-hermes-workspace-plugins.sh"
 PLUGINS_ROOT = REPO / "plugins" / "hermes-agent"
 PLUGIN_DIR = REPO / "plugins" / "hermes-agent" / "arclink-managed-context"
 PLUGIN_INIT = PLUGIN_DIR / "__init__.py"
 DEFAULT_PLUGIN_NAMES = (
-    "arclink-code",
-    "arclink-drive",
-    "arclink-terminal",
+    "drive",
+    "code",
+    "terminal",
     "arclink-managed-context",
 )
 LEGACY_PLUGIN_NAMES = (
     "arclink-code-space",
     "arclink-knowledge-vault",
+    "arclink-code",
+    "arclink-drive",
+    "arclink-terminal",
 )
 START_HOOK_DIR = REPO / "hooks" / "hermes-agent" / "arclink-telegram-start"
 CONTROL_PY = REPO / "python" / "arclink_control.py"
@@ -114,7 +118,7 @@ def _assert_default_plugins_installed(hermes_home: Path) -> None:
         expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
         expect(f"  - {plugin_name}" in config_body, config_body)
 
-    for plugin_name in ("arclink-code", "arclink-drive", "arclink-terminal"):
+    for plugin_name in ("code", "drive", "terminal"):
         dashboard_dir = hermes_home / "plugins" / plugin_name / "dashboard"
         expect((dashboard_dir / "manifest.json").is_file(), f"expected dashboard manifest at {dashboard_dir / 'manifest.json'}")
         expect((dashboard_dir / "plugin_api.py").is_file(), f"expected dashboard API at {dashboard_dir / 'plugin_api.py'}")
@@ -142,6 +146,27 @@ def test_install_arclink_plugins_installs_default_hermes_plugin() -> None:
         expect("plugins:\n" in config_body, config_body)
         expect("disabled:\n  - arclink-managed-context" not in config_body, config_body)
         print("PASS test_install_arclink_plugins_installs_default_hermes_plugin")
+
+
+def test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_only() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        result = subprocess.run(
+            [str(WORKSPACE_INSTALL_SCRIPT), str(REPO), str(hermes_home)],
+            env={**os.environ},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected install-hermes-workspace-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        for plugin_name in ("drive", "code", "terminal"):
+            expect((hermes_home / "plugins" / plugin_name / "plugin.yaml").is_file(), f"expected {plugin_name} plugin to install")
+            expect(f"  - {plugin_name}" in config_body, config_body)
+        expect(not (hermes_home / "plugins" / "arclink-managed-context").exists(), "standalone installer should not install managed context")
+        expect(not (hermes_home / "hooks" / "arclink-telegram-start").exists(), "standalone installer should not install ArcLink hooks")
+        print("PASS test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_only")
 
 
 def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default() -> None:
@@ -272,9 +297,12 @@ def test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases() -> Non
             "plugins:\n"
             "  disabled:\n"
             "  - arclink-code-space\n"
+            "  - arclink-code\n"
             "  - noisy-plugin\n"
             "  enabled:\n"
             "  - arclink-knowledge-vault\n"
+            "  - arclink-drive\n"
+            "  - arclink-terminal\n"
             "  - existing-plugin\n",
             encoding="utf-8",
         )
@@ -303,12 +331,12 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
         hermes_home = root / "hermes-home"
         state_dir = hermes_home / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "arclink-web-access.json").write_text(
+        (state_dir / "web-access.json").write_text(
             json.dumps(
                 {
                     "username": "alex",
                     "nextcloud_username": "alex-nextcloud",
-                    "code_url": "https://arclink.example.test:40011/",
+                    "code_url": "https://example.test:40011/",
                     "password": "do-not-return",
                 },
                 indent=2,
@@ -316,12 +344,12 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             + "\n",
             encoding="utf-8",
         )
-        (state_dir / "arclink-vault-reconciler.json").write_text(
+        (state_dir / "vault-reconciler.json").write_text(
             json.dumps(
                 {
                     "resource-ref": (
                         "Canonical user access rails:\n"
-                        "- Vault access in Nextcloud: https://arclink.example.test/ (shared mount: /Vault)\n"
+                        "- Vault access in Nextcloud: https://example.test/ (shared mount: /Vault)\n"
                     ),
                 },
                 indent=2,
@@ -333,33 +361,33 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
         old_env = os.environ.copy()
         workspace_home = root / "home" / "alex"
         workspace_home.mkdir(parents=True, exist_ok=True)
-        (workspace_home / "ArcLink").mkdir(parents=True, exist_ok=True)
-        (workspace_home / "ArcLink" / "agent-notes.md").write_text("# Notes\n\nArcLink Drive test.\n", encoding="utf-8")
+        (workspace_home / "Vault").mkdir(parents=True, exist_ok=True)
+        (workspace_home / "Vault" / "agent-notes.md").write_text("# Notes\n\nDrive test.\n", encoding="utf-8")
         (workspace_home / "hello.py").write_text("print('hi')\n", encoding="utf-8")
         os.environ["HERMES_HOME"] = str(hermes_home)
         os.environ["HOME"] = str(workspace_home)
-        os.environ["ARCLINK_DRIVE_WORKSPACE_ROOT"] = str(workspace_home)
-        os.environ["ARCLINK_TERMINAL_ALLOW_ROOT"] = "1"
+        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace_home)
+        os.environ["TERMINAL_ALLOW_ROOT"] = "1"
         try:
             knowledge_api = load_module(
-                PLUGINS_ROOT / "arclink-drive" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
                 "arclink_drive_dashboard_api_test",
             )
             code_api = load_module(
-                PLUGINS_ROOT / "arclink-code" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "code" / "dashboard" / "plugin_api.py",
                 "arclink_code_dashboard_api_test",
             )
             terminal_api = load_module(
-                PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py",
                 "arclink_terminal_dashboard_api_test",
             )
             knowledge = asyncio.run(knowledge_api.status())
             code = asyncio.run(code_api.status())
             terminal = asyncio.run(terminal_api.status())
-            expect(knowledge["plugin"] == "arclink-drive", str(knowledge))
+            expect(knowledge["plugin"] == "drive", str(knowledge))
             expect(knowledge["status_contract"] == 1, str(knowledge))
             expect(knowledge["available"] is True, str(knowledge))
-            expect(knowledge["url"] == "https://arclink.example.test/", str(knowledge))
+            expect(knowledge["url"] == "https://example.test/", str(knowledge))
             expect(knowledge["mount"] == "/Vault", str(knowledge))
             expect(knowledge["username"] == "alex-nextcloud", str(knowledge))
             expect(knowledge["backend"] == "local-roots", str(knowledge))
@@ -376,7 +404,7 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(any(item["name"] == "agent-notes.md" for item in drive_items["items"]), str(drive_items))
             workspace_items = asyncio.run(knowledge_api.items(root="workspace", path="/"))
             expect(any(item["name"] == "hello.py" for item in workspace_items["items"]), str(workspace_items))
-            expect(code["plugin"] == "arclink-code", str(code))
+            expect(code["plugin"] == "code", str(code))
             expect(code["status_contract"] == 1, str(code))
             expect(code["available"] is True, str(code))
             expect(code["url"] == "", str(code))
@@ -392,9 +420,9 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(code_file["language"] == "python", str(code_file))
             expect("print('hi')" in code_file["content"], str(code_file))
             _assert_no_secret_status(code, "Code")
-            expect(terminal["plugin"] == "arclink-terminal", str(terminal))
+            expect(terminal["plugin"] == "terminal", str(terminal))
             expect(terminal["status_contract"] == 1, str(terminal))
-            expect(terminal["label"] == "ArcLink Terminal", str(terminal))
+            expect(terminal["label"] == "Terminal", str(terminal))
             expect(terminal["available"] is True, str(terminal))
             expect(terminal["backend"] == "managed-pty", str(terminal))
             expect(terminal["workspace_root"] == "[workspace]", str(terminal))
@@ -427,11 +455,11 @@ def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
 
         old_env = os.environ.copy()
         os.environ["HERMES_HOME"] = str(hermes_home)
-        os.environ["ARCLINK_DRIVE_ROOT"] = str(vault)
-        os.environ["ARCLINK_DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["DRIVE_ROOT"] = str(vault)
+        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace)
         try:
             drive_api = load_module(
-                PLUGINS_ROOT / "arclink-drive" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
                 "arclink_drive_dashboard_file_ops_test",
             )
             status = asyncio.run(drive_api.status())
@@ -615,21 +643,21 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
 
         old_env = os.environ.copy()
         for key in (
-            "ARCLINK_DRIVE_ROOT",
+            "DRIVE_ROOT",
             "ARCLINK_KNOWLEDGE_VAULT_ROOT",
             "ARCLINK_AGENT_VAULT_DIR",
             "VAULT_DIR",
-            "ARCLINK_DRIVE_WORKSPACE_ROOT",
-            "ARCLINK_CODE_WORKSPACE_ROOT",
+            "DRIVE_WORKSPACE_ROOT",
+            "CODE_WORKSPACE_ROOT",
         ):
             os.environ.pop(key, None)
         os.environ["HERMES_HOME"] = str(hermes_home)
         os.environ["HOME"] = str(home)
-        os.environ["ARCLINK_DRIVE_ROOT"] = str(vault)
-        os.environ["ARCLINK_DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["DRIVE_ROOT"] = str(vault)
+        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace)
         try:
             drive_api = load_module(
-                PLUGINS_ROOT / "arclink-drive" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
                 "arclink_drive_dashboard_hardening_test",
             )
             try:
@@ -639,7 +667,7 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
             else:
                 raise AssertionError("expected invalid root to be rejected")
 
-            os.environ["ARCLINK_DRIVE_ROOT"] = str(missing_vault)
+            os.environ["DRIVE_ROOT"] = str(missing_vault)
             unavailable = asyncio.run(drive_api.status())
             unavailable_roots = {item["id"]: item for item in unavailable["roots"]}
             expect(unavailable_roots["vault"]["available"] is False, str(unavailable_roots["vault"]))
@@ -650,7 +678,7 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
                 expect(getattr(exc, "status_code", None) == 404, f"expected unavailable vault rejection, got {exc!r}")
             else:
                 raise AssertionError("expected unavailable vault to be rejected")
-            os.environ["ARCLINK_DRIVE_ROOT"] = str(vault)
+            os.environ["DRIVE_ROOT"] = str(vault)
 
             docs_listing = asyncio.run(drive_api.items(root="vault", path="/Docs"))
             listed_paths = {item["path"] for item in docs_listing["items"]}
@@ -741,7 +769,7 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
 
 
 def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> None:
-    body = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    body = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
     expect('h("button", { key: "drive"' in body and "Drive" in body, "Drive breadcrumb root should be browser-visible")
     expect('h("button", { key: "root"' in body and "rootLabel" in body, "selected root should be part of breadcrumbs")
     expect('function loadTrash()' in body and 'api("/trash?"' in body, "Drive UI should load backend trash records")
@@ -749,7 +777,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect('function restoreSelected()' in body and 'state.location === "trash"' in body, "Drive UI should support trash selection state")
     expect("const visibleItems = sortedItems();" in body and "visibleItems.map" in body, "Trash view should render sorted trash items")
     expect('state.location !== "trash" && hasFiles(event)' in body, "Trash view should not advertise or accept uploads")
-    expect("arclink-drive-confirm" in body and "expectedText" in body, "Risky Drive actions should use in-app typed confirmations")
+    expect("hermes-drive-confirm" in body and "expectedText" in body, "Risky Drive actions should use in-app typed confirmations")
     expect('requestJSON("/batch", { action: "restore"' in body, "Drive UI should use batch restore so partial failures are visible")
     expect('function copySelectedWithPrompt()' in body and 'action: "copy"' in body, "Drive UI should expose selected batch copy")
     expect('function moveSelectedWithPrompt()' in body and 'action: "move"' in body, "Drive UI should expose selected batch move")
@@ -762,12 +790,12 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("openItem" not in click_handler and "selectListItem(item, event, index, list)" in click_handler, "Drive single-click should select folders instead of opening them")
     expect("onDoubleClick: function ()" in body and "openItem(item);" in body, "Drive double-click should open folder rows")
     expect('has-selection' in body, "Drive content pane should make room for metadata and preview after selection")
-    expect("arclink-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
+    expect("hermes-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
     expect("paddingLeft: 0.2 + depth * 0.9" in body and "marginLeft: depth * 14" not in body, "Drive tree indentation should move the full row, not only the caret")
-    style = (PLUGINS_ROOT / "arclink-drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
-    expect(".arclink-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
-    expect(".arclink-drive-content.has-selection .arclink-drive-items" in style, "Drive CSS should keep selected-item previews visible")
-    expect(".arclink-drive-pdf-preview" in style and ".arclink-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
+    style = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".hermes-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
+    expect(".hermes-drive-content.has-selection .hermes-drive-items" in style, "Drive CSS should keep selected-item previews visible")
+    expect(".hermes-drive-pdf-preview" in style and ".hermes-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
 
 
@@ -784,10 +812,10 @@ def test_arclink_code_native_editor_guards_conflicting_saves() -> None:
 
         old_env = os.environ.copy()
         os.environ["HERMES_HOME"] = str(hermes_home)
-        os.environ["ARCLINK_CODE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["CODE_WORKSPACE_ROOT"] = str(workspace)
         try:
             code_api = load_module(
-                PLUGINS_ROOT / "arclink-code" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "code" / "dashboard" / "plugin_api.py",
                 "arclink_code_dashboard_editor_ops_test",
             )
             listing = asyncio.run(code_api.items(path="/"))
@@ -905,10 +933,10 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
 
         old_env = os.environ.copy()
         os.environ["HERMES_HOME"] = str(hermes_home)
-        os.environ["ARCLINK_CODE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["CODE_WORKSPACE_ROOT"] = str(workspace)
         try:
             code_api = load_module(
-                PLUGINS_ROOT / "arclink-code" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "code" / "dashboard" / "plugin_api.py",
                 "arclink_code_dashboard_git_ops_test",
             )
             repos = asyncio.run(code_api.repos())
@@ -993,10 +1021,10 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
 
 
 def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
-    body = (PLUGINS_ROOT / "arclink-code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    body = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
     expect('"/git/diff?repo="' in body, "Source Control changed-file clicks should request the diff endpoint")
     expect("function renderDiff(diff)" in body, "Code UI should render a diff view")
-    expect("arclink-code-diff-panes" in body, "Code UI should include before/after diff panes")
+    expect("hermes-code-diff-panes" in body, "Code UI should include before/after diff panes")
     expect("state.diff" in body and "renderDiff(state.diff)" in body, "Diff state should drive the editor surface")
     expect('"/tree?path="' in body and "function renderTreeNode(item, depth)" in body, "Code UI should render a nested Explorer tree")
     expect("function renderContextMenu()" in body and "onContextMenu" in body, "Code UI should expose Explorer context menus")
@@ -1008,17 +1036,17 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect("renderSearchBox()" in body and "state.leftPanel === \"search\"" not in body, "Code UI should use inline search instead of a separate Search panel")
     expect("onDrop: openDroppedTab" in body, "Code UI should open files dropped on the tab strip")
     expect('"/git/ignore"' in body and '"/git/pull"' in body and '"/git/push"' in body, "Code UI should expose richer source-control actions")
-    expect("Auto-save is off" in body and "arclink-code-theme-" in body, "Code UI should expose manual-save warning and theme toggle")
-    expect("arclink-code-statusbar" in body and "lastGitResult" in body, "Code UI should expose status bar and last git result")
+    expect("Auto-save is off" in body and "hermes-code-theme-" in body, "Code UI should expose manual-save warning and theme toggle")
+    expect("hermes-code-statusbar" in body and "lastGitResult" in body, "Code UI should expose status bar and last git result")
     expect("function extensionColor(item)" in body and "long-ext" in body, "Code file icons should derive compact, readable extension colors")
     expect("function renderCodePreview(file)" in body and 'api("/preview?path="' in body, "Code UI should open previewable files in editor tabs")
-    expect("arclink-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")
-    style = (PLUGINS_ROOT / "arclink-code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
-    expect(".arclink-code-diff-panes" in style, "Code CSS should style split diff panes")
-    expect(".arclink-code-tree-node" in style and ".arclink-code-context-menu" in style, "Code CSS should style nested Explorer and context menus")
-    expect(".arclink-code-search" in style and ".arclink-code-statusbar" in style, "Code CSS should style search and status bar")
-    expect(".arclink-code-fileicon.long-ext" in style and ".arclink-code-pdf-preview" in style, "Code CSS should style compact icons and PDF preview tabs")
-    expect(".arclink-code-theme-light" in style, "Code CSS should include a light theme")
+    expect("hermes-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")
+    style = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".hermes-code-diff-panes" in style, "Code CSS should style split diff panes")
+    expect(".hermes-code-tree-node" in style and ".hermes-code-context-menu" in style, "Code CSS should style nested Explorer and context menus")
+    expect(".hermes-code-search" in style and ".hermes-code-statusbar" in style, "Code CSS should style search and status bar")
+    expect(".hermes-code-fileicon.long-ext" in style and ".hermes-code-pdf-preview" in style, "Code CSS should style compact icons and PDF preview tabs")
+    expect(".hermes-code-theme-light" in style, "Code CSS should include a light theme")
     expect("@media (max-width: 760px)" in style and "grid-template-columns: 1fr;" in style, "Code diff panes should collapse on mobile")
     print("PASS test_arclink_code_browser_opens_source_control_changes_as_diffs")
 
@@ -1034,12 +1062,12 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
         old_env = os.environ.copy()
         os.environ["HERMES_HOME"] = str(hermes_home)
         os.environ["HOME"] = str(workspace)
-        os.environ["ARCLINK_TERMINAL_WORKSPACE_ROOT"] = str(workspace)
-        os.environ["ARCLINK_TERMINAL_SCROLLBACK_BYTES"] = "4000"
-        os.environ["ARCLINK_TERMINAL_ALLOW_ROOT"] = "1"
+        os.environ["TERMINAL_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["TERMINAL_SCROLLBACK_BYTES"] = "4000"
+        os.environ["TERMINAL_ALLOW_ROOT"] = "1"
         try:
             terminal_api = load_module(
-                PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py",
                 "arclink_terminal_dashboard_managed_pty_test",
             )
             status = asyncio.run(terminal_api.status())
@@ -1152,7 +1180,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
 
 
 def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
-    body = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    body = (PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
     expect('"/sessions"' in body and '"/input"' in body, "Terminal UI should use persistent session and input endpoints")
     expect("EventSource" in body and '"/stream"' in body, "Terminal UI should stream session output")
     expect("setInterval" in body and "startPolling" in body, "Terminal UI should retain polling fallback")
@@ -1166,17 +1194,17 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("startRenameSession" in body and "editingSessionId" in body, "Terminal UI should support inline session renaming")
     expect("window.prompt(\"SSH target\"" not in body and "target: \"\"" in body, "Terminal UI should not prompt for an SSH target")
     expect("+ TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
-    expect("scrollback" in body and "arclink-terminal-screen" in body, "Terminal UI should render bounded scrollback")
-    api_body = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
+    expect("scrollback" in body and "hermes-terminal-screen" in body, "Terminal UI should render bounded scrollback")
+    api_body = (PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
     expect("_DEFAULT_TUI_DIR" in api_body and "HERMES_TUI_DIR" in api_body and "_tui_dist_available" in api_body, "Terminal API should only advertise Hermes TUI when bundled assets are ready")
     expect("_CPR_QUERY" in api_body and "_answer_terminal_queries" in api_body, "Terminal API should answer cursor-position requests for TUIs")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
     expect("registerPage" not in body, "Terminal UI should not use unavailable dashboard SDK registration helpers")
-    style = (PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
-    expect(".arclink-terminal-confirm" in style, "Terminal CSS should style close confirmation")
-    expect(".arclink-terminal-context" in style, "Terminal CSS should style the session right-click menu")
-    expect(".arclink-terminal-session-rename" in style, "Terminal CSS should style inline rename")
+    style = (PLUGINS_ROOT / "terminal" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".hermes-terminal-confirm" in style, "Terminal CSS should style close confirmation")
+    expect(".hermes-terminal-context" in style, "Terminal CSS should style the session right-click menu")
+    expect(".hermes-terminal-session-rename" in style, "Terminal CSS should style inline rename")
     expect("text-transform: none" in style and "font-variant-caps: normal" in style, "Terminal CSS should preserve shell output casing")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")
     print("PASS test_arclink_terminal_browser_exposes_persistent_session_controls")
@@ -1195,11 +1223,11 @@ def test_arclink_terminal_blocks_unrestricted_root_runtime_when_not_overridden()
         old_env = os.environ.copy()
         os.environ["HERMES_HOME"] = str(hermes_home)
         os.environ["HOME"] = str(workspace)
-        os.environ["ARCLINK_TERMINAL_WORKSPACE_ROOT"] = str(workspace)
-        os.environ.pop("ARCLINK_TERMINAL_ALLOW_ROOT", None)
+        os.environ["TERMINAL_WORKSPACE_ROOT"] = str(workspace)
+        os.environ.pop("TERMINAL_ALLOW_ROOT", None)
         try:
             terminal_api = load_module(
-                PLUGINS_ROOT / "arclink-terminal" / "dashboard" / "plugin_api.py",
+                PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py",
                 "arclink_terminal_dashboard_root_guard_test",
             )
             status = asyncio.run(terminal_api.status())
@@ -2610,6 +2638,7 @@ def test_arclink_managed_context_recipe_tools_match_mcp_surface() -> None:
 
 def main() -> int:
     test_install_arclink_plugins_installs_default_hermes_plugin()
+    test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_only()
     test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default()
     test_install_arclink_plugins_preserves_comments_and_future_nested_config()
     test_install_arclink_plugins_excludes_generated_artifacts()
@@ -2637,7 +2666,7 @@ def main() -> int:
     test_arclink_managed_context_budgets_live_notion_queries_per_turn()
     test_arclink_managed_context_emits_telemetry_and_respects_opt_out()
     test_arclink_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 28 ArcLink plugin tests")
+    print("PASS all 29 ArcLink plugin tests")
     return 0
 
 

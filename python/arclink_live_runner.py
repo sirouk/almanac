@@ -250,30 +250,30 @@ def _browser_runner_script() -> str:
           fs.mkdirSync(screenshotDir, { recursive: true });
           await page.addStyleTag({
             content: `
-              .arclink-drive-file-name,
-              .arclink-drive-name,
-              .arclink-drive-file-facts,
-              .arclink-drive-meta,
-              .arclink-drive-path,
-              .arclink-drive-preview,
-              .arclink-drive-text-preview,
-              .arclink-drive-preview-fullscreen,
-              .arclink-code-item-name,
-              .arclink-code-item-lang,
-              .arclink-code-path,
-              .arclink-code-textarea,
-              .arclink-code-preview,
-              .arclink-code-preview-fullscreen,
-              .arclink-code-diff,
-              .arclink-code-search-results,
-              .arclink-code-change-name,
-              .arclink-code-source-head,
-              .arclink-code-last-git-result,
-              .arclink-terminal-screen,
-              .arclink-terminal-facts,
-              .arclink-terminal-group-label,
-              .arclink-terminal-session strong,
-              .arclink-terminal-session span,
+              .hermes-drive-file-name,
+              .hermes-drive-name,
+              .hermes-drive-file-facts,
+              .hermes-drive-meta,
+              .hermes-drive-path,
+              .hermes-drive-preview,
+              .hermes-drive-text-preview,
+              .hermes-drive-preview-fullscreen,
+              .hermes-code-item-name,
+              .hermes-code-item-lang,
+              .hermes-code-path,
+              .hermes-code-textarea,
+              .hermes-code-preview,
+              .hermes-code-preview-fullscreen,
+              .hermes-code-diff,
+              .hermes-code-search-results,
+              .hermes-code-change-name,
+              .hermes-code-source-head,
+              .hermes-code-last-git-result,
+              .hermes-terminal-screen,
+              .hermes-terminal-facts,
+              .hermes-terminal-group-label,
+              .hermes-terminal-session strong,
+              .hermes-terminal-session span,
               input,
               textarea,
               pre {
@@ -281,13 +281,13 @@ def _browser_runner_script() -> str:
                 text-shadow: none !important;
                 caret-color: transparent !important;
               }
-              .arclink-drive-preview *,
-              .arclink-drive-preview-fullscreen *,
-              .arclink-code-preview *,
-              .arclink-code-preview-fullscreen *,
-              .arclink-code-textarea *,
-              .arclink-code-diff *,
-              .arclink-terminal-screen * {
+              .hermes-drive-preview *,
+              .hermes-drive-preview-fullscreen *,
+              .hermes-code-preview *,
+              .hermes-code-preview-fullscreen *,
+              .hermes-code-textarea *,
+              .hermes-code-diff *,
+              .hermes-terminal-screen * {
                 color: transparent !important;
                 text-shadow: none !important;
               }
@@ -306,7 +306,7 @@ def _browser_runner_script() -> str:
             form.append("root", root);
             form.append("conflict", "keep-both");
             form.append("files", new File([content], name, { type: "text/plain" }));
-            const res = await fetch("/api/plugins/arclink-drive/upload", {
+            const res = await fetch("/api/plugins/drive/upload", {
               method: "POST",
               credentials: "same-origin",
               body: form,
@@ -319,8 +319,8 @@ def _browser_runner_script() -> str:
         }
 
         async function driveProof(page) {
-          await openPluginPage(page, "ArcLink Drive", "New Folder");
-          const status = await requestJSON(page, "/api/plugins/arclink-drive/status");
+          await openPluginPage(page, "Drive", "New Folder");
+          const status = await requestJSON(page, "/api/plugins/drive/status");
           if (!status.available) throw new Error("Drive plugin unavailable");
           const roots = (status.roots || []).filter((root) => root.available);
           if (!roots.length) throw new Error("Drive has no available roots");
@@ -330,15 +330,15 @@ def _browser_runner_script() -> str:
           const path = upload.uploaded[0].path;
           const renamed = "/" + slug + "-renamed.txt";
           const moved = "/" + slug + "-folder/" + slug + "-renamed.txt";
-          await requestJSON(page, "/api/plugins/arclink-drive/rename", { method: "POST", body: { root, path, name: slug + "-renamed.txt" } });
-          await requestJSON(page, "/api/plugins/arclink-drive/mkdir", { method: "POST", body: { root, path: "/" + slug + "-folder" } });
-          await requestJSON(page, "/api/plugins/arclink-drive/duplicate", { method: "POST", body: { root, path: renamed } });
-          await requestJSON(page, "/api/plugins/arclink-drive/move", { method: "POST", body: { root, source_path: renamed, destination_path: moved } });
-          await requestJSON(page, "/api/plugins/arclink-drive/delete", { method: "POST", body: { root, path: moved } });
-          const trash = await requestJSON(page, "/api/plugins/arclink-drive/trash?root=" + encodeURIComponent(root));
+          await requestJSON(page, "/api/plugins/drive/rename", { method: "POST", body: { root, path, name: slug + "-renamed.txt" } });
+          await requestJSON(page, "/api/plugins/drive/mkdir", { method: "POST", body: { root, path: "/" + slug + "-folder" } });
+          await requestJSON(page, "/api/plugins/drive/duplicate", { method: "POST", body: { root, path: renamed } });
+          await requestJSON(page, "/api/plugins/drive/move", { method: "POST", body: { root, source_path: renamed, destination_path: moved } });
+          await requestJSON(page, "/api/plugins/drive/delete", { method: "POST", body: { root, path: moved } });
+          const trash = await requestJSON(page, "/api/plugins/drive/trash?root=" + encodeURIComponent(root));
           const record = (trash.items || []).find((item) => item.original_path === moved);
           if (!record) throw new Error("Drive trash record missing");
-          await requestJSON(page, "/api/plugins/arclink-drive/restore", { method: "POST", body: { root, path: record.trash_path } });
+          await requestJSON(page, "/api/plugins/drive/restore", { method: "POST", body: { root, path: record.trash_path } });
           if (roots.length > 1) {
             await page.getByRole("button", { name: roots[1].label }).first().click();
           }
@@ -346,59 +346,59 @@ def _browser_runner_script() -> str:
         }
 
         async function codeProof(page) {
-          await openPluginPage(page, "ArcLink Code", "Explorer");
-          const status = await requestJSON(page, "/api/plugins/arclink-code/status");
+          await openPluginPage(page, "Code", "Explorer");
+          const status = await requestJSON(page, "/api/plugins/code/status");
           if (!status.available) throw new Error("Code plugin unavailable");
           const slug = "arclink-proof-" + Date.now() + ".md";
-          const repos = await requestJSON(page, "/api/plugins/arclink-code/repos");
+          const repos = await requestJSON(page, "/api/plugins/code/repos");
           const repo = repos.repos && repos.repos.length ? repos.repos[0] : null;
           const repoPath = repo ? repo.path : "";
           const workspacePath = repo ? ((repoPath === "/" ? "" : repoPath.replace(/\/$/, "")) + "/" + slug) : ("/" + slug);
-          const saved = await requestJSON(page, "/api/plugins/arclink-code/save", {
+          const saved = await requestJSON(page, "/api/plugins/code/save", {
             method: "POST",
             body: { path: workspacePath, content: "# Workspace proof\n" },
           });
-          await requestJSON(page, "/api/plugins/arclink-code/file?path=" + encodeURIComponent(saved.path));
-          const updated = await requestJSON(page, "/api/plugins/arclink-code/save", {
+          await requestJSON(page, "/api/plugins/code/file?path=" + encodeURIComponent(saved.path));
+          const updated = await requestJSON(page, "/api/plugins/code/save", {
             method: "POST",
             body: { path: saved.path, expected_hash: saved.hash, content: "# Workspace proof\n\nedited\n" },
           });
-          await requestJSON(page, "/api/plugins/arclink-code/search?q=" + encodeURIComponent("Workspace proof") + "&path=%2F");
+          await requestJSON(page, "/api/plugins/code/search?q=" + encodeURIComponent("Workspace proof") + "&path=%2F");
           if (repo) {
-            await requestJSON(page, "/api/plugins/arclink-code/git/status?repo=" + encodeURIComponent(repoPath));
-            await requestJSON(page, "/api/plugins/arclink-code/git/diff?repo=" + encodeURIComponent(repoPath) + "&path=" + encodeURIComponent(slug) + "&untracked=true");
-            await requestJSON(page, "/api/plugins/arclink-code/git/stage", { method: "POST", body: { repo: repoPath, path: slug } });
-            await requestJSON(page, "/api/plugins/arclink-code/git/unstage", { method: "POST", body: { repo: repoPath, path: slug } });
+            await requestJSON(page, "/api/plugins/code/git/status?repo=" + encodeURIComponent(repoPath));
+            await requestJSON(page, "/api/plugins/code/git/diff?repo=" + encodeURIComponent(repoPath) + "&path=" + encodeURIComponent(slug) + "&untracked=true");
+            await requestJSON(page, "/api/plugins/code/git/stage", { method: "POST", body: { repo: repoPath, path: slug } });
+            await requestJSON(page, "/api/plugins/code/git/unstage", { method: "POST", body: { repo: repoPath, path: slug } });
           }
-          await requestJSON(page, "/api/plugins/arclink-code/ops/trash", { method: "POST", body: { path: updated.path, confirm: true } });
+          await requestJSON(page, "/api/plugins/code/ops/trash", { method: "POST", body: { path: updated.path, confirm: true } });
           await page.getByRole("button", { name: "Light" }).first().click().catch(() => {});
           return { checks: repo ? 8 : 6, repos: (repos.repos || []).length };
         }
 
         async function terminalProof(page) {
-          await openPluginPage(page, "ArcLink Terminal", "Sessions");
-          const status = await requestJSON(page, "/api/plugins/arclink-terminal/status");
+          await openPluginPage(page, "Terminal", "Sessions");
+          const status = await requestJSON(page, "/api/plugins/terminal/status");
           if (!status.available) throw new Error("Terminal plugin unavailable");
-          const created = await requestJSON(page, "/api/plugins/arclink-terminal/sessions", {
+          const created = await requestJSON(page, "/api/plugins/terminal/sessions", {
             method: "POST",
             body: { name: "Proof Terminal", cwd: "/" },
           });
           const session = created.session;
-          await requestJSON(page, "/api/plugins/arclink-terminal/sessions/" + encodeURIComponent(session.id) + "/input", {
+          await requestJSON(page, "/api/plugins/terminal/sessions/" + encodeURIComponent(session.id) + "/input", {
             method: "POST",
             body: { input: "printf 'workspace-proof-ok\\n'\n" },
           });
           await page.reload({ waitUntil: "domcontentloaded" });
-          await openPluginPage(page, "ArcLink Terminal", "Sessions");
-          const revisited = await requestJSON(page, "/api/plugins/arclink-terminal/sessions/" + encodeURIComponent(session.id));
+          await openPluginPage(page, "Terminal", "Sessions");
+          const revisited = await requestJSON(page, "/api/plugins/terminal/sessions/" + encodeURIComponent(session.id));
           if (!String(revisited.session.scrollback || "").includes("workspace-proof-ok")) {
             throw new Error("Terminal proof output missing after reload");
           }
-          await requestJSON(page, "/api/plugins/arclink-terminal/sessions/" + encodeURIComponent(session.id) + "/rename", {
+          await requestJSON(page, "/api/plugins/terminal/sessions/" + encodeURIComponent(session.id) + "/rename", {
             method: "POST",
             body: { name: "Proof Terminal Renamed", folder: "Proof" },
           });
-          await requestJSON(page, "/api/plugins/arclink-terminal/sessions/" + encodeURIComponent(session.id) + "/close", {
+          await requestJSON(page, "/api/plugins/terminal/sessions/" + encodeURIComponent(session.id) + "/close", {
             method: "POST",
             body: { confirm: true },
           });

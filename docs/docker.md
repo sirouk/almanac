@@ -104,11 +104,11 @@ the entire possible port range at Compose startup.
 
 Docker deployment stacks also carry the native Hermes workspace plugin mounts.
 `hermes-dashboard` receives the deployment Hermes home, vault, and code
-workspace with `VAULT_DIR=/srv/vault`, `ARCLINK_DRIVE_ROOT=/srv/vault`, and
-`ARCLINK_CODE_WORKSPACE_ROOT=/workspace`. Reconcile and health repair those
+workspace with `VAULT_DIR=/srv/vault`, `DRIVE_ROOT=/srv/vault`, and
+`CODE_WORKSPACE_ROOT=/workspace`. Reconcile and health repair those
 mounts for existing deployment Compose files, rerun the managed plugin installer,
-and recreate `hermes-dashboard` so `ArcLink Drive`, `ArcLink Code`, and the
-managed-pty `ArcLink Terminal` tab stay visible without Hermes core patches.
+and recreate `hermes-dashboard` so `Drive`, `Code`, and the
+managed-pty `Terminal` tab stay visible without Hermes core patches.
 
 When Tailscale path mode is selected, Docker reconcile/health can publish
 per-deployment Hermes, files, and code surfaces on stable tailnet HTTPS ports
@@ -229,6 +229,6 @@ volumes, but bind-mounted `arclink-priv/` state remains on disk.
 - Secrets belong in mounted runtime config, not in the image.
 - Tailscale ingress is optional and remains an integration choice outside the
   default local Docker stack.
-- ArcLink Drive, Code, and Terminal are exposed as authenticated Hermes
+- Drive, Code, and Terminal are exposed as authenticated Hermes
   dashboard plugin routes, not separate sidecar IDE ports.
 - The Docker app image installs Hermes and qmd from `config/pins.json`.

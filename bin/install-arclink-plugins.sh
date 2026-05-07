@@ -12,9 +12,9 @@ shift 2
 
 if [[ $# -eq 0 ]]; then
   set -- \
-    arclink-code \
-    arclink-drive \
-    arclink-terminal \
+    drive \
+    code \
+    terminal \
     arclink-managed-context
 fi
 
@@ -25,8 +25,20 @@ TARGET_HOOKS_ROOT="$HERMES_HOME/hooks"
 LEGACY_PLUGIN_NAMES=(
   arclink-code-space
   arclink-knowledge-vault
+  arclink-code
+  arclink-drive
+  arclink-terminal
 )
 mkdir -p "$TARGET_ROOT"
+
+normalize_plugin_name() {
+  case "$1" in
+    arclink-code|code|codespace|code-space|arclink-code-space) printf '%s\n' "code" ;;
+    arclink-drive|knowledge-vault|arclink-knowledge-vault) printf '%s\n' "drive" ;;
+    arclink-terminal) printf '%s\n' "terminal" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
 
 cleanup_legacy_plugins() {
   local legacy_name=""
@@ -153,12 +165,13 @@ PY
 }
 
 install_one_plugin() {
-  local plugin_name="$1"
+  local plugin_name
+  plugin_name="$(normalize_plugin_name "$1")"
   local src_dir="$PLUGINS_ROOT/$plugin_name"
   local dst_dir="$TARGET_ROOT/$plugin_name"
 
   if [[ ! -f "$src_dir/plugin.yaml" || ! -f "$src_dir/__init__.py" ]]; then
-    echo "Missing ArcLink plugin source: expected plugin.yaml and __init__.py under $src_dir" >&2
+    echo "Missing Hermes plugin source: expected plugin.yaml and __init__.py under $src_dir" >&2
     exit 1
   fi
 
@@ -183,7 +196,7 @@ install_one_plugin() {
   fi
 
   if [[ ! -f "$dst_dir/plugin.yaml" || ! -f "$dst_dir/__init__.py" ]]; then
-    echo "Failed to install ArcLink plugin into $dst_dir" >&2
+    echo "Failed to install Hermes plugin into $dst_dir" >&2
     exit 1
   fi
 }
@@ -209,9 +222,16 @@ install_default_hooks() {
 
 cleanup_legacy_plugins
 
+normalized_plugins=()
 for plugin_name in "$@"; do
+  normalized_plugins+=("$(normalize_plugin_name "$plugin_name")")
+done
+
+for plugin_name in "${normalized_plugins[@]}"; do
   install_one_plugin "$plugin_name"
 done
-sync_plugin_config "$@"
+sync_plugin_config "${normalized_plugins[@]}"
 
-install_default_hooks
+if [[ "${INSTALL_ARCLINK_PLUGINS_SKIP_HOOKS:-0}" != "1" ]]; then
+  install_default_hooks
+fi

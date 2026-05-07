@@ -151,32 +151,32 @@ _WORKSPACE_JOURNEY_STEPS: list[dict[str, Any]] = [
     },
     {
         "name": "drive_tls_desktop_proof",
-        "description": "Exercise ArcLink Drive upload, rename, duplicate, move, trash, restore, and root switch over TLS on desktop",
+        "description": "Exercise Drive upload, rename, duplicate, move, trash, restore, and root switch over TLS on desktop",
         "required_env": list(_WORKSPACE_PROOF_ENV),
     },
     {
         "name": "drive_tls_mobile_proof",
-        "description": "Exercise ArcLink Drive workflow over TLS on a mobile viewport",
+        "description": "Exercise Drive workflow over TLS on a mobile viewport",
         "required_env": list(_WORKSPACE_PROOF_ENV),
     },
     {
         "name": "code_tls_desktop_proof",
-        "description": "Exercise ArcLink Code open, edit without auto-save, save, diff, stage, and unstage over TLS on desktop",
+        "description": "Exercise Code open, edit without auto-save, save, diff, stage, and unstage over TLS on desktop",
         "required_env": list(_WORKSPACE_PROOF_ENV),
     },
     {
         "name": "code_tls_mobile_proof",
-        "description": "Exercise ArcLink Code workflow over TLS on a mobile viewport",
+        "description": "Exercise Code workflow over TLS on a mobile viewport",
         "required_env": list(_WORKSPACE_PROOF_ENV),
     },
     {
         "name": "terminal_tls_desktop_proof",
-        "description": "Exercise ArcLink Terminal create, output, reload, revisit, rename, and close over TLS on desktop",
+        "description": "Exercise Terminal create, output, reload, revisit, rename, and close over TLS on desktop",
         "required_env": list(_WORKSPACE_PROOF_ENV),
     },
     {
         "name": "terminal_tls_mobile_proof",
-        "description": "Exercise ArcLink Terminal workflow over TLS on a mobile viewport",
+        "description": "Exercise Terminal workflow over TLS on a mobile viewport",
         "required_env": list(_WORKSPACE_PROOF_ENV),
     },
 ]

@@ -105,7 +105,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-code-", suffix=".json.tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".code-", suffix=".json.tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -139,8 +139,16 @@ def _clean_text(value: Any, limit: int = 160) -> str:
     return text[:limit]
 
 
+def _env_first(*keys: str) -> str:
+    for key in keys:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _workspace_root() -> Path:
-    explicit = os.environ.get("ARCLINK_CODE_WORKSPACE_ROOT")
+    explicit = _env_first("CODE_WORKSPACE_ROOT")
     if explicit:
         return Path(explicit).expanduser().resolve(strict=False)
     return Path(os.environ.get("HOME") or str(Path.home())).expanduser().resolve(strict=False)
@@ -150,14 +158,14 @@ def _candidate_vault_roots() -> list[Path]:
     home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     candidates: list[Path] = []
     for value in (
-        os.environ.get("ARCLINK_CODE_VAULT_ROOT"),
-        os.environ.get("ARCLINK_DRIVE_ROOT"),
-        os.environ.get("ARCLINK_KNOWLEDGE_VAULT_ROOT"),
+        os.environ.get("CODE_VAULT_ROOT"),
+        os.environ.get("DRIVE_ROOT"),
+        os.environ.get("KNOWLEDGE_VAULT_ROOT"),
         os.environ.get("VAULT_DIR"),
     ):
         if value:
             candidates.append(Path(value).expanduser())
-    candidates.extend([home / "ArcLink", home / "Vault", _hermes_home() / "ArcLink", _hermes_home() / "Vault"])
+    candidates.extend([home / "Vault", _hermes_home() / "Vault"])
     return candidates
 
 
@@ -197,7 +205,8 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
 
 
 def _load_access() -> dict[str, Any]:
-    return _load_json(_hermes_home() / "state" / "arclink-web-access.json")
+    state_dir = _hermes_home() / "state"
+    return _load_json(state_dir / "web-access.json")
 
 
 def _clean_relative_path(raw_path: Any) -> str:
@@ -225,7 +234,7 @@ def _resolve(raw_path: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, 
     relative = _clean_relative_path(raw_path)
     target = (root / relative).resolve(strict=False)
     if target != root and root not in target.parents:
-        raise HTTPException(status_code=403, detail="Path is outside ArcLink Code")
+        raise HTTPException(status_code=403, detail="Path is outside Code")
     return target, relative, root_ctx
 
 
@@ -247,7 +256,7 @@ def _require_destination(raw_path: Any, raw_root: Any = None, *, overwrite: bool
     parent = target.parent.resolve(strict=False)
     root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
     if parent != root and root not in parent.parents:
-        raise HTTPException(status_code=403, detail="Destination parent is outside ArcLink Code")
+        raise HTTPException(status_code=403, detail="Destination parent is outside Code")
     parent.mkdir(parents=True, exist_ok=True)
     return target, relative, root_ctx
 
@@ -260,7 +269,7 @@ def _clean_leaf_name(raw_name: Any) -> str:
 
 
 def _trash_dir() -> Path:
-    return _hermes_home() / "state" / "arclink-code-trash"
+    return _hermes_home() / "state" / "code-trash"
 
 
 def _trash_index_path() -> Path:
@@ -396,7 +405,7 @@ def _tree_for(path: Path, relative: str, depth: int, root_ctx: dict[str, Any]) -
 
 def _write_text_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-code-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".code-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
@@ -424,7 +433,7 @@ def _repo_display_path(path: Path, root: Path | None = None) -> str:
     try:
         relative = path.resolve(strict=False).relative_to(root)
     except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Repository is outside ArcLink Code") from exc
+        raise HTTPException(status_code=403, detail="Repository is outside Code") from exc
     return _display_path(relative.as_posix())
 
 
@@ -457,7 +466,7 @@ def _resolve_repo_file(repo: Path, raw_path: Any) -> tuple[Path, str]:
     relative = _clean_repo_file_path(raw_path)
     target = (repo / relative).resolve(strict=False)
     if target != repo and repo not in target.parents:
-        raise HTTPException(status_code=403, detail="Repository file is outside ArcLink Code")
+        raise HTTPException(status_code=403, detail="Repository file is outside Code")
     return target, relative
 
 
@@ -687,8 +696,8 @@ async def status() -> dict[str, Any]:
     roots = _root_descriptors()
     workspace = next((root for root in roots if root["id"] == "workspace"), roots[0])
     return {
-        "plugin": "arclink-code",
-        "label": "ArcLink Code",
+        "plugin": "code",
+        "label": "Code",
         "version": "1.0.0",
         "status_contract": 1,
         "available": any(bool(root.get("available")) for root in roots),
@@ -840,7 +849,7 @@ async def items(path: str = "/", root: str = "workspace") -> dict[str, Any]:
     target, relative, root_ctx = _resolve(path, root)
     root_path = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
     if not root_path.is_dir():
-        raise HTTPException(status_code=404, detail="ArcLink Code workspace is not available")
+        raise HTTPException(status_code=404, detail="Code workspace is not available")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Workspace path does not exist")
     if not target.is_dir():
@@ -858,7 +867,7 @@ async def tree(path: str = "/", root: str = "workspace", depth: int = 3) -> dict
     target, relative, root_ctx = _resolve(path, root)
     root_path = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
     if not root_path.is_dir():
-        raise HTTPException(status_code=404, detail="ArcLink Code workspace is not available")
+        raise HTTPException(status_code=404, detail="Code workspace is not available")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Workspace path does not exist")
     if not target.is_dir():

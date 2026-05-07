@@ -2,17 +2,17 @@
 
 ## Native Hermes Workspace Plugins (2026-05-05)
 
-- **ArcLink Drive**: `plugins/hermes-agent/arclink-drive/` is now documented as
-  the ArcLink-owned Hermes dashboard file manager. It supports local vault and
+- **Drive**: `plugins/hermes-agent/drive/` is now documented as
+  the Hermes dashboard file manager. It supports local vault and
   sanitized Nextcloud WebDAV backends, bounded preview/download/upload, folder
   creation, rename/move, local trash, and local restore. WebDAV
   credentials stay server-side in the plugin API.
-- **ArcLink Code**: `plugins/hermes-agent/arclink-code/` is now documented as
+- **Code**: `plugins/hermes-agent/code/` is now documented as
   the native Hermes code workspace. It uses the deployment workspace root,
   opens bounded text files, guards saves with expected SHA-256 hashes, scans
   bounded git repositories, and exposes allowlisted source-control operations
   with confirmation-gated discard.
-- **ArcLink Terminal**: `plugins/hermes-agent/arclink-terminal/` now exposes a
+- **Terminal**: `plugins/hermes-agent/terminal/` now exposes a
   managed-pty persistent-session backend with stable session IDs, persisted
   metadata, bounded scrollback, polling output, input, reload reconnect,
   rename/folder/reorder controls, confirmation-gated close, and an

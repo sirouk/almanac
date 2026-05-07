@@ -467,24 +467,24 @@ Without credentials, all steps skip cleanly. Evidence template at
 
 | Surface | Owner | Current status |
 | --- | --- | --- |
-| ArcLink Drive | `plugins/hermes-agent/arclink-drive/` | Functional first-generation file manager |
-| ArcLink Code | `plugins/hermes-agent/arclink-code/` | Functional first-generation editor/git surface |
-| ArcLink Terminal | `plugins/hermes-agent/arclink-terminal/` | Managed-pty persistent sessions with bounded polling output |
-| Install/enable | `bin/install-arclink-plugins.sh` | Installs all default ArcLink plugins and prunes legacy aliases |
+| Drive | `plugins/hermes-agent/drive/` | Functional first-generation file manager |
+| Code | `plugins/hermes-agent/code/` | Functional first-generation editor/git surface |
+| Terminal | `plugins/hermes-agent/terminal/` | Managed-pty persistent sessions with bounded polling output |
+| Install/enable | `bin/install-arclink-plugins.sh` | Installs all default workspace plugins and prunes legacy aliases |
 | Docker repair | `bin/arclink-docker.sh` | Repairs dashboard mounts and refreshes managed plugins |
 
 **Assumptions:**
 
 - Workspace plugins are additive Hermes dashboard plugins. Do not patch Hermes
-  core for ArcLink-specific Drive, Code, or Terminal behavior.
+  core for Drive, Code, or Terminal behavior.
 - Plugin status contracts are capability-driven and secret-free. They may
   return access URLs, usernames, mount labels, roots, editor mode, and backend
   names; they must not return tokens, passwords, deploy keys, OAuth material, or
   raw `.env` values.
 - Drive and Code are mounted into deployment-owned roots. In Docker
   deployments, Drive uses `/srv/vault` and Code uses `/workspace`.
-- Terminal is intentionally unavailable until its persistent session backend is
-  implemented. Operators should not treat the tab as shell access.
+- Terminal exposes managed shell access only behind the authenticated Hermes
+  dashboard and keeps unrestricted root blocked unless explicitly allowed.
 
 **Default install:**
 
@@ -495,9 +495,9 @@ bin/install-arclink-plugins.sh "$REPO_DIR" "$HERMES_HOME"
 With no explicit plugin list, the installer enables:
 
 ```text
-arclink-code
-arclink-drive
-arclink-terminal
+drive
+code
+terminal
 arclink-managed-context
 ```
 
@@ -506,6 +506,9 @@ It also removes legacy aliases from the Hermes home and plugin config:
 ```text
 arclink-code-space
 arclink-knowledge-vault
+arclink-code
+arclink-drive
+arclink-terminal
 ```
 
 **Docker repair and refresh:**
@@ -514,8 +517,8 @@ Docker reconcile and health call helper paths that:
 
 1. Ensure deployed `hermes-dashboard` services mount the Hermes home, vault,
    and workspace.
-2. Ensure `VAULT_DIR`, `ARCLINK_DRIVE_ROOT`, and
-   `ARCLINK_CODE_WORKSPACE_ROOT` are present in the dashboard environment.
+2. Ensure `VAULT_DIR`, `DRIVE_ROOT`, and
+   `CODE_WORKSPACE_ROOT` are present in the dashboard environment.
 3. Re-run `managed-context-install` for each deployment stack that has that
    service.
 4. Recreate `hermes-dashboard` so plugin changes are loaded.
@@ -546,14 +549,14 @@ URL read model when publishing succeeds.
 
 ```bash
 python3 -m py_compile \
-  plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-code/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py
+  plugins/hermes-agent/drive/dashboard/plugin_api.py \
+  plugins/hermes-agent/code/dashboard/plugin_api.py \
+  plugins/hermes-agent/terminal/dashboard/plugin_api.py
 python3 tests/test_arclink_plugins.py
 python3 tests/test_arclink_docker.py
-node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js
+node --check plugins/hermes-agent/drive/dashboard/dist/index.js
+node --check plugins/hermes-agent/code/dashboard/dist/index.js
+node --check plugins/hermes-agent/terminal/dashboard/dist/index.js
 ```
 
 ---

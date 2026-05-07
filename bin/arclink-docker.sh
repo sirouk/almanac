@@ -984,6 +984,11 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     if isinstance(env, dict):
         for key, value in {
             "VAULT_DIR": "/srv/vault",
+            "DRIVE_ROOT": "/srv/vault",
+            "CODE_WORKSPACE_ROOT": "/workspace",
+            "TERMINAL_WORKSPACE_ROOT": "/workspace",
+            "TERMINAL_ALLOW_ROOT": "1",
+            "TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
             "ARCLINK_DRIVE_ROOT": "/srv/vault",
             "ARCLINK_CODE_WORKSPACE_ROOT": "/workspace",
             "ARCLINK_TERMINAL_ALLOW_ROOT": "1",

@@ -56,8 +56,8 @@ _DEFAULT_MAX_SESSIONS = 6
 _DEFAULT_SCROLLBACK_BYTES = 32_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
-_DEFAULT_TUI_COMMAND = "/opt/arclink/runtime/hermes-venv/bin/hermes"
-_DEFAULT_TUI_DIR = "/opt/arclink/runtime/hermes-agent-src/ui-tui"
+_DEFAULT_TUI_COMMAND = "hermes"
+_DEFAULT_TUI_DIR = ""
 _DEFAULT_ROWS = 32
 _DEFAULT_COLS = 132
 _CPR_QUERY = b"\x1b[6n"
@@ -87,7 +87,7 @@ def _hermes_home() -> Path:
 
 
 def _state_dir() -> Path:
-    return _hermes_home() / "state" / "arclink-terminal"
+    return _hermes_home() / "state" / "terminal"
 
 
 def _sessions_path() -> Path:
@@ -102,9 +102,17 @@ def _load_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _env_first(*keys: str) -> str:
+    for key in keys:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-terminal-", suffix=".json.tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".terminal-", suffix=".json.tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -121,7 +129,7 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _workspace_root() -> Path:
-    for key in ("ARCLINK_TERMINAL_WORKSPACE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "HOME"):
+    for key in ("TERMINAL_WORKSPACE_ROOT", "CODE_WORKSPACE_ROOT", "HOME"):
         value = str(os.environ.get(key) or "").strip()
         if value:
             return Path(value).expanduser().resolve(strict=False)
@@ -129,7 +137,7 @@ def _workspace_root() -> Path:
 
 
 def _shell_path() -> str:
-    for value in (os.environ.get("ARCLINK_TERMINAL_SHELL"), os.environ.get("SHELL"), "/bin/bash", "/bin/sh"):
+    for value in (_env_first("TERMINAL_SHELL"), os.environ.get("SHELL"), "/bin/bash", "/bin/sh"):
         text = str(value or "").strip()
         if text and Path(text).is_absolute() and os.access(text, os.X_OK):
             return text
@@ -152,17 +160,17 @@ def _clean_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _max_sessions() -> int:
-    return _clean_int(os.environ.get("ARCLINK_TERMINAL_MAX_SESSIONS"), _DEFAULT_MAX_SESSIONS, 1, 24)
+    return _clean_int(_env_first("TERMINAL_MAX_SESSIONS"), _DEFAULT_MAX_SESSIONS, 1, 24)
 
 
 def _scrollback_limit() -> int:
-    return _clean_int(os.environ.get("ARCLINK_TERMINAL_SCROLLBACK_BYTES"), _DEFAULT_SCROLLBACK_BYTES, 4_000, 250_000)
+    return _clean_int(_env_first("TERMINAL_SCROLLBACK_BYTES"), _DEFAULT_SCROLLBACK_BYTES, 4_000, 250_000)
 
 
 def _runtime_user_safe() -> bool:
     if not hasattr(os, "geteuid"):
         return True
-    return os.geteuid() != 0 or str(os.environ.get("ARCLINK_TERMINAL_ALLOW_ROOT") or "").strip() == "1"
+    return os.geteuid() != 0 or _env_first("TERMINAL_ALLOW_ROOT") == "1"
 
 
 def _now() -> str:
@@ -215,7 +223,7 @@ def _resolve_cwd(raw_path: Any) -> tuple[Path, str]:
     relative = _clean_relative_path(raw_path)
     target = (root / relative).resolve(strict=False)
     if target != root and root not in target.parents:
-        raise HTTPException(status_code=403, detail="Terminal cwd is outside the ArcLink workspace")
+        raise HTTPException(status_code=403, detail="Terminal cwd is outside the configured workspace")
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Terminal cwd does not exist")
     return target, relative
@@ -420,7 +428,7 @@ def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
             raise HTTPException(status_code=503, detail="No supported terminal shell is available")
         return [shell, "-i"], "Machine Terminal"
     if mode == "tui":
-        raw_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or _DEFAULT_TUI_COMMAND).strip()
+        raw_command = _env_first("TERMINAL_TUI_COMMAND", "HERMES_TUI_COMMAND") or _DEFAULT_TUI_COMMAND
         argv = shlex.split(raw_command)
         if not argv:
             raise HTTPException(status_code=503, detail="Hermes TUI command is not configured")
@@ -437,7 +445,10 @@ def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
 
 
 def _tui_dist_available() -> bool:
-    tui_dir = Path(os.environ.get("HERMES_TUI_DIR") or _DEFAULT_TUI_DIR).expanduser()
+    tui_dir_value = _env_first("HERMES_TUI_DIR", "TERMINAL_TUI_DIR") or _DEFAULT_TUI_DIR
+    if not tui_dir_value:
+        return False
+    tui_dir = Path(tui_dir_value).expanduser()
     return (tui_dir / "dist" / "entry.js").is_file() and (tui_dir / "node_modules").is_dir()
 
 
@@ -456,10 +467,12 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     env["COLORTERM"] = env.get("COLORTERM") or "truecolor"
     env["COLUMNS"] = str(_DEFAULT_COLS)
     env["LINES"] = str(_DEFAULT_ROWS)
-    env["TERM_PROGRAM"] = "ArcLinkTerminal"
+    env["TERM_PROGRAM"] = "HermesTerminal"
     env["PS1"] = "$ "
     if mode == "tui":
-        env.setdefault("HERMES_TUI_DIR", _DEFAULT_TUI_DIR)
+        tui_dir_value = _env_first("HERMES_TUI_DIR", "TERMINAL_TUI_DIR") or _DEFAULT_TUI_DIR
+        if tui_dir_value:
+            env.setdefault("HERMES_TUI_DIR", tui_dir_value)
     try:
         process = subprocess.Popen(
             argv,
@@ -484,7 +497,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     _RUNTIMES[session_id] = {"process": process, "fd": master_fd}
     entry["state"] = "starting"
     entry["exit_code"] = None
-    _append_scrollback(entry, "ArcLink " + label + " session ready. Cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
+    _append_scrollback(entry, label + " session ready. Cwd: " + _display_path(str(entry.get("cwd") or "")) + "\n")
     time.sleep(0.05)
     _read_runtime(entry)
 
@@ -493,7 +506,7 @@ def _status_payload() -> dict[str, Any]:
     workspace_root = _workspace_root()
     tmux_path = shutil.which("tmux") or ""
     shell = _shell_path()
-    tui_command = str(os.environ.get("ARCLINK_TERMINAL_TUI_COMMAND") or _DEFAULT_TUI_COMMAND).strip()
+    tui_command = (_env_first("TERMINAL_TUI_COMMAND", "HERMES_TUI_COMMAND") or _DEFAULT_TUI_COMMAND).strip()
     tui_argv = shlex.split(tui_command) if tui_command else []
     tui_command_available = bool(tui_argv and (Path(tui_argv[0]).is_absolute() or shutil.which(tui_argv[0])))
     tui_requires_dist = "--tui" in tui_argv
@@ -501,8 +514,8 @@ def _status_payload() -> dict[str, Any]:
     runtime_user_safe = _runtime_user_safe()
     available = bool(shell and workspace_root.exists() and workspace_root.is_dir() and runtime_user_safe)
     return {
-        "plugin": "arclink-terminal",
-        "label": "ArcLink Terminal",
+        "plugin": "terminal",
+        "label": "Terminal",
         "version": "0.2.0",
         "status_contract": 1,
         "available": available,

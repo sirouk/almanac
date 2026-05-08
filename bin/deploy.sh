@@ -98,6 +98,7 @@ ARCLINK_NOTION_WEBHOOK_PUBLIC_URL="${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
 ARCLINK_PRODUCT_NAME="${ARCLINK_PRODUCT_NAME:-ArcLink}"
 ARCLINK_BASE_DOMAIN="${ARCLINK_BASE_DOMAIN:-arclink.online}"
 ARCLINK_INGRESS_MODE="${ARCLINK_INGRESS_MODE:-domain}"
+ARCLINK_CONTROL_DEPLOYMENT_STYLE="${ARCLINK_CONTROL_DEPLOYMENT_STYLE:-single-machine}"
 ARCLINK_TAILSCALE_DNS_NAME="${ARCLINK_TAILSCALE_DNS_NAME:-}"
 ARCLINK_TAILSCALE_CONTROL_URL="${ARCLINK_TAILSCALE_CONTROL_URL:-}"
 ARCLINK_TAILSCALE_HTTPS_PORT="${ARCLINK_TAILSCALE_HTTPS_PORT:-443}"
@@ -2117,6 +2118,7 @@ emit_runtime_config() {
     write_kv ARCLINK_PRODUCT_NAME "${ARCLINK_PRODUCT_NAME:-ArcLink}"
     write_kv ARCLINK_BASE_DOMAIN "${ARCLINK_BASE_DOMAIN:-arclink.online}"
     write_kv ARCLINK_INGRESS_MODE "${ARCLINK_INGRESS_MODE:-domain}"
+    write_kv ARCLINK_CONTROL_DEPLOYMENT_STYLE "${ARCLINK_CONTROL_DEPLOYMENT_STYLE:-single-machine}"
     write_kv ARCLINK_TAILSCALE_DNS_NAME "${ARCLINK_TAILSCALE_DNS_NAME:-}"
     write_kv ARCLINK_TAILSCALE_CONTROL_URL "${ARCLINK_TAILSCALE_CONTROL_URL:-}"
     write_kv ARCLINK_TAILSCALE_HTTPS_PORT "${ARCLINK_TAILSCALE_HTTPS_PORT:-443}"
@@ -8501,6 +8503,26 @@ normalize_control_ingress_mode() {
   esac
 }
 
+normalize_control_deployment_style() {
+  local value="${1:-single-machine}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  value="${value//_/-}"
+  case "$value" in
+    single|single-machine|single-host|local|local-machine|starter|starter-host)
+      printf '%s\n' "single-machine"
+      ;;
+    hetzner|hcloud|hetzner-cloud)
+      printf '%s\n' "hetzner"
+      ;;
+    akamai|linode|akamai-linode|akamai-cloud|akamai-connected-cloud)
+      printf '%s\n' "akamai-linode"
+      ;;
+    *)
+      printf '%s\n' "single-machine"
+      ;;
+  esac
+}
+
 normalize_tailscale_host_strategy() {
   local value="${1:-path}"
   value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
@@ -8725,6 +8747,7 @@ collect_control_install_answers() {
   local default_first_agent_price_id="" default_scale_price_id="" default_additional_agent_price_id=""
   local detected_tailscale_dns="" ingress_answer="" default_tailscale_dns=""
   local ssh_key_confirmed="" setup_local_fleet_ssh="" local_fleet_access_prepared="0"
+  local default_executor_adapter="" default_register_local_fleet_host=""
 
   docker_env="$(docker_env_file_path)"
   load_docker_runtime_config
@@ -8742,6 +8765,7 @@ collect_control_install_answers() {
 
   ARCLINK_PRODUCT_NAME="${ARCLINK_PRODUCT_NAME:-ArcLink}"
   ARCLINK_PRIMARY_PROVIDER="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
+  ARCLINK_CONTROL_DEPLOYMENT_STYLE="$(normalize_control_deployment_style "${ARCLINK_CONTROL_DEPLOYMENT_STYLE:-single-machine}")"
   detect_tailscale
   detected_tailscale_dns="${TAILSCALE_DNS_NAME:-}"
   default_tailscale_dns="${ARCLINK_TAILSCALE_DNS_NAME:-$detected_tailscale_dns}"
@@ -8761,6 +8785,22 @@ collect_control_install_answers() {
     echo "Detected Tailscale DNS name: $detected_tailscale_dns"
     echo
   fi
+  echo "Sovereign deployment style:"
+  echo "  single-machine - one starter machine runs the control node and first worker"
+  echo "  hetzner        - control node places pods onto registered Hetzner workers"
+  echo "  akamai-linode  - control node places pods onto registered Akamai Linode workers"
+  ARCLINK_CONTROL_DEPLOYMENT_STYLE="$(normalize_control_deployment_style "$(ask "Sovereign deployment style" "$ARCLINK_CONTROL_DEPLOYMENT_STYLE")")"
+  case "$ARCLINK_CONTROL_DEPLOYMENT_STYLE" in
+    single-machine)
+      default_executor_adapter="local"
+      default_register_local_fleet_host="1"
+      ;;
+    hetzner|akamai-linode)
+      default_executor_adapter="ssh"
+      default_register_local_fleet_host="0"
+      ;;
+  esac
+  echo
   ingress_answer="$(normalize_optional_answer "$(ask "ArcLink ingress mode (domain/tailscale)" "$ARCLINK_INGRESS_MODE")")"
   ARCLINK_INGRESS_MODE="$(normalize_control_ingress_mode "${ingress_answer:-$ARCLINK_INGRESS_MODE}")"
   if [[ "$ARCLINK_INGRESS_MODE" == "tailscale" ]]; then
@@ -8856,16 +8896,22 @@ collect_control_install_answers() {
     echo "  fake  - no external changes; useful only for dry validation"
     echo "  local - apply pods on this machine with Docker Compose"
     echo "  ssh   - copy pod bundles to fleet hosts and run Docker Compose over SSH"
-    ARCLINK_EXECUTOR_ADAPTER="$(normalize_optional_answer "$(ask "Executor adapter" "${ARCLINK_EXECUTOR_ADAPTER:-ssh}")")"
+    if [[ -z "$ARCLINK_EXECUTOR_ADAPTER" || "$ARCLINK_EXECUTOR_ADAPTER" == "disabled" ]]; then
+      ARCLINK_EXECUTOR_ADAPTER="$default_executor_adapter"
+    fi
+    ARCLINK_EXECUTOR_ADAPTER="$(normalize_optional_answer "$(ask "Executor adapter" "${ARCLINK_EXECUTOR_ADAPTER:-$default_executor_adapter}")")"
     if [[ -z "$ARCLINK_EXECUTOR_ADAPTER" ]]; then
-      ARCLINK_EXECUTOR_ADAPTER="ssh"
+      ARCLINK_EXECUTOR_ADAPTER="$default_executor_adapter"
     fi
   fi
   ARCLINK_STATE_ROOT_BASE="$(normalize_optional_answer "$(ask "Worker deployment state root base" "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")")"
   if [[ -z "$ARCLINK_STATE_ROOT_BASE" ]]; then
     ARCLINK_STATE_ROOT_BASE="/arcdata/deployments"
   fi
-  ARCLINK_REGISTER_LOCAL_FLEET_HOST="$(ask_yes_no "Register this machine as a starter Sovereign worker host" "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}")"
+  if [[ "$ARCLINK_CONTROL_DEPLOYMENT_STYLE" == "single-machine" && "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}" == "0" && -z "${ARCLINK_LOCAL_FLEET_HOSTNAME:-}${ARCLINK_LOCAL_FLEET_SSH_HOST:-}" ]]; then
+    ARCLINK_REGISTER_LOCAL_FLEET_HOST="$default_register_local_fleet_host"
+  fi
+  ARCLINK_REGISTER_LOCAL_FLEET_HOST="$(ask_yes_no "Register this machine as a starter Sovereign worker host" "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-$default_register_local_fleet_host}")"
   if [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; then
     ARCLINK_LOCAL_FLEET_HOSTNAME="$(normalize_optional_answer "$(ask "Local fleet hostname" "${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}")")"
     if [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" || "${ARCLINK_EXECUTOR_ADAPTER:-}" == "local" ]]; then

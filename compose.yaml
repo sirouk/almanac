@@ -221,6 +221,10 @@ services:
   control-api:
     <<: *arclink-app
     command: ["python3", "python/arclink_hosted_api.py"]
+    volumes:
+      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - arclink-qmd:/home/arclink/.qmd
+      - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
     ports:
       - "127.0.0.1:${ARCLINK_API_PORT:-8900}:8900"
     labels:

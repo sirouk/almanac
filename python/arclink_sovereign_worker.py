@@ -755,7 +755,7 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Use /agents for your crew, /connect_notion for Notion, /config_backup for private backups, or /pair-channel to bring this same ArcLink identity onto another channel.",
+            "Use /agents for your crew, /connect_notion for Notion, /config_backup for private backups, or /link-channel to bring this same ArcLink identity onto another channel.",
         ]
     )
     return "\n".join(lines)
@@ -771,13 +771,13 @@ def _vessel_online_actions(*, urls: Mapping[str, Any]) -> dict[str, Any]:
     telegram_row.extend(
         [
             {"text": "Show My Crew", "callback_data": "arclink:/agents"},
-            {"text": "Pair Channel", "callback_data": "arclink:/pair-channel"},
+            {"text": "Link Channel", "callback_data": "arclink:/link-channel"},
         ]
     )
     discord_buttons.extend(
         [
             {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
-            {"type": 2, "label": "Pair Channel", "style": 2, "custom_id": "arclink:/pair-channel"},
+            {"type": 2, "label": "Link Channel", "style": 2, "custom_id": "arclink:/link-channel"},
         ]
     )
     return {

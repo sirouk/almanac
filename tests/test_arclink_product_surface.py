@@ -115,6 +115,8 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
     admin = surface.handle_arclink_product_surface_request(conn, method="GET", path="/admin")
     expect(admin.status == 200, admin.body)
     expect("Onboarding Funnel" in admin.body and "Queued Actions" in admin.body, admin.body)
+    expect("disabled until worker wiring lands" in admin.body, admin.body)
+    expect("Force Resynth - disabled" in admin.body and "Rollout - disabled" in admin.body, admin.body)
     for label in ("Payments", "Infrastructure", "Security And Abuse", "Releases And Maintenance", "Logs And Events", "Audit"):
         expect(label in admin.body, admin.body)
     unauth_form_action = surface.handle_arclink_product_surface_request(

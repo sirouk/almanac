@@ -2031,6 +2031,14 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("run_control_runtime_reset()" in text, "expected first-class control runtime reset flow")
     expect("ARCLINK_CONFIRM_RUNTIME_RESET=RESET" in text, "expected non-interactive reset confirmation guard")
     expect("collect_control_install_answers()" in text, "expected control-node provider configuration flow")
+    expect("Sovereign deployment style" in text, "expected control install to ask for single-machine/hosted-fleet style")
+    expect("single-machine - one starter machine runs the control node and first worker" in text, "expected single-machine setup guidance")
+    expect("hetzner        - control node places pods onto registered Hetzner workers" in text, "expected Hetzner setup guidance")
+    expect("akamai-linode  - control node places pods onto registered Akamai Linode workers" in text, "expected Akamai Linode setup guidance")
+    expect("write_kv ARCLINK_CONTROL_DEPLOYMENT_STYLE" in text, "expected deployment style to persist in generated config")
+    expect('default_executor_adapter="local"' in text, "expected single-machine style to default to local execution")
+    expect('default_executor_adapter="ssh"' in text, "expected remote fleet styles to default to SSH execution")
+    expect('default_register_local_fleet_host="1"' in text, "expected single-machine style to default to starter worker registration")
     expect("ArcLink ingress mode (domain/tailscale)" in text, "expected control install to ask for domain or Tailscale ingress")
     expect("publish_control_tailscale_ingress()" in text, "expected control install to publish Dockerized control surfaces through Tailscale")
     expect('"http://127.0.0.1:$api_port/api"' in text, "expected Tailscale /api route to preserve the API prefix")
@@ -2056,6 +2064,27 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("run_arclink_docker health" in text, "expected Docker install flow to run health")
     expect("run_arclink_docker live-smoke" in text, "expected Docker install flow to run live agent smoke")
     print("PASS test_deploy_sh_exposes_docker_control_center")
+
+
+def test_control_deployment_style_aliases_are_normalized() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "normalize_control_deployment_style() {", "normalize_tailscale_host_strategy() {")
+    script = f"""
+{snippet}
+normalize_control_deployment_style single_machine
+normalize_control_deployment_style local
+normalize_control_deployment_style hcloud
+normalize_control_deployment_style linode
+normalize_control_deployment_style unknown-value
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"deployment style normalization failed: {result.stderr}")
+    lines = result.stdout.strip().splitlines()
+    expect(
+        lines == ["single-machine", "single-machine", "hetzner", "akamai-linode", "single-machine"],
+        str(lines),
+    )
+    print("PASS test_control_deployment_style_aliases_are_normalized")
 
 
 def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
@@ -3196,6 +3225,7 @@ def main() -> int:
         test_collect_install_answers_records_missing_host_dependency_choices,
         test_write_answers_file_persists_host_dependency_choices,
         test_deploy_sh_exposes_docker_control_center,
+        test_control_deployment_style_aliases_are_normalized,
         test_control_runtime_reset_is_backup_first_and_guarded,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,

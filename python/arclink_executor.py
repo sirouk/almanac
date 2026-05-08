@@ -970,7 +970,10 @@ def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
             source = str(volume.get("source") or "").strip()
             target = str(volume.get("target") or "").strip()
             if source and target:
-                volumes.append({"type": "bind", "source": source, "target": target})
+                item: dict[str, Any] = {"type": "bind", "source": source, "target": target}
+                if volume.get("read_only") is True:
+                    item["read_only"] = True
+                volumes.append(item)
         elif str(volume).strip():
             volumes.append(str(volume))
     if volumes:
@@ -1233,7 +1236,8 @@ def _plan_rollback_apply(plan: Mapping[str, Any]) -> dict[str, Any]:
     protected_roots = tuple(
         str(state_roots[name])
         for name in sorted(state_roots)
-        if state_roots.get(name) and name in {"root", "state", "vault", "hermes_home", "qmd", "memory", "nextcloud", "code_workspace"}
+        if state_roots.get(name)
+        and name in {"root", "state", "vault", "linked_resources", "hermes_home", "qmd", "memory", "nextcloud", "code_workspace"}
     )
     secret_refs = plan.get("secret_refs") if isinstance(plan.get("secret_refs"), Mapping) else {}
     return {

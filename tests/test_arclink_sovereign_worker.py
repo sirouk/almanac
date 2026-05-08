@@ -85,9 +85,33 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
 
 def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_apply")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_sovereign_apply")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_apply")
     conn = memory_db(control)
     seed_ready_deployment(control, conn)
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:100",
+        text="/link-channel",
+    )
+    code_row = conn.execute(
+        """
+        SELECT code, status
+        FROM arclink_channel_pairing_codes
+        WHERE source_session_id = 'onb_worker_1'
+        """
+    ).fetchone()
+    expect(opened.action == "pair_channel_code", str(opened))
+    expect(code_row is not None and code_row["status"] == "open", str(dict(code_row or {})))
+    claimed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:200",
+        text=f"/link-channel {code_row['code']}",
+    )
+    expect(claimed.action == "pair_channel_claimed", str(claimed))
+    expect(claimed.deployment_id == "dep_1", str(claimed))
     with tempfile.TemporaryDirectory() as tmpdir:
         results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
 
@@ -107,22 +131,57 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     expect(health_statuses == {"healthy"}, str(health_statuses))
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
     expect({"sovereign_provisioning_started", "sovereign_pod_applied", "user_handoff_ready", "public_bot:vessel_online_ping_queued"} <= event_types, str(event_types))
-    notification = conn.execute(
-        """
-        SELECT target_kind, target_id, channel_kind, message, extra_json
-        FROM notification_outbox
-        WHERE target_kind = 'public-bot-user'
-          AND channel_kind = 'telegram'
-        """
-    ).fetchone()
-    expect(notification is not None, "expected agent-ready ping to be queued")
-    expect(notification["target_id"] == "100", str(dict(notification)))
+    notifications = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT target_kind, target_id, channel_kind, message, extra_json
+            FROM notification_outbox
+            WHERE target_kind = 'public-bot-user'
+            ORDER BY channel_kind, target_id
+            """
+        ).fetchall()
+    ]
+    targets = {(item["channel_kind"], item["target_id"]) for item in notifications}
+    expect(targets == {("discord", "200"), ("telegram", "100")}, str(notifications))
+    notification = next(item for item in notifications if item["channel_kind"] == "telegram")
     expect("Agent online" in notification["message"], str(notification["message"]))
+    expect("I'm Raven. Your ArcLink agent is ready" in notification["message"], str(notification["message"]))
+    expect("Dashboard: https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
     expect("Hermes:" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
     expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
+    telegram_buttons = [
+        button
+        for row in extra["telegram_reply_markup"]["inline_keyboard"]
+        for button in row
+    ]
+    expect(any(button.get("text") == "Open Helm" and button.get("url") for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Show My Crew" and button.get("callback_data") == "arclink:/agents" for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Link Channel" and button.get("callback_data") == "arclink:/link-channel" for button in telegram_buttons), str(extra))
     session = conn.execute("SELECT status, current_step FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
     expect(session["status"] == "first_contacted" and session["current_step"] == "first_agent_contact", str(dict(session)))
+    paired = conn.execute(
+        """
+        SELECT status, current_step
+        FROM arclink_onboarding_sessions
+        WHERE channel = 'discord'
+          AND channel_identity = 'discord:200'
+        """
+    ).fetchone()
+    expect(paired["status"] == "first_contacted" and paired["current_step"] == "first_agent_contact", str(dict(paired)))
+    queued_event = conn.execute(
+        """
+        SELECT metadata_json
+        FROM arclink_events
+        WHERE subject_kind = 'deployment'
+          AND subject_id = 'dep_1'
+          AND event_type = 'public_bot:vessel_online_ping_queued'
+        """
+    ).fetchone()
+    queued_meta = json.loads(queued_event["metadata_json"])
+    expect(queued_meta["notification_count"] == 2, str(queued_meta))
+    expect(queued_meta["channels"] == ["discord", "telegram"], str(queued_meta))
     print("PASS test_fake_sovereign_worker_applies_ready_deployment")
 
 

@@ -42,6 +42,7 @@ CONTAINER_QMD_STATE_DIR = "/home/arclink/.qmd"
 CONTAINER_VAULT_DIR = "/srv/vault"
 CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
 CONTAINER_CODE_WORKSPACE_DIR = "/workspace"
+CONTAINER_LINKED_RESOURCES_DIR = "/linked-resources"
 
 _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
@@ -168,6 +169,7 @@ def render_arclink_state_roots(
         "config": f"{root}/config",
         "state": f"{root}/state",
         "vault": f"{root}/vault",
+        "linked_resources": f"{root}/linked-resources",
         "hermes_home": f"{root}/state/hermes-home",
         "qmd": f"{root}/state/qmd",
         "memory": f"{root}/state/memory",
@@ -441,6 +443,7 @@ def _render_services(
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
                 {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
                 {"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR},
+                {"source": roots["linked_resources"], "target": CONTAINER_LINKED_RESOURCES_DIR, "read_only": True},
             ],
             labels=labels["hermes"],
             depends_on=["managed-context-install"],
@@ -731,6 +734,9 @@ def render_arclink_provisioning_intent(
         "VAULT_DIR": CONTAINER_VAULT_DIR,
         "DRIVE_ROOT": CONTAINER_VAULT_DIR,
         "CODE_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
+        "DRIVE_LINKED_ROOT": CONTAINER_LINKED_RESOURCES_DIR,
+        "CODE_LINKED_ROOT": CONTAINER_LINKED_RESOURCES_DIR,
+        "ARCLINK_LINKED_RESOURCES_ROOT": CONTAINER_LINKED_RESOURCES_DIR,
         "TERMINAL_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
         "ARCLINK_DRIVE_ROOT": CONTAINER_VAULT_DIR,

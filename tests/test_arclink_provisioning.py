@@ -100,6 +100,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(set(services) == expected_services, sorted(services))
     expect(intent["execution"]["ready"], str(intent["execution"]))
     expect(intent["state_roots"]["root"] == "/arcdata/deployments/dep_1-amber-vault-1a2b", str(intent["state_roots"]))
+    expect(intent["state_roots"]["linked_resources"].endswith("/linked-resources"), str(intent["state_roots"]))
     expect(intent["state_roots"]["nextcloud"].endswith("/state/nextcloud"), str(intent["state_roots"]))
     expect(intent["state_roots"]["nextcloud_db"].endswith("/state/nextcloud/db"), str(intent["state_roots"]))
     expect(intent["state_roots"]["nextcloud_redis"].endswith("/state/nextcloud/redis"), str(intent["state_roots"]))
@@ -112,6 +113,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["CODE_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
+    expect(intent["environment"]["DRIVE_LINKED_ROOT"] == "/linked-resources", str(intent["environment"]))
+    expect(intent["environment"]["CODE_LINKED_ROOT"] == "/linked-resources", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_LINKED_RESOURCES_ROOT"] == "/linked-resources", str(intent["environment"]))
     expect(intent["environment"]["TERMINAL_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
     expect(intent["environment"]["TERMINAL_TUI_COMMAND"] == "/opt/arclink/runtime/hermes-venv/bin/hermes", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
@@ -124,7 +128,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["QMD_MCP_LOOPBACK_PORT"] == "18181", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
-    for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
+    for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "DRIVE_LINKED_ROOT", "CODE_LINKED_ROOT", "ARCLINK_LINKED_RESOURCES_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
         expect(not intent["environment"][key].startswith("/arcdata/"), f"{key} leaked host root")
     expect(services["nextcloud"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_html"], str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_HOST"] == "nextcloud-db", str(services["nextcloud"]))
@@ -151,6 +155,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/workspace"] == intent["state_roots"]["code_workspace"], str(services["hermes-dashboard"]))
+    expect(hermes_dashboard_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["hermes-dashboard"]))
+    linked_volume = next(item for item in services["hermes-dashboard"]["volumes"] if item["target"] == "/linked-resources")
+    expect(linked_volume["read_only"] is True, str(linked_volume))
     memory_synth_volumes = {item["target"]: item["source"] for item in services["memory-synth"]["volumes"]}
     expect(memory_synth_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["memory-synth"]))
     expect(memory_synth_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["memory-synth"]))

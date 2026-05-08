@@ -500,6 +500,38 @@ def _user_dashboard(conn: sqlite3.Connection, user_id: str = "") -> ArcLinkSurfa
     return ArcLinkSurfaceResponse(status=200, body=_layout("User Dashboard", html))
 
 
+_ADMIN_ACTION_LABELS = {
+    "restart": "Restart",
+    "dns_repair": "DNS Repair",
+    "rotate_chutes_key": "Rotate Chutes Key",
+    "refund": "Refund",
+    "cancel": "Cancel",
+    "comp": "Comp",
+    "suspend": "Suspend",
+    "unsuspend": "Unsuspend",
+    "reprovision": "Reprovision",
+    "rollout": "Rollout",
+    "force_resynth": "Force Resynth",
+    "rotate_bot_key": "Rotate Bot Key",
+}
+
+
+def _admin_action_options(readiness: Mapping[str, Any]) -> str:
+    executable = [str(item) for item in readiness.get("executable", []) if str(item).strip()]
+    pending = [str(item) for item in readiness.get("pending_not_implemented", []) if str(item).strip()]
+    if not executable:
+        executable = ["restart"]
+    enabled_options = "".join(
+        f'<option value="{escape(action)}">{escape(_ADMIN_ACTION_LABELS.get(action, action.replace("_", " ").title()))}</option>'
+        for action in executable
+    )
+    disabled_options = "".join(
+        f'<option value="{escape(action)}" disabled>{escape(_ADMIN_ACTION_LABELS.get(action, action.replace("_", " ").title()))} - disabled until worker wiring lands</option>'
+        for action in pending
+    )
+    return enabled_options + disabled_options
+
+
 def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | None = None, error: str = "") -> ArcLinkSurfaceResponse:
     params = params or {}
     view = read_arclink_admin_dashboard(
@@ -530,6 +562,9 @@ def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | No
         for section in view.get("sections", [])
     )
     target_id = _param(params, "deployment_id") or (view["deployments"][0]["deployment_id"] if view["deployments"] else "")
+    readiness = view.get("action_execution_readiness", {})
+    action_options = _admin_action_options(readiness if isinstance(readiness, Mapping) else {})
+    readiness_note = escape(str((readiness if isinstance(readiness, Mapping) else {}).get("queue_policy") or "Unsupported admin actions stay disabled until they are wired to the worker."))
     error_html = f"<p class=\"warn\">{escape(error)}</p>" if error else ""
     html = f"""
 <section class="stack">
@@ -551,7 +586,7 @@ def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | No
     <div><label>Admin Session ID</label><input name="session_id" autocomplete="off"></div>
     <div><label>Admin Session Token</label><input name="session_token" type="password" autocomplete="off"></div>
     <div><label>CSRF Token</label><input name="csrf_token" autocomplete="off"></div>
-    <div><label>Action</label><select name="action_type"><option value="restart">Restart</option><option value="dns_repair">DNS Repair</option><option value="force_resynth">Force Resynth</option><option value="rollout">Rollout</option></select></div>
+    <div><label>Action</label><select name="action_type">{action_options}</select><p class="muted">{readiness_note}</p></div>
     <div><label>Target Kind</label><input name="target_kind" value="deployment"></div>
     <div><label>Target ID</label><input name="target_id" value="{escape(target_id)}"></div>
     <div><label>Reason</label><textarea name="reason">local operator requested no-secret test action</textarea></div>

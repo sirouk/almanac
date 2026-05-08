@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from arclink_http import http_request, parse_json_response
+from arclink_api_auth import create_user_share_grant_for_owner
 from arclink_control import (
     Config,
     RateLimitError,
@@ -80,6 +81,7 @@ TOOLS = {
     "vault.search-and-fetch": "Fast bounded search of shared/private vault knowledge and fetched text for top hits. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default and does not rerank. A leading Markdown YAML metadata block stays inline in text when fetched from the top and is also duplicated into metadata when present.",
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload used by the managed-context plugin, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
+    "shares.request": "Request a read-only Drive/Code share for one of the caller's Vault or Workspace paths. The request stays pending for owner approval, then recipient acceptance, and never shares Linked resources onward.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
     "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering - returns rows where the caller appears in any of the database's people-typed columns (regardless of column name). Use this when the verified caller needs live structured involvement in the configured SSOT database. For broad plate/focus orientation, start from [managed:today-plate] and qmd-backed knowledge.search-and-fetch. For broad knowledge lookup by phrase or for content under page-scoped SSOTs and child databases, call notion.search-and-fetch instead.",
@@ -323,6 +325,20 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "token": AGENT_TOKEN_PROP,
             "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
         },
+    ),
+    "shares.request": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "recipient_user_id": {"type": "string", "description": "ArcLink recipient user id. Use this when already known."},
+            "recipient_email": {"type": "string", "description": "Recipient ArcLink account email. Used only to resolve an existing user."},
+            "resource_kind": {"type": "string", "enum": ["drive", "code"], "description": "Surface that owns the named resource."},
+            "resource_root": {"type": "string", "enum": ["vault", "workspace"], "description": "Origin root. Linked resources cannot be reshared."},
+            "resource_path": {"type": "string", "minLength": 1, "description": "Named file or directory path under the selected root."},
+            "display_name": {"type": "string", "description": "Optional human label for the approval prompt."},
+            "deployment_id": {"type": "string", "description": "Optional deployment id when the caller has multiple linked deployments."},
+            "actor": ACTOR_PROP,
+        },
+        required=("resource_kind", "resource_root", "resource_path"),
     ),
     "curator.fanout": _operator_schema({}),
     "notifications.list": _operator_schema(
@@ -844,6 +860,107 @@ def _agent_workspace_root(conn: sqlite3.Connection, agent_id: str) -> Path | Non
 def _agent_vault_display_root(conn: sqlite3.Connection, agent_id: str) -> str:
     workspace_root = _agent_workspace_root(conn, agent_id)
     return str(workspace_root / "ArcLink") if workspace_root is not None else ""
+
+
+def _agent_share_owner(conn: sqlite3.Connection, agent_id: str, deployment_id: str = "") -> dict[str, str]:
+    clean_agent = str(agent_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_agent:
+        raise PermissionError("agent token is not linked to an agent")
+    if clean_deployment:
+        row = conn.execute(
+            """
+            SELECT deployment_id, user_id
+            FROM arclink_deployments
+            WHERE deployment_id = ?
+              AND agent_id = ?
+              AND user_id != ''
+            """,
+            (clean_deployment, clean_agent),
+        ).fetchone()
+        if row is None:
+            raise PermissionError("share deployment is outside this agent's scope")
+        return {"deployment_id": str(row["deployment_id"] or ""), "user_id": str(row["user_id"] or "")}
+
+    row = conn.execute(
+        """
+        SELECT deployment_id, user_id
+        FROM arclink_deployments
+        WHERE agent_id = ?
+          AND user_id != ''
+        ORDER BY
+          CASE status
+            WHEN 'active' THEN 0
+            WHEN 'ready' THEN 1
+            WHEN 'provisioning' THEN 2
+            ELSE 3
+          END,
+          updated_at DESC,
+          created_at DESC,
+          deployment_id DESC
+        LIMIT 1
+        """,
+        (clean_agent,),
+    ).fetchone()
+    if row is None:
+        raise PermissionError("agent is not linked to an ArcLink user deployment")
+    return {"deployment_id": str(row["deployment_id"] or ""), "user_id": str(row["user_id"] or "")}
+
+
+def _share_recipient_user_id(conn: sqlite3.Connection, arguments: dict[str, Any]) -> str:
+    recipient_user = str(arguments.get("recipient_user_id") or "").strip()
+    if recipient_user:
+        row = conn.execute("SELECT user_id FROM arclink_users WHERE user_id = ?", (recipient_user,)).fetchone()
+        if row is None:
+            raise PermissionError("recipient ArcLink user was not found")
+        return str(row["user_id"] or "")
+
+    recipient_email = str(arguments.get("recipient_email") or "").strip()
+    if recipient_email:
+        row = conn.execute(
+            "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?)",
+            (recipient_email,),
+        ).fetchone()
+        if row is None:
+            raise PermissionError("recipient ArcLink user was not found")
+        return str(row["user_id"] or "")
+
+    raise ValueError("shares.request requires recipient_user_id or recipient_email")
+
+
+def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, Any]) -> dict[str, Any]:
+    token_row = validate_token(conn, str(arguments.get("token") or ""))
+    agent_id = str(token_row["agent_id"] or "")
+    owner = _agent_share_owner(conn, agent_id, str(arguments.get("deployment_id") or ""))
+    recipient_user = _share_recipient_user_id(conn, arguments)
+    metadata = {
+        "requested_via": "arclink-mcp",
+        "deployment_id": owner["deployment_id"],
+        "actor": str(arguments.get("actor") or agent_id),
+    }
+    result = create_user_share_grant_for_owner(
+        conn,
+        owner_user_id=owner["user_id"],
+        recipient_user_id=recipient_user,
+        resource_kind=str(arguments.get("resource_kind") or ""),
+        resource_root=str(arguments.get("resource_root") or ""),
+        resource_path=str(arguments.get("resource_path") or ""),
+        display_name=str(arguments.get("display_name") or ""),
+        access_mode="read",
+        metadata=metadata,
+        requested_by_agent_id=agent_id,
+    )
+    return {
+        "ok": True,
+        "agent_id": agent_id,
+        "deployment_id": owner["deployment_id"],
+        "approval_required": True,
+        "recipient_acceptance_required": True,
+        "linked_root": "Linked",
+        "reshare_allowed": False,
+        "copy_duplicate_policy": "policy_question",
+        **result.payload,
+    }
 
 
 def _display_vault_path(display_vault_root: str | None, rel_path: str) -> str:
@@ -1786,6 +1903,9 @@ class Handler(BaseHTTPRequestHandler):
                         conn, agent_id=str(token_row["agent_id"]), limit=limit
                     ),
                 }
+
+            if tool_name == "shares.request":
+                return _create_agent_share_request(conn, arguments)
 
             if tool_name == "curator.fanout":
                 self._require_operator(conn, arguments)

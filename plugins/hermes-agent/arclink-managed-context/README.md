@@ -19,4 +19,23 @@ Design notes:
 - injects on first turn, on revision change, and on ArcLink-relevant prompts
 - injects on model-runtime changes and once when a gateway restart resumes an already-active session
 - injects compact per-turn tool recipes for clear SSOT/Notion actions instead of asking the agent to read repo Python
+- honors `ARCLINK_MANAGED_CONTEXT_RECALL_BUDGET=low|mid|high`; `low` trims recall-heavy sections but keeps qmd/Notion routing and recall-stub safety guardrails
 - writes JSONL injection telemetry under `HERMES_HOME/state/arclink-context-telemetry.jsonl`; summarize it with `bin/arclink-context-telemetry`
+
+Optional conversational-memory siblings:
+- operators may install a separate Hermes conversational-memory plugin when
+  they want chat-fact or preference recall; that plugin is a sibling, not a
+  replacement for ArcLink managed context
+- sibling memory plugins must stay inside the same enrolled user's Hermes home
+  and must not read another user's vault, linked resources, session DB rows, or
+  private state
+- sibling memory plugins must not write shared Notion/SSOT state directly;
+  shared changes still go through brokered `ssot.write`/ArcLink MCP rails and
+  their approval, verification, and destructive-operation guards
+- sibling memory plugins must not auto-capture every Hermes turn into ArcLink
+  governed memory or managed recall stubs unless an operator-approved policy and
+  isolation tests exist
+- recall produced by a sibling plugin is only conversational context; vault,
+  PDF, shared Notion, and SSOT answers still need retrieval through
+  `knowledge.search-and-fetch`, `vault.search-and-fetch`,
+  `notion.search-and-fetch`, `notion.fetch`, or `ssot.read`

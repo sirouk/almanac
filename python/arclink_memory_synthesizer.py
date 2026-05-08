@@ -11,7 +11,7 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 _PYTHON_DIR = Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
@@ -30,7 +30,8 @@ from arclink_control import (
 from arclink_http import http_request, parse_json_object
 
 
-PROMPT_VERSION = "memory-synth-v2"
+PROMPT_VERSION = "memory-synth-v3"
+LOCAL_FALLBACK_MODEL = "local-non-llm-fallback"
 DEFAULT_MAX_SOURCES_PER_RUN = 12
 DEFAULT_MAX_SOURCE_CHARS = 4500
 DEFAULT_MAX_OUTPUT_TOKENS = 450
@@ -174,7 +175,10 @@ def load_settings(cfg: Config | None = None) -> SynthesisSettings:
     api_key = (_env("ARCLINK_MEMORY_SYNTH_API_KEY", "").strip() or _env("PDF_VISION_API_KEY", "").strip())
     enabled_raw = _env("ARCLINK_MEMORY_SYNTH_ENABLED", "auto").strip().lower()
     explicit_enabled = enabled_raw not in {"", "auto"}
-    enabled = _boolish(enabled_raw) if explicit_enabled else bool(endpoint and model and api_key)
+    has_llm_config = bool(endpoint and model and api_key)
+    enabled = _boolish(enabled_raw) if explicit_enabled else has_llm_config
+    if enabled and not has_llm_config:
+        model = LOCAL_FALLBACK_MODEL
     state_dir = Path(_env("ARCLINK_MEMORY_SYNTH_STATE_DIR", str(cfg.state_dir / "memory-synth"))).expanduser()
     return SynthesisSettings(
         enabled=enabled,
@@ -783,6 +787,8 @@ def call_openai_compatible_model(candidate: SourceCandidate, settings: Synthesis
         "Build one compact memory card from this bounded source inventory. "
         "Use source names, folders, page titles, snippets, PDFs, media/data asset inventories, and owners as retrieval cues. "
         "Prefer durable nouns and workflows over generic labels. "
+        "Set trust_score from 0.0 to 1.0 based on source specificity and freshness. "
+        "Only list contradiction_signals or disagreement_signals when the bounded source inventory explicitly shows conflicting facts, owners, dates, decisions, or positions. "
         "If the source is too thin or mostly boilerplate, set inject=false.\n\n"
         "Required JSON shape:\n"
         '{"summary":"<=35 words","domains":["<=5 e.g. family, creator, community, business"],'
@@ -790,7 +796,9 @@ def call_openai_compatible_model(candidate: SourceCandidate, settings: Synthesis
         '"content_types":["<=6 e.g. PDFs, videos, invoices, notes, runbooks"],'
         '"topics":["<=6"],"entities":["<=8"],'
         '"retrieval_queries":["<=5 concise searches"],"source_hints":["<=5 filenames/pages/folders/assets"],'
-        '"confidence":"low|medium|high","inject":true}\n\n'
+        '"confidence":"low|medium|high","trust_score":0.0,'
+        '"contradiction_signals":["<=4 explicit conflicts"],"disagreement_signals":["<=4 explicit disagreements"],'
+        '"inject":true}\n\n'
         + _candidate_prompt(candidate, settings)
     )
     response = http_request(
@@ -823,10 +831,242 @@ def call_openai_compatible_model(candidate: SourceCandidate, settings: Synthesis
     return _extract_json_object(str(content or ""))
 
 
+KEYWORD_STOPWORDS = {
+    "about",
+    "after",
+    "agent",
+    "agents",
+    "alpha",
+    "and",
+    "archive",
+    "before",
+    "current",
+    "draft",
+    "example",
+    "file",
+    "files",
+    "for",
+    "from",
+    "into",
+    "local",
+    "note",
+    "notes",
+    "open",
+    "page",
+    "pages",
+    "private",
+    "shared",
+    "source",
+    "state",
+    "status",
+    "test",
+    "the",
+    "this",
+    "user",
+    "vault",
+    "with",
+    "work",
+}
+
+
+def _settings_has_llm_config(settings: SynthesisSettings) -> bool:
+    return bool(settings.endpoint and settings.model and settings.api_key and settings.model != LOCAL_FALLBACK_MODEL)
+
+
+def _payload_list(payload: Mapping[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _phrase_candidates(values: Sequence[Any], *, limit: int = 8) -> list[str]:
+    phrases: list[str] = []
+    for value in values:
+        text = _clean_space(value, limit=180)
+        if not text:
+            continue
+        path_name = Path(text.split(":", 1)[0]).stem if "/" in text or "." in text else text
+        cleaned = re.sub(r"[_\-.]+", " ", path_name)
+        cleaned = re.sub(r"[^A-Za-z0-9 ]+", " ", cleaned)
+        cleaned = " ".join(
+            part
+            for part in cleaned.split()
+            if len(part) > 2 and part.casefold() not in KEYWORD_STOPWORDS and not part.isdigit()
+        )
+        if cleaned:
+            phrases.append(cleaned[:80])
+        if len(phrases) >= limit:
+            break
+    return _compact_unique(phrases, limit=limit, item_limit=80)
+
+
+def _snippet_keywords(snippets: Sequence[Any], *, limit: int = 8) -> list[str]:
+    values: list[str] = []
+    for snippet in snippets:
+        if isinstance(snippet, dict):
+            values.extend(
+                str(snippet.get(key) or "")
+                for key in ("path", "title", "section", "snippet")
+                if str(snippet.get(key) or "")
+            )
+        else:
+            values.append(str(snippet or ""))
+    tokens: list[str] = []
+    for text in values:
+        for match in re.finditer(r"\b[A-Za-z][A-Za-z0-9_-]{2,}\b", _clean_space(text, limit=600)):
+            token = match.group(0).replace("_", " ").replace("-", " ")
+            if token.casefold() in KEYWORD_STOPWORDS:
+                continue
+            tokens.append(token)
+            if len(tokens) >= limit * 3:
+                break
+    return _compact_unique(tokens, limit=limit, item_limit=80)
+
+
+def _infer_domains(candidate: SourceCandidate, payload: Mapping[str, Any], topics: Sequence[str]) -> list[str]:
+    haystack = " ".join(
+        [
+            candidate.source_kind,
+            candidate.source_title,
+            json_dumps(payload.get("asset_counts") or {}),
+            " ".join(topics),
+            " ".join(str(item) for item in _payload_list(payload, "subfolders")),
+        ]
+    ).casefold()
+    domains: list[str] = []
+    rules = [
+        ("research", ("research", "protocol", "paper", "study", "benchmark")),
+        ("creator", ("creator", "episode", "studio", "content", "thumbnail", "video")),
+        ("family", ("family", "school", "household", "calendar")),
+        ("business", ("business", "trading", "market", "customer", "invoice", "operation")),
+        ("code", ("repo", "repository", "source", "git", "code")),
+        ("organization", ("notion", "ssot", "workspace", "owner")),
+    ]
+    for label, needles in rules:
+        if any(needle in haystack for needle in needles):
+            domains.append(label)
+    if not domains:
+        domains.append("workspace")
+    return _compact_unique(domains, limit=5, item_limit=80)
+
+
+def _local_fallback_content_types(payload: Mapping[str, Any]) -> list[str]:
+    content: list[str] = []
+    if payload.get("repo_inventory") or payload.get("repos"):
+        content.append("repositories")
+    if payload.get("text_files") or payload.get("files") or payload.get("snippets"):
+        content.append("notes")
+    if payload.get("pdfs"):
+        content.append("PDFs")
+    asset_counts = payload.get("asset_counts")
+    if isinstance(asset_counts, dict):
+        content.extend(str(kind) for kind, count in sorted(asset_counts.items()) if int(count or 0) > 0)
+    if payload.get("pages"):
+        content.append("Notion pages")
+    if payload.get("owners"):
+        content.append("ownership metadata")
+    return _compact_unique(content or ["routing metadata"], limit=6, item_limit=80)
+
+
+def _local_fallback_source_hints(payload: Mapping[str, Any]) -> list[str]:
+    hints: list[str] = []
+    for key in ("text_files", "pdfs", "repos", "subfolders"):
+        hints.extend(str(value) for value in _payload_list(payload, key))
+    for item in _payload_list(payload, "asset_examples"):
+        if isinstance(item, dict):
+            hints.append(str(item.get("path") or ""))
+    for item in _payload_list(payload, "snippets"):
+        if isinstance(item, dict):
+            hints.append(str(item.get("path") or item.get("title") or ""))
+    for item in _payload_list(payload, "pages"):
+        if isinstance(item, dict):
+            hints.append(str(item.get("title") or ""))
+    return _compact_unique(hints, limit=5, item_limit=120)
+
+
+def local_non_llm_fallback_model(candidate: SourceCandidate, settings: SynthesisSettings) -> dict[str, Any]:
+    """Build low-fidelity retrieval hints from already bounded source metadata."""
+    payload = _payload_for_prompt(candidate.payload)
+    source_hints = _local_fallback_source_hints(payload)
+    topic_values: list[Any] = [candidate.source_title, candidate.source_key]
+    for key in ("repos", "subfolders", "text_files", "pdfs", "owners"):
+        topic_values.extend(_payload_list(payload, key))
+    for item in _payload_list(payload, "pages"):
+        if isinstance(item, dict):
+            topic_values.append(item.get("title"))
+            topic_values.extend(item.get("sections") if isinstance(item.get("sections"), list) else [])
+    for item in _payload_list(payload, "snippets"):
+        if isinstance(item, dict):
+            topic_values.append(item.get("path") or item.get("title"))
+            topic_values.append(item.get("snippet"))
+    topics = _compact_unique(
+        [*_phrase_candidates(topic_values, limit=8), *_snippet_keywords(_payload_list(payload, "snippets"), limit=8)],
+        limit=6,
+        item_limit=80,
+    )
+    domains = _infer_domains(candidate, payload, topics)
+    content_types = _local_fallback_content_types(payload)
+    entities = _compact_unique(
+        [candidate.source_title, *_payload_list(payload, "owners")],
+        limit=8,
+        item_limit=80,
+    )
+    workflows = _compact_unique(
+        [
+            "retrieval triage",
+            "source review",
+            "workspace orientation",
+            "Notion review" if candidate.source_kind == "notion" else "",
+            "repository inspection" if payload.get("repo_inventory") or payload.get("repos") else "",
+        ],
+        limit=6,
+        item_limit=100,
+    )
+    query_seed = _compact_unique([candidate.source_title, *topics, *source_hints], limit=5, item_limit=120)
+    source_count = max(1, int(candidate.source_count or payload.get("page_count") or payload.get("fingerprint_count") or 1))
+    content_label = ", ".join(content_types[:3])
+    summary = (
+        f"Local fallback found {source_count} {candidate.source_kind} cue(s) for {candidate.source_title}; "
+        f"use retrieval for {content_label or 'source metadata'}."
+    )
+    return {
+        "summary": summary,
+        "domains": domains,
+        "workflows": workflows,
+        "content_types": content_types,
+        "topics": topics,
+        "entities": entities,
+        "retrieval_queries": query_seed,
+        "source_hints": source_hints,
+        "confidence": "low",
+        "trust_score": 0.4,
+        "contradiction_signals": [],
+        "disagreement_signals": [],
+        "inject": bool(source_hints or topics or content_types),
+    }
+
+
+def _normalize_trust_score(value: Any, *, confidence: str) -> float:
+    fallback = {
+        "low": 0.35,
+        "medium": 0.65,
+        "high": 0.85,
+    }.get(confidence, 0.35)
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        score = fallback
+    if score < 0:
+        score = 0.0
+    if score > 1:
+        score = 1.0
+    return round(score, 2)
+
+
 def _normalize_card_payload(raw: dict[str, Any]) -> dict[str, Any]:
     confidence = str(raw.get("confidence") or "low").strip().lower()
     if confidence not in {"low", "medium", "high"}:
         confidence = "low"
+    trust_score = _normalize_trust_score(raw.get("trust_score"), confidence=confidence)
     return {
         "summary": _clean_space(raw.get("summary"), limit=260),
         "domains": _compact_unique(raw.get("domains") if isinstance(raw.get("domains"), list) else [], limit=5, item_limit=80),
@@ -845,6 +1085,17 @@ def _normalize_card_payload(raw: dict[str, Any]) -> dict[str, Any]:
             item_limit=120,
         ),
         "confidence": confidence,
+        "trust_score": trust_score,
+        "contradiction_signals": _compact_unique(
+            raw.get("contradiction_signals") if isinstance(raw.get("contradiction_signals"), list) else [],
+            limit=4,
+            item_limit=140,
+        ),
+        "disagreement_signals": _compact_unique(
+            raw.get("disagreement_signals") if isinstance(raw.get("disagreement_signals"), list) else [],
+            limit=4,
+            item_limit=140,
+        ),
         "inject": bool(raw.get("inject", True)),
     }
 
@@ -860,6 +1111,8 @@ def render_card_text(candidate: SourceCandidate, card: dict[str, Any]) -> str:
     entities = ", ".join(card.get("entities") or [])
     queries = "; ".join(card.get("retrieval_queries") or [])
     hints = ", ".join(card.get("source_hints") or [])
+    contradictions = "; ".join(card.get("contradiction_signals") or [])
+    disagreements = "; ".join(card.get("disagreement_signals") or [])
     if domains:
         bits.append(f"Domains: {domains}.")
     if workflows:
@@ -874,7 +1127,13 @@ def render_card_text(candidate: SourceCandidate, card: dict[str, Any]) -> str:
         bits.append(f"Search hints: {queries}.")
     if hints:
         bits.append(f"Sources to fetch: {hints}.")
-    bits.append(f"Confidence: {card.get('confidence') or 'low'}.")
+    confidence = str(card.get("confidence") or "low").strip().lower()
+    bits.append(f"Confidence: {confidence}.")
+    bits.append(f"Trust score: {_normalize_trust_score(card.get('trust_score'), confidence=confidence):.2f}.")
+    if contradictions:
+        bits.append(f"Contradiction signals: {contradictions}.")
+    if disagreements:
+        bits.append(f"Disagreement signals: {disagreements}.")
     return " ".join(bits)
 
 
@@ -1052,7 +1311,9 @@ def run_once(
     settings = load_settings(cfg)
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     settings.lock_file.parent.mkdir(parents=True, exist_ok=True)
-    model_client = model_client or call_openai_compatible_model
+    model_client = model_client or (
+        call_openai_compatible_model if _settings_has_llm_config(settings) else local_non_llm_fallback_model
+    )
 
     with settings.lock_file.open("a", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)

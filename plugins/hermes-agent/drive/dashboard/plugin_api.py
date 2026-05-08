@@ -101,10 +101,12 @@ _TEXT_EXTENSIONS = {
     ".yml",
 }
 _TRASH_DIR_NAME = ".drive-trash"
+_LINKED_MANIFEST_NAME = ".arclink-linked-resources.json"
 _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", _TRASH_DIR_NAME}
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
     ".env",
+    _LINKED_MANIFEST_NAME,
     "arclink-bootstrap-token",
     "id_dsa",
     "id_ecdsa",
@@ -125,6 +127,36 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _linked_manifest(root: Path) -> dict[str, Any]:
+    payload = _load_json(root / _LINKED_MANIFEST_NAME)
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+    return entries
+
+
+def _linked_manifest_entry(root: Path, path: Path) -> dict[str, Any] | None:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return None
+    parts = relative.parts
+    if not parts:
+        return None
+    entry = _linked_manifest(root).get(parts[0])
+    return entry if isinstance(entry, dict) else None
+
+
+def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
+    entry = _linked_manifest_entry(root, path)
+    if not entry:
+        return False
+    source = Path(str(entry.get("source_path") or "")).expanduser().resolve(strict=False)
+    if not str(source):
+        return False
+    return resolved == source or source in resolved.parents
 
 
 def _clean_url(value: Any) -> str:
@@ -215,6 +247,18 @@ def _candidate_workspace_roots() -> list[Path]:
     return candidates
 
 
+def _candidate_linked_roots() -> list[Path]:
+    candidates: list[Path] = []
+    for value in (
+        os.environ.get("DRIVE_LINKED_ROOT"),
+        os.environ.get("ARCLINK_LINKED_RESOURCES_ROOT"),
+    ):
+        if value:
+            candidates.append(Path(value).expanduser())
+    candidates.append(_hermes_home() / "linked")
+    return candidates
+
+
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -259,8 +303,35 @@ def _local_root() -> Path | None:
     return _first_existing_dir(_candidate_vault_roots())
 
 
-def _root_capabilities(*, available: bool, backend: str, webdav_available: bool = False) -> dict[str, bool]:
+def _root_capabilities(
+    *,
+    available: bool,
+    backend: str,
+    webdav_available: bool = False,
+    read_only: bool = False,
+) -> dict[str, bool]:
     local = bool(available and backend == "local")
+    if read_only:
+        return {
+            "batch": False,
+            "copy": local,
+            "delete": False,
+            "download": local,
+            "drag_drop_upload": False,
+            "duplicate": local,
+            "favorites": False,
+            "folders": local,
+            "move": False,
+            "new_file": False,
+            "preview": local,
+            "rename": False,
+            "restore": False,
+            "search": local,
+            "sharing": False,
+            "trash": False,
+            "upload": False,
+            "nextcloud_webdav": False,
+        }
     return {
         "batch": local,
         "copy": local,
@@ -283,7 +354,14 @@ def _root_capabilities(*, available: bool, backend: str, webdav_available: bool 
     }
 
 
-def _root_descriptor(root_id: str, label: str, root: Path | None, *, webdav_available: bool = False) -> dict[str, Any]:
+def _root_descriptor(
+    root_id: str,
+    label: str,
+    root: Path | None,
+    *,
+    webdav_available: bool = False,
+    read_only: bool = False,
+) -> dict[str, Any]:
     available = root is not None
     return {
         "id": root_id,
@@ -291,10 +369,12 @@ def _root_descriptor(root_id: str, label: str, root: Path | None, *, webdav_avai
         "available": available,
         "backend": "local" if available else "unavailable",
         "path": str(root) if root else "",
+        "read_only": read_only,
         "capabilities": _root_capabilities(
             available=available,
             backend="local" if available else "unavailable",
             webdav_available=webdav_available,
+            read_only=read_only,
         ),
     }
 
@@ -307,6 +387,12 @@ def _local_root_descriptors(webdav_available: bool = False) -> list[dict[str, An
             "Workspace",
             _first_existing_dir(_candidate_workspace_roots()),
             webdav_available=webdav_available,
+        ),
+        _root_descriptor(
+            "linked",
+            "Linked",
+            _first_existing_dir(_candidate_linked_roots()),
+            read_only=True,
         ),
     ]
 
@@ -324,7 +410,7 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
     roots = _local_root_descriptors()
     if not root_id:
         root_id = _default_root_id(roots)
-    if root_id not in {"vault", "workspace"}:
+    if root_id not in {"vault", "workspace", "linked"}:
         raise HTTPException(status_code=400, detail="Unknown Drive root")
     for root in roots:
         if root["id"] == root_id:
@@ -332,6 +418,11 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
                 raise HTTPException(status_code=404, detail=f"{root['label']} root is not available")
             return root
     raise HTTPException(status_code=404, detail="Drive root is not available")
+
+
+def _assert_writable_root(root_id: str) -> None:
+    if str(root_id or "").strip().lower() == "linked":
+        raise HTTPException(status_code=403, detail="Linked resources are read-only")
 
 
 def _meta_path() -> Path:
@@ -424,27 +515,39 @@ def _sanitized_name(raw_name: Any) -> str:
     return name
 
 
-def _resolve_local(root: Path, raw_path: Any) -> tuple[Path, str]:
-    relative_path = _clean_relative_path(raw_path)
-    target = (root / relative_path).resolve(strict=False)
+def _assert_accessible_path(root: Path, target: Path, *, root_id: str = "") -> None:
     root_resolved = root.resolve(strict=False)
-    if target != root_resolved and root_resolved not in target.parents:
+    if target == root_resolved:
+        return
+    try:
+        target.parent.relative_to(root_resolved)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Path is outside the selected Drive root")
+    resolved = target.resolve(strict=False)
+    if resolved == root_resolved or root_resolved in resolved.parents:
+        return
+    if str(root_id or "").strip().lower() == "linked" and _linked_target_allowed(root_resolved, target, resolved):
+        return
+    raise HTTPException(status_code=403, detail="Path is outside the selected Drive root")
+
+
+def _resolve_local(root: Path, raw_path: Any, *, root_id: str = "") -> tuple[Path, str]:
+    relative_path = _clean_relative_path(raw_path)
+    root_resolved = root.resolve(strict=False)
+    target = root_resolved / relative_path
+    _assert_accessible_path(root_resolved, target, root_id=root_id)
     if relative_path:
         _assert_not_sensitive(target)
     return target, relative_path
 
 
-def _assert_within_root(root: Path, path: Path) -> None:
-    resolved = path.resolve(strict=False)
-    root_resolved = root.resolve(strict=False)
-    if resolved != root_resolved and root_resolved not in resolved.parents:
-        raise HTTPException(status_code=403, detail="Path is outside the selected Drive root")
+def _assert_within_root(root: Path, path: Path, *, root_id: str = "") -> None:
+    _assert_accessible_path(root.resolve(strict=False), path, root_id=root_id)
 
 
-def _safe_child_relative(root: Path, path: Path) -> str | None:
+def _safe_child_relative(root: Path, path: Path, *, root_id: str = "") -> str | None:
     try:
-        _assert_within_root(root, path)
+        _assert_within_root(root, path, root_id=root_id)
         _assert_not_sensitive(path)
         return path.relative_to(root).as_posix()
     except (HTTPException, ValueError, OSError):
@@ -481,7 +584,7 @@ def _iso_from_timestamp(value: float) -> str:
 
 
 def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, meta: dict[str, Any]) -> dict[str, Any]:
-    _assert_within_root(root, path)
+    _assert_within_root(root, path, root_id=root_id)
     try:
         stat = path.stat()
     except OSError as exc:
@@ -511,17 +614,17 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
     items: list[dict[str, Any]] = []
     if query.strip():
         needle = query.strip().lower()
-        for current_root, dirnames, filenames in os.walk(root):
+        for current_root, dirnames, filenames in os.walk(root, followlinks=root_id == "linked"):
             dirnames[:] = [
                 name
                 for name in dirnames
-                if name not in _SKIP_DIR_NAMES and _safe_child_relative(root, Path(current_root) / name) is not None
+                if name not in _SKIP_DIR_NAMES and _safe_child_relative(root, Path(current_root) / name, root_id=root_id) is not None
             ]
             for name in sorted([*dirnames, *filenames]):
                 if needle not in name.lower():
                     continue
                 candidate = Path(current_root) / name
-                relative = _safe_child_relative(root, candidate)
+                relative = _safe_child_relative(root, candidate, root_id=root_id)
                 if relative is None:
                     continue
                 item = _item_from_local(root_id, root, candidate, relative, meta)
@@ -534,16 +637,16 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
                 break
         current_path = "/"
     else:
-        target, relative = _resolve_local(root, raw_path)
+        target, relative = _resolve_local(root, raw_path, root_id=root_id)
         if not target.exists():
             raise HTTPException(status_code=404, detail="Vault path does not exist")
         if not target.is_dir():
             raise HTTPException(status_code=400, detail="Vault path is not a folder")
-        safe_children = [child for child in target.iterdir() if _safe_child_relative(root, child) is not None]
+        safe_children = [child for child in target.iterdir() if _safe_child_relative(root, child, root_id=root_id) is not None]
         for child in sorted(safe_children, key=lambda value: (not value.is_dir(), value.name.lower())):
             if _should_skip(child):
                 continue
-            child_relative = _safe_child_relative(root, child)
+            child_relative = _safe_child_relative(root, child, root_id=root_id)
             if child_relative is None:
                 continue
             item = _item_from_local(root_id, root, child, child_relative, meta)
@@ -562,8 +665,9 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
 
 
 def _move_local(root_id: str, root: Path, source_path: Any, destination_path: Any) -> dict[str, Any]:
-    source, source_relative = _resolve_local(root, source_path)
-    destination, destination_relative = _resolve_local(root, destination_path)
+    _assert_writable_root(root_id)
+    source, source_relative = _resolve_local(root, source_path, root_id=root_id)
+    destination, destination_relative = _resolve_local(root, destination_path, root_id=root_id)
     if not source.exists():
         raise HTTPException(status_code=404, detail="Drive source path does not exist")
     if source == root:
@@ -655,8 +759,9 @@ def _copy_confined(source: Path, destination: Path) -> None:
 
 
 def _copy_local(root_id: str, root: Path, source_path: Any, destination_path: Any, *, conflict: str = "reject") -> dict[str, Any]:
-    source, source_relative = _resolve_local(root, source_path)
-    destination, destination_relative = _resolve_local(root, destination_path)
+    _assert_writable_root(root_id)
+    source, source_relative = _resolve_local(root, source_path, root_id=root_id)
+    destination, destination_relative = _resolve_local(root, destination_path, root_id=root_id)
     if not source.exists():
         raise HTTPException(status_code=404, detail="Drive source path does not exist")
     if source == root:
@@ -672,6 +777,52 @@ def _copy_local(root_id: str, root: Path, source_path: Any, destination_path: An
         "ok": True,
         "root": root_id,
         "path": _display_path(source_relative),
+        "destination": _display_path(destination_relative),
+    }
+
+
+def _default_writable_root_id() -> str:
+    for candidate in _local_root_descriptors():
+        if candidate.get("id") in {"vault", "workspace"} and candidate.get("available") and not candidate.get("read_only"):
+            return str(candidate["id"])
+    raise HTTPException(status_code=404, detail="No writable Drive root is available")
+
+
+def _copy_between_roots(
+    source_ctx: dict[str, Any],
+    destination_ctx: dict[str, Any],
+    source_path: Any,
+    destination_path: Any,
+    *,
+    conflict: str = "reject",
+) -> dict[str, Any]:
+    source_root_id = str(source_ctx["id"])
+    destination_root_id = str(destination_ctx["id"])
+    if source_root_id != "linked":
+        raise HTTPException(status_code=400, detail="Cross-root copy is only supported from Linked into owned roots")
+    _assert_writable_root(destination_root_id)
+    source_root = Path(source_ctx["path"])
+    destination_root = Path(destination_ctx["path"])
+    source, source_relative = _resolve_local(source_root, source_path, root_id=source_root_id)
+    destination, destination_relative = _resolve_local(destination_root, destination_path, root_id=destination_root_id)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Drive source path does not exist")
+    if source == source_root:
+        raise HTTPException(status_code=400, detail="Cannot copy the Linked root")
+    source_for_copy = source.resolve(strict=False)
+    _assert_not_sensitive(source)
+    _assert_not_sensitive(source_for_copy)
+    if source_for_copy.is_dir() and (destination == source_for_copy or source_for_copy in destination.parents):
+        raise HTTPException(status_code=400, detail="Cannot copy a folder into itself")
+    destination = _resolve_conflict_destination(destination, conflict=conflict)
+    destination_relative = destination.relative_to(destination_root.resolve(strict=False)).as_posix()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _copy_confined(source_for_copy, destination)
+    return {
+        "ok": True,
+        "root": source_root_id,
+        "path": _display_path(source_relative),
+        "destination_root": destination_root_id,
         "destination": _display_path(destination_relative),
     }
 
@@ -891,7 +1042,7 @@ async def items(path: str = "/", query: str = "", favorites_only: bool = False, 
 async def content(path: str, root: str = "") -> dict[str, Any]:
     if root:
         ctx = _root_context(root)
-        target, relative = _resolve_local(Path(ctx["path"]), path)
+        target, relative = _resolve_local(Path(ctx["path"]), path, root_id=ctx["id"])
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Drive file does not exist")
         if target.stat().st_size > _MAX_TEXT_BYTES or not _is_text_item(target):
@@ -904,7 +1055,7 @@ async def content(path: str, root: str = "") -> dict[str, Any]:
         }
     backend = _backend()
     if backend["name"] == "local-vault":
-        target, relative = _resolve_local(backend["root"], path)
+        target, relative = _resolve_local(backend["root"], path, root_id="vault")
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Drive file does not exist")
         if target.stat().st_size > _MAX_TEXT_BYTES or not _is_text_item(target):
@@ -934,13 +1085,13 @@ async def content(path: str, root: str = "") -> dict[str, Any]:
 async def download(path: str, root: str = "") -> Any:
     if root:
         ctx = _root_context(root)
-        target, _relative = _resolve_local(Path(ctx["path"]), path)
+        target, _relative = _resolve_local(Path(ctx["path"]), path, root_id=ctx["id"])
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Drive file does not exist")
         return FileResponse(str(target), filename=target.name, media_type=mimetypes.guess_type(str(target))[0])
     backend = _backend()
     if backend["name"] == "local-vault":
-        target, _relative = _resolve_local(backend["root"], path)
+        target, _relative = _resolve_local(backend["root"], path, root_id="vault")
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Drive file does not exist")
         return FileResponse(str(target), filename=target.name, media_type=mimetypes.guess_type(str(target))[0])
@@ -954,7 +1105,7 @@ async def download(path: str, root: str = "") -> Any:
 async def preview(path: str, root: str = "") -> Any:
     if root:
         ctx = _root_context(root)
-        target, _relative = _resolve_local(Path(ctx["path"]), path)
+        target, _relative = _resolve_local(Path(ctx["path"]), path, root_id=ctx["id"])
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Drive file does not exist")
         return FileResponse(
@@ -964,7 +1115,7 @@ async def preview(path: str, root: str = "") -> Any:
         )
     backend = _backend()
     if backend["name"] == "local-vault":
-        target, _relative = _resolve_local(backend["root"], path)
+        target, _relative = _resolve_local(backend["root"], path, root_id="vault")
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Drive file does not exist")
         return FileResponse(
@@ -993,12 +1144,13 @@ async def mkdir(request: Request) -> dict[str, Any]:
         path = _join_display(str(path), _sanitized_name(name))
     if root_id:
         ctx = _root_context(root_id)
-        target, relative = _resolve_local(Path(ctx["path"]), path)
+        _assert_writable_root(ctx["id"])
+        target, relative = _resolve_local(Path(ctx["path"]), path, root_id=ctx["id"])
         target.mkdir(parents=True, exist_ok=True)
         return {"ok": True, "root": ctx["id"], "path": _display_path(relative)}
     backend = _backend()
     if backend["name"] == "local-vault":
-        target, relative = _resolve_local(backend["root"], path)
+        target, relative = _resolve_local(backend["root"], path, root_id="vault")
         target.mkdir(parents=True, exist_ok=True)
         return {"ok": True, "root": "vault", "path": _display_path(relative)}
     if backend["name"] == "nextcloud-webdav":
@@ -1093,7 +1245,8 @@ async def delete(request: Request) -> dict[str, Any]:
 
 
 def _delete_local(root_id: str, root: Path, raw_path: Any) -> dict[str, Any]:
-    target, relative = _resolve_local(root, raw_path)
+    _assert_writable_root(root_id)
+    target, relative = _resolve_local(root, raw_path, root_id=root_id)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Drive path does not exist")
     if target == root:
@@ -1133,7 +1286,7 @@ async def trash(root: str = "") -> dict[str, Any]:
     meta = _load_meta()
     records = []
     for trash_path, record in sorted(_root_meta(meta, "trash", root_id).items()):
-        target, _relative = _resolve_local(root_path, trash_path)
+        target, _relative = _resolve_local(root_path, trash_path, root_id=root_id)
         if target.exists():
             records.append(record)
     return {"root": root_id, "items": records}
@@ -1157,6 +1310,7 @@ async def restore(request: Request) -> dict[str, Any]:
 
 
 def _restore_local(root_id: str, root_path: Path, raw_path: Any) -> dict[str, Any]:
+    _assert_writable_root(root_id)
     requested = _display_path(_clean_relative_path(raw_path))
     meta = _load_meta()
     trash_records = _root_meta(meta, "trash", root_id)
@@ -1169,8 +1323,8 @@ def _restore_local(root_id: str, root_path: Path, raw_path: Any) -> dict[str, An
                 break
     if not record:
         raise HTTPException(status_code=404, detail="Trash record does not exist")
-    trash_target, _trash_relative = _resolve_local(root_path, requested)
-    destination, destination_relative = _resolve_local(root_path, record.get("original_path"))
+    trash_target, _trash_relative = _resolve_local(root_path, requested, root_id=root_id)
+    destination, destination_relative = _resolve_local(root_path, record.get("original_path"), root_id=root_id)
     if destination.exists():
         raise HTTPException(status_code=409, detail="Original path already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1188,6 +1342,8 @@ async def upload(
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
     ctx: dict[str, Any] | None = _root_context(root) if root else None
+    if ctx is not None:
+        _assert_writable_root(ctx["id"])
     backend = _backend()
     uploaded: list[dict[str, Any]] = []
     target_dir_path = _clean_relative_path(path)
@@ -1199,14 +1355,14 @@ async def upload(
         display = _join_display(target_dir_path, name)
         content_bytes = await upload_file.read()
         if ctx is not None:
-            target, relative = _resolve_local(Path(ctx["path"]), display)
+            target, relative = _resolve_local(Path(ctx["path"]), display, root_id=ctx["id"])
             target = _resolve_conflict_destination(target, conflict=policy)
             relative = target.relative_to(Path(ctx["path"])).as_posix()
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content_bytes)
             uploaded.append({"root": ctx["id"], "path": _display_path(relative), "size": len(content_bytes)})
         elif backend["name"] == "local-vault":
-            target, relative = _resolve_local(backend["root"], display)
+            target, relative = _resolve_local(backend["root"], display, root_id="vault")
             target = _resolve_conflict_destination(target, conflict=policy)
             relative = target.relative_to(backend["root"]).as_posix()
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1227,9 +1383,10 @@ async def upload(
 async def new_file(request: Request) -> dict[str, Any]:
     payload = await request.json()
     ctx = _root_context(payload.get("root"))
+    _assert_writable_root(ctx["id"])
     parent = payload.get("path") or "/"
     name = _sanitized_name(payload.get("name"))
-    target, relative = _resolve_local(Path(ctx["path"]), _join_display(str(parent), name))
+    target, relative = _resolve_local(Path(ctx["path"]), _join_display(str(parent), name), root_id=ctx["id"])
     if target.exists():
         raise HTTPException(status_code=409, detail="File already exists")
     if target.suffix.lower() not in _TEXT_EXTENSIONS:
@@ -1243,14 +1400,21 @@ async def new_file(request: Request) -> dict[str, Any]:
 async def copy(request: Request) -> dict[str, Any]:
     payload = await request.json()
     root_id = payload.get("root")
-    destination_root = payload.get("destination_root") or root_id
-    if destination_root != root_id:
-        raise HTTPException(status_code=400, detail="Cross-root copy is not supported")
     ctx = _root_context(root_id)
+    destination_root = payload.get("destination_root") or (_default_writable_root_id() if ctx["id"] == "linked" else ctx["id"])
+    destination_ctx = _root_context(destination_root)
     source_path = payload.get("path") or payload.get("source_path")
     destination_path = payload.get("destination_path") or payload.get("destination")
     if not source_path or not destination_path:
         raise HTTPException(status_code=400, detail="Source and destination are required")
+    if destination_ctx["id"] != ctx["id"]:
+        return _copy_between_roots(
+            ctx,
+            destination_ctx,
+            source_path,
+            destination_path,
+            conflict=str(payload.get("conflict") or "reject"),
+        )
     return _copy_local(
         ctx["id"],
         Path(ctx["path"]),
@@ -1267,6 +1431,16 @@ async def duplicate(request: Request) -> dict[str, Any]:
     source_path = payload.get("path") or payload.get("source_path")
     if not source_path:
         raise HTTPException(status_code=400, detail="Source path is required")
+    if ctx["id"] == "linked":
+        destination_root = payload.get("destination_root") or _default_writable_root_id()
+        destination_path = payload.get("destination_path") or _display_path(posixpath.basename(_clean_relative_path(source_path)))
+        return _copy_between_roots(
+            ctx,
+            _root_context(destination_root),
+            source_path,
+            destination_path,
+            conflict="keep-both",
+        )
     return _copy_local(
         ctx["id"],
         Path(ctx["path"]),
@@ -1302,20 +1476,28 @@ async def batch(request: Request) -> dict[str, Any]:
                 _save_meta(meta)
                 result = {"ok": True, "root": ctx["id"], "path": display, "favorite": is_favorite}
             elif action == "copy":
-                destination_root = payload.get("destination_root") or ctx["id"]
-                if destination_root != ctx["id"]:
-                    raise HTTPException(status_code=400, detail="Cross-root copy is not supported")
+                destination_root = payload.get("destination_root") or (_default_writable_root_id() if ctx["id"] == "linked" else ctx["id"])
                 destination_folder = payload.get("destination_folder") or payload.get("destination_path")
                 if not destination_folder:
                     raise HTTPException(status_code=400, detail="Batch copy destination folder is required")
                 destination = _join_display(str(destination_folder), posixpath.basename(_clean_relative_path(raw_path)))
-                result = _copy_local(
-                    ctx["id"],
-                    Path(ctx["path"]),
-                    raw_path,
-                    destination,
-                    conflict=str(payload.get("conflict") or "reject"),
-                )
+                destination_ctx = _root_context(destination_root)
+                if destination_ctx["id"] != ctx["id"]:
+                    result = _copy_between_roots(
+                        ctx,
+                        destination_ctx,
+                        raw_path,
+                        destination,
+                        conflict=str(payload.get("conflict") or "reject"),
+                    )
+                else:
+                    result = _copy_local(
+                        ctx["id"],
+                        Path(ctx["path"]),
+                        raw_path,
+                        destination,
+                        conflict=str(payload.get("conflict") or "reject"),
+                    )
             elif action == "move":
                 destination_root = payload.get("destination_root") or ctx["id"]
                 if destination_root != ctx["id"]:

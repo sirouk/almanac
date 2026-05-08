@@ -58,6 +58,22 @@ def base_config(root: Path) -> dict[str, str]:
     }
 
 
+def local_fallback_config(root: Path) -> dict[str, str]:
+    values = base_config(root)
+    values.update(
+        {
+            "ARCLINK_MEMORY_SYNTH_ENABLED": "1",
+            "ARCLINK_MEMORY_SYNTH_ENDPOINT": "",
+            "ARCLINK_MEMORY_SYNTH_MODEL": "",
+            "ARCLINK_MEMORY_SYNTH_API_KEY": "",
+            "PDF_VISION_ENDPOINT": "",
+            "PDF_VISION_MODEL": "",
+            "PDF_VISION_API_KEY": "",
+        }
+    )
+    return values
+
+
 def insert_agent(conn, root: Path) -> None:
     now = control.utc_now_iso()
     hermes_home = root / "home-testuser" / ".local" / "share" / "arclink-agent" / "hermes-home"
@@ -240,6 +256,9 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                     "retrieval_queries": [candidate.source_title, "Horizon protocol", "Nimbus Trading Lab market making"],
                     "source_hints": [candidate.source_title],
                     "confidence": "medium",
+                    "trust_score": 0.72,
+                    "contradiction_signals": ["Horizon protocol notes list open research questions next to final protocol language"],
+                    "disagreement_signals": ["Nimbus spread policy notes include unresolved execution-risk tradeoffs"],
                     "inject": True,
                 }
 
@@ -254,7 +273,7 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
             expect(any(call.startswith("notion:Work Focus") for call in calls), calls)
 
             with control.connect_db(cfg) as conn:
-                card_rows = conn.execute("SELECT source_kind, source_key, card_text FROM memory_synthesis_cards WHERE status = 'ok'").fetchall()
+                card_rows = conn.execute("SELECT source_kind, source_key, card_json, card_text FROM memory_synthesis_cards WHERE status = 'ok'").fetchall()
                 card_text = "\n".join(str(row["card_text"] or "") for row in card_rows)
                 expect("Research contains compact orientation" in card_text, card_text)
                 expect("Projects contains compact orientation" in card_text, card_text)
@@ -264,6 +283,17 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 expect("Domains: creator, family, business." in card_text, card_text)
                 expect("Workflows: content planning, household coordination, research review." in card_text, card_text)
                 expect("Content: notes, PDFs, videos, images, tables." in card_text, card_text)
+                expect("Confidence: medium." in card_text, card_text)
+                expect("Trust score: 0.72." in card_text, card_text)
+                expect("Contradiction signals: Horizon protocol notes list open research questions next to final protocol language." in card_text, card_text)
+                expect("Disagreement signals: Nimbus spread policy notes include unresolved execution-risk tradeoffs." in card_text, card_text)
+                parsed_cards = [json.loads(str(row["card_json"] or "{}")) for row in card_rows]
+                expect(all(card.get("trust_score") == 0.72 for card in parsed_cards), parsed_cards)
+                expect(
+                    all(card.get("contradiction_signals") for card in parsed_cards)
+                    and all(card.get("disagreement_signals") for card in parsed_cards),
+                    parsed_cards,
+                )
                 fanout = conn.execute(
                     "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'"
                 ).fetchone()
@@ -279,8 +309,11 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 conn.commit()
                 payload = control.build_managed_memory_payload(conn, cfg, agent_id="agent-test")
                 expect("Semantic synthesis cards:" in payload["recall-stubs"], payload["recall-stubs"])
-                expect("LLM-compressed recall hints only" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("Compact recall hints only" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("[vault:Research]" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("Trust score: 0.72." in payload["recall-stubs"], payload["recall-stubs"])
+                expect("Contradiction signals:" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("Disagreement signals:" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("[vault:Creator Studio]" not in payload["recall-stubs"], payload["recall-stubs"])
 
             calls.clear()
@@ -335,10 +368,63 @@ def test_memory_synthesizer_source_signature_uses_file_content_hash() -> None:
             os.environ.update(old_env)
 
 
+def test_memory_synthesizer_local_fallback_runs_without_llm_config() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = local_fallback_config(root)
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ.update(values)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                insert_agent(conn, root)
+                seed_sources(root, conn)
+                control.reload_vault_definitions(conn, cfg)
+                conn.execute("DELETE FROM notification_outbox")
+                conn.commit()
+
+            settings = synth.load_settings(cfg)
+            expect(settings.enabled is True, str(settings))
+            expect(settings.model == synth.LOCAL_FALLBACK_MODEL, str(settings))
+            expect(settings.endpoint == "", str(settings))
+            result = synth.run_once(cfg)
+            expect(result["status"] == "ok", str(result))
+            expect(result["model"] == synth.LOCAL_FALLBACK_MODEL, str(result))
+            expect(result["synthesized"] >= 4, str(result))
+            expect(result["failed"] == 0, str(result))
+
+            with control.connect_db(cfg) as conn:
+                card_rows = conn.execute(
+                    "SELECT source_kind, source_key, card_json, card_text FROM memory_synthesis_cards WHERE status = 'ok'"
+                ).fetchall()
+                expect(len(card_rows) >= 4, f"expected local fallback cards, got {len(card_rows)}")
+                card_text = "\n".join(str(row["card_text"] or "") for row in card_rows)
+                expect("Local fallback found" in card_text, card_text)
+                expect("Confidence: low." in card_text, card_text)
+                expect("Trust score: 0.40." in card_text, card_text)
+                expect("off-vault private note" not in card_text, card_text)
+                parsed_cards = [json.loads(str(row["card_json"] or "{}")) for row in card_rows]
+                expect(all(card.get("confidence") == "low" for card in parsed_cards), parsed_cards)
+                expect(all(card.get("trust_score") == 0.4 for card in parsed_cards), parsed_cards)
+                expect(any("Creator Studio" in (card.get("retrieval_queries") or []) for card in parsed_cards), parsed_cards)
+                payload = control.build_managed_memory_payload(conn, cfg, agent_id="agent-test")
+                expect("Semantic synthesis cards:" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("Compact recall hints only" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("[vault:Research]" in payload["recall-stubs"], payload["recall-stubs"])
+            print("PASS test_memory_synthesizer_local_fallback_runs_without_llm_config")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
-    print("PASS all 2 memory synthesizer tests")
+    test_memory_synthesizer_local_fallback_runs_without_llm_config()
+    print("PASS all 3 memory synthesizer tests")
     return 0
 
 

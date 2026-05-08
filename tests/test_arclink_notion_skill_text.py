@@ -8,6 +8,7 @@ NOTION_MCP_SKILL = REPO / "skills" / "arclink-notion-mcp" / "SKILL.md"
 NOTION_KNOWLEDGE_SKILL = REPO / "skills" / "arclink-notion-knowledge" / "SKILL.md"
 SSOT_CONNECT_SKILL = REPO / "skills" / "arclink-ssot-connect" / "SKILL.md"
 SSOT_SKILL = REPO / "skills" / "arclink-ssot" / "SKILL.md"
+NOTION_HUMAN_GUIDE = REPO / "docs" / "arclink" / "notion-human-guide.md"
 CODEX_CONFIG = REPO / ".codex" / "config.toml"
 CONNECT_SCRIPT = REPO / "skills" / "arclink-ssot-connect" / "scripts" / "check-codex-notion-mcp.sh"
 
@@ -127,6 +128,16 @@ def test_ssot_skill_marks_broker_as_non_workspace_search_lane() -> None:
     print("PASS test_ssot_skill_marks_broker_as_non_workspace_search_lane")
 
 
+def test_notion_human_guide_uses_shared_root_ssot_membership() -> None:
+    body = NOTION_HUMAN_GUIDE.read_text(encoding="utf-8")
+    body_collapsed = " ".join(body.split())
+    expect("SSOT sharing uses shared-root membership as the canonical model." in body_collapsed, body)
+    expect("add them to the Notion shared root or to the workspace/teamspace that owns that root" in body_collapsed, body)
+    expect("Drive linked-resource grants do not imply Notion or SSOT share grants." in body_collapsed, body)
+    expect("User-owned OAuth, private integration tokens, and email-share-only workflows are non-default research/proof alternatives." in body_collapsed, body)
+    print("PASS test_notion_human_guide_uses_shared_root_ssot_membership")
+
+
 def test_project_codex_config_and_connect_script_exist() -> None:
     config_body = CODEX_CONFIG.read_text(encoding="utf-8")
     script_body = CONNECT_SCRIPT.read_text(encoding="utf-8")
@@ -143,8 +154,9 @@ def main() -> int:
     test_notion_knowledge_skill_teaches_shared_three_tool_split()
     test_ssot_connect_requires_search_and_fetch_verification()
     test_ssot_skill_marks_broker_as_non_workspace_search_lane()
+    test_notion_human_guide_uses_shared_root_ssot_membership()
     test_project_codex_config_and_connect_script_exist()
-    print("PASS all 5 notion skill text regression tests")
+    print("PASS all 6 notion skill text regression tests")
     return 0
 
 

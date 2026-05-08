@@ -56,6 +56,35 @@ _SECTION_LIMITS = {
     "recent-events": 1200,
     "identity": 900,
 }
+_RECALL_BUDGET_ALIASES = {
+    "": "mid",
+    "default": "mid",
+    "medium": "mid",
+    "normal": "mid",
+}
+_RECALL_BUDGET_SECTION_LIMITS = {
+    "low": {
+        "vault-landmarks": 650,
+        "recall-stubs": 900,
+        "notion-landmarks": 650,
+        "today-plate": 650,
+    },
+    "mid": {},
+    "high": {
+        "vault-landmarks": 2400,
+        "recall-stubs": 2600,
+        "notion-landmarks": 2200,
+        "today-plate": 2000,
+    },
+}
+_RECALL_STUB_GUARDRAIL_MARKERS = (
+    "Retrieval memory stubs:",
+    "Treat these as awareness cards",
+    "Default broad question path:",
+    "Vault/PDF/file path:",
+    "Shared Notion path:",
+    "Quality rule:",
+)
 _MAX_EVENT_COUNT = 5
 _MAX_EVENT_MESSAGE_CHARS = 240
 _MAX_LOCAL_FIELD_CHARS = 160
@@ -216,6 +245,7 @@ _TOKEN_TOOL_SUFFIXES = {
     "knowledge_search_and_fetch": "knowledge.search-and-fetch",
     "agents_managed_memory": "agents.managed-memory",
     "agents_consume_notifications": "agents.consume-notifications",
+    "shares_request": "shares.request",
     "ssot_read": "ssot.read",
     "ssot_pending": "ssot.pending",
     "ssot_preflight": "ssot.preflight",
@@ -261,6 +291,30 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "Searches both vault/PDF and shared Notion by default; use sources:[\"vault\"] or [\"notion\"] to narrow. "
             "Bounded defaults: search_limit ≤ 5 per source, vault_fetch_limit ≤ 2, notion_fetch_limit ≤ 3, body_char_limit ≤ 12000. "
             "Best first call when the user did not clearly say whether the answer lives in files/PDFs or Notion."
+        ),
+    ),
+    (
+        "shares.request",
+        (
+            "share this file",
+            "share this folder",
+            "share this directory",
+            "share the file",
+            "share the folder",
+            "share the directory",
+            "send this file to",
+            "give access to",
+            "grant access to",
+            "read-only share",
+            "share from my vault",
+            "share from my workspace",
+        ),
+        (
+            "shares.request - governed read-only Drive/Code share request. The plugin injects token automatically; omit token. "
+            "Required: resource_kind drive|code, resource_root vault|workspace, resource_path. Also pass recipient_user_id or recipient_email. "
+            "Use only for the current user's named Vault or Workspace file/directory; Linked resources cannot be reshared. "
+            "The call creates pending_owner_approval; the owner must approve and the recipient must accept before it appears under the recipient's read-only Linked root. "
+            "reshare is false, and copy/duplicate remains a policy question."
         ),
     ),
     (
@@ -440,6 +494,53 @@ _TELEMETRY_FILENAME = "arclink-context-telemetry.jsonl"
 _TELEMETRY_MAX_BYTES = 1_000_000
 
 
+def _cadence_layer_labels(
+    *,
+    include_sections: bool,
+    recipes: list[dict[str, str]] | None = None,
+    resource_request: bool = False,
+) -> list[str]:
+    layers: list[str] = []
+    if resource_request:
+        layers.append("cheap-resource-request")
+    if recipes:
+        layers.append("cheap-tool-recipes")
+    if include_sections:
+        layers.append("expensive-managed-context")
+    return layers
+
+
+def _cadence_telemetry(
+    *,
+    include_sections: bool,
+    recipes: list[dict[str, str]] | None = None,
+    resource_request: bool = False,
+    gate: list[str] | None = None,
+    suppressed_reason: str = "",
+) -> dict[str, object]:
+    layers = _cadence_layer_labels(
+        include_sections=include_sections,
+        recipes=recipes,
+        resource_request=resource_request,
+    )
+    reasons: dict[str, list[str]] = {}
+    if resource_request:
+        reasons["cheap-resource-request"] = ["resource_request"]
+    if recipes:
+        reasons["cheap-tool-recipes"] = [f"recipe:{entry['tool']}" for entry in recipes]
+    if include_sections:
+        expensive_reasons = [item for item in (gate or []) if item != "recipe"] or ["full_context_gate"]
+        reasons["expensive-managed-context"] = expensive_reasons
+    if not layers and suppressed_reason:
+        reasons["none"] = [suppressed_reason]
+    primary = "expensive" if include_sections else ("cheap" if layers else "none")
+    return {
+        "cadence_layer": primary,
+        "cadence_layers": layers,
+        "cadence_reasons": reasons,
+    }
+
+
 def _hermes_home() -> Path:
     return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
 
@@ -535,6 +636,57 @@ def _trim(text: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _recall_budget_tier() -> str:
+    raw = str(os.environ.get("ARCLINK_MANAGED_CONTEXT_RECALL_BUDGET") or "").strip().lower()
+    tier = _RECALL_BUDGET_ALIASES.get(raw, raw)
+    if tier not in _RECALL_BUDGET_SECTION_LIMITS:
+        return "mid"
+    return tier
+
+
+def _section_limit_for_budget(key: str, tier: str) -> int:
+    base = _SECTION_LIMITS.get(key, 800)
+    return int(_RECALL_BUDGET_SECTION_LIMITS.get(tier, {}).get(key, base))
+
+
+def _budget_recall_stub_text(text: str, limit: int) -> str:
+    raw = str(text or "").strip()
+    if len(raw) <= limit:
+        return raw
+
+    guardrail_lines: list[str] = []
+    optional_lines: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if any(marker in stripped for marker in _RECALL_STUB_GUARDRAIL_MARKERS):
+            guardrail_lines.append(line)
+        elif stripped:
+            optional_lines.append(line)
+
+    selected: list[str] = []
+    for line in guardrail_lines:
+        candidate = "\n".join([*selected, line]).strip()
+        if len(candidate) > limit:
+            return _trim("\n".join(selected) or line, limit)
+        selected.append(line)
+
+    omitted = "- Additional recall cards omitted by the low recall budget; use the retrieval rails above for depth."
+    for line in [*optional_lines, omitted]:
+        candidate = "\n".join([*selected, line]).strip()
+        if len(candidate) > limit:
+            continue
+        selected.append(line)
+
+    return "\n".join(selected).strip()
+
+
+def _trim_section(key: str, text: str, *, tier: str) -> str:
+    limit = _section_limit_for_budget(key, tier)
+    if key == "recall-stubs" and tier == "low":
+        return _budget_recall_stub_text(text, limit)
+    return _trim(text, limit)
 
 
 def _clean_text(value: object, *, limit: int) -> str:
@@ -1327,6 +1479,12 @@ def _render_context(
 ) -> str:
     label = "refreshed local ArcLink context" if include_sections else "turn tool recipe"
     lines = [f"[Plugin: {PLUGIN_NAME} - {label}]", f"managed revision: {managed_revision}"]
+    cadence_layers = _cadence_layer_labels(include_sections=include_sections, recipes=recipes)
+    if cadence_layers:
+        lines.append(f"cadence layers: {', '.join(cadence_layers)}")
+    recall_budget = _recall_budget_tier()
+    if include_sections:
+        lines.append(f"recall budget: {recall_budget}")
     if include_sections and context_revision != managed_revision:
         lines.append(f"live revision: {context_revision}")
 
@@ -1362,7 +1520,7 @@ def _render_context(
                 [
                     "",
                     f"[{prefix}:{key}]",
-                    _trim(raw, _SECTION_LIMITS.get(key, 800)),
+                    _trim_section(key, raw, tier=recall_budget),
                 ]
             )
 
@@ -1397,6 +1555,7 @@ def _pre_llm_call(
     access_payload = _load_json_dict(access_path)
     events_payload = _load_json_dict(events_path)
     identity_payload = _load_json_dict(identity_path)
+    recall_budget = _recall_budget_tier()
     resource_request = _is_resource_request(user_message)
     if resource_request:
         context = _render_resource_request_context(
@@ -1417,6 +1576,12 @@ def _pre_llm_call(
                     "context_mode": "resource_request",
                     "managed_revision": _managed_revision(payload) if payload else "",
                     "platform": str(platform or ""),
+                    "recall_budget": recall_budget,
+                    **_cadence_telemetry(
+                        include_sections=False,
+                        resource_request=True,
+                        gate=["resource_request"],
+                    ),
                 }
             )
             return {"context": context}
@@ -1468,33 +1633,6 @@ def _pre_llm_call(
         or context_followup
         or recipe_context_gate
     )
-    if not (full_context_gate or recipes):
-        _emit_telemetry(
-            {
-                "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-                "session_id": session_key,
-                "injected": False,
-                "gate": [],
-                "recipes": [],
-                "context_chars": 0,
-                "managed_revision": managed_revision,
-                "platform": str(platform or ""),
-                "reason": "no_gate",
-            }
-        )
-        return None
-
-    context = _render_context(
-        sections,
-        freshness=freshness,
-        managed_revision=managed_revision,
-        context_revision=revision,
-        recipes=recipes,
-        include_sections=full_context_gate,
-    )
-    if not context:
-        return None
-
     gate: list[str] = []
     if is_first_turn:
         gate.append("first_turn")
@@ -1510,6 +1648,40 @@ def _pre_llm_call(
         gate.append("recipe")
     if recipe_context_gate:
         gate.append("recipe_context")
+    if not (full_context_gate or recipes):
+        _emit_telemetry(
+            {
+                "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "session_id": session_key,
+                "injected": False,
+                "gate": [],
+                "recipes": [],
+                "context_chars": 0,
+                "managed_revision": managed_revision,
+                "platform": str(platform or ""),
+                "recall_budget": recall_budget,
+                "reason": "no_gate",
+                **_cadence_telemetry(
+                    include_sections=False,
+                    recipes=[],
+                    gate=[],
+                    suppressed_reason="no_gate",
+                ),
+            }
+        )
+        return None
+
+    context = _render_context(
+        sections,
+        freshness=freshness,
+        managed_revision=managed_revision,
+        context_revision=revision,
+        recipes=recipes,
+        include_sections=full_context_gate,
+    )
+    if not context:
+        return None
+
     _emit_telemetry(
         {
             "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -1521,6 +1693,12 @@ def _pre_llm_call(
             "context_mode": "full" if full_context_gate else "recipe_only",
             "managed_revision": managed_revision,
             "platform": str(platform or ""),
+            "recall_budget": recall_budget,
+            **_cadence_telemetry(
+                include_sections=full_context_gate,
+                recipes=recipes,
+                gate=gate,
+            ),
         }
     )
     return {"context": context}

@@ -127,6 +127,26 @@ def _assert_default_plugins_installed(hermes_home: Path) -> None:
         expect((dashboard_dir / "dist" / "style.css").is_file(), f"expected dashboard CSS at {dashboard_dir / 'dist' / 'style.css'}")
 
 
+def test_managed_context_readme_documents_conversational_memory_sibling_boundaries() -> None:
+    text = " ".join((PLUGIN_DIR / "README.md").read_text(encoding="utf-8").lower().split())
+    required = (
+        "optional conversational-memory siblings",
+        "sibling, not a replacement for arclink managed context",
+        "must stay inside the same enrolled user's hermes home",
+        "must not read another user's vault",
+        "must not write shared notion/ssot state directly",
+        "brokered `ssot.write`/arclink mcp rails",
+        "must not auto-capture every hermes turn",
+        "operator-approved policy and isolation tests",
+        "recall produced by a sibling plugin is only conversational context",
+        "knowledge.search-and-fetch",
+        "ssot.read",
+    )
+    for phrase in required:
+        expect(phrase in text, f"managed-context README missing sibling-memory boundary phrase: {phrase}")
+    print("PASS test_managed_context_readme_documents_conversational_memory_sibling_boundaries")
+
+
 def test_install_arclink_plugins_installs_default_hermes_plugin() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -365,9 +385,16 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
         (workspace_home / "Vault").mkdir(parents=True, exist_ok=True)
         (workspace_home / "Vault" / "agent-notes.md").write_text("# Notes\n\nDrive test.\n", encoding="utf-8")
         (workspace_home / "hello.py").write_text("print('hi')\n", encoding="utf-8")
+        linked_root = hermes_home / "linked-resources"
+        (linked_root / "share_001-project-brief").mkdir(parents=True, exist_ok=True)
+        (linked_root / "share_001-project-brief" / "overview.md").write_text(
+            "# Linked Project Brief\n\nRead-only shared context.\n",
+            encoding="utf-8",
+        )
         os.environ["HERMES_HOME"] = str(hermes_home)
         os.environ["HOME"] = str(workspace_home)
         os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace_home)
+        os.environ["ARCLINK_LINKED_RESOURCES_ROOT"] = str(linked_root)
         os.environ["TERMINAL_ALLOW_ROOT"] = "1"
         try:
             knowledge_api = load_module(
@@ -394,10 +421,14 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(knowledge["backend"] == "local-roots", str(knowledge))
             expect(knowledge["default_root"] == "vault", str(knowledge))
             root_map = {item["id"]: item for item in knowledge["roots"]}
-            expect(set(root_map) == {"vault", "workspace"}, str(knowledge))
+            expect(set(root_map) == {"vault", "workspace", "linked"}, str(knowledge))
             expect(root_map["vault"]["label"] == "Vault", str(root_map["vault"]))
             expect(root_map["workspace"]["label"] == "Workspace", str(root_map["workspace"]))
+            expect(root_map["linked"]["label"] == "Linked", str(root_map["linked"]))
+            expect(root_map["linked"]["available"] is True, str(root_map["linked"]))
+            expect(root_map["linked"]["read_only"] is True, str(root_map["linked"]))
             expect(root_map["vault"]["capabilities"]["sharing"] is False, str(root_map["vault"]))
+            expect(root_map["linked"]["capabilities"]["upload"] is False, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["trash"] is True, str(root_map["workspace"]))
             expect(knowledge["capabilities"]["drag_drop_upload"] is True, str(knowledge))
             _assert_no_secret_status(knowledge, "Drive")
@@ -405,18 +436,45 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(any(item["name"] == "agent-notes.md" for item in drive_items["items"]), str(drive_items))
             workspace_items = asyncio.run(knowledge_api.items(root="workspace", path="/"))
             expect(any(item["name"] == "hello.py" for item in workspace_items["items"]), str(workspace_items))
+            linked_items = asyncio.run(knowledge_api.items(root="linked", path="/"))
+            expect(any(item["name"] == "share_001-project-brief" for item in linked_items["items"]), str(linked_items))
+            linked_content = asyncio.run(knowledge_api.content(root="linked", path="/share_001-project-brief/overview.md"))
+            expect("Linked Project Brief" in linked_content["content"], str(linked_content))
+            try:
+                asyncio.run(knowledge_api.mkdir(JsonRequest({"root": "linked", "path": "/", "name": "blocked"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected linked Drive write rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected linked Drive write rejection")
             expect(code["plugin"] == "code", str(code))
             expect(code["status_contract"] == 1, str(code))
             expect(code["available"] is True, str(code))
             expect(code["url"] == "", str(code))
             expect(code["full_ide_available"] is False, str(code))
             code_root_map = {item["id"]: item for item in code["roots"]}
-            expect(set(code_root_map) == {"workspace", "vault"}, str(code))
+            expect(set(code_root_map) == {"workspace", "vault", "linked"}, str(code))
+            expect(code_root_map["linked"]["label"] == "Linked", str(code_root_map["linked"]))
+            expect(code_root_map["linked"]["available"] is True, str(code_root_map["linked"]))
+            expect(code_root_map["linked"]["read_only"] is True, str(code_root_map["linked"]))
+            expect(code_root_map["workspace"]["capabilities"]["sharing"] is False, str(code_root_map["workspace"]))
+            expect(code_root_map["vault"]["capabilities"]["sharing"] is False, str(code_root_map["vault"]))
+            expect(code_root_map["linked"]["capabilities"]["sharing"] is False, str(code_root_map["linked"]))
+            expect(code_root_map["linked"]["capabilities"]["write"] is False, str(code_root_map["linked"]))
             expect(code["workspace_root"].endswith("/home/alex"), str(code))
             code_items = asyncio.run(code_api.items(path="/", root="workspace"))
             expect(any(item["name"] == "hello.py" for item in code_items["items"]), str(code_items))
             vault_code_items = asyncio.run(code_api.items(path="/", root="vault"))
             expect(any(item["name"] == "agent-notes.md" for item in vault_code_items["items"]), str(vault_code_items))
+            linked_code_items = asyncio.run(code_api.items(path="/", root="linked"))
+            expect(any(item["name"] == "share_001-project-brief" for item in linked_code_items["items"]), str(linked_code_items))
+            linked_code_file = asyncio.run(code_api.file(path="/share_001-project-brief/overview.md", root="linked"))
+            expect("Linked Project Brief" in linked_code_file["content"], str(linked_code_file))
+            try:
+                asyncio.run(code_api.save(JsonRequest({"root": "linked", "path": "/share_001-project-brief/overview.md", "content": "blocked"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected linked Code write rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected linked Code write rejection")
             code_file = asyncio.run(code_api.file(path="/hello.py", root="workspace"))
             expect(code_file["language"] == "python", str(code_file))
             expect("print('hi')" in code_file["content"], str(code_file))
@@ -436,6 +494,198 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(terminal["transport"]["fallback"] == "polling", str(terminal))
             _assert_no_secret_status(terminal, "Terminal")
             print("PASS test_arclink_dashboard_plugins_expose_sanitized_access_state")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        workspace_home = root / "home" / "alex"
+        vault = workspace_home / "Vault"
+        workspace = workspace_home / "workspace"
+        linked = workspace_home / "Linked"
+        vault.mkdir(parents=True, exist_ok=True)
+        workspace.mkdir(parents=True, exist_ok=True)
+        linked.mkdir(parents=True, exist_ok=True)
+        (linked / "shared-note.md").write_text("# Shared\n\nLinked root proof.\n", encoding="utf-8")
+        source_live = root / "owner-source" / "live-brief"
+        source_live.mkdir(parents=True, exist_ok=True)
+        (source_live / "overview.md").write_text("# Live Brief\n\nFirst version.\n", encoding="utf-8")
+        (source_live / ".env").write_text("TOKEN=hidden\n", encoding="utf-8")
+        os.symlink(source_live, linked / "live-brief", target_is_directory=True)
+        (linked / ".arclink-linked-resources.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": {
+                        "live-brief": {
+                            "grant_id": "share_live",
+                            "source_path": str(source_live.resolve(strict=False)),
+                            "linked_path": "/live-brief",
+                            "entry_path": "/live-brief",
+                            "resource_kind": "directory",
+                            "read_only": True,
+                            "projection_mode": "living_symlink",
+                        }
+                    },
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init"], cwd=linked, text=True, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "arc@example.test"], cwd=linked, check=True)
+        subprocess.run(["git", "config", "user.name", "ArcLink Test"], cwd=linked, check=True)
+        subprocess.run(["git", "add", "shared-note.md"], cwd=linked, check=True)
+        subprocess.run(["git", "commit", "-m", "initial linked share"], cwd=linked, text=True, capture_output=True, check=True)
+        (linked / "shared-note.md").write_text("# Shared\n\nLinked root proof, changed.\n", encoding="utf-8")
+        (linked / "linked-untracked.md").write_text("# Untracked\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(workspace_home)
+        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["CODE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["ARCLINK_LINKED_RESOURCES_ROOT"] = str(linked)
+        try:
+            drive_api = load_module(
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_linked_root_test",
+            )
+            code_api = load_module(
+                PLUGINS_ROOT / "code" / "dashboard" / "plugin_api.py",
+                "arclink_code_linked_root_test",
+            )
+            drive_status = asyncio.run(drive_api.status())
+            drive_roots = {item["id"]: item for item in drive_status["roots"]}
+            expect(drive_roots["linked"]["available"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["read_only"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["capabilities"]["preview"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["capabilities"]["delete"] is False, str(drive_roots["linked"]))
+            linked_items = asyncio.run(drive_api.items(root="linked", path="/"))
+            expect(any(item["name"] == "shared-note.md" for item in linked_items["items"]), str(linked_items))
+            expect(any(item["name"] == "live-brief" for item in linked_items["items"]), str(linked_items))
+            linked_content = asyncio.run(drive_api.content(root="linked", path="/shared-note.md"))
+            expect("Linked root proof" in linked_content["content"], str(linked_content))
+            live_content = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
+            expect("First version" in live_content["content"], str(live_content))
+            (source_live / "overview.md").write_text("# Live Brief\n\nSecond version.\n", encoding="utf-8")
+            live_content_updated = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
+            expect("Second version" in live_content_updated["content"], str(live_content_updated))
+            live_listing = asyncio.run(drive_api.items(root="linked", path="/live-brief"))
+            expect(not any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
+            copied_from_linked = asyncio.run(
+                drive_api.copy(
+                    JsonRequest(
+                        {
+                            "root": "linked",
+                            "path": "/live-brief",
+                            "destination_root": "vault",
+                            "destination_path": "/Copied Live Brief",
+                            "conflict": "keep-both",
+                        }
+                    )
+                )
+            )
+            expect(copied_from_linked["destination_root"] == "vault", str(copied_from_linked))
+            expect((vault / "Copied Live Brief" / "overview.md").is_file(), "linked copy should land in owned Vault")
+            expect(not (vault / "Copied Live Brief" / ".env").exists(), "linked copy must not include sensitive children")
+            try:
+                asyncio.run(drive_api.delete(JsonRequest({"root": "linked", "path": "/shared-note.md"})))
+                raise AssertionError("expected Drive linked delete to fail")
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected linked Drive delete guard, got {exc!r}")
+
+            code_status = asyncio.run(code_api.status())
+            code_roots = {item["id"]: item for item in code_status["roots"]}
+            expect(code_roots["linked"]["available"] is True, str(code_roots["linked"]))
+            expect(code_roots["linked"]["read_only"] is True, str(code_roots["linked"]))
+            code_items = asyncio.run(code_api.items(path="/", root="linked"))
+            expect(any(item["name"] == "shared-note.md" for item in code_items["items"]), str(code_items))
+            expect(any(item["name"] == "live-brief" for item in code_items["items"]), str(code_items))
+            code_file = asyncio.run(code_api.file(path="/shared-note.md", root="linked"))
+            expect("Linked root proof" in code_file["content"], str(code_file))
+            code_live_file = asyncio.run(code_api.file(path="/live-brief/overview.md", root="linked"))
+            expect("Second version" in code_live_file["content"], str(code_live_file))
+            code_duplicate = asyncio.run(
+                code_api.duplicate_item(
+                    JsonRequest(
+                        {
+                            "root": "linked",
+                            "path": "/live-brief/overview.md",
+                            "destination_root": "workspace",
+                            "destination": "/live-brief-copy.md",
+                        }
+                    )
+                )
+            )
+            expect(code_duplicate["root"] == "workspace", str(code_duplicate))
+            expect((workspace / "live-brief-copy.md").read_text(encoding="utf-8").startswith("# Live Brief"), str(code_duplicate))
+            code_repos = asyncio.run(code_api.repos())
+            expect(
+                any(item["root_id"] == "linked" and item["path"] == "/" for item in code_repos["repos"]),
+                str(code_repos),
+            )
+            linked_git_status = asyncio.run(code_api.git_status(repo="/", root="linked"))
+            expect(linked_git_status["root"] == "linked", str(linked_git_status))
+            expect(any(item["path"] == "shared-note.md" for item in linked_git_status["unstaged"]), str(linked_git_status))
+            expect(any(item["path"] == "linked-untracked.md" for item in linked_git_status["untracked"]), str(linked_git_status))
+            linked_git_diff = asyncio.run(code_api.git_diff(repo="/", root="linked", path="shared-note.md"))
+            expect(linked_git_diff["mode"] == "working-tree", str(linked_git_diff))
+            expect("changed" in linked_git_diff["after"], str(linked_git_diff))
+            try:
+                asyncio.run(
+                    code_api.save(
+                        JsonRequest(
+                            {
+                                "root": "linked",
+                                "path": "/shared-note.md",
+                                "content": "blocked",
+                                "expected_hash": code_file["hash"],
+                            }
+                        )
+                    )
+                )
+                raise AssertionError("expected Code linked save to fail")
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected linked Code save guard, got {exc!r}")
+
+            git_write_cases = [
+                ("stage", code_api.git_stage, {"root": "linked", "repo": "/", "path": "shared-note.md"}),
+                ("stage all", code_api.git_stage, {"root": "linked", "repo": "/", "all": True}),
+                ("unstage", code_api.git_unstage, {"root": "linked", "repo": "/", "path": "shared-note.md"}),
+                ("unstage all", code_api.git_unstage, {"root": "linked", "repo": "/", "all": True}),
+                ("discard", code_api.git_discard, {"root": "linked", "repo": "/", "path": "shared-note.md", "confirm": True}),
+                ("discard all", code_api.git_discard, {"root": "linked", "repo": "/", "all": True, "confirm": True}),
+                ("commit", code_api.git_commit, {"root": "linked", "repo": "/", "message": "blocked linked commit"}),
+                ("ignore", code_api.git_ignore, {"root": "linked", "repo": "/", "path": "linked-untracked.md"}),
+                ("pull", code_api.git_pull, {"root": "linked", "repo": "/", "confirm": True}),
+                ("push", code_api.git_push, {"root": "linked", "repo": "/", "confirm": True}),
+            ]
+            for label, handler, payload in git_write_cases:
+                try:
+                    asyncio.run(handler(JsonRequest(payload)))
+                except Exception as exc:
+                    expect(getattr(exc, "status_code", None) == 403, f"expected linked Git {label} guard, got {exc!r}")
+                else:
+                    raise AssertionError(f"expected linked Git {label} to fail")
+
+            linked_status_output = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=linked,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            expect(" M shared-note.md" in linked_status_output, linked_status_output)
+            expect("?? linked-untracked.md" in linked_status_output, linked_status_output)
+            expect(not (linked / ".gitignore").exists(), "linked Git ignore must not mutate .gitignore")
+            print("PASS test_arclink_drive_and_code_expose_read_only_linked_root")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -798,6 +1048,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     content_block = body.split('className: "hermes-drive-content"', 1)[1].split("renderFullscreenPreview()", 1)[0]
     expect(content_block.find('className: "hermes-drive-items ') < content_block.find("renderDetailsPanel()"), "Drive preview/details should render below the scrollable file list")
     expect("hermes-drive-preview-fullscreen" in body and "Maximize" in body, "Drive previews should be expandable in-place")
+    expect("Generate share link" not in body and "Create share link" not in body, "Drive right-click share-link creation should stay hidden until policy is decided")
     expect("paddingLeft: 0.2 + depth * 0.9" in body and "marginLeft: depth * 14" not in body, "Drive tree indentation should move the full row, not only the caret")
     style = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".hermes-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
@@ -1213,6 +1464,7 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect("function extensionColor(item)" in body and "long-ext" in body, "Code file icons should derive compact, readable extension colors")
     expect("function renderCodePreview(file)" in body and 'api("/preview?path="' in body, "Code UI should open previewable files in editor tabs")
     expect("hermes-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")
+    expect("Generate share link" not in body and "Create share link" not in body, "Code right-click share-link creation should stay hidden until policy is decided")
     style = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
     expect(".hermes-code-diff-panes" in style, "Code CSS should style split diff panes")
     expect(".hermes-code-tree-node" in style and ".hermes-code-context-menu" in style, "Code CSS should style nested Explorer and context menus")
@@ -2267,6 +2519,84 @@ def _write_minimal_managed_state(hermes_home: Path) -> None:
     )
 
 
+def test_arclink_managed_context_recall_budget_low_preserves_guardrails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp) / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        long_recall = "\n".join(
+            [
+                "Retrieval memory stubs:",
+                "- Treat these as awareness cards, not facts to answer from. Use MCP retrieval for the depth before citing or changing anything.",
+                "- Default broad question path: knowledge.search-and-fetch with a specific natural-language query.",
+                "- Vault/PDF/file path: vault.search-and-fetch; include vault-pdf-ingest for PDF-derived markdown.",
+                "- Shared Notion path: notion.search-and-fetch for documentation/notes; notion.query only for one exact live structured database target.",
+                "- User-visible vault root for file references: /srv/arclink/vault",
+                "Subscribed awareness lanes:",
+                *[
+                    f"- Very Long Vault {idx}: category=research, owner=team. Ask vault.search-and-fetch for depth; current lane root is ~/ArcLink/Very Long Vault {idx}. This extra detail should fall out of low recall budget."
+                    for idx in range(20)
+                ],
+                "Quality rule: if recall feels thin, say which rail was searched and retry once with narrower nouns, owner names, file titles, or source lane.",
+            ]
+        )
+        (state_dir / "arclink-vault-reconciler.json").write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-guide",
+                    "managed_memory_revision": "rev-budget-low",
+                    "arclink-skill-ref": "Current ArcLink capability snapshot:\n- Use arclink-qmd-mcp for vault retrieval.",
+                    "qmd-ref": "qmd MCP (deep retrieval): use vault.search-and-fetch and knowledge.search-and-fetch before answering from stubs.",
+                    "notion-ref": "Shared Notion knowledge rail: notion.search-and-fetch for notes; notion.query for exact live structured targets.",
+                    "vault-landmarks": "Vault landmarks:\n" + "\n".join(f"- Landmark {idx}: large detail" for idx in range(30)),
+                    "recall-stubs": long_recall,
+                    "today-plate": "Today plate:\n" + "\n".join(f"- Task {idx}: large detail" for idx in range(30)),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["ARCLINK_MANAGED_CONTEXT_RECALL_BUDGET"] = "low"
+        os.environ["ARCLINK_CONTEXT_TELEMETRY"] = "0"
+        try:
+            module = load_module(PLUGIN_INIT, "arclink_managed_context_plugin_recall_budget_low_test")
+            ctx = FakeCtx()
+            module.register(ctx)
+            hook = ctx.hooks["pre_llm_call"][0]
+            result = hook(
+                session_id="session-recall-low",
+                user_message="what do we know about Very Long Vault 19?",
+                conversation_history=[],
+                is_first_turn=True,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(result, dict) and result.get("context"), f"expected low-budget context, got {result!r}")
+            context = result["context"]
+            expect("recall budget: low" in context, context)
+            expect("[managed:qmd-ref]" in context, context)
+            expect("[managed:notion-ref]" in context, context)
+            expect("[managed:recall-stubs]" in context, context)
+            expect("Treat these as awareness cards, not facts to answer from" in context, context)
+            expect("knowledge.search-and-fetch" in context, context)
+            expect("vault.search-and-fetch" in context, context)
+            expect("notion.search-and-fetch" in context, context)
+            expect("Quality rule: if recall feels thin" in context, context)
+            expect("Very Long Vault 19" not in context, context)
+            recall_section = context.split("[managed:recall-stubs]", 1)[1].split("\n[", 1)[0]
+            expect(len(recall_section) <= 900, f"low recall section stayed too large: {len(recall_section)}")
+            print("PASS test_arclink_managed_context_recall_budget_low_preserves_guardrails")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_arclink_managed_context_answers_resource_request_without_secrets() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -2630,6 +2960,21 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             expect(ssot_preflight_args["token"] == "tok_live_test", ssot_preflight_args)
             expect(isinstance(ssot_preflight_args["payload"], dict), ssot_preflight_args)
 
+            share_args = {
+                "recipient_email": "recipient@example.test",
+                "resource_kind": "drive",
+                "resource_root": "vault",
+                "resource_path": "/Projects/brief.md",
+            }
+            hook(
+                tool_name="mcp_arclink_mcp_shares_request",
+                args=share_args,
+                session_id="session-token",
+                task_id="task-share",
+                tool_call_id="call-share",
+            )
+            expect(share_args["token"] == "tok_live_test", share_args)
+
             canonical_args = {"pending_id": "ssotw_123"}
             hook(tool_name="ssot.status", args=canonical_args, session_id="session-token")
             expect(canonical_args["token"] == "tok_live_test", canonical_args)
@@ -2661,7 +3006,7 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
 
             os.environ["HERMES_HOME"] = str(hermes_home)
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            expect(len(lines) == 5, lines)
+            expect(len(lines) == 6, lines)
             expect(all(record.get("tool_token_injected") is True for record in lines), lines)
             expect(
                 {record.get("tool_name") for record in lines}
@@ -2671,12 +3016,13 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
                     "mcp_arclink_mcp_vault_search_and_fetch",
                     "mcp_arclink_mcp_ssot_write",
                     "mcp_arclink_mcp_ssot_preflight",
+                    "mcp_arclink_mcp_shares_request",
                 },
                 lines,
             )
             expect(
                 {record.get("task_id") for record in lines}
-                == {"task-1", "task-knowledge", "task-2", "task-ssot-write", "task-ssot-preflight"},
+                == {"task-1", "task-knowledge", "task-2", "task-ssot-write", "task-ssot-preflight", "task-share"},
                 lines,
             )
             telemetry_body = telemetry_path.read_text(encoding="utf-8")
@@ -2759,7 +3105,7 @@ def test_arclink_managed_context_emits_telemetry_and_respects_opt_out() -> None:
             module.register(ctx)
             hook = ctx.hooks["pre_llm_call"][0]
 
-            hook(
+            first = hook(
                 session_id="session-tel-1",
                 user_message="update the page to include chocolate",
                 conversation_history=[],
@@ -2767,6 +3113,11 @@ def test_arclink_managed_context_emits_telemetry_and_respects_opt_out() -> None:
                 model="test-model",
                 platform="discord",
                 sender_id="user-1",
+            )
+            expect(isinstance(first, dict) and first.get("context"), first)
+            expect(
+                "cadence layers: cheap-tool-recipes, expensive-managed-context" in first["context"],
+                first["context"],
             )
             expect(telemetry_path.is_file(), f"expected telemetry file at {telemetry_path}")
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -2780,6 +3131,12 @@ def test_arclink_managed_context_emits_telemetry_and_respects_opt_out() -> None:
             expect(record.get("platform") == "discord", record)
             expect(isinstance(record.get("context_chars"), int) and record["context_chars"] > 0, record)
             expect(record.get("context_mode") == "full", record)
+            expect(record.get("cadence_layer") == "expensive", record)
+            expect(record.get("cadence_layers") == ["cheap-tool-recipes", "expensive-managed-context"], record)
+            cadence_reasons = record.get("cadence_reasons")
+            expect(isinstance(cadence_reasons, dict), record)
+            expect(cadence_reasons.get("cheap-tool-recipes") == ["recipe:ssot.write"], record)
+            expect("first_turn" in cadence_reasons.get("expensive-managed-context", []), record)
             expect("user_message" not in record, record)
 
             hook(
@@ -2797,7 +3154,32 @@ def test_arclink_managed_context_emits_telemetry_and_respects_opt_out() -> None:
             expect(suppressed.get("injected") is False, suppressed)
             expect(suppressed.get("reason") == "no_gate", suppressed)
             expect(suppressed.get("context_chars") == 0, suppressed)
+            expect(suppressed.get("cadence_layer") == "none", suppressed)
+            expect(suppressed.get("cadence_layers") == [], suppressed)
+            expect(suppressed.get("cadence_reasons", {}).get("none") == ["no_gate"], suppressed)
             expect("user_message" not in suppressed, suppressed)
+
+            recipe_only = hook(
+                session_id="session-tel-3",
+                user_message="append to groceries",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(recipe_only, dict) and recipe_only.get("context"), recipe_only)
+            expect("cadence layers: cheap-tool-recipes" in recipe_only["context"], recipe_only["context"])
+            expect("[turn:tool-recipes]" in recipe_only["context"], recipe_only["context"])
+            expect("[managed:qmd-ref]" not in recipe_only["context"], recipe_only["context"])
+            lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            expect(len(lines) == 3, lines)
+            cheap = lines[2]
+            expect(cheap.get("injected") is True, cheap)
+            expect(cheap.get("context_mode") == "recipe_only", cheap)
+            expect(cheap.get("cadence_layer") == "cheap", cheap)
+            expect(cheap.get("cadence_layers") == ["cheap-tool-recipes"], cheap)
+            expect(cheap.get("cadence_reasons", {}).get("cheap-tool-recipes") == ["recipe:ssot.write"], cheap)
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -2849,6 +3231,7 @@ def test_arclink_managed_context_recipe_tools_match_mcp_surface() -> None:
 
 
 def main() -> int:
+    test_managed_context_readme_documents_conversational_memory_sibling_boundaries()
     test_install_arclink_plugins_installs_default_hermes_plugin()
     test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_only()
     test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default()
@@ -2856,6 +3239,7 @@ def main() -> int:
     test_install_arclink_plugins_excludes_generated_artifacts()
     test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases()
     test_arclink_dashboard_plugins_expose_sanitized_access_state()
+    test_arclink_drive_and_code_expose_read_only_linked_root()
     test_arclink_drive_local_backend_file_operations_are_recoverable()
     test_arclink_drive_api_hardens_roots_uploads_and_batch_failures()
     test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore()
@@ -2873,13 +3257,14 @@ def main() -> int:
     test_arclink_managed_context_normalizes_and_dedupes_legacy_recent_events()
     test_arclink_managed_context_handles_missing_and_invalid_local_state_files()
     test_arclink_managed_context_preserves_late_qmd_and_notion_guardrails()
+    test_arclink_managed_context_recall_budget_low_preserves_guardrails()
     test_arclink_managed_context_answers_resource_request_without_secrets()
     test_arclink_managed_context_injects_tool_recipe_cards_on_intent_triggers()
     test_arclink_managed_context_pre_tool_call_injects_bootstrap_token()
     test_arclink_managed_context_budgets_live_notion_queries_per_turn()
     test_arclink_managed_context_emits_telemetry_and_respects_opt_out()
     test_arclink_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 30 ArcLink plugin tests")
+    print("PASS all 33 ArcLink plugin tests")
     return 0
 
 

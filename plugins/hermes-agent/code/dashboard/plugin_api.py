@@ -82,6 +82,7 @@ _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", ".next"
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
     ".env",
+    ".arclink-linked-resources.json",
     "arclink-bootstrap-token",
     "id_dsa",
     "id_ecdsa",
@@ -98,6 +99,7 @@ _MAX_TREE_DEPTH = 4
 _MAX_TREE_CHILDREN = 200
 _GIT_TIMEOUT_SECONDS = 15
 _TRASH_INDEX_VERSION = 1
+_LINKED_MANIFEST_NAME = ".arclink-linked-resources.json"
 
 
 def _hermes_home() -> Path:
@@ -110,6 +112,43 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _linked_manifest(root: Path) -> dict[str, Any]:
+    payload = _load_json(root / _LINKED_MANIFEST_NAME)
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+    return entries
+
+
+def _linked_manifest_entry(root: Path, path: Path) -> dict[str, Any] | None:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return None
+    if not relative.parts:
+        return None
+    entry = _linked_manifest(root).get(relative.parts[0])
+    return entry if isinstance(entry, dict) else None
+
+
+def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
+    entry = _linked_manifest_entry(root, path)
+    if not entry:
+        return False
+    source = Path(str(entry.get("source_path") or "")).expanduser().resolve(strict=False)
+    if not str(source):
+        return False
+    return resolved == source or source in resolved.parents
+
+
+def _allowed_linked_symlink(root_ctx: dict[str, Any], root: Path, path: Path) -> bool:
+    return (
+        str(root_ctx.get("id") or "").strip().lower() == "linked"
+        and path.is_symlink()
+        and _linked_target_allowed(root.resolve(strict=False), path, path.resolve(strict=False))
+    )
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -208,6 +247,18 @@ def _candidate_vault_roots() -> list[Path]:
     return candidates
 
 
+def _candidate_linked_roots() -> list[Path]:
+    candidates: list[Path] = []
+    for value in (
+        os.environ.get("CODE_LINKED_ROOT"),
+        os.environ.get("ARCLINK_LINKED_RESOURCES_ROOT"),
+    ):
+        if value:
+            candidates.append(Path(value).expanduser())
+    candidates.append(_hermes_home() / "linked")
+    return candidates
+
+
 def _first_existing_dir(candidates: list[Path]) -> Path | None:
     for candidate in candidates:
         try:
@@ -225,16 +276,61 @@ def _vault_root() -> Path | None:
 def _root_descriptors() -> list[dict[str, Any]]:
     workspace = _workspace_root()
     vault = _vault_root()
+    linked = _first_existing_dir(_candidate_linked_roots())
     workspace_available = workspace.is_dir() and not _is_sensitive_path(workspace)
+    writable_capabilities = {
+        "read": True,
+        "preview": True,
+        "search": True,
+        "write": True,
+        "git_read": True,
+        "git_mutation": True,
+        "sharing": False,
+    }
+    linked_capabilities = {
+        "read": True,
+        "preview": True,
+        "search": True,
+        "duplicate": True,
+        "write": False,
+        "git_read": True,
+        "git_mutation": False,
+        "sharing": False,
+    }
     return [
-        {"id": "workspace", "label": "Workspace", "path": str(workspace), "display_path": "/", "available": workspace_available},
-        {"id": "vault", "label": "Vault", "path": str(vault or ""), "display_path": "/", "available": bool(vault and vault.is_dir())},
+        {
+            "id": "workspace",
+            "label": "Workspace",
+            "path": str(workspace),
+            "display_path": "/",
+            "available": workspace_available,
+            "read_only": False,
+            "capabilities": dict(writable_capabilities),
+        },
+        {
+            "id": "vault",
+            "label": "Vault",
+            "path": str(vault or ""),
+            "display_path": "/",
+            "available": bool(vault and vault.is_dir()),
+            "read_only": False,
+            "capabilities": dict(writable_capabilities),
+        },
+        {
+            "id": "linked",
+            "label": "Linked",
+            "path": str(linked or ""),
+            "display_path": "/",
+            "available": bool(linked and linked.is_dir()),
+            "read_only": True,
+            "capabilities": linked_capabilities,
+        },
     ]
 
 
 def _root_context(raw_root: Any = None) -> dict[str, Any]:
     root_id = str(raw_root or "workspace").strip().lower()
-    if root_id not in {"workspace", "vault"}:
+    if root_id not in {"workspace", "vault", "linked"}:
         raise HTTPException(status_code=400, detail="Unknown Code root")
     for root in _root_descriptors():
         if root["id"] == root_id:
@@ -242,6 +338,11 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
                 raise HTTPException(status_code=404, detail=f"{root['label']} root is not available")
             return root
     raise HTTPException(status_code=404, detail="Code root is not available")
+
+
+def _assert_writable_root(root_ctx: dict[str, Any]) -> None:
+    if bool(root_ctx.get("read_only")) or str(root_ctx.get("id") or "").strip().lower() == "linked":
+        raise HTTPException(status_code=403, detail="Linked resources are read-only")
 
 
 def _load_access() -> dict[str, Any]:
@@ -265,16 +366,33 @@ def _clean_relative_path(raw_path: Any) -> str:
 
 
 def _display_path(relative_path: str) -> str:
+    if relative_path == ".":
+        return "/"
     return "/" + relative_path.strip("/") if relative_path else "/"
+
+
+def _assert_accessible_path(root: Path, target: Path, root_ctx: dict[str, Any]) -> None:
+    root_resolved = root.resolve(strict=False)
+    if target == root_resolved:
+        return
+    try:
+        target.parent.relative_to(root_resolved)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path is outside Code")
+    resolved = target.resolve(strict=False)
+    if resolved == root_resolved or root_resolved in resolved.parents:
+        return
+    if str(root_ctx.get("id") or "").strip().lower() == "linked" and _linked_target_allowed(root_resolved, target, resolved):
+        return
+    raise HTTPException(status_code=403, detail="Path is outside Code")
 
 
 def _resolve(raw_path: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, Any]]:
     root_ctx = _root_context(raw_root)
     root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
     relative = _clean_relative_path(raw_path)
-    target = (root / relative).resolve(strict=False)
-    if target != root and root not in target.parents:
-        raise HTTPException(status_code=403, detail="Path is outside Code")
+    target = root / relative
+    _assert_accessible_path(root, target, root_ctx)
     if relative:
         _assert_not_sensitive(target)
     return target, relative, root_ctx
@@ -282,6 +400,7 @@ def _resolve(raw_path: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, 
 
 def _require_operable_path(raw_path: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, Any]]:
     target, relative, root_ctx = _resolve(raw_path, raw_root)
+    _assert_writable_root(root_ctx)
     if not relative:
         raise HTTPException(status_code=400, detail="Workspace root cannot be changed by this operation")
     if not target.exists():
@@ -291,6 +410,7 @@ def _require_operable_path(raw_path: Any, raw_root: Any = None) -> tuple[Path, s
 
 def _require_destination(raw_path: Any, raw_root: Any = None, *, overwrite: bool = False) -> tuple[Path, str, dict[str, Any]]:
     target, relative, root_ctx = _resolve(raw_path, raw_root)
+    _assert_writable_root(root_ctx)
     if not relative:
         raise HTTPException(status_code=400, detail="Workspace root is not a valid destination")
     if target.exists() and not overwrite:
@@ -359,7 +479,7 @@ def _copy_confined(source: Path, destination: Path) -> None:
     if source.is_dir():
         destination.mkdir(parents=True, exist_ok=False)
         for child in source.iterdir():
-            if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
+            if child.name in _SKIP_DIR_NAMES or (child.is_symlink() and not _allowed_linked_symlink(root_ctx, root, child)) or _is_sensitive_path(child):
                 continue
             _copy_confined(child, destination / child.name)
         shutil.copystat(source, destination, follow_symlinks=False)
@@ -367,6 +487,34 @@ def _copy_confined(source: Path, destination: Path) -> None:
     if not source.is_file():
         raise HTTPException(status_code=400, detail="Workspace path is not copyable")
     shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def _default_writable_root_id() -> str:
+    for root in _root_descriptors():
+        if root.get("id") in {"workspace", "vault"} and root.get("available") and not root.get("read_only"):
+            return str(root["id"])
+    raise HTTPException(status_code=404, detail="No writable Code root is available")
+
+
+def _copy_from_linked_to_owned_root(
+    source: Path,
+    source_relative: str,
+    destination_root_id: str,
+    raw_destination: Any,
+) -> dict[str, Any]:
+    destination, destination_relative, destination_ctx = _require_destination(raw_destination, destination_root_id)
+    source_for_copy = source.resolve(strict=False)
+    _assert_not_sensitive(source)
+    _assert_not_sensitive(source_for_copy)
+    _copy_confined(source_for_copy, destination)
+    return {
+        "ok": True,
+        "root": str(destination_ctx["id"]),
+        "source_root": "linked",
+        "source_path": _display_path(source_relative),
+        "path": _display_path(destination_relative),
+        "item": _item_for(destination, destination_relative, str(destination_ctx["id"])),
+    }
 
 
 def _iso_from_timestamp(value: float) -> str:
@@ -451,13 +599,13 @@ def _tree_for(path: Path, relative: str, depth: int, root_ctx: dict[str, Any]) -
         return node
     children: list[dict[str, Any]] = []
     if depth > 0:
+        root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
         for child in sorted(path.iterdir(), key=_entry_sort_key):
             if len(children) >= _MAX_TREE_CHILDREN:
                 node["truncated"] = True
                 break
-            if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
+            if child.name in _SKIP_DIR_NAMES or (child.is_symlink() and not _allowed_linked_symlink(root_ctx, root, child)) or _is_sensitive_path(child):
                 continue
-            root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
             child_relative = child.relative_to(root).as_posix()
             children.append(_tree_for(child, child_relative, depth - 1, root_ctx))
     node["children"] = children
@@ -492,9 +640,12 @@ def _file_hash(path: Path) -> str:
 def _repo_display_path(path: Path, root: Path | None = None) -> str:
     root = root or _workspace_root()
     try:
-        relative = path.resolve(strict=False).relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Repository is outside Code") from exc
+        relative = path.relative_to(root)
+    except ValueError:
+        try:
+            relative = path.resolve(strict=False).relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Repository is outside Code") from exc
     return _display_path(relative.as_posix())
 
 
@@ -516,6 +667,12 @@ def _resolve_repo(raw_repo: Any, raw_root: Any = None) -> tuple[Path, str, dict[
     return repo, relative, root_ctx
 
 
+def _resolve_writable_repo(raw_repo: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, Any]]:
+    repo, relative, root_ctx = _resolve_repo(raw_repo, raw_root)
+    _assert_writable_root(root_ctx)
+    return repo, relative, root_ctx
+
+
 def _clean_repo_file_path(raw_path: Any) -> str:
     relative = _clean_relative_path(raw_path)
     if not relative:
@@ -526,7 +683,8 @@ def _clean_repo_file_path(raw_path: Any) -> str:
 def _resolve_repo_file(repo: Path, raw_path: Any) -> tuple[Path, str]:
     relative = _clean_repo_file_path(raw_path)
     target = (repo / relative).resolve(strict=False)
-    if target != repo and repo not in target.parents:
+    repo_resolved = repo.resolve(strict=False)
+    if target != repo_resolved and repo_resolved not in target.parents:
         raise HTTPException(status_code=403, detail="Repository file is outside Code")
     return target, relative
 
@@ -620,14 +778,21 @@ def _discover_repos(root: Path, root_id: str = "workspace", root_label: str = "W
     if not root.is_dir():
         return []
     repos: list[dict[str, Any]] = []
-    for current_root, dirnames, _filenames in os.walk(root):
+    root_ctx = {"id": root_id}
+    for current_root, dirnames, _filenames in os.walk(root, followlinks=root_id == "linked"):
         current = Path(current_root)
         try:
             relative = current.relative_to(root)
         except ValueError:
             continue
         depth = 0 if str(relative) == "." else len(relative.parts)
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIR_NAMES and not _is_sensitive_path(current / name)]
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if name not in _SKIP_DIR_NAMES
+            and (not (current / name).is_symlink() or _allowed_linked_symlink(root_ctx, root, current / name))
+            and not _is_sensitive_path(current / name)
+        ]
         if (current / ".git").exists():
             repos.append(_repo_item(root, current, root_id, root_label))
             if len(repos) >= _MAX_REPOS:
@@ -832,7 +997,7 @@ async def git_diff(repo: str = "/", path: str = "", root: str = "workspace", sta
 @router.post("/git/stage")
 async def git_stage(request: Request) -> dict[str, Any]:
     payload = await request.json()
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     if bool(payload.get("all")):
         _run_git(repo, ["add", "-A"])
     else:
@@ -844,7 +1009,7 @@ async def git_stage(request: Request) -> dict[str, Any]:
 @router.post("/git/unstage")
 async def git_unstage(request: Request) -> dict[str, Any]:
     payload = await request.json()
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     has_head = _repo_has_head(repo)
     if bool(payload.get("all")):
         if has_head:
@@ -865,7 +1030,7 @@ async def git_discard(request: Request) -> dict[str, Any]:
     payload = await request.json()
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Discard requires explicit confirmation")
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     if bool(payload.get("all")):
         _run_git(repo, ["restore", "--staged", "."])
         _run_git(repo, ["restore", "."])
@@ -882,7 +1047,7 @@ async def git_discard(request: Request) -> dict[str, Any]:
 @router.post("/git/commit")
 async def git_commit(request: Request) -> dict[str, Any]:
     payload = await request.json()
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     message = _clean_text(payload.get("message"), 240)
     if not message:
         raise HTTPException(status_code=400, detail="Commit message is required")
@@ -893,7 +1058,7 @@ async def git_commit(request: Request) -> dict[str, Any]:
 @router.post("/git/ignore")
 async def git_ignore(request: Request) -> dict[str, Any]:
     payload = await request.json()
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     path = _clean_repo_file_path(payload.get("path"))
     gitignore = repo / ".gitignore"
     existing = gitignore.read_text(encoding="utf-8", errors="replace").splitlines() if gitignore.exists() else []
@@ -908,7 +1073,7 @@ async def git_pull(request: Request) -> dict[str, Any]:
     payload = await request.json()
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Pull requires explicit confirmation")
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     result = _run_git(repo, ["pull", "--ff-only"])
     return {"ok": True, "status": _git_status_payload(repo, relative, root_ctx), "last_git_result": _git_action_result("pull --ff-only", result)}
 
@@ -918,7 +1083,7 @@ async def git_push(request: Request) -> dict[str, Any]:
     payload = await request.json()
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Push requires explicit confirmation")
-    repo, relative, root_ctx = _resolve_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
+    repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     result = _run_git(repo, ["push"])
     return {"ok": True, "status": _git_status_payload(repo, relative, root_ctx), "last_git_result": _git_action_result("push", result)}
 
@@ -935,7 +1100,7 @@ async def items(path: str = "/", root: str = "workspace") -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Workspace path is not a folder")
     entries: list[dict[str, Any]] = []
     for child in sorted(target.iterdir(), key=_entry_sort_key):
-        if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
+        if child.name in _SKIP_DIR_NAMES or (child.is_symlink() and not _allowed_linked_symlink(root_ctx, root_path, child)) or _is_sensitive_path(child):
             continue
         entries.append(_item_for(child, child.relative_to(root_path).as_posix(), str(root_ctx["id"])))
     return {"root": str(root_ctx["id"]), "root_label": str(root_ctx["label"]), "path": _display_path(relative), "items": entries}
@@ -974,7 +1139,7 @@ async def search(q: str = "", path: str = "/", root: str = "") -> dict[str, Any]
         base, base_relative, _resolved_root = _resolve(path, root_ctx["id"])
         if not base.exists() or not base.is_dir():
             continue
-        for current_root, dirnames, filenames in os.walk(base):
+        for current_root, dirnames, filenames in os.walk(base, followlinks=str(root_ctx.get("id") or "") == "linked"):
             current = Path(current_root)
             try:
                 current.relative_to(root_path)
@@ -982,7 +1147,9 @@ async def search(q: str = "", path: str = "/", root: str = "") -> dict[str, Any]
                 continue
             dirnames[:] = [
                 name for name in dirnames
-                if name not in _SKIP_DIR_NAMES and not (current / name).is_symlink() and not _is_sensitive_path(current / name)
+                if name not in _SKIP_DIR_NAMES
+                and (not (current / name).is_symlink() or _allowed_linked_symlink(root_ctx, root_path, current / name))
+                and not _is_sensitive_path(current / name)
             ]
             candidates = sorted(
                 [current / name for name in dirnames if (current / name).is_dir()]
@@ -992,7 +1159,7 @@ async def search(q: str = "", path: str = "/", root: str = "") -> dict[str, Any]
             for child in candidates:
                 if len(results) >= _MAX_SEARCH_RESULTS:
                     break
-                if child.is_symlink():
+                if child.is_symlink() and not _allowed_linked_symlink(root_ctx, root_path, child):
                     continue
                 relative = child.relative_to(root_path).as_posix()
                 haystack_path = relative.lower()
@@ -1067,6 +1234,7 @@ async def preview(path: str, root: str = "workspace") -> Any:
 async def save(request: Request) -> dict[str, Any]:
     payload = await request.json()
     target, relative, root_ctx = _resolve(payload.get("path"), payload.get("root") or payload.get("root_id"))
+    _assert_writable_root(root_ctx)
     if target.exists() and not target.is_file():
         raise HTTPException(status_code=400, detail="Workspace path is not a file")
     expected_hash = str(payload.get("expected_hash") or payload.get("hash") or "").strip()
@@ -1088,6 +1256,7 @@ async def save(request: Request) -> dict[str, Any]:
 async def mkdir(request: Request) -> dict[str, Any]:
     payload = await request.json()
     target, relative, root_ctx = _resolve(payload.get("path"), payload.get("root") or payload.get("root_id"))
+    _assert_writable_root(root_ctx)
     target.mkdir(parents=True, exist_ok=True)
     return {"ok": True, "root": str(root_ctx["id"]), "path": _display_path(relative)}
 
@@ -1118,7 +1287,22 @@ async def move_item(request: Request) -> dict[str, Any]:
 async def duplicate_item(request: Request) -> dict[str, Any]:
     payload = await request.json()
     root_id = payload.get("root") or payload.get("root_id")
-    source, _source_relative, root_ctx = _require_operable_path(payload.get("path"), root_id)
+    source, source_relative, root_ctx = _resolve(payload.get("path"), root_id)
+    if bool(root_ctx.get("read_only")) or str(root_ctx.get("id") or "") == "linked":
+        if str(root_ctx.get("id") or "") != "linked":
+            _assert_writable_root(root_ctx)
+        if not source_relative:
+            raise HTTPException(status_code=400, detail="Linked root cannot be duplicated")
+        raw_destination = payload.get("destination")
+        if not raw_destination:
+            raw_destination = _display_path(Path(source_relative).name)
+        return _copy_from_linked_to_owned_root(
+            source,
+            source_relative,
+            str(payload.get("destination_root") or payload.get("destination_root_id") or _default_writable_root_id()),
+            raw_destination,
+        )
+    _assert_writable_root(root_ctx)
     raw_destination = payload.get("destination")
     if raw_destination:
         destination, destination_relative, _destination_root = _require_destination(raw_destination, root_ctx["id"])

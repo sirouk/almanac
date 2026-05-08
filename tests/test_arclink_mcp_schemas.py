@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import subprocess
 import sys
@@ -104,6 +105,7 @@ def test_arclink_mcp_tools_advertise_actionable_input_schemas() -> None:
         "knowledge.search-and-fetch",
         "agents.managed-memory",
         "agents.consume-notifications",
+        "shares.request",
         "ssot.read",
         "ssot.pending",
         "ssot.status",
@@ -170,6 +172,13 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "body_char_limit": 6000,
             "rerank": False,
         },
+        "shares.request": {
+            "recipient_email": "recipient@example.test",
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/brief.md",
+            "display_name": "Project Brief",
+        },
         "ssot.write": {
             "operation": "create_page",
             "payload": {"title": "Org Notes", "children": [{"type": "paragraph", "paragraph": {"rich_text": []}}]},
@@ -210,6 +219,7 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "vault.search-and-fetch": ("One-shot replacement for qmd.query followed by qmd.get", "vault-pdf-ingest", "does not rerank", "metadata block", "stays inline in text"),
         "knowledge.search": ("both vault/PDF and shared Notion", "source is unclear"),
         "knowledge.search-and-fetch": ("vault/PDF and shared Notion", "files, PDFs, cloned docs, or shared Notion pages"),
+        "shares.request": ("read-only Drive/Code share", "pending for owner approval", "never shares Linked resources"),
     }
     for tool, needles in expectations.items():
         description = mod.TOOLS[tool]
@@ -258,6 +268,123 @@ def test_runtime_helpers_close_schema_bypass_gaps() -> None:
     else:
         raise AssertionError("invalid knowledge source should fail clearly")
     print("PASS test_runtime_helpers_close_schema_bypass_gaps")
+
+
+def test_agent_share_request_tool_creates_scoped_pending_grant() -> None:
+    control = load_module(PYTHON_DIR / "arclink_control.py", "arclink_control_mcp_share_test")
+    mod = load_module(MCP_SERVER, "arclink_mcp_server_share_test")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    control.ensure_schema(conn)
+    control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_share_owner",
+        email="owner@example.test",
+        display_name="Share Owner",
+        entitlement_state="paid",
+    )
+    control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_share_recipient",
+        email="recipient@example.test",
+        display_name="Share Recipient",
+        entitlement_state="paid",
+    )
+    control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_foreign_owner",
+        email="foreign@example.test",
+        display_name="Foreign Owner",
+        entitlement_state="paid",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_share_owner",
+        user_id="arcusr_share_owner",
+        prefix="share-owner-1a2b",
+        base_domain="example.test",
+        agent_id="agent-share",
+        status="active",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_foreign",
+        user_id="arcusr_foreign_owner",
+        prefix="foreign-owner-1a2b",
+        base_domain="example.test",
+        agent_id="agent-foreign",
+        status="active",
+    )
+    token_payload = control._issue_bootstrap_token(
+        conn,
+        request_id=None,
+        agent_id="agent-share",
+        requester_identity="Share Agent",
+        source_ip="127.0.0.1",
+        issued_by="test",
+        activate_now=True,
+    )
+    conn.commit()
+
+    result = mod._create_agent_share_request(
+        conn,
+        {
+            "token": token_payload["raw_token"],
+            "recipient_email": "recipient@example.test",
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/brief.md",
+            "display_name": "Project Brief",
+        },
+    )
+    grant = result["grant"]
+    expect(result["ok"] is True, str(result))
+    expect(result["agent_id"] == "agent-share", str(result))
+    expect(result["deployment_id"] == "arcdep_share_owner", str(result))
+    expect(result["approval_required"] is True and result["recipient_acceptance_required"] is True, str(result))
+    expect(grant["owner_user_id"] == "arcusr_share_owner", str(grant))
+    expect(grant["recipient_user_id"] == "arcusr_share_recipient", str(grant))
+    expect(grant["resource_root"] == "vault" and grant["resource_path"] == "/Projects/brief.md", str(grant))
+    expect(grant["status"] == "pending_owner_approval", str(grant))
+    expect(grant["reshare_allowed"] is False, str(grant))
+    stored = conn.execute("SELECT metadata_json FROM arclink_share_grants WHERE grant_id = ?", (grant["grant_id"],)).fetchone()
+    metadata = json.loads(stored["metadata_json"])
+    expect(metadata["requested_via"] == "arclink-mcp", metadata)
+    expect(metadata["requested_by_agent_id"] == "agent-share", metadata)
+
+    try:
+        mod._create_agent_share_request(
+            conn,
+            {
+                "token": token_payload["raw_token"],
+                "recipient_user_id": "arcusr_share_recipient",
+                "resource_kind": "drive",
+                "resource_root": "linked",
+                "resource_path": "/already-linked.md",
+            },
+        )
+    except ValueError as exc:
+        expect("linked" in str(exc), str(exc))
+    else:
+        raise AssertionError("shares.request must reject linked-root reshare")
+
+    try:
+        mod._create_agent_share_request(
+            conn,
+            {
+                "token": token_payload["raw_token"],
+                "deployment_id": "arcdep_foreign",
+                "recipient_user_id": "arcusr_share_recipient",
+                "resource_kind": "drive",
+                "resource_root": "vault",
+                "resource_path": "/Projects/brief.md",
+            },
+        )
+    except PermissionError as exc:
+        expect("outside this agent" in str(exc), str(exc))
+    else:
+        raise AssertionError("shares.request must reject deployments outside the agent scope")
+    print("PASS test_agent_share_request_tool_creates_scoped_pending_grant")
 
 
 def test_ssot_write_result_promotes_receipt_fields() -> None:
@@ -532,12 +659,13 @@ def main() -> int:
     test_tools_list_serves_rich_schemas_not_empty_objects()
     test_hot_tool_descriptions_carry_when_to_call_guidance()
     test_runtime_helpers_close_schema_bypass_gaps()
+    test_agent_share_request_tool_creates_scoped_pending_grant()
     test_ssot_write_result_promotes_receipt_fields()
     test_search_and_fetch_compacts_search_payloads()
     test_vault_qmd_helpers_normalize_resource_content()
     test_notion_index_fallback_returns_qmd_markdown_body()
     test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars()
-    print("PASS all 10 ArcLink MCP schema tests")
+    print("PASS all 11 ArcLink MCP schema tests")
     return 0
 
 

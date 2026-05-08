@@ -57,6 +57,11 @@ const api = {
   userDashboard: () => request("/user/dashboard"),
   userBilling: () => request("/user/billing"),
   userProvisioning: () => request("/user/provisioning"),
+  userCredentials: () => request("/user/credentials"),
+  acknowledgeCredential: (body) => request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }),
+  userLinkedResources: () => request("/user/linked-resources"),
+  denyShareGrant: (body) => request("/user/share-grants/deny", { method: "POST", body: JSON.stringify(body) }),
+  revokeShareGrant: (body) => request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }),
   adminDashboard: (params) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return request(`/admin/dashboard${qs}`);
@@ -72,6 +77,7 @@ const api = {
   logout: (kind) => request(`/auth/${kind}/logout`, { method: "POST" }),
   userPortal: (body) => request("/user/portal", { method: "POST", body: JSON.stringify(body) }),
   revokeSession: (body) => request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }),
+  userProviderState: () => request("/user/provider-state"),
 };
 
 // --- Tests ---
@@ -109,6 +115,37 @@ describe("API client route construction", () => {
   it("userProvisioning GETs /user/provisioning", async () => {
     await api.userProvisioning();
     assert.ok(lastFetchUrl.endsWith("/user/provisioning"));
+  });
+
+  it("userCredentials GETs /user/credentials", async () => {
+    await api.userCredentials();
+    assert.ok(lastFetchUrl.endsWith("/user/credentials"));
+  });
+
+  it("acknowledgeCredential POSTs to /user/credentials/acknowledge", async () => {
+    await api.acknowledgeCredential({ handoff_id: "cred_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/credentials/acknowledge"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).handoff_id, "cred_1");
+  });
+
+  it("userLinkedResources GETs /user/linked-resources", async () => {
+    await api.userLinkedResources();
+    assert.ok(lastFetchUrl.endsWith("/user/linked-resources"));
+  });
+
+  it("denyShareGrant POSTs to /user/share-grants/deny", async () => {
+    await api.denyShareGrant({ grant_id: "share_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants/deny"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
+  });
+
+  it("revokeShareGrant POSTs to /user/share-grants/revoke", async () => {
+    await api.revokeShareGrant({ grant_id: "share_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants/revoke"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
   });
 
   it("adminDashboard GETs with query params", async () => {
@@ -172,6 +209,11 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/user/portal"));
   });
 
+  it("userProviderState GETs /user/provider-state", async () => {
+    await api.userProviderState();
+    assert.ok(lastFetchUrl.endsWith("/user/provider-state"));
+  });
+
   it("revokeSession POSTs to /admin/sessions/revoke", async () => {
     await api.revokeSession({ target_session_id: "s1", session_kind: "user" });
     assert.ok(lastFetchUrl.endsWith("/admin/sessions/revoke"));
@@ -221,4 +263,4 @@ describe("API client response parsing", () => {
   });
 });
 
-console.log("PASS all 22 ArcLink web API client tests");
+console.log("PASS all 27 ArcLink web API client tests");

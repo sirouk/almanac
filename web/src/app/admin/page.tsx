@@ -16,6 +16,7 @@ interface AdminData {
   subscriptions?: Record<string, string>[];
   active_sessions?: { user: number; admin: number };
   recent_failures?: Record<string, string>[];
+  action_execution_readiness?: AdminActionReadiness;
 }
 
 interface HealthEntry {
@@ -24,6 +25,30 @@ interface HealthEntry {
   status: string;
   checked_at?: string;
 }
+
+interface AdminActionReadiness {
+  executable?: string[];
+  pending_not_implemented?: string[];
+  disabled?: string[];
+  executor_adapter?: string;
+  queue_policy?: string;
+  note?: string;
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  restart: "Restart",
+  dns_repair: "DNS repair",
+  rotate_chutes_key: "Rotate Chutes key",
+  refund: "Refund",
+  cancel: "Cancel",
+  comp: "Comp",
+  suspend: "Suspend",
+  unsuspend: "Unsuspend",
+  reprovision: "Reprovision",
+  rollout: "Rollout",
+  force_resynth: "Force resynth",
+  rotate_bot_key: "Rotate bot key",
+};
 
 function isGoodStatus(status = "") {
   return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "clear", "succeeded", "running"].includes(status.toLowerCase());
@@ -188,6 +213,7 @@ export default function AdminPage() {
                 <StatCard label="User Sessions" value={data.active_sessions?.user ?? 0} detail="Active sessions" />
                 <StatCard label="Admin Sessions" value={data.active_sessions?.admin ?? 0} detail="Active operators" />
               </div>
+              <AdminTriageBoard data={data} onTab={setTab} />
               {data.sections?.length ? (
                 <div className="grid gap-3 lg:grid-cols-2">
                   {data.sections.map((section) => (
@@ -433,7 +459,10 @@ export default function AdminPage() {
           {tab === "actions" && (
             <div className="space-y-6">
               <h1 className="font-display text-2xl font-bold">Queued Actions</h1>
-              <QueueActionForm onQueued={() => api.adminActions().then((r) => { if (r.status === 200) setActions(r.data as typeof actions); })} />
+              <QueueActionForm
+                readiness={data?.action_execution_readiness}
+                onQueued={() => api.adminActions().then((r) => { if (r.status === 200) setActions(r.data as typeof actions); })}
+              />
               {actions?.actions?.length ? (
                 actions.actions.map((a, i) => (
                   <div key={i} className="rounded-lg border border-border bg-surface p-4 text-sm">
@@ -783,6 +812,119 @@ function StatCard({ label, value, detail }: { label: string; value: number; deta
   );
 }
 
+function AdminTriageBoard({ data, onTab }: { data: AdminData; onTab: (tab: Tab) => void }) {
+  const sections = data.sections || [];
+  const readySections = sections.filter((section) => isGoodStatus(section.status)).length;
+  const queuedActions = sections.find((section) => section.section === "queued_actions")?.counts?.queued || 0;
+  const disabledActions = [
+    ...(data.action_execution_readiness?.pending_not_implemented || []),
+    ...(data.action_execution_readiness?.disabled || []),
+  ].filter((action, index, list) => list.indexOf(action) === index);
+  const failureCount = data.recent_failures?.length || 0;
+  const paidUsers = data.users?.filter((user) => user.entitlement_state === "paid").length || 0;
+  const triageItems = [
+    {
+      label: "Section readiness",
+      value: `${readySections}/${sections.length || 0}`,
+      status: readySections === sections.length && sections.length ? "ready" : "attention",
+      detail: "Health, bots, security, release, and queue read models.",
+      tab: "health" as Tab,
+    },
+    {
+      label: "Recent failures",
+      value: String(failureCount),
+      status: failureCount ? "attention" : "clear",
+      detail: failureCount ? "Open health or provisioning to inspect the affected deployment." : "No failure rows in the current read model.",
+      tab: "health" as Tab,
+    },
+    {
+      label: "Queued actions",
+      value: String(queuedActions),
+      status: queuedActions ? "queued" : "clear",
+      detail: data.action_execution_readiness?.queue_policy || "Reason-required worker actions are queued through the modeled executor path.",
+      tab: "actions" as Tab,
+    },
+    {
+      label: "Disabled operations",
+      value: String(disabledActions.length),
+      status: disabledActions.length ? "disabled" : "clear",
+      detail: disabledActions.length ? "Unsupported operations stay visible as disabled, not fake-success buttons." : "No disabled action types reported.",
+      tab: "actions" as Tab,
+    },
+    {
+      label: "Billing posture",
+      value: `${paidUsers}/${data.users?.length || 0}`,
+      status: paidUsers === (data.users?.length || 0) && paidUsers > 0 ? "paid" : "attention",
+      detail: "Paid users against known accounts in the admin read model.",
+      tab: "payments" as Tab,
+    },
+  ];
+
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Operations Triage</p>
+          <h3 className="mt-1 font-display text-xl font-semibold">Actionable control-plane signals</h3>
+        </div>
+        <StatusBadge status={failureCount || queuedActions ? "attention" : "ready"} />
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        {triageItems.map((item) => (
+          <button
+            key={item.label}
+            onClick={() => onTab(item.tab)}
+            className="border border-border/70 bg-carbon/70 px-3 py-3 text-left transition hover:border-signal-orange/60"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-xs uppercase tracking-wide text-soft-white/35">{item.label}</p>
+              <StatusBadge status={item.status} />
+            </div>
+            <p className="mt-2 font-display text-2xl font-semibold">{item.value}</p>
+            <p className="mt-2 line-clamp-3 text-xs leading-5 text-soft-white/45">{item.detail}</p>
+          </button>
+        ))}
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="border border-border/70 bg-carbon/70 px-3 py-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-soft-white/35">Failure preview</h4>
+          <div className="mt-3 space-y-2">
+            {data.recent_failures?.length ? data.recent_failures.slice(0, 3).map((failure, index) => (
+              <button
+                key={`${failure.deployment_id || failure.service_name || failure.job_id || "failure"}-${index}`}
+                onClick={() => onTab(failure.job_id ? "provisioning" : "health")}
+                className="flex w-full items-center justify-between gap-3 border border-border/60 bg-jet/35 px-3 py-2 text-left text-xs"
+              >
+                <span className="min-w-0 truncate text-soft-white/70">{failure.service_name || failure.job_kind || failure.kind || "failure"}</span>
+                <StatusBadge status={failure.status || "attention"} />
+              </button>
+            )) : (
+              <p className="text-sm text-soft-white/40">No recent failures reported.</p>
+            )}
+          </div>
+        </div>
+        <div className="border border-border/70 bg-carbon/70 px-3 py-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-soft-white/35">Disabled and proof-gated actions</h4>
+          {disabledActions.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {disabledActions.map((action) => (
+                <span key={action} className="rounded border border-border/70 px-2 py-1 text-xs text-soft-white/45">
+                  {ACTION_LABELS[action] || formatLabel(action)}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-soft-white/40">No disabled action types reported.</p>
+          )}
+          <p className="mt-3 text-xs leading-5 text-soft-white/35">
+            {data.action_execution_readiness?.note || "Live proof-gated or unsupported operations are labeled instead of presented as executable controls."}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DataRail({
   title,
   rows,
@@ -924,16 +1066,23 @@ function OperatorSection({ title, ready, checks }: { title: string; ready: boole
   );
 }
 
-function QueueActionForm({ onQueued }: { onQueued: () => void }) {
-  const [actionType, setActionType] = useState("");
+function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadiness; onQueued: () => void }) {
+  const executableActions = readiness?.executable?.length ? readiness.executable : ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"];
+  const disabledActions = readiness?.pending_not_implemented || readiness?.disabled || [];
+  const [actionType, setActionType] = useState(executableActions[0] || "restart");
   const [targetKind, setTargetKind] = useState("deployment");
   const [targetId, setTargetId] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState("");
+  const actionIsExecutable = executableActions.includes(actionType);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!actionIsExecutable) {
+      setResult("That action is not wired to the worker yet.");
+      return;
+    }
     setResult("");
     setSubmitting(true);
     try {
@@ -962,16 +1111,27 @@ function QueueActionForm({ onQueued }: { onQueued: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} className="rounded-lg border border-border bg-surface p-4 space-y-3">
-      <h3 className="text-sm font-semibold text-soft-white/80">Queue New Action</h3>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-soft-white/80">Queue Modeled Action</h3>
+          <p className="mt-1 text-xs leading-5 text-soft-white/45">
+            {readiness?.queue_policy || "Only worker-modeled admin actions can be queued from this surface."}
+          </p>
+        </div>
+        <StatusBadge status={readiness?.executor_adapter || "disabled"} />
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <input
+        <select
           required
           value={actionType}
           onChange={(e) => setActionType(e.target.value)}
           aria-label="Action type"
-          placeholder="Action type (e.g. restart)"
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange"
-        />
+        >
+          {executableActions.map((action) => (
+            <option key={action} value={action}>{ACTION_LABELS[action] || formatLabel(action)}</option>
+          ))}
+        </select>
         <select
           value={targetKind}
           onChange={(e) => setTargetKind(e.target.value)}
@@ -1000,10 +1160,22 @@ function QueueActionForm({ onQueued }: { onQueued: () => void }) {
           className="rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none focus:border-signal-orange"
         />
       </div>
+      {disabledActions.length > 0 && (
+        <div className="border border-border/70 bg-carbon/70 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Disabled until worker wiring lands</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {disabledActions.map((action) => (
+              <span key={action} className="rounded border border-border/70 px-2 py-1 text-xs text-soft-white/45">
+                {ACTION_LABELS[action] || formatLabel(action)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-3">
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || !actionIsExecutable}
           className="rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
         >
           {submitting ? "Queuing..." : "Queue Action"}

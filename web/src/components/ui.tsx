@@ -1,11 +1,11 @@
 export function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase();
   const tone =
-    ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready"].includes(normalized)
+    ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "verified", "available", "fresh", "allowed"].includes(normalized)
       ? "border-neon-green/30 bg-neon-green/10 text-neon-green"
-      : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned", "pending run", "pending credentialed run"].includes(normalized)
+      : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned", "pending run", "pending credentialed run", "pending_dashboard_verification", "awaiting_user_setup", "webhook_install_armed", "verified_waiting_for_index"].includes(normalized)
         ? "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
-        : ["unknown", "not_configured", "not configured", "missing"].includes(normalized)
+        : ["unknown", "not_configured", "not configured", "not_seen", "proof_gated", "policy_question", "disabled", "missing", "unavailable", "not_applicable", "clear", "no reshare"].includes(normalized)
           ? "border-soft-white/15 bg-soft-white/5 text-soft-white/50"
         : "border-red-400/30 bg-red-500/10 text-red-300";
   return (

@@ -23,17 +23,66 @@ interface AccessUrls {
   urls?: Record<string, string>;
 }
 
+interface NotionSetup {
+  status?: string;
+  model?: string;
+  callback_url?: string;
+  public_status?: string;
+  requested_at?: string;
+  ready_at?: string;
+  webhook?: {
+    configured?: boolean;
+    verified?: boolean;
+    installed_at?: string;
+    verified_at?: string;
+    armed?: boolean;
+    armed_until?: string;
+  };
+  index?: { status?: string };
+  verification?: {
+    dashboard?: string;
+    email_share?: string;
+    live_workspace?: string;
+  };
+}
+
+interface BillingLifecycle {
+  payment_state?: string;
+  provider_access?: string;
+  warning_cadence?: string;
+  grace_period?: string;
+  data_retention?: string;
+  purge_policy?: string;
+  reason?: string;
+}
+
 interface Deployment {
   deployment_id: string;
+  agent_label?: string;
   hostname?: string;
   prefix?: string;
   base_domain?: string;
   status: string;
   service_health?: ServiceHealth[];
-  model?: { provider: string; model_id: string; credential_state: string };
+  model?: { provider: string; model_id: string; credential_state: string; billing_lifecycle?: BillingLifecycle };
   freshness?: { qmd: { status: string; checked_at: string }; memory: { status: string; checked_at: string } };
+  notion_setup?: NotionSetup;
   bot_contact?: BotContact;
   access?: AccessUrls;
+  sections?: DeploymentSection[];
+  recent_events?: DeploymentEvent[];
+}
+
+interface DeploymentSection {
+  section: string;
+  label?: string;
+  status?: string;
+}
+
+interface DeploymentEvent {
+  event_id?: string;
+  event_type?: string;
+  created_at?: string;
 }
 
 interface UserData {
@@ -51,8 +100,113 @@ interface ProvisioningDeployment {
 }
 
 interface BillingData {
-  entitlement?: { state: string };
+  entitlement?: { state: string; renewal_lifecycle?: BillingLifecycle };
   subscriptions?: Record<string, string>[];
+  renewal_lifecycle?: BillingLifecycle;
+}
+
+interface CredentialHandoff {
+  handoff_id: string;
+  deployment_id: string;
+  credential_kind: string;
+  display_name: string;
+  status: string;
+  secret_ref?: string;
+  reveal_mode?: string;
+  delivery_hint?: string;
+  copy_guidance?: string;
+}
+
+interface CredentialsData {
+  instructions?: { copy?: string; acknowledge?: string; reissue?: string };
+  credentials?: CredentialHandoff[];
+  removed_count?: number;
+}
+
+interface LinkedResource {
+  grant_id: string;
+  owner_user_id: string;
+  resource_kind: string;
+  resource_root: string;
+  resource_path: string;
+  linked_root?: string;
+  linked_path?: string;
+  projection?: {
+    status?: string;
+    linked_path?: string;
+    entry_path?: string;
+    read_only?: boolean;
+    materialized_at?: string;
+    removed_at?: string;
+    reason?: string;
+  };
+  display_name?: string;
+  access_mode: string;
+  status: string;
+  accepted_at?: string;
+  reshare_allowed?: boolean;
+}
+
+interface LinkedResourcesData {
+  linked_resources?: LinkedResource[];
+}
+
+interface ThresholdContinuation {
+  status?: string;
+  dashboard_guidance?: string;
+  raven_notifications?: string;
+  provider_fallback?: string;
+  overage_refill?: string;
+  warning_cadence?: string;
+  reason?: string;
+}
+
+interface ProviderDeploymentModel {
+  deployment_id: string;
+  model_id?: string;
+  credential_state?: string;
+  allow_inference?: boolean;
+  provider_detail?: {
+    reason?: string;
+    budget?: {
+      status?: string;
+      monthly_cents?: number;
+      used_cents?: number;
+      remaining_cents?: number;
+      usage_percent?: number;
+    };
+    credential_lifecycle?: {
+      current_mode?: string;
+      posture?: string;
+      live_key_creation?: string;
+    };
+    billing_lifecycle?: BillingLifecycle;
+    threshold_continuation?: ThresholdContinuation;
+  };
+}
+
+interface ProviderSettings {
+  self_service_provider_add?: string;
+  dashboard_mutation?: string;
+  current_change_path?: string;
+  secret_input_policy?: string;
+  live_provider_mutation?: string;
+  operator_decision_needed?: string;
+  guidance?: string;
+}
+
+interface ProviderStateData {
+  provider?: string;
+  default_model?: string;
+  provider_boundary?: {
+    credential_isolation?: string;
+    operator_shared_key_policy?: string;
+    budget_enforcement?: string;
+    live_key_creation?: string;
+    threshold_continuation?: ThresholdContinuation;
+  };
+  provider_settings?: ProviderSettings;
+  deployment_models?: ProviderDeploymentModel[];
 }
 
 type Tab = "overview" | "billing" | "provisioning" | "services" | "vault" | "bots" | "model" | "memory" | "security" | "support";
@@ -60,6 +214,13 @@ const ALL_TABS: Tab[] = ["overview", "billing", "provisioning", "services", "vau
 
 function isGoodStatus(status = "") {
   return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "running"].includes(status.toLowerCase());
+}
+
+function isAttentionStatus(status = "") {
+  const normalized = status.toLowerCase();
+  return ["attention", "blocked", "degraded", "failed", "unhealthy", "error", "drift", "past_due", "billing_suspended", "budget_warning", "budget_exhausted"].some((marker) =>
+    normalized.includes(marker),
+  );
 }
 
 function healthSummary(deployments: Deployment[] = []) {
@@ -86,7 +247,11 @@ function orderedDeployments(deployments: Deployment[] = []) {
 }
 
 function deploymentTitle(dep: Deployment) {
-  return dep.hostname || (dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : dep.deployment_id);
+  return dep.agent_label || dep.hostname || (dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : dep.deployment_id);
+}
+
+function deploymentHost(dep: Deployment) {
+  return dep.hostname || (dep.prefix && dep.base_domain ? `${dep.prefix}.${dep.base_domain}` : "");
 }
 
 function urlJoin(base: string, path = "") {
@@ -115,6 +280,16 @@ function hermesPluginLinks(dep: Deployment) {
   ];
 }
 
+function sectionStatus(dep: Deployment | undefined, section: string, fallback = "unknown") {
+  if (!dep) return fallback;
+  return dep.sections?.find((item) => item.section === section)?.status || fallback;
+}
+
+function providerModelForDeployment(dep: Deployment | undefined, state: ProviderStateData | null) {
+  if (!dep) return undefined;
+  return state?.deployment_models?.find((model) => model.deployment_id === dep.deployment_id);
+}
+
 function formatDate(value?: string) {
   if (!value) return "-";
   const date = new Date(value);
@@ -126,6 +301,13 @@ export default function DashboardPage() {
   const [data, setData] = useState<UserData | null>(null);
   const [billing, setBilling] = useState<BillingData | null>(null);
   const [provisioning, setProvisioning] = useState<{ deployments?: ProvisioningDeployment[] } | null>(null);
+  const [credentials, setCredentials] = useState<CredentialsData | null>(null);
+  const [linkedResources, setLinkedResources] = useState<LinkedResourcesData | null>(null);
+  const [providerState, setProviderState] = useState<ProviderStateData | null>(null);
+  const [credentialsError, setCredentialsError] = useState("");
+  const [linkedResourcesError, setLinkedResourcesError] = useState("");
+  const [providerStateError, setProviderStateError] = useState("");
+  const [credentialAckLoading, setCredentialAckLoading] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -134,6 +316,35 @@ export default function DashboardPage() {
   async function handleLogout() {
     await api.logout("user");
     router.push("/login");
+  }
+
+  async function handleAcknowledgeCredential(handoffId: string) {
+    setCredentialAckLoading(handoffId);
+    setError("");
+    try {
+      const result = await api.acknowledgeCredential({ handoff_id: handoffId });
+      if (result.status !== 200) {
+        setError("Could not acknowledge credential handoff.");
+        return;
+      }
+      const refreshed = await api.userCredentials();
+      if (refreshed.status === 200) {
+        setCredentials(refreshed.data as CredentialsData);
+      } else {
+        setCredentials((current) => {
+          const existing: CredentialsData = current || {};
+          return {
+            ...existing,
+            credentials: (existing.credentials || []).filter((credential) => credential.handoff_id !== handoffId),
+            removed_count: (existing.removed_count || 0) + 1,
+          };
+        });
+      }
+    } catch {
+      setError("Could not acknowledge credential handoff.");
+    } finally {
+      setCredentialAckLoading("");
+    }
   }
 
   useEffect(() => {
@@ -150,6 +361,39 @@ export default function DashboardPage() {
       }),
       api.userProvisioning().then((r) => {
         if (mounted && r.status === 200) setProvisioning(r.data as { deployments?: ProvisioningDeployment[] });
+      }),
+      api.userCredentials().then((r) => {
+        if (!mounted) return;
+        if (r.status === 200) {
+          setCredentials(r.data as CredentialsData);
+          setCredentialsError("");
+        } else {
+          setCredentialsError("Credential handoff could not be loaded. Refresh the dashboard or ask support to reissue the handoff.");
+        }
+      }).catch(() => {
+        if (mounted) setCredentialsError("Credential handoff could not be loaded. Refresh the dashboard or ask support to reissue the handoff.");
+      }),
+      api.userLinkedResources().then((r) => {
+        if (!mounted) return;
+        if (r.status === 200) {
+          setLinkedResources(r.data as LinkedResourcesData);
+          setLinkedResourcesError("");
+        } else {
+          setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shares read-only when the API is available.");
+        }
+      }).catch(() => {
+        if (mounted) setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shares read-only when the API is available.");
+      }),
+      api.userProviderState().then((r) => {
+        if (!mounted) return;
+        if (r.status === 200) {
+          setProviderState(r.data as ProviderStateData);
+          setProviderStateError("");
+        } else {
+          setProviderStateError("Provider state could not be loaded. Provider changes remain operator-managed until the API is available.");
+        }
+      }).catch(() => {
+        if (mounted) setProviderStateError("Provider state could not be loaded. Provider changes remain operator-managed until the API is available.");
       }),
     ]).catch(() => {
       if (mounted) setError("Failed to load dashboard.");
@@ -260,6 +504,21 @@ export default function DashboardPage() {
                 <InfoPanel title="Primary Agent" value={activeDeployment ? deploymentTitle(activeDeployment) : "Not launched"} detail={activeDeployment?.deployment_id || "Start launch to create the first private workspace."} />
                 <InfoPanel title="Service Health" value={`${health.healthy}/${health.total || 0}`} detail={health.attention ? `${health.attention} service signals need attention.` : "All reported services are clear."} />
               </div>
+              <DashboardRecoveryRail
+                deployment={activeDeployment}
+                entitlementState={entitlementState}
+                credentials={credentials}
+                providerState={providerState}
+                onTab={setActiveTab}
+              />
+              <WorkspaceReadinessGrid
+                deployment={activeDeployment}
+                entitlementState={entitlementState}
+                health={health}
+                linkedResources={linkedResources}
+                providerState={providerState}
+                onTab={setActiveTab}
+              />
               {data.deployments?.map((dep) => (
                 <DeploymentOverview key={dep.deployment_id} dep={dep} />
               ))}
@@ -281,6 +540,19 @@ export default function DashboardPage() {
                 <div className="rounded-lg border border-border bg-surface p-4">
                   <span className="text-sm text-soft-white/60">Plan Status: </span>
                   <StatusBadge status={billing.entitlement.state} />
+                </div>
+              )}
+              {(billing?.renewal_lifecycle || billing?.entitlement?.renewal_lifecycle) && (
+                <div className="rounded-lg border border-border bg-surface p-4 text-sm">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-soft-white/60">Provider Access:</span>
+                    <StatusBadge status={(billing?.renewal_lifecycle || billing?.entitlement?.renewal_lifecycle)?.provider_access || "unknown"} />
+                    <span className="text-soft-white/60">Renewal Policy:</span>
+                    <StatusBadge status={(billing?.renewal_lifecycle || billing?.entitlement?.renewal_lifecycle)?.purge_policy || "unknown"} />
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-soft-white/45">
+                    {(billing?.renewal_lifecycle || billing?.entitlement?.renewal_lifecycle)?.reason || "Renewal lifecycle state is not available."}
+                  </p>
                 </div>
               )}
               {billing?.subscriptions && billing.subscriptions.length > 0 ? (
@@ -418,6 +690,7 @@ export default function DashboardPage() {
               {(!data.deployments || data.deployments.length === 0) && (
                 <NoDeployments message="No deployments. Vault access available after provisioning." />
               )}
+              <LinkedResourcesPanel resources={linkedResources} loadError={linkedResourcesError} />
             </div>
           )}
 
@@ -469,6 +742,7 @@ export default function DashboardPage() {
           {activeTab === "model" && data && (
             <div className="space-y-6">
               <h1 className="font-display text-2xl font-bold">Model &amp; Skills</h1>
+              <ProviderSettingsPanel state={providerState} loadError={providerStateError} />
               {data.deployments?.map((dep) => {
                 const model = dep.model;
                 return (
@@ -515,6 +789,7 @@ export default function DashboardPage() {
                         )}
                       </div>
                     </div>
+                    <NotionSetupPanel setup={dep.notion_setup} />
                   </DeploymentCard>
                 );
               })}
@@ -530,8 +805,14 @@ export default function DashboardPage() {
               <div className="rounded-lg border border-border bg-surface p-4 text-sm text-soft-white/60">
                 <p>Session authentication uses hashed tokens with HttpOnly cookie transport.</p>
                 <p className="mt-2">CSRF protection is enforced on all mutation endpoints.</p>
-                <p className="mt-2">Secret references are never exposed in dashboard responses.</p>
+                <p className="mt-2">Secret values are never exposed in dashboard responses; pending handoffs show masked references only.</p>
               </div>
+              <CredentialHandoffPanel
+                credentials={credentials}
+                loadError={credentialsError}
+                acknowledging={credentialAckLoading}
+                onAcknowledge={handleAcknowledgeCredential}
+              />
               <div className="rounded-lg border border-border bg-surface p-4">
                 <h3 className="font-display font-semibold mb-3">Session Controls</h3>
                 <p className="text-sm text-soft-white/60 mb-3">
@@ -605,15 +886,243 @@ function InfoPanel({ title, value, detail }: { title: string; value: string; det
   );
 }
 
+type RecoveryAction = {
+  title: string;
+  detail: string;
+  status: string;
+  tab: Tab;
+};
+
+function recoveryActionsForDashboard({
+  deployment,
+  entitlementState,
+  credentials,
+  providerState,
+}: {
+  deployment?: Deployment;
+  entitlementState: string;
+  credentials: CredentialsData | null;
+  providerState: ProviderStateData | null;
+}) {
+  const actions: RecoveryAction[] = [];
+  const pendingCredentials = credentials?.credentials?.length || 0;
+  const providerModel = providerModelForDeployment(deployment, providerState);
+  const providerStatus = providerModel?.credential_state || deployment?.model?.credential_state || "";
+  const thresholdContinuation =
+    providerModel?.provider_detail?.threshold_continuation || providerState?.provider_boundary?.threshold_continuation;
+  const serviceAttention = (deployment?.service_health || []).filter((service) => isAttentionStatus(service.status));
+
+  if (!deployment) {
+    actions.push({
+      title: "Launch first agent",
+      detail: "No private workspace has been provisioned for this account yet.",
+      status: "pending",
+      tab: "provisioning",
+    });
+    return actions;
+  }
+
+  if (!isGoodStatus(entitlementState)) {
+    actions.push({
+      title: "Billing needs review",
+      detail: "Provider access and deployment changes stay fail-closed until entitlement is current.",
+      status: entitlementState || "unknown",
+      tab: "billing",
+    });
+  }
+
+  if (!isGoodStatus(deployment.status)) {
+    actions.push({
+      title: "Provisioning is not complete",
+      detail: "Open provisioning for job state, service output, and operator handoff status.",
+      status: deployment.status || "unknown",
+      tab: "provisioning",
+    });
+  }
+
+  if (serviceAttention.length > 0) {
+    actions.push({
+      title: "Service attention",
+      detail: `${serviceAttention.length} reported service signal(s) need operator review.`,
+      status: "attention",
+      tab: "services",
+    });
+  }
+
+  if (pendingCredentials > 0) {
+    actions.push({
+      title: "Credential handoff pending",
+      detail: "Store each secure completion-bundle credential before acknowledging removal.",
+      status: "pending",
+      tab: "security",
+    });
+  }
+
+  if (!deployment.bot_contact?.first_contacted || !deployment.bot_contact?.handoff_recorded) {
+    actions.push({
+      title: "Bot handoff pending",
+      detail: "Raven and the private agent channel are not both recorded as contacted.",
+      status: "pending",
+      tab: "bots",
+    });
+  }
+
+  if (deployment.notion_setup?.verification?.live_workspace === "proof_gated") {
+    actions.push({
+      title: "SSOT live proof gated",
+      detail: "Local broker status is visible; live workspace/page permission proof needs an authorized run.",
+      status: "proof_gated",
+      tab: "memory",
+    });
+  }
+
+  if (isAttentionStatus(providerStatus)) {
+    actions.push({
+      title: "Provider threshold state visible",
+      detail: thresholdContinuation?.reason || "ArcLink shows warning or exhausted state only; refill and fallback paths remain policy-gated.",
+      status: providerStatus,
+      tab: "model",
+    });
+  }
+
+  return actions.slice(0, 5);
+}
+
+function DashboardRecoveryRail({
+  deployment,
+  entitlementState,
+  credentials,
+  providerState,
+  onTab,
+}: {
+  deployment?: Deployment;
+  entitlementState: string;
+  credentials: CredentialsData | null;
+  providerState: ProviderStateData | null;
+  onTab: (tab: Tab) => void;
+}) {
+  const actions = recoveryActionsForDashboard({ deployment, entitlementState, credentials, providerState });
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Recovery Actions</p>
+          <h3 className="mt-1 font-display text-xl font-semibold">Next safest steps</h3>
+        </div>
+        <StatusBadge status={actions.length ? "attention" : "clear"} />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {actions.length ? actions.map((action) => (
+          <button
+            key={`${action.title}-${action.tab}`}
+            onClick={() => onTab(action.tab)}
+            className="border border-border/70 bg-carbon/70 px-3 py-3 text-left transition hover:border-signal-orange/60"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-medium text-soft-white">{action.title}</p>
+              <StatusBadge status={action.status} />
+            </div>
+            <p className="mt-2 text-xs leading-5 text-soft-white/45">{action.detail}</p>
+          </button>
+        )) : (
+          <div className="lg:col-span-2 border border-border/70 bg-carbon/70 px-3 py-3">
+            <p className="font-medium text-soft-white">No required recovery actions</p>
+            <p className="mt-2 text-xs leading-5 text-soft-white/45">Reported service, billing, handoff, and credential signals are clear.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceReadinessGrid({
+  deployment,
+  entitlementState,
+  health,
+  linkedResources,
+  providerState,
+  onTab,
+}: {
+  deployment?: Deployment;
+  entitlementState: string;
+  health: { total: number; healthy: number; attention: number };
+  linkedResources: LinkedResourcesData | null;
+  providerState: ProviderStateData | null;
+  onTab: (tab: Tab) => void;
+}) {
+  const providerModel = providerModelForDeployment(deployment, providerState);
+  const linkedCount = linkedResources?.linked_resources?.length || 0;
+  const readiness = [
+    {
+      label: "Billing",
+      value: entitlementState || "unknown",
+      detail: "Plan and provider access state.",
+      tab: "billing" as Tab,
+    },
+    {
+      label: "Services",
+      value: health.attention ? "attention" : health.total ? "ready" : "pending",
+      detail: `${health.healthy}/${health.total || 0} reported healthy.`,
+      tab: "services" as Tab,
+    },
+    {
+      label: "Channel",
+      value: deployment?.bot_contact?.first_contacted && deployment?.bot_contact?.handoff_recorded ? "recorded" : "pending",
+      detail: deployment?.bot_contact?.channel || "No handoff channel recorded.",
+      tab: "bots" as Tab,
+    },
+    {
+      label: "Knowledge",
+      value: sectionStatus(deployment, "qmd_memory", "unknown"),
+      detail: `qmd ${deployment?.freshness?.qmd?.status || "unknown"} · memory ${deployment?.freshness?.memory?.status || "unknown"}`,
+      tab: "memory" as Tab,
+    },
+    {
+      label: "Linked",
+      value: linkedCount ? "available" : "clear",
+      detail: linkedCount ? `${linkedCount} read-only resource(s).` : "No accepted linked resources.",
+      tab: "vault" as Tab,
+    },
+    {
+      label: "Provider",
+      value: providerModel?.credential_state || deployment?.model?.credential_state || "unknown",
+      detail: providerModel?.provider_detail?.reason || "Provider state is read-only in the dashboard.",
+      tab: "model" as Tab,
+    },
+  ];
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <SectionHeader title="Workspace Readiness" eyebrow="Grouped status" detail="Each signal links to the tab that owns its evidence and recovery state." />
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {readiness.map((item) => (
+          <button
+            key={item.label}
+            onClick={() => onTab(item.tab)}
+            className="border border-border/70 bg-carbon/70 px-3 py-3 text-left transition hover:border-signal-orange/60"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-xs uppercase tracking-wide text-soft-white/35">{item.label}</p>
+              <StatusBadge status={item.value} />
+            </div>
+            <p className="mt-2 line-clamp-2 text-xs leading-5 text-soft-white/45">{item.detail}</p>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeploymentOverview({ dep }: { dep: Deployment }) {
   const services = dep.service_health || [];
   const links = hermesPluginLinks(dep).filter((link) => link.href);
+  const host = deploymentHost(dep);
   return (
     <div className="border border-border bg-surface/85 p-4">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Private agent</p>
           <h3 className="mt-1 truncate font-display text-xl font-semibold">{deploymentTitle(dep)}</h3>
+          {host && <p className="mt-1 truncate text-xs text-soft-white/45">{host}</p>}
           <p className="mt-1 break-all font-mono text-xs text-soft-white/35">{dep.deployment_id}</p>
         </div>
         <StatusBadge status={dep.status || "unknown"} />
@@ -648,17 +1157,291 @@ function DeploymentOverview({ dep }: { dep: Deployment }) {
   );
 }
 
-function DeploymentCard({ dep, children }: { dep: { deployment_id: string; hostname?: string }; children: React.ReactNode }) {
+function DeploymentCard({ dep, children }: { dep: { deployment_id: string; hostname?: string; agent_label?: string }; children: React.ReactNode }) {
   return (
     <div className="border border-border bg-surface/85 p-4">
-      <h3 className="mb-3 font-display font-semibold">{dep.hostname || dep.deployment_id}</h3>
+      <h3 className="mb-1 font-display font-semibold">{dep.agent_label || dep.hostname || dep.deployment_id}</h3>
+      {dep.agent_label && dep.hostname && <p className="mb-3 text-xs text-soft-white/40">{dep.hostname}</p>}
       {children}
+    </div>
+  );
+}
+
+function NotionSetupPanel({ setup }: { setup?: NotionSetup }) {
+  const status = setup?.status || "unavailable";
+  const callbackUrl = setup?.callback_url || "";
+  const webhookStatus = setup?.webhook?.verified ? "verified" : setup?.webhook?.configured ? "configured" : setup?.webhook?.armed ? "webhook_install_armed" : "not_configured";
+  return (
+    <div className="mt-3 rounded bg-carbon px-3 py-3 text-sm">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs text-soft-white/60">Notion SSOT</p>
+          <p className="mt-1 text-soft-white/55">
+            Brokered shared-root setup with dashboard/operator verification.
+          </p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Webhook</p>
+          <div className="mt-1"><StatusBadge status={webhookStatus} /></div>
+          {setup?.webhook?.verified_at && (
+            <p className="mt-1 truncate text-[10px] text-soft-white/30">{formatDate(setup.webhook.verified_at)}</p>
+          )}
+        </div>
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Index</p>
+          <div className="mt-1"><StatusBadge status={setup?.index?.status || "not_seen"} /></div>
+        </div>
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Live Proof</p>
+          <div className="mt-1"><StatusBadge status={setup?.verification?.live_workspace || "proof_gated"} /></div>
+        </div>
+      </div>
+      {callbackUrl ? (
+        <p className="mt-3 break-all font-mono text-xs text-soft-white/40">{callbackUrl}</p>
+      ) : (
+        <p className="mt-3 text-xs text-soft-white/40">Callback URL appears after provisioning publishes the deployment route.</p>
+      )}
+      <p className="mt-2 text-xs text-soft-white/35">
+        Email sharing alone is not proof of API access; live workspace/page permission proof stays gated until an operator runs it.
+      </p>
+    </div>
+  );
+}
+
+function formatCents(value?: number) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  return `$${(value / 100).toFixed(2)}`;
+}
+
+function humanizeValue(value?: string) {
+  return (value || "").replaceAll("_", " ");
+}
+
+function ProviderSettingsPanel({ state, loadError = "" }: { state: ProviderStateData | null; loadError?: string }) {
+  const settings = state?.provider_settings || {};
+  const boundary = state?.provider_boundary || {};
+  const models = state?.deployment_models || [];
+  const selfServiceStatus = settings.self_service_provider_add || "policy_question";
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="font-display font-semibold">Provider Settings</h3>
+          <p className="mt-1 text-sm text-soft-white/60">
+            {settings.guidance || "The dashboard shows provider state only. Provider changes are not a live self-service mutation path."}
+          </p>
+        </div>
+        <StatusBadge status={loadError ? "unavailable" : selfServiceStatus} />
+      </div>
+      {loadError ? (
+        <div className="mt-3 border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+          {loadError}
+        </div>
+      ) : (
+        <>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded border border-border/70 bg-carbon px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Current Provider</p>
+              <p className="mt-1 text-sm text-soft-white">{state?.provider || "-"}</p>
+            </div>
+            <div className="rounded border border-border/70 bg-carbon px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Default Model</p>
+              <p className="mt-1 break-all text-sm text-soft-white">{state?.default_model || "-"}</p>
+            </div>
+            <div className="rounded border border-border/70 bg-carbon px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Credential Isolation</p>
+              <p className="mt-1 text-sm text-soft-white">{boundary.credential_isolation || "secret:// scoped references required"}</p>
+            </div>
+            <div className="rounded border border-border/70 bg-carbon px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Live Key Mutation</p>
+              <div className="mt-1"><StatusBadge status={settings.live_provider_mutation || boundary.live_key_creation || "proof_gated"} /></div>
+            </div>
+          </div>
+          <div className="mt-4 rounded border border-border/70 bg-jet/40 px-3 py-3 text-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-medium text-soft-white">Self-Service Provider Add</p>
+                <p className="mt-1 text-soft-white/55">
+                  {settings.operator_decision_needed || "Policy is required before ArcLink accepts provider changes directly from user settings."}
+                </p>
+              </div>
+              <StatusBadge status={selfServiceStatus} />
+            </div>
+            <p className="mt-2 text-xs text-soft-white/35">
+              Secret input policy: {humanizeValue(settings.secret_input_policy) || "dashboard never collects raw provider tokens"}.
+            </p>
+          </div>
+          {models.length ? (
+            <div className="mt-4 grid gap-3">
+              {models.map((model) => {
+                const detail = model.provider_detail || {};
+                const budget = detail.budget || {};
+                const continuation = detail.threshold_continuation;
+                return (
+                  <div key={model.deployment_id} className="border border-border/70 bg-carbon px-3 py-3 text-sm">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <p className="font-medium text-soft-white">{model.deployment_id}</p>
+                        <p className="mt-1 break-all text-xs text-soft-white/45">Model: {model.model_id || state?.default_model || "-"}</p>
+                        {detail.reason && (
+                          <p className="mt-2 text-xs text-soft-white/40">{detail.reason}</p>
+                        )}
+                      </div>
+                      <div className="grid min-w-[220px] gap-2 text-xs text-soft-white/45 sm:grid-cols-2">
+                        <div>
+                          <p className="text-soft-white/35">Credential</p>
+                          <StatusBadge status={model.credential_state || "unknown"} />
+                        </div>
+                        <div>
+                          <p className="text-soft-white/35">Budget</p>
+                          <StatusBadge status={budget.status || "unknown"} />
+                        </div>
+                        <p>Used: {formatCents(budget.used_cents)}</p>
+                        <p>Remaining: {formatCents(budget.remaining_cents)}</p>
+                      </div>
+                    </div>
+                    {continuation?.status && continuation.status !== "not_applicable" && (
+                      <div className="mt-3 border-t border-border/60 pt-3 text-xs text-soft-white/45">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="font-medium text-soft-white">Threshold Guidance Policy</p>
+                          <StatusBadge status={continuation.status} />
+                        </div>
+                        {continuation.reason && (
+                          <p className="mt-2 text-soft-white/45">{continuation.reason}</p>
+                        )}
+                        <p className="mt-2">
+                          Raven notifications: {humanizeValue(continuation.raven_notifications || "policy_question")}; fallback:{" "}
+                          {humanizeValue(continuation.provider_fallback || "policy_question")}; refill:{" "}
+                          {humanizeValue(continuation.overage_refill || "policy_question")}.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-soft-white/40">Provider deployment state appears after provisioning.</p>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
 function NoDeployments({ message }: { message?: string }) {
   return <p className="text-soft-white/40">{message || "No deployments."}</p>;
+}
+
+function LinkedResourcesPanel({ resources, loadError = "" }: { resources: LinkedResourcesData | null; loadError?: string }) {
+  const linked = resources?.linked_resources || [];
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <h3 className="mb-3 font-display font-semibold">Linked Resources</h3>
+      <p className="mb-3 text-sm text-soft-white/60">
+        Accepted shares appear as a read-only Linked root in Drive and Code. They cannot be reshared from this account.
+      </p>
+      {linked.length ? (
+        <div className="grid gap-3">
+          {linked.map((resource) => (
+            <div key={resource.grant_id} className="border border-border/70 bg-carbon px-3 py-2 text-sm">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <p className="font-medium text-soft-white">{resource.display_name || resource.resource_path}</p>
+                  <p className="break-all font-mono text-xs text-soft-white/40">{resource.resource_root}:{resource.resource_path}</p>
+                  <p className="break-all font-mono text-xs text-soft-white/40">
+                    Linked: {resource.linked_root || "linked"}:{resource.projection?.linked_path || resource.linked_path || "pending"}
+                  </p>
+                  <p className="mt-1 text-xs text-soft-white/35">Owner: {resource.owner_user_id}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <StatusBadge status={resource.access_mode || "read"} />
+                  <StatusBadge status={resource.projection?.status || resource.status || "pending"} />
+                  <StatusBadge status={resource.reshare_allowed ? "reshare" : "no reshare"} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : loadError ? (
+        <div className="border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+          {loadError}
+        </div>
+      ) : (
+        <p className="text-sm text-soft-white/40">No linked resources accepted yet.</p>
+      )}
+    </div>
+  );
+}
+
+function CredentialHandoffPanel({
+  credentials,
+  loadError = "",
+  acknowledging,
+  onAcknowledge,
+}: {
+  credentials: CredentialsData | null;
+  loadError?: string;
+  acknowledging: string;
+  onAcknowledge: (handoffId: string) => void;
+}) {
+  const pending = credentials?.credentials || [];
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="font-display font-semibold">Credential Handoff</h3>
+          <p className="mt-1 text-sm text-soft-white/60">
+            {credentials?.instructions?.copy || "Copy credentials from the secure completion bundle into your password manager."}
+          </p>
+        </div>
+        <StatusBadge status={loadError ? "unavailable" : pending.length ? "pending" : "clear"} />
+      </div>
+      {pending.length ? (
+        <div className="grid gap-3">
+          {pending.map((credential) => (
+            <div key={credential.handoff_id} className="border border-border/70 bg-carbon px-3 py-3 text-sm">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <p className="font-medium text-soft-white">{credential.display_name || credential.credential_kind}</p>
+                  <p className="mt-1 text-xs text-soft-white/45">
+                    {credential.delivery_hint || "Store it before acknowledging removal from the dashboard."}
+                  </p>
+                  {credential.secret_ref && (
+                    <p className="mt-2 break-all font-mono text-xs text-soft-white/45">{credential.secret_ref}</p>
+                  )}
+                  {credential.copy_guidance && (
+                    <p className="mt-2 text-xs text-soft-white/35">{credential.copy_guidance}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => onAcknowledge(credential.handoff_id)}
+                  disabled={acknowledging === credential.handoff_id}
+                  className="shrink-0 rounded border border-signal-orange/50 bg-signal-orange/10 px-3 py-2 text-sm text-signal-orange transition hover:bg-signal-orange/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {acknowledging === credential.handoff_id ? "Removing..." : "I Stored This"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : loadError ? (
+        <div className="border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+          {loadError}
+        </div>
+      ) : (
+        <p className="text-sm text-soft-white/40">
+          No pending credential handoffs. {credentials?.removed_count ? `${credentials.removed_count} handoff(s) already removed from future responses.` : ""}
+        </p>
+      )}
+      <p className="mt-3 text-xs text-soft-white/30">
+        {credentials?.instructions?.acknowledge || "After acknowledgement, ArcLink removes the handoff from future dashboard responses."}
+      </p>
+    </div>
+  );
 }
 
 function PortalLinkButton() {

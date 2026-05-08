@@ -65,6 +65,19 @@ export const api = {
 
   userProvisioning: () => request("/user/provisioning", {}, "user"),
 
+  userCredentials: () => request("/user/credentials", {}, "user"),
+
+  acknowledgeCredential: (body: Record<string, string>) =>
+    request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  userLinkedResources: () => request("/user/linked-resources", {}, "user"),
+
+  denyShareGrant: (body: Record<string, string>) =>
+    request("/user/share-grants/deny", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  revokeShareGrant: (body: Record<string, string>) =>
+    request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   adminDashboard: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return request(`/admin/dashboard${qs}`, {}, "admin");

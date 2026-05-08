@@ -82,6 +82,8 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
     assert.ok(content.includes("Drive"), "dashboard should link to Drive");
     assert.ok(content.includes("Code"), "dashboard should link to Code");
+    assert.ok(content.includes("Recovery Actions"), "dashboard should expose recovery actions");
+    assert.ok(content.includes("Workspace Readiness"), "dashboard should group readiness signals");
     assert.ok(!content.includes("Files (Nextcloud)"), "dashboard should not advertise legacy Nextcloud access");
     assert.ok(!content.includes("Code (code-server)"), "dashboard should not advertise legacy code-server access");
   });
@@ -98,6 +100,8 @@ describe("Page content smoke checks", () => {
     }
     assert.ok(content.includes("api.adminDashboard"), "missing admin dashboard API call");
     assert.ok(content.includes("api.queueAdminAction"), "missing admin action API call");
+    assert.ok(content.includes("Operations Triage"), "admin page should expose operations triage");
+    assert.ok(content.includes("Disabled and proof-gated actions"), "admin page should label disabled operations");
   });
 
   it("No page claims live provisioning with fake adapters", () => {

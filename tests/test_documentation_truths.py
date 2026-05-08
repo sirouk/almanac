@@ -71,11 +71,52 @@ def test_docs_do_not_claim_stripe_webhook_skip() -> None:
     print("PASS test_docs_do_not_claim_stripe_webhook_skip")
 
 
+def test_creative_brief_labels_live_external_proof_gates() -> None:
+    brief = (REPO / "docs" / "arclink" / "CREATIVE_BRIEF.md").read_text(encoding="utf-8")
+    expect(
+        "implemented in the current `arclink` branch" not in brief,
+        "Creative brief must not broadly claim live implementation without the local/fake-adapter boundary.",
+    )
+    expect("implemented as local public-repo behavior" in brief, brief)
+    expect("live external\nproof remains gated" in brief, brief)
+    for surface in ("Stripe", "Telegram", "Discord", "Notion", "Chutes", "Cloudflare", "Tailscale", "Docker"):
+        expect(surface in brief, f"Creative brief proof-gate sentence should name {surface}.")
+    expect("live workspace verification stays proof-gated" in brief, brief)
+    expect("live runtime\n  access stays proof-gated" in brief, brief)
+    expect("live provider key creation\n  and utilization proof stay gated" in brief, brief)
+    print("PASS test_creative_brief_labels_live_external_proof_gates")
+
+
+def test_shipped_docs_do_not_claim_live_external_proof_passed() -> None:
+    forbidden = (
+        "live proof passed",
+        "live external proof passed",
+        "live Stripe proof passed",
+        "live Chutes proof passed",
+        "live Notion proof passed",
+        "live Cloudflare proof passed",
+        "live Tailscale proof passed",
+        "production host proof passed",
+    )
+    offenders = []
+    for path in (REPO / "docs").rglob("*.md"):
+        rel = path.relative_to(REPO)
+        body = path.read_text(encoding="utf-8")
+        lowered = body.lower()
+        for phrase in forbidden:
+            if phrase.lower() in lowered:
+                offenders.append(f"{rel} contains {phrase!r}")
+    expect(not offenders, "\n".join(offenders))
+    print("PASS test_shipped_docs_do_not_claim_live_external_proof_passed")
+
+
 def main() -> int:
     test_agents_service_user_unit_list_matches_templates()
     test_org_profile_docs_mark_cli_as_shipped_contract()
     test_docs_do_not_claim_stripe_webhook_skip()
-    print("PASS all 3 documentation truth tests")
+    test_creative_brief_labels_live_external_proof_gates()
+    test_shipped_docs_do_not_claim_live_external_proof_passed()
+    print("PASS all 5 documentation truth tests")
     return 0
 
 

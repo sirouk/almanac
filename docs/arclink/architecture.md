@@ -115,6 +115,13 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `GET /user/billing` | User session | Billing/entitlement status |
 | `POST /user/portal` | User + CSRF | Create Stripe portal link |
 | `GET /user/provisioning` | User session | Deployment provisioning status |
+| `GET /user/credentials` | User session | Pending credential handoff metadata with masked secret references |
+| `POST /user/credentials/acknowledge` | User + CSRF | Confirm credential storage and hide future handoff visibility |
+| `POST /user/share-grants` | User + CSRF | Request a read-only Drive/Code share grant |
+| `POST /user/share-grants/approve` | User + CSRF | Owner-approve a pending share grant |
+| `POST /user/share-grants/deny` | User + CSRF | Owner-deny a pending share grant |
+| `POST /user/share-grants/accept` | User + CSRF | Recipient accepts an approved share grant |
+| `GET /user/linked-resources` | User session | Accepted linked resources for the authenticated user |
 | `GET /user/provider-state` | User session | Provider adapter state |
 | `GET /admin/dashboard` | Admin session | Admin dashboard read |
 | `GET /admin/service-health` | Admin session | Service health |
@@ -149,14 +156,21 @@ core patches:
 - `drive` owns the native file-manager surface. It prefers a mounted
   local vault, can use sanitized Nextcloud WebDAV access state when available,
   and exposes browse, bounded preview, download, upload, folder creation,
-  rename, move, trash, and restore contracts. The local backend keeps
-  trash recoverable under `.drive-trash`; WebDAV delete is direct provider
-  delete and must remain UI-confirmed.
+  rename, move, trash, and restore contracts for writable roots. It also exposes
+  a read-only `Linked` root when the linked-resource projection exists. Linked
+  resources can be listed, searched, previewed, downloaded, and copied or
+  duplicated into an owned Vault or Workspace destination, but cannot be
+  uploaded to, renamed, moved, deleted, restored, or reshared from the plugin.
+  The local backend keeps trash recoverable under `.drive-trash`; WebDAV delete
+  is direct provider delete and must remain UI-confirmed.
 - `code` owns the native code workspace. It uses
   `CODE_WORKSPACE_ROOT`, guards text saves with a SHA-256 expected hash,
   scans bounded workspace depth for git repositories, and exposes source
-  control status, stage, unstage, confirmed discard, and commit operations. It
-  remains a lightweight native editor, not a full Monaco/VS Code workbench.
+  control status, stage, unstage, confirmed discard, and commit operations on
+  writable Workspace/Vault roots. Its read-only `Linked` root allows file reads,
+  previews, duplicate/copy into owned roots, repository discovery, git status,
+  and git diff, while rejecting saves, reshare, and git mutations. It remains a
+  lightweight native editor, not a full Monaco/VS Code workbench.
 - `terminal` owns the native terminal surface. It uses a managed pty backend
   with stable session ids, persisted metadata,
   bounded scrollback, same-origin SSE output streaming with polling fallback,
@@ -231,8 +245,10 @@ live-gated behavior.
 ## Current Limitations
 
 - Executor is fail-closed; no production live adapters are shipped yet.
-- Admin dashboard is wired to all hosted API admin endpoints; user dashboard
-  live data wiring is deferred.
+- Admin dashboard is wired to all hosted API admin endpoints. User dashboard
+  wiring covers dashboard, billing, provisioning, credentials, linked-resource,
+  and provider-state reads, plus credential acknowledgement; broader share
+  create/approve/accept/revoke UI remains intentionally deferred.
 - Scale operations are durable and API-visible, but no long-running production
   worker service unit is documented as live yet. Operators should treat worker
   execution as a controlled runbook step until live host orchestration lands.

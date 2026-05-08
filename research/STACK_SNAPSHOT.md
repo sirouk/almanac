@@ -1,56 +1,54 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-08
-- project_root: repository root
+- snapshot_date: 2026-05-08
+- project_root: .
 - primary_stack: ArcLink multi-runtime platform
 - primary_score: 096/100
-- deterministic_confidence_score: 094/100
 - confidence: high
 
-## Deterministic Scoring Method
+## Deterministic Scoring Inputs
 
-Scores are based only on public repository signals: source counts, manifests,
-runtime entrypoints, service definitions, tests, and documented canonical
-commands. Private state, live credentials, logs, dependency folders, build
-outputs, and machine-specific paths are excluded.
+| Signal | Score contribution | Evidence |
+| --- | ---: | --- |
+| Python control plane and tests | 30 | 168 tracked Python files and 99 tracked Python regression tests cover control DB, hosted API, auth, bots, provisioning, qmd/MCP, Notion/SSOT, memory, diagnostics, and plugin APIs. |
+| Bash host lifecycle | 20 | 86 tracked shell/script entrypoints cover deploy, Docker, bootstrap, health, service installation, qmd/PDF jobs, backup, and upgrades. |
+| Next.js web app | 18 | `web/package.json`, App Router pages, React/TypeScript components, Node tests, and Playwright browser tests cover onboarding, checkout, login, user dashboard, and admin dashboard. |
+| Docker and systemd runtime | 14 | `compose.yaml`, `Dockerfile`, and 29 tracked systemd units/timers/paths define Shared Host Docker, Control Node, and bare-metal service lanes. |
+| Hermes, qmd, plugins, hooks, and skills | 9 | `config/pins.json`, ArcLink Hermes plugins, hooks, skills, qmd wrappers, and managed-context tests define the agent runtime without Hermes core edits. |
+| Public config/docs alignment | 5 | Public JSON/YAML manifests, OpenAPI, env examples, runbooks, and Ralphie research artifacts describe the same multi-lane stack. |
 
-## Ranked Stack Hypotheses
+Total: 96/100. Confidence is capped below 100 because live external services
+and host-mutating proof are intentionally gated.
 
-| Rank | Stack hypothesis | Score | Evidence |
-| ---: | --- | ---: | --- |
-| 1 | ArcLink multi-runtime platform: Bash orchestration, Python control plane, Docker Compose/systemd services, Next.js web, Hermes plugins, qmd/Notion/SSOT rails | 096 | Canonical deploy wrappers, 54 first-party `python/arclink_*.py` modules, 99 Python tests, 82 shell scripts, 29 systemd units, 26 Compose services, 36 web TS/TSX/MJS/JS files, 4 Hermes plugins, 11 skills |
-| 2 | Python-centered control and automation system | 088 | Control DB schema, hosted API, onboarding, provisioning, action worker, MCP, Notion/SSOT, memory, Docker supervisor, evidence, diagnostics, and most regression tests are Python |
-| 3 | Bash/systemd/Docker operations platform | 082 | `deploy.sh`, `bin/deploy.sh`, Docker wrapper, bootstrap, health, service installers, qmd/PDF/backup jobs, and systemd/Compose topologies own host behavior |
-| 4 | Hosted Next.js product surface backed by Python API | 064 | `web/package.json`, Next.js 15, React 19, TypeScript, browser tests, checkout/onboarding/dashboard/admin routes, and Python hosted API/auth modules |
-| 5 | Hermes agent extension package | 058 | ArcLink behavior is delivered through Hermes plugins, hooks, generated config, skills, and pinned Hermes runtime docs without editing Hermes core |
-| 6 | Documentation-only or static site project | 018 | Many docs exist, but deploy, runtime, API, worker, service, and test surfaces dominate behavior |
+## Project Stack Ranking
 
-## Component Snapshot
+| Rank | Stack hypothesis | Score | Evidence | Decision |
+| --- | --- | ---: | --- | --- |
+| 1 | ArcLink multi-runtime platform: Bash + Python + Next.js + Docker/systemd + Hermes/qmd | 96 | Strong source, manifest, service, and test evidence across all lanes | Primary |
+| 2 | Python control-plane platform with Bash host orchestration and a Next.js frontend | 83 | Python and Bash own most behavior, with web as a substantial UI layer | Useful shorthand, but it underweights Docker/systemd and Hermes plugins |
+| 3 | Next.js application with Python API backend | 42 | Web app exists and is product-facing | Rejected as primary because host lifecycle, agent runtime, qmd, Notion, and bots are core product behavior |
+| 4 | Python service collection only | 35 | Python modules are broad | Rejected because deploy scripts, web, Docker, systemd, and Hermes plugin surfaces are load-bearing |
+| 5 | Node.js app | 18 | Next.js, React, TypeScript, and Playwright are present | Rejected as primary; Node is one runtime lane, not the whole project |
+| 6 | Unknown or generic library | 0 | Repository has explicit manifests, entrypoints, and runbooks | Rejected |
 
-| Component | Current role | Primary evidence |
-| --- | --- | --- |
-| Bash | Host lifecycle, Docker wrapper, bootstrap, health, qmd/PDF/Nextcloud jobs, service installation, validation wrappers | `deploy.sh`, `bin/*.sh`, `test.sh` |
-| Python 3 | Control plane, hosted API, auth, onboarding, provisioning, workers, MCP, Notion/SSOT, memory, diagnostics, evidence, plugin APIs | `python/arclink_*.py`, `bin/*.py`, `tests/test_*.py` |
-| SQLite | Durable control state for users, deployments, sessions, actions, events, evidence, fleet, rollout, and onboarding | `python/arclink_control.py` |
-| Docker Compose | Shared Host Docker and Control Node service topology | `compose.yaml`, `Dockerfile`, `bin/arclink-docker.sh` |
-| systemd | Bare-metal Shared Host services and timers | `systemd/user/*`, install scripts |
-| Next.js/React/TypeScript | Hosted onboarding, checkout, login, dashboard, admin UI, API client, browser tests | `web/package.json`, `web/src/*`, `web/tests/*` |
-| Hermes runtime | Agent gateways, dashboards, skills, hooks, managed context | `config/pins.json`, `plugins/hermes-agent/*`, `hooks/hermes-agent/*`, `skills/*` |
-| qmd/Notion/SSOT | Vault/PDF/Notion retrieval and shared-source-of-truth write rails | qmd scripts, Notion/SSOT Python modules, skills |
+## Ranked Implementation Alternatives
 
-## Alternatives
+| Rank | Path | Fit | Tradeoff |
+| --- | --- | --- | --- |
+| 1 | Repair existing ArcLink Bash, Python, web, plugin, Compose, and systemd surfaces | Best fit | Preserves the current operator, hosted, agent, qmd, Notion, and dashboard contracts. |
+| 2 | Fail closed or label unavailable where proof or policy is missing | Required companion path | Keeps no-secret BUILD safe, but leaves external rows proof-gated until authorized. |
+| 3 | Add a new ArcLink browser broker for Drive/Code sharing | Conditional | Could make browser right-click sharing real without Nextcloud, but it is additional product scope and needs operator priority. |
+| 4 | Depend on Nextcloud/WebDAV/OCS as the only sharing backend | Conditional | Fits deployments with Nextcloud enabled, but cannot be the only path for deployments without a safe live shared root. |
+| 5 | Rewrite as a single hosted web application first | Poor fit | Would not repair Shared Host, Docker, public bots, Hermes plugins, qmd, Notion/SSOT, or runtime services. |
+| 6 | Documentation-only repair | Poor fit | Violates the mission requirement to fix behavior before docs unless a row is explicitly proof-gated or policy-gated. |
 
-| Alternative | Fit | Decision |
-| --- | --- | --- |
-| Treat the repo as a Node/Next.js app | Too narrow; misses deploy, agent runtime, Docker/systemd, qmd, Notion/SSOT, and onboarding workers | Rejected |
-| Treat the repo as a Python service | Useful for control-plane work but misses canonical Bash host orchestration and web/dashboard behavior | Partial only |
-| Treat the repo as infrastructure-as-code | Useful for deploy and service review but misses hosted API, onboarding, plugins, and tests | Partial only |
-| Treat the repo as a Hermes plugin package | Useful for agent runtime changes but misses product/control and host lifecycle | Partial only |
+## Stack Assumptions For BUILD
 
-## BUILD Implication
-
-BUILD should preserve the multi-runtime architecture: use Bash for host and
-Docker flows, Python for control/API/worker/knowledge behavior, Next.js for
-browser journeys, Compose/systemd for service topology, and ArcLink-owned
-Hermes plugins/hooks/skills for agent runtime behavior. Do not patch Hermes
-core or private state.
+- Use public repo wrappers, generated config, plugins, hooks, service units,
+  hosted API, public bots, web dashboards, and tests.
+- Do not edit Hermes core.
+- Treat live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
+  Docker install/upgrade, and host deploy/upgrade proof as explicit
+  authorization gates.
+- Keep Shared Host, Shared Host Docker, and Sovereign Control Node boundaries
+  distinct while aligning docs, defaults, health checks, and tests.

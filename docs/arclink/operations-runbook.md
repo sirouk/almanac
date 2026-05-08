@@ -23,9 +23,17 @@ python3 python/arclink_hosted_api.py   # starts on 127.0.0.1:8900
 | `ARCLINK_FOUNDERS_PRICE_ID` | `price_arclink_founders` | Limited 100 Founders Stripe price ($149/month target) |
 | `ARCLINK_SOVEREIGN_PRICE_ID` | `price_arclink_sovereign` | Sovereign Stripe price ($199/month target) |
 | `ARCLINK_SCALE_PRICE_ID` | `price_arclink_scale` | Scale Stripe price ($275/month target) |
+| `ARCLINK_FIRST_AGENT_PRICE_ID` | `price_arclink_founders` | Legacy first-agent alias for Limited 100 Founders |
 | `ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID` | `price_arclink_sovereign_agent_expansion` | Sovereign Agentic Expansion Stripe price ($99/month target) |
 | `ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID` | `price_arclink_scale_agent_expansion` | Scale Agentic Expansion Stripe price ($79/month target) |
 | `ARCLINK_ADDITIONAL_AGENT_PRICE_ID` | `price_arclink_sovereign_agent_expansion` | Legacy alias for Sovereign Agentic Expansion |
+| `ARCLINK_FOUNDERS_MONTHLY_CENTS` | `14900` | Limited 100 Founders public price label |
+| `ARCLINK_SOVEREIGN_MONTHLY_CENTS` | `19900` | Sovereign public price label |
+| `ARCLINK_SCALE_MONTHLY_CENTS` | `27500` | Scale public price label |
+| `ARCLINK_FIRST_AGENT_MONTHLY_CENTS` | `14900` | Legacy first-agent monthly price alias |
+| `ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS` | `9900` | Sovereign Agentic Expansion public price label |
+| `ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS` | `7900` | Scale Agentic Expansion public price label |
+| `ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS` | `9900` | Legacy additional-agent monthly price alias |
 
 **Health check:**
 ```bash
@@ -49,6 +57,14 @@ rotate an operator password without printing it into logs, run:
 The generated file is written with `0600` permissions. Use `--password-file`
 for an existing private password file.
 
+**Admin ownership:** ArcLink enforces one active `owner` admin. Additional
+admin rows may exist only as subordinate roles such as `admin`, `ops`,
+`support`, or `read_only`; creating a second active owner is rejected. Treat the
+owner account as the operator of record for production decisions, live-proof
+authorization, and destructive maintenance. Do not create a second owner for
+coverage; rotate or recover the owner account, then add subordinate admin roles
+only for delegated operations.
+
 **User dashboard passwords:** User login requires the same dashboard password
 issued for the user's Hermes dashboard. New Sovereign pods seed that password
 through a Docker secret and store only its hash in the control DB. Existing pod
@@ -64,8 +80,41 @@ notifications redact that password by default; only set
 `ARCLINK_OPERATOR_NOTIFICATION_INCLUDE_CREDENTIALS=1` for an explicitly
 credential-bearing private operator channel.
 
+Hosted user sessions expose credential handoff state through
+`GET /api/v1/user/credentials` and acknowledge storage through
+`POST /api/v1/user/credentials/acknowledge`. These responses use masked secret
+references only; acknowledgement hides the handoff from future user API reads
+and records audit/event rows.
+
 The reconciler invokes `bin/sync-dashboard-user-passwords.py` inside the
 provisioner context so it can read deployment state roots and update hashes.
+
+**Linked resources:** Cross-user Drive/Code sharing is modeled as read-only
+share grants. A user session creates a pending grant for a recipient, Raven
+queues an owner approval notification when the owner has a linked Telegram or
+Discord channel, and the owner can approve or deny it with the button-only
+`/share-approve {grant_id}` and `/share-deny {grant_id}` callbacks or through
+the hosted API. The recipient accepts an approved grant with their own user
+session, and accepted resources are listed at
+`GET /api/v1/user/linked-resources`. Drive and Code expose a read-only `Linked`
+root when `ARCLINK_LINKED_RESOURCES_ROOT` or the plugin fallback projection
+exists. Accepted grants create living linked-resource projections backed by a
+manifest, owner revoke removes the projection and manifest entry, and Drive/Code
+allow recipient copy/duplicate into the recipient's own Vault or Workspace
+without allowing reshare from the `Linked` source. Right-click browser
+share-link UI remains disabled until a live ArcLink browser broker or approved
+Nextcloud-backed adapter exists, and live bot delivery proof remains
+credential-gated.
+
+If the owner has no linked Telegram or Discord channel, share creation still
+persists the grant as `pending_owner_approval`, but no Raven notification is
+queued. The API response reports `owner_notification.queued=false` with a
+reason of `no_public_channel` when no public channel exists, or
+`unsupported_public_channel` when stored channel metadata is not a usable
+Telegram or Discord target. Operators should treat either as a waiting state,
+not a delivery failure: link or repair the owner's public channel and request
+the share again, or have the owner approve or deny the pending grant through
+their authenticated hosted API session.
 
 **OpenAPI contract:** `GET /api/v1/openapi.json` (no auth). Static copy at
 `docs/openapi/arclink-v1.openapi.json`.
@@ -189,17 +238,49 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
 - Revoke: teardown removes key state for the deployment.
 - Per-deployment key state tracked in `arclink_chutes_keys` table.
 
+**Access boundary:** Local provider evaluation fails closed unless all of these
+are true: billing is current, a scoped per-user or per-deployment `secret://`
+reference exists, the secret reference contains the user or deployment scope,
+and the configured monthly budget has remaining capacity. An operator-level
+`CHUTES_API_KEY` is useful for model/provider administration, but it is not
+accepted as customer isolation for inference. If per-key metering is explicitly
+unavailable and no scoped secret is present, the deployment is marked as
+requiring a per-user Chutes account/OAuth lane before inference. User-facing
+dashboards and public bots must never collect raw provider tokens; route
+provider credentials through the scoped secret handoff/secret-reference path.
+
+**Billing and budget:** Non-current billing states suspend provider access
+immediately. User and admin provider-state responses expose the local lifecycle:
+immediate notice, daily reminders, day-7 account/data-removal warning metadata,
+and day-14 audited purge queue metadata. Usage ingestion updates local
+deployment budget counters and blocks inference at the hard limit. Local
+provider-budget credit helpers record a fair-credit ledger and can apply credit
+to the deployment's local Chutes provider budget; live purchase handling and
+direct provider balance application remain proof-gated.
+
 **Env vars (live mode):**
 | Var | Purpose |
 |-----|---------|
 | `CHUTES_API_KEY` | Owner key for model catalog and key management |
+| `ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS` | Local monthly provider budget before any applied credit |
+| `ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT` | Warning threshold for local budget status |
+| `ARCLINK_CHUTES_HARD_LIMIT_PERCENT` | Hard stop threshold for local budget status |
+| `ARCLINK_CHUTES_PER_KEY_METERING_AVAILABLE` | Set false/unavailable to require the per-user account/OAuth fallback |
+| `ARCLINK_REFUEL_SKU_ID` | Local provider-budget credit SKU id |
+| `ARCLINK_REFUEL_CREDIT_CENTS` | Default local provider-budget credit amount |
+| `ARCLINK_REFUEL_CURRENCY` | Local credit currency, default `usd` |
 
 **Fake mode:** Default. Model catalog uses a built-in fixture. Key operations
-write to SQLite only.
+write to SQLite only, and budget/credit accounting is local state only.
 
 **Troubleshooting:**
 - Model catalog empty: check `CHUTES_API_KEY` is set for live catalog fetch.
 - Key creation fails: verify the deployment has an active entitlement.
+- Provider state says `billing_suspended`: restore billing before rotating or
+  reissuing provider credentials.
+- Provider state says `operator_shared_key_rejected`: configure a scoped
+  per-user or per-deployment secret reference, or use the per-user account/OAuth
+  fallback when per-key metering is not available.
 
 ## 5. Stripe Boundary
 

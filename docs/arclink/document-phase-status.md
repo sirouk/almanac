@@ -1,94 +1,91 @@
 # Document Phase Status
 
-Generated: 2026-05-06 (alignment audit: API routes, module map, Terminal
-streaming, stale metrics)
+Generated: 2026-05-08 (Ralphie document phase: final product-reality alignment)
 
 ## Documentation Audit
 
-Project-facing ArcLink documentation has been audited and corrected against the
-current codebase state: Python control-plane modules, test coverage, web
-surfaces, native Hermes workspace plugins, hosted API route table, and
-architecture module map. This pass focused on closing gaps between landed code
-and documentation rather than adding brittle inventory counts.
+Project-facing ArcLink documentation has been checked against the current
+Ralphie product-reality matrix, implementation plan, operator-policy addendum,
+recent build notes, and the closest README/AGENTS/docs artifacts. This pass
+focused on the final no-secret behaviors that changed after the earlier
+share-approval audit: single-operator ownership, Chutes provider isolation,
+failed-renewal suspension and warning cadence, local provider-budget credits,
+living linked-resource projections, recipient copy/duplicate, Raven display
+name customization, shared-root Notion SSOT membership, and managed-context
+memory cherrypicks.
 
-### Files Updated (This Pass)
+No live-proof claims, local operator identity, private paths, secrets, command
+transcripts, or machine-only evidence were added.
 
-| File | Change | Rationale |
-| --- | --- | --- |
-| `docs/API_REFERENCE.md` | Added missing `GET /openapi.json` (public) and `GET /admin/scale-operations` (admin) routes; added scale-operations to the web client integration table | These routes exist in the hosted API `_ROUTES` dict but were absent from the reference doc |
-| `docs/arclink/architecture.md` | Added 6 missing modules to the module map (`arclink_boundary`, `arclink_host_readiness`, `arclink_diagnostics`, `arclink_live_runner`, `arclink_live_journey`, `arclink_evidence`); updated terminal plugin description from "scaffolded only" to managed-pty persistent sessions with same-origin SSE streaming and polling fallback; expanded the route table from representative rows to the canonical hosted API route catalog matching `_ROUTES` in `arclink_hosted_api.py`; fixed stale route paths (`/admin/login` -> `/auth/admin/login`, `/stripe/webhook` -> `/webhooks/stripe`) | Module map and route table were incomplete and had path discrepancies vs. the actual code |
-| `docs/arclink/document-phase-status.md` | Replaced prior status with this current audit | Prior status described the workspace plugin pass, not the current alignment audit |
-| `PROMPT_document.md` and `ralphie.sh` | Strengthened the document phase prompt so it self-directs from repo context and avoids interactive "what should I document?" stalls | Ralphie document attempt 1 produced no artifact; future document phases should inspect plan/backlog/docs and either update docs or record why they are current |
-| `plugins/hermes-agent/terminal/README.md` | Updated Terminal transport notes for same-origin SSE streaming with polling fallback | Terminal now matches the desired persistent, kept-current dashboard session behavior more closely |
-| `tests/test_arclink_plugins.py` | Updated Terminal status/UI assertions for `streaming_output`, SSE mode, and polling fallback | Tests now lock the streaming terminal contract instead of the old polling-only contract |
-
-### Files Updated (Prior Passes)
+## Files Updated
 
 | File | Change | Rationale |
 | --- | --- | --- |
-| `docs/arclink/architecture.md` | Native Hermes workspace plugin architecture, installer, Docker repair, tailnet, limitations | Plugin workspace pass |
-| `docs/arclink/foundation.md` | Provisioning mount/access URL behavior, workspace plugin notes | Plugin workspace pass |
-| `docs/arclink/foundation-runbook.md` | Workspace plugin assumptions, ownership, checks, risks | Plugin workspace pass |
-| `docs/arclink/operations-runbook.md` | Tailscale port-base env var, Native Hermes Workspace Plugins section | Plugin workspace pass |
-| `docs/arclink/CHANGELOG.md` | P9-P12, P13-P16, scale operations, web lint, workspace plugin entries | All landed work |
-| Plugin READMEs (Drive, Code, Terminal) | Ownership, behavior, assumptions, runbook, boundaries | Plugin workspace pass |
-| `docs/docker.md` | Docker-mode plugin mounts, repair, tailnet publication | Plugin workspace pass |
+| `docs/API_REFERENCE.md` | Clarified that local provider-budget credit accounting is separate from live purchase/provider-balance proof, and that threshold continuation copy/provider-change policy remains gated | The previous wording could imply refill accounting was still wholly undecided even though local credit accounting is now implemented |
+| `docs/arclink/architecture.md` | Corrected Drive/Code `Linked` root behavior to allow copy/duplicate into owned roots, and replaced stale user-dashboard-live-data wording with the current wired routes plus the intentionally deferred share-management UI | The final matrix marks recipient copy/duplicate and user dashboard read wiring as real, while broader share create/approve/accept/revoke dashboard UI remains incomplete |
+| `docs/arclink/operations-runbook.md` | Added the single active owner rule, clarified owner recovery versus second-owner creation, tightened linked-resource copy/duplicate wording, and documented the Chutes provider access boundary, failed-renewal lifecycle, local budget thresholds, local provider-budget credit helpers, raw-token avoidance, and per-user account/OAuth fallback | The matrix now marks these behaviors as local public-repo contracts, but the runbook still focused on earlier share-approval and fake-key lifecycle wording |
+| `plugins/hermes-agent/drive/README.md` and `plugins/hermes-agent/code/README.md` | Replaced stale browser-sharing decision wording with the current gate: right-click share UI stays off until a live ArcLink browser broker or approved Nextcloud-backed adapter is enabled | The operator decision now exists; the remaining issue is implementation/proof of the browser sharing backend, not an unanswered model choice |
+| `research/PRODUCT_REALITY_MATRIX.md` | Reworded the browser right-click sharing row so the remaining blocker is backend enablement/proof, not choosing the sharing model again | The operator decision now names ArcLink grants backed by living shared roots as canonical, with Nextcloud/WebDAV/OCS preferred where safely enabled |
+| `docs/arclink/document-phase-status.md` | Replaced the earlier share-approval-only audit with this final product-reality documentation status | The previous status still treated recipient copy/duplicate as undecided and did not reflect the later provider, billing, ownership, and memory reconciliation work |
 
-### Files Reviewed (No Changes Needed)
+## Docs Inspected
 
 | File | Verdict |
 | --- | --- |
-| `docs/arclink/CHANGELOG.md` | Current. Native Hermes Workspace Plugins entry is the latest; no new features since. |
-| `docs/arclink/operations-runbook.md` | Current. All 14 sections match landed modules. |
-| `docs/arclink/foundation.md` | Current. Workspace plugin, executor, provisioning, bot adapter notes match code. |
-| `docs/arclink/foundation-runbook.md` | Current. Validation commands match test file list. |
-| `docs/arclink/secret-checklist.md` | Current. Secret inventory and handling rules. |
-| `docs/arclink/ingress-plan.md` | Current. Domain/Tailscale ingress, DNS layout, Traefik, SSH, drift, teardown. |
-| `docs/arclink/backup-restore.md` | Current. Backup targets, schedule, restore, DR, retention. |
-| `docs/arclink/alert-candidates.md` | Current. Critical/warning/info alert signals with sources. |
-| `docs/arclink/data-safety.md` | Current. Isolation, volumes, secrets, teardown safeguards. |
-| `docs/arclink/live-e2e-secrets-needed.md` | Current. All credential blockers named. |
-| `docs/arclink/live-e2e-evidence-template.md` | Current. Evidence collection template. |
-| `config/env.example` | Current. All ArcLink env vars with comments. |
-| `docs/arclink/brand-system.md` | Current. Product promise wording matches. |
-| `docs/arclink/CREATIVE_BRIEF.md` | Current. Pricing/offer copy matches. |
-| `docs/arclink/professional-finish-gate.md` | Current. Finish-gate wording matches. |
+| `AGENTS.md` | Canonical operating guide remains aligned with deploy-mode boundaries, private-state safety, and agent runtime ownership |
+| `README.md` | Top-level product/deploy overview already describes the current local behavior and live-proof gates |
+| `IMPLEMENTATION_PLAN.md` | Active handoff plan shows no remaining partial/gap rows and keeps live/policy gates explicit |
+| `research/PRODUCT_REALITY_MATRIX.md` | Current matrix totals remain 98 real, 0 partial, 0 gap, 12 proof-gated, and 4 policy-question; browser sharing wording now reflects the answered operator model and remaining backend gate |
+| `docs/DOC_STATUS.md` | Classification remains valid; this status file is historical and canonical docs own current operating truth |
+| `docs/API_REFERENCE.md` | Lists credential, share-grant, linked-resource, billing lifecycle, sanitized Chutes provider-state routes, local provider-budget credit posture, and remaining continuation-policy gates |
+| `docs/openapi/arclink-v1.openapi.json` | Already includes the current hosted API route catalog |
+| `docs/arclink/architecture.md` | Reflects credential/share routes, current user dashboard API wiring, and Drive/Code `Linked` root boundaries |
+| `docs/arclink/first-day-user-guide.md` | Already describes credential acknowledgement and read-only linked resources for users |
+| `docs/arclink/raven-public-bot.md` | Already documents `/raven_name`, `/link_channel`, `/connect_notion`, share approval callbacks, and upgrade-rail guidance |
+| `docs/arclink/notion-human-guide.md` | Already names shared-root membership as the canonical SSOT sharing model and keeps user-owned OAuth/email-share paths non-default |
+| `plugins/hermes-agent/drive/README.md` and `plugins/hermes-agent/code/README.md` | Document `Linked` root discovery, read-only behavior, no reshare, owned copy/duplicate from linked content, and the disabled browser share-link gate |
+| `plugins/hermes-agent/arclink-managed-context/README.md` | Already documents recall budget tiers and sibling conversational-memory boundaries |
+| `docs/arclink/control-node-production-runbook.md` and `docs/arclink/sovereign-control-node.md` | Already document deployment-style selection and keep live production proof credential-gated |
 
-## Open Questions
+## Open Questions And Risks
 
-- Live Docker Compose execution remains unverified until operator-gated host
-  credentials are available.
-- Production 12 is not live-proven yet; the scaffold is ready, but the full
-  live journey needs credentials and an explicit credentialed run.
-- External credential sets remain absent (Stripe, Chutes, Telegram, Discord,
-  host, and the selected Cloudflare-domain or Tailscale ingress mode).
-- The action worker has code-level batch and stale-recovery entrypoints, but no
-  documented production service/timer unit is live yet.
-- Terminal has managed-pty persistent sessions with same-origin SSE
-  output streaming and bounded polling fallback. tmux backend validation
-  remains future work.
+- Live Stripe, Chutes, Telegram, Discord, Notion, Cloudflare, Tailscale, Docker
+  install/upgrade, and production host proof remain credential-gated.
+- Browser right-click Drive/Code share creation remains disabled until a live
+  ArcLink broker or approved Nextcloud-backed adapter exists.
+- Chutes threshold continuation copy and self-service provider-change UI remain
+  product-policy questions; current docs keep those surfaces disabled or
+  labeled as policy-gated.
+- Scoped agent self-model or multi-agent peer-awareness cards remain a
+  product-policy question unless a future audited, no-transcript-leak path is
+  built with tests.
 
-## Risks
+## Validation
 
-- Documentation correctness depends on the no-secret suite continuing to pass.
-  If tests diverge from docs, the foundation-runbook validation section lists
-  the exact commands to reconfirm.
-- Provisioning resource limits and healthchecks are rendered in Compose intent
-  but have not been validated against a live Docker Compose execution yet
-  (blocked on external credentials).
-- Scale operations placement is intentionally deterministic and capacity-based,
-  not a replacement for an external scheduler.
-- Docker tailnet app publication depends on the host Tailscale CLI and tailnet
-  policy.
-- WebDAV delete behavior is provider-direct, unlike local Drive delete which is
-  recoverable through `.arclink-trash`.
+- Documentation truth checks passed after this pass.
+- Public repo hygiene passed after shipped docs used generic
+  provider-budget-credit wording instead of speculative add-on product copy.
+- Markdown/diff whitespace hygiene passed.
+- Stale-phrase search found no remaining current-doc or active-matrix claims
+  that recipient copy/duplicate is still undecided, browser sharing is waiting
+  on an operator model choice, or user dashboard data wiring is deferred.
+
+## Transition Readiness
+
+- Documentation work is complete for the current no-secret product-reality
+  repair: current canonical docs describe the implemented local behavior,
+  disabled or deferred browser sharing surfaces, and live-proof boundaries.
+- No additional project-facing documentation change is required before terminal
+  handoff unless later code changes alter the product matrix, route catalog,
+  billing/provider contract, dashboard wiring, or plugin behavior.
+- The remaining proof-gated and product-policy rows are not documentation
+  blockers. They stay disabled, labeled, or credential-gated until explicit
+  authorization or product policy exists.
+- This document phase does not authorize live Stripe, provider, bot, Notion,
+  ingress, Docker install/upgrade, or host deploy/upgrade operations.
 
 ## Verdict
 
-Project-facing docs are aligned with the current codebase. The API reference
-now includes the hosted OpenAPI and scale-operations routes that were missing.
-The architecture module map now lists all modules relevant to ArcLink SaaS
-behavior including host readiness, diagnostics, live proof, evidence, and
-boundary helpers. The gaps were completeness and accuracy in existing artifacts,
-plus Terminal transport language after the SSE upgrade. Production 12 remains
-externally blocked.
+Docs are clear enough to proceed with the Ralphie handoff. The canonical docs
+now describe the current no-secret implementation and rationale without
+claiming unproved live external behavior.

@@ -45,12 +45,17 @@ secret manager. Never commit them.
 ## Install And Configuration
 
 1. Run `./deploy.sh control install`.
-2. Choose ingress mode: `domain` or `tailscale`.
-3. Choose provider adapter mode: `fake` for validation or explicit live mode
+2. Choose deployment style: `single-machine` for one starter host, `hetzner`
+   for registered Hetzner workers, or `akamai-linode` for registered Akamai
+   Linode workers. The single-machine style defaults the executor toward the
+   local worker path and starter host registration; hosted-fleet styles default
+   toward SSH worker placement.
+3. Choose ingress mode: `domain` or `tailscale`.
+4. Choose provider adapter mode: `fake` for validation or explicit live mode
    only when credentials and operator approval are present.
-4. Configure Stripe price ids and webhook secret.
-5. Configure public bot webhook URLs through the generated control host.
-6. Run `./deploy.sh control health`.
+5. Configure Stripe price ids and webhook secret.
+6. Configure public bot webhook URLs through the generated control host.
+7. Run `./deploy.sh control health`.
 
 If a value changes, use `./deploy.sh control reconfigure` and then rerun health.
 

@@ -312,8 +312,15 @@ Hosted API boundary:
 - `HostedApiConfig` resolves runtime configuration from environment variables:
   `ARCLINK_BASE_DOMAIN`, `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`,
   `ARCLINK_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`,
-  `ARCLINK_DEFAULT_PRICE_ID`, `ARCLINK_FIRST_AGENT_PRICE_ID`, and
-  `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`.
+  `ARCLINK_DEFAULT_PRICE_ID`, `ARCLINK_FOUNDERS_PRICE_ID`,
+  `ARCLINK_SOVEREIGN_PRICE_ID`, `ARCLINK_SCALE_PRICE_ID`,
+  `ARCLINK_FIRST_AGENT_PRICE_ID`,
+  `ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID`,
+  `ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID`, and
+  `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`. Compose also carries matching monthly
+  cent defaults for public price labels: Founders `14900`, Sovereign `19900`,
+  Scale `27500`, Sovereign Agentic Expansion `9900`, and Scale Agentic
+  Expansion `7900`.
 - Public onboarding routes (`/onboarding/start`, `/onboarding/answer`,
   `/onboarding/checkout`), login routes, and the Stripe webhook endpoint require
   no existing session. Admin and user login still require the stored password
@@ -383,8 +390,8 @@ Dashboard and admin contracts:
   `arclink_action_attempts` row, dispatches supported actions through the
   guarded executor, and writes audit/event rows for success, failure, or
   unsupported paths.
-- Executor-backed worker actions currently include restart, DNS repair, Chutes
-  key rotation, refund, and cancel. They are fake/no-secret unless the caller
+- Executor-backed worker actions currently include restart, DNS repair,
+  provider key rotation, refund, and cancel. They are fake/no-secret unless the caller
   deliberately supplies a live-enabled executor and live adapters.
 - Other accepted admin action types, including comp, reprovision, rollout,
   suspend, unsuspend, force resynthesis, and bot-key rotation, are honest

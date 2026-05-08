@@ -16,6 +16,16 @@ blocks destructive archive/delete/trash style changes unless an explicit
 approval rail exists. Use this lane for team notes, operating profile content,
 shared databases, and agent-visible source-of-truth pages.
 
+SSOT sharing uses shared-root membership as the canonical model. If a user or
+agent should see shared SSOT content, add them to the Notion shared root or to
+the workspace/teamspace that owns that root, then verify access through the
+brokered setup/status rail. Drive linked-resource grants do not imply Notion or
+SSOT share grants.
+
+User-owned OAuth, private integration tokens, and email-share-only workflows are
+non-default research/proof alternatives. Do not use them for organization pages
+that must inherit ArcLink shared-root permissions.
+
 ## Indexed Notion Knowledge
 
 Indexed shared Notion pages are synchronized into the `notion-shared` qmd
@@ -32,9 +42,10 @@ permission.
 
 ## Personal Notion MCP
 
-Personal Notion OAuth or MCP access is separate from shared SSOT. Use personal
-Notion for a user's private workspace, not for shared organization records that
-must inherit the ArcLink shared root permissions.
+Personal Notion OAuth or MCP access is separate from shared SSOT. It is a
+non-default personal lane for a user's private workspace, not the way ArcLink
+shares organization records that must inherit the ArcLink shared root
+permissions.
 
 If content should become shared, move or recreate it under the ArcLink shared
 parent through `ssot.write`.

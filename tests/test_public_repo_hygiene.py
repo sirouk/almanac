@@ -78,12 +78,14 @@ PROVIDER_CODE_PATHS = {
     Path("bin/init.sh"),
     Path("config/model-providers.yaml"),
     Path("docs/arclink/CHANGELOG.md"),
+    Path("docs/arclink/CREATIVE_BRIEF.md"),
     Path("docs/arclink/architecture.md"),
     Path("docs/arclink/brand-system.md"),
     Path("docs/arclink/document-phase-status.md"),
     Path("docs/arclink/foundation.md"),
     Path("docs/arclink/live-e2e-secrets-needed.md"),
     Path("docs/arclink/sovereign-control-node.md"),
+    Path("python/arclink_api_auth.py"),
     Path("python/arclink_chutes.py"),
     Path("python/arclink_dashboard.py"),
     Path("python/arclink_diagnostics.py"),
@@ -99,9 +101,11 @@ PROVIDER_CODE_PATHS = {
     Path("tests/test_arclink_e2e_live.py"),
     Path("tests/test_arclink_admin_actions.py"),
     Path("tests/test_arclink_executor.py"),
+    Path("tests/test_arclink_hosted_api.py"),
     Path("tests/test_arclink_provisioning.py"),
     Path("tests/test_arclink_product_config.py"),
     Path("tests/test_arclink_onboarding_prompts.py"),
+    Path("tests/test_documentation_truths.py"),
     Path("tests/test_deploy_regressions.py"),
     Path("tests/test_model_providers.py"),
 }
@@ -115,6 +119,15 @@ DEPLOYMENT_IDENTIFIER_PATTERNS = (
         re.compile(r"(?i)\b[a-z0-9][a-z0-9-]*\.tail[0-9a-f]{4,}\.ts\.net\b"),
     ),
 )
+SPECULATIVE_ADDON_RE = re.compile(r"(?i)\b(?:ArcLink\s+)?Refuel\s+Pod\b")
+SPECULATIVE_ADDON_ALLOWED_DIRS = {
+    Path("research"),
+    Path("consensus"),
+}
+SPECULATIVE_ADDON_ALLOWED_PATHS = {
+    Path("IMPLEMENTATION_PLAN.md"),
+    Path("tests/test_public_repo_hygiene.py"),
+}
 
 
 def relative(path: Path) -> Path:
@@ -199,11 +212,32 @@ def test_no_live_deployment_identifiers_in_public_files() -> None:
     )
 
 
+def test_speculative_refuel_pod_copy_is_not_shipped() -> None:
+    violations: list[str] = []
+    for path in public_repo_files():
+        rel = relative(path)
+        if rel.parts and rel.parts[0] == "arclink-priv":
+            continue
+        if rel in SPECULATIVE_ADDON_ALLOWED_PATHS or any(rel.is_relative_to(parent) for parent in SPECULATIVE_ADDON_ALLOWED_DIRS):
+            continue
+        text = read_text(path)
+        if text is None:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if SPECULATIVE_ADDON_RE.search(line):
+                violations.append(f"{rel}:{lineno}: {line.strip()}")
+    expect(
+        not violations,
+        "speculative Refuel Pod copy appears in shipped public surfaces:\n" + "\n".join(violations[:50]),
+    )
+
+
 def main() -> int:
     test_public_repo_file_discovery_includes_untracked_text_and_skips_pdf_assets()
     test_no_private_operator_names_in_public_files()
     test_provider_name_is_only_used_for_model_provider_context()
     test_no_live_deployment_identifiers_in_public_files()
+    test_speculative_refuel_pod_copy_is_not_shipped()
     print("PASS public repo hygiene")
     return 0
 

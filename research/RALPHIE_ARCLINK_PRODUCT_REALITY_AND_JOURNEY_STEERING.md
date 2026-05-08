@@ -72,6 +72,14 @@ Use `rg` and focused file reads. At minimum inspect:
   `python/arclink_notion_webhook.py`, `python/arclink_ssot_batcher.py`,
   `bin/qmd-*.sh`, `bin/vault-watch.sh`, `bin/memory-synth.sh`,
   managed-context plugin, qmd/Notion/SSOT tests.
+- Memory cherrypick study:
+  `research/RALPHIE_MEMORY_SYSTEM_CHERRYPICK_STUDY.md`,
+  `plugins/hermes-agent/arclink-managed-context/**`,
+  `python/arclink_memory_synthesizer.py`, and memory-related sections/tests in
+  `python/arclink_control.py`. The only permitted private-state exception for
+  this study is the mirrored, non-secret Hermes docs reference corpus at
+  `arclink-priv/state/hermes-docs-src/plugins/memory/**`; do not inspect
+  unrelated `arclink-priv/` state.
 - Hermes dashboard plugins: `plugins/hermes-agent/drive/**`,
   `plugins/hermes-agent/code/**`, `plugins/hermes-agent/terminal/**`,
   installer/refresh scripts and plugin tests.
@@ -88,6 +96,31 @@ Use `rg` and focused file reads. At minimum inspect:
 
 For each item, write `real|partial|gap|proof-gated|policy-question`, with file
 references and line numbers where possible.
+
+## Operator Policy Update - 2026-05-08
+
+Use `research/OPERATOR_POLICY_DECISIONS_20260508.md` as the canonical answer to
+the remaining policy questions. Reclassify affected rows from
+`policy-question` into `real`, `partial`, `gap`, or `proof-gated` based on
+actual code/tests, then repair the local buildable gaps.
+
+- Raven identity must support per-user/per-channel Raven bot-name
+  customization, in addition to selected-agent labels.
+- SSOT sharing uses shared-root membership as the canonical Notion model.
+- Failed renewal suspends provider/API access immediately, warns immediately
+  and daily, escalates to account/data-removal language after day 7, and queues
+  irreversible purge on day 14 only after warning delivery is attempted and
+  audited.
+- Drive sharing must expose living linked files/directories, not copied
+  snapshots. Recipients may copy/duplicate accepted content into their own
+  Vault or Workspace, but the accepted `Linked` root remains non-reshareable.
+- Browser right-click sharing should use ArcLink grants backed by a live shared
+  root. Prefer a Nextcloud/WebDAV/OCS-backed adapter where Nextcloud is enabled;
+  otherwise keep the browser UI disabled or build a live ArcLink broker.
+- The operator model is exactly one operator.
+- Chutes fallback is a separate per-user Chutes account/OAuth session when
+  per-key metering cannot be proven. Refuel Pod credits are a real product
+  direction and need local SKU/config/credit accounting before shipped copy.
 
 ### Entry, Payment, Deployment, Credentials
 
@@ -123,6 +156,23 @@ references and line numbers where possible.
   `knowledge.search-and-fetch`, `vault.search-and-fetch`, `vault.fetch`,
   `notion.search-and-fetch`, `notion.fetch`, `ssot.read`, and `ssot.write`;
   do not tell agents to rummage raw files first.
+- ArcLink managed context is a governed awareness/routing layer, not a generic
+  conversational memory replacement. It should remain complementary to
+  optional Hermes memory plugins such as mem0, Supermemory, Honcho, Hindsight,
+  Holographic, OpenViking, RetainDB, or ByteRover.
+- Evaluate cherrypicks from the memory study without replacing ArcLink's SSOT
+  posture:
+  1. normalized trust/confidence and contradiction/disagreement signals on
+     memory synthesis cards,
+  2. explicit `low|mid|high` recall budget tiers,
+  3. cheap-layer versus expensive-layer managed-context injection cadence,
+  4. a local-only/non-LLM synthesis fallback,
+  5. optional conversational-memory extension points that cannot bypass user
+     isolation, brokered SSOT writes, or private-state boundaries,
+  6. scoped agent self-model or peer-awareness cards for multi-agent work,
+     marked as policy-question unless existing code proves a safe path.
+- Do not add broad auto-capture of every Hermes turn into ArcLink governed
+  memory unless the operator makes that product/security decision explicitly.
 
 ### Raven, Public Bots, Channel Linking, Agent Switching
 
@@ -183,11 +233,18 @@ references and line numbers where possible.
   asks Approve or Deny before finalizing.
 - Accepted linked resources cannot be reshared by the receiving agent/user.
 - Recipients may copy or duplicate accepted content into their own Vault or
-  Workspace if policy allows.
+  Workspace. This creates their own copy; it does not alter the living linked
+  grant or allow resharing from `Linked`.
 - Linked ArcLink resources appear as a third navigation root named `Linked` or
   `Linked directory` in Drive and Code, below Vault and Workspace.
 - Cross-user shares must be path-contained, audit logged, revocable, and scoped
   to the accepted file/directory only.
+- Accepted shares must be living linked files/directories. A copied projection
+  may be a temporary internal fallback, but it must not be represented as the
+  completed product promise.
+- For browser right-click sharing, evaluate Nextcloud OCS Share API plus WebDAV
+  as the preferred enabled-backend path, while keeping ArcLink approval,
+  account login, audit, revoke, no-reshare, and isolation above Nextcloud.
 
 ### Operator Setup, Ingress, Fleet, Admin
 
@@ -202,8 +259,8 @@ references and line numbers where possible.
 - The operator can manage all deployments, billing, activity, health, and
   queued actions in the admin dashboard.
 - There is exactly one operator. If the code supports multiple admin users,
-  decide whether to constrain it, document it as internal-only, or ask a policy
-  question.
+  constrain it, hide multi-admin mechanics as internal-only, or add a
+  migration-safe single-operator enforcement path.
 - A user can see only their own deployment/service health and accepted shared
   resources.
 - User/admin dashboards remain Next.js + Tailwind and should respect the
@@ -217,19 +274,21 @@ references and line numbers where possible.
 - After credential confirmation/removal, Raven explains resources and offers a
   `Setup SSOT` button/action.
 - SSOT setup explains that ArcLink connects Notion for all agents under the
-  user, and linked agents share the SSOT rail according to policy.
+  user, and linked agents share the SSOT rail through shared-root membership.
 - Setup verifies connectivity and page/share correctness using the same quality
   bar as the earlier Almanac system.
-- Evaluate possible Notion integration models:
-  1. User creates/shares a Notion page to a control-plane email/integration.
-  2. User configures a Notion integration token/connectivity directly.
-  3. Control plane owns a shared root and users claim/attach scoped pages.
+- Canonical Notion integration model:
+  1. Control plane owns a shared root and users claim/attach scoped pages via
+     shared-root membership.
+  2. User-created page sharing to a control-plane email/integration and
+     user-owned token/OAuth are research/future alternatives, not the default
+     product path.
 - Do not claim email sharing is enough for API read/write unless verified.
   Notion API permissions may still require an integration token and explicit
   page sharing. Mark this proof-gated or ask a policy question if code cannot
   verify.
-- Users should be able to share their SSOT where policy permits, but only
-  through explicit scoped share/accept/approval rails.
+- Users share SSOT through shared-root membership. Do not build independent
+  SSOT accept/approval rails unless a later policy changes the model.
 
 ### Upgrades And Component Control
 
@@ -251,6 +310,33 @@ references and line numbers where possible.
   login/handshake.
 - API key usage must be limited to a budget/balance covered by the user's plan,
   setup, and recurring charges.
+- API-key or account usage must be monitored against a max utilization
+  threshold. When a user approaches or crosses the threshold, Raven and the
+  dashboard should advise one of the safe continuation paths:
+  - add another provider through Hermes `/provider` or the ArcLink provider
+    settings flow,
+  - buy inference a la carte as an add-on,
+  - buy an `ArcLink Refuel Pod` to get through the overage window.
+- Verify whether ArcLink can use `https://github.com/chutesai/chutes-api` with
+  the operator account to read per-API-key utilization and create/rotate/remove
+  keys. Public repo inspection on 2026-05-08 found key create/list/delete
+  endpoints and `last_used_at`, but usage accounting appears user/chute/bucket
+  based rather than per-key. Treat per-key metering as proof-gated until an
+  authorized live/sandbox account proves otherwise.
+- Verify whether `https://github.com/Veightor/chutes-agent-toolkit` can supply
+  the safer adapter path. Public repo inspection on 2026-05-08 confirmed the
+  repository exists and its README describes Chutes account/API-key management,
+  usage/quota tools, and Hermes-compatible skills, but several write surfaces
+  are labeled beta there; treat this as an integration candidate, not shipped
+  ArcLink truth.
+- If per-key usage is not available from the operator account, use a separate
+  Chutes account/OAuth session per ArcLink user. In that model ArcLink monitors
+  the whole account, suspends or refuels at the account boundary, and keeps
+  operator/customer isolation explicit.
+- `ArcLink Refuel Pod` is the working product name for paid top-ups. Ralphie
+  must add pricing/config/API/docs surfaces for it before public UI claims it
+  is purchasable. Use the research addendum's `$25/$75/$150` pod model unless
+  tests or current pricing make it unsafe.
 - If live Chutes key creation cannot be verified locally, implement or document
   a fail-closed adapter boundary with fake tests and mark live creation
   proof-gated. Do not invent an unaudited credential workflow.
@@ -268,6 +354,8 @@ references and line numbers where possible.
    - credential reveal/ack/removal,
    - drive/share model and plugin roots,
    - Notion/SSOT setup truth,
+   - memory trust/contradiction signals, recall-budget tiers, and
+     managed-context cadence where locally repairable,
    - billing renewal/suspension warning lifecycle,
    - admin/user dashboard entitlement and health visibility.
 4. Docs that say only what is real, partial, or proof-gated.
@@ -278,80 +366,134 @@ references and line numbers where possible.
 
 ### Priority 0: Truth Matrix And Safety Invariants
 
-- [ ] Build the product reality matrix with file/line evidence for every claim.
-- [ ] Add/verify regression tests that logged-in users cannot access another
+- [x] Build the product reality matrix with file/line evidence for every claim.
+- [x] Add/verify regression tests that logged-in users cannot access another
   user's dashboard data, Hermes links, agent inventory, channels, shares,
   Notion/SSOT state, provider state, Stripe state, or deployment health.
-- [ ] Identify every live/proof-gated claim and remove any shipped-language
+- [x] Identify every live/proof-gated claim and remove any shipped-language
   overclaim from public docs/UI.
 
 ### Priority 1: Paid Onboarding, Credential Handoff, Dashboard Access
 
-- [ ] Verify and repair website, Telegram, and Discord onboarding starts.
-- [ ] Verify and repair Stripe payment gating before deployment/provisioning.
-- [ ] Verify and repair deployment-ready notification.
-- [ ] Verify and repair credential reveal, "copy and safely store", user
+- [x] Verify and repair website, Telegram, and Discord onboarding starts.
+- [x] Verify and repair Stripe payment gating before deployment/provisioning.
+- [x] Verify and repair deployment-ready notification.
+- [x] Verify and repair credential reveal, "copy and safely store", user
   confirmation, and post-confirmation removal/hiding.
-- [ ] Verify and repair user dashboard and direct Hermes dashboard entry.
+- [x] Verify and repair user dashboard and direct Hermes dashboard entry.
 
 ### Priority 2: Raven As Control Conduit
 
-- [ ] Verify and repair Raven's post-onboarding role as user-to-agent control
+- [x] Verify and repair Raven's post-onboarding role as user-to-agent control
   conduit.
-- [ ] Verify and repair agent inventory and selected-agent switching through
+- [x] Verify and repair agent inventory and selected-agent switching through
   `/agents` with clear current-agent labels.
-- [ ] Verify and repair Telegram/Discord channel linking with `/link-channel`
+- [x] Verify and repair Telegram/Discord channel linking with `/link-channel`
   plus aliases, code window, claim on other channel, and growing linked-channel
   inventory.
 
 ### Priority 3: Knowledge, Almanac, SSOT, Memory
 
-- [ ] Verify and repair vault/qmd/Notion/webhook indexing story end to end.
-- [ ] Verify and repair memory synthesis inputs: vault, notion-shared/SSOT, and
+- [x] Verify and repair vault/qmd/Notion/webhook indexing story end to end.
+- [x] Verify and repair memory synthesis inputs: vault, notion-shared/SSOT, and
   daily plate materials.
-- [ ] Verify and repair managed memory stubs and MCP retrieval guidance.
-- [ ] Clarify Almanac as knowledge store/lineage only across docs/context.
-- [ ] Verify and repair Setup SSOT post-credential flow and Notion integration
+- [x] Verify and repair managed memory stubs and MCP retrieval guidance.
+- [x] Incorporate
+  `research/RALPHIE_MEMORY_SYSTEM_CHERRYPICK_STUDY.md` into the truth matrix:
+  classify ArcLink's memory layer and each cherrypick as `real`, `partial`,
+  `gap`, `proof-gated`, or `policy-question`.
+- [x] Verify or add structured trust/confidence and contradiction/disagreement
+  signals for memory synthesis cards and recall-stub rendering.
+- [x] Verify or add explicit managed-context recall budget tiers such as
+  `ARCLINK_MANAGED_CONTEXT_RECALL_BUDGET=low|mid|high`, with tests that low
+  budget preserves retrieval routing and safety guardrails.
+- [x] Verify or design cheap-layer versus expensive-layer managed-context
+  cadence, including telemetry for why each layer injected.
+- [x] Evaluate a local-only/non-LLM synthesis fallback and mark it truthfully
+  if it remains a design/backlog item.
+- [x] Document optional conversational-memory plugin stacking as a sibling
+  capability, not a replacement for ArcLink managed context, with isolation and
+  SSOT-governance caveats.
+- [x] Evaluate agent self-model and multi-agent peer-awareness cards as a
+  scoped/audited policy-question; do not expose cross-agent transcripts or
+  private data through memory.
+- [x] Clarify Almanac as knowledge store/lineage only across docs/context.
+- [x] Verify and repair Setup SSOT post-credential flow and Notion integration
   options without overclaiming email-share sufficiency.
 
 ### Priority 4: Drive Sharing And Plugin Independence
 
-- [ ] Design and implement or honestly mark proof-gated the ArcLink drive-share
+- [x] Design and implement or honestly mark proof-gated the ArcLink drive-share
   model: create link, logged-in accept, owner Raven approve/deny, final mount,
   no reshare, copy/duplicate option, audit, revoke.
-- [ ] Expose accepted linked resources as a third `Linked` root in Drive and
+- [x] Expose accepted linked resources as a third `Linked` root in Drive and
   Code.
-- [ ] Ensure Drive, Code, and Terminal plugins degrade gracefully when copied
+- [x] Ensure Drive, Code, and Terminal plugins degrade gracefully when copied
   outside ArcLink.
 
 ### Priority 5: Plans, Billing, Chutes, Renewal Lifecycle
 
-- [ ] Verify and repair Founders/Sovereign/Scale/Expansion pricing consistency.
-- [ ] Verify and repair entitlement counts and agent expansion rules.
-- [ ] Define or implement the Chutes per-user key adapter boundary, budget
+- [x] Verify and repair Founders/Sovereign/Scale/Expansion pricing consistency.
+- [x] Verify and repair entitlement counts and agent expansion rules.
+- [x] Define or implement the Chutes per-user key adapter boundary, budget
   limits, and proof-gated live handshake.
-- [ ] Implement or truthfully model failed-renewal lifecycle: suspend provider
-  access, daily Raven reminders, one-week removal warning, 14-day purge policy.
+- [x] Verify or design Chutes utilization monitoring: per-API-key usage if
+  available from operator credentials, otherwise per-user Chutes account usage.
+- [x] Truthfully model utilization-threshold notifications, provider
+  fallback guidance through Hermes `/provider`, and `ArcLink Refuel Pod`
+  a-la-carte top-up purchase flow as policy/proof-gated until operator policy
+  and live Chutes usage proof exist.
+- [x] Implement failed-renewal provider suspension and truthfully model daily
+  Raven reminders, one-week removal warning, and 14-day purge policy.
 
 ### Priority 6: Operator Setup, Fleet, Ingress, Admin/User UX
 
-- [ ] Verify and repair operator setup choices: single machine, Hetzner, Akamai
+- [x] Verify and repair operator setup choices: single machine, Hetzner, Akamai
   Linode.
-- [ ] Verify and repair Cloudflare/Tailscale verification gates.
-- [ ] Verify and repair one-operator policy.
-- [ ] Improve logged-in user and admin dashboard UI/UX while preserving Next.js
+- [x] Verify and repair Cloudflare/Tailscale verification gates.
+- [x] Record one-operator behavior as a policy-question while preserving the
+  current multi-admin truth in auth, UI, docs, and tests.
+- [x] Improve logged-in user and admin dashboard UI/UX while preserving Next.js
   + Tailwind and the existing brand direction.
-- [ ] Verify and repair user-only health visibility and operator all-system
+- [x] Verify and repair user-only health visibility and operator all-system
   power.
 
 ### Priority 7: Upgrade Control
 
-- [ ] Verify and repair Hermes/component upgrades through ArcLink control-plane
+- [x] Verify and repair Hermes/component upgrades through ArcLink control-plane
   flows.
-- [ ] Add `/upgrade-hermes` and platform-safe `/upgrade_hermes` routing if
+- [x] Add `/upgrade-hermes` and platform-safe `/upgrade_hermes` routing if
   missing.
-- [ ] Remove/suppress/override unsafe default Hermes upgrade command exposure
+- [x] Remove/suppress/override unsafe default Hermes upgrade command exposure
   when it bypasses ArcLink pinned upgrades.
+
+### Priority 8: Operator Policy Resolution Pass
+
+- [x] Reclassify the 2026-05-08 operator policy decisions in
+  `research/OPERATOR_POLICY_DECISIONS_20260508.md` across the product matrix,
+  implementation plan, build gate, docs, UI, and tests.
+- [x] Implement or honestly mark partial/gated per-user/per-channel Raven
+  display-name customization beyond selected-agent labels.
+- [x] Align SSOT sharing around shared-root membership and demote user-owned
+  OAuth/token and email-share-only paths to non-default research/proof-gated
+  alternatives.
+- [x] Implement the failed-renewal warning cadence and purge policy:
+  immediate suspension, immediate notice, daily reminders, day-7 removal
+  warning, and day-14 audited purge queue.
+- [x] Replace copied-share completion claims with living linked-resource
+  behavior. Prefer a Nextcloud/WebDAV/OCS adapter where enabled; otherwise keep
+  browser right-click sharing disabled until a live ArcLink broker exists.
+- [x] Add recipient copy/duplicate actions from accepted `Linked` resources
+  into the recipient's own Vault or Workspace while preserving no-reshare on
+  the linked grant.
+- [x] Enforce exactly one operator or make all multi-admin mechanics
+  internal-only/subordinate to the single-operator policy.
+- [x] Add Chutes Refuel Pod local SKU/config/credit accounting using fair
+  provider-budget credits, while keeping live purchase and live Chutes balance
+  application proof-gated.
+- [x] Prefer per-user Chutes account/OAuth fallback when per-key metering is
+  unavailable; keep per-key usage proof gated until an authorized Chutes
+  account proves it.
 
 ## Validation Floor
 
@@ -392,4 +534,3 @@ python3 -m py_compile <touched python files>
 
 Heavy/live checks remain proof-gated unless the operator explicitly authorizes
 them.
-

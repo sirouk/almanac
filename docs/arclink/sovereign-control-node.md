@@ -132,8 +132,18 @@ are present in `arclink-priv/config/docker.env`:
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `ARCLINK_DEFAULT_PRICE_ID`
+- `ARCLINK_FOUNDERS_PRICE_ID`
+- `ARCLINK_SOVEREIGN_PRICE_ID`
+- `ARCLINK_SCALE_PRICE_ID`
 - `ARCLINK_FIRST_AGENT_PRICE_ID`
+- `ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID`
+- `ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID`
 - `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`
+- `ARCLINK_FOUNDERS_MONTHLY_CENTS=14900`
+- `ARCLINK_SOVEREIGN_MONTHLY_CENTS=19900`
+- `ARCLINK_SCALE_MONTHLY_CENTS=27500`
+- `ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS=9900`
+- `ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS=7900`
 - `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID` for `domain` ingress mode.
 - `CHUTES_API_KEY`
 - `TELEGRAM_BOT_TOKEN`
@@ -142,6 +152,12 @@ are present in `arclink-priv/config/docker.env`:
 - `DISCORD_APP_ID`
 - `DISCORD_PUBLIC_KEY`
 - `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`
+- `ARCLINK_CONTROL_DEPLOYMENT_STYLE=single-machine`, `hetzner`, or
+  `akamai-linode`; `deploy.sh control install` asks this before ingress so the
+  operator records whether the control node is a starter single-host setup or
+  a remote worker-fleet setup. Single-machine defaults toward local execution
+  and starter host registration; Hetzner and Akamai Linode default toward SSH
+  worker placement.
 - `ARCLINK_EXECUTOR_ADAPTER=ssh` for remote fleet hosts, or `local` for a
   starter single-host deployment.
 - `ARCLINK_INGRESS_MODE=domain` or `tailscale`.

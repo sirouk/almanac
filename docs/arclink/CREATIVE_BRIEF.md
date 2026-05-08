@@ -4,7 +4,14 @@ This brief is the creative source of truth for ArcLink's public-facing story, Ra
 
 ## Implementation Status Note
 
-Use this brief as the target creative direction. The Raven onboarding copy, button-led prelaunch flow, pricing language, web hero, web onboarding, public Telegram/Discord bot state machine, Stripe checkout handoff, and Sovereign Control Node path are implemented in the current `arclink` branch.
+Use this brief as the target creative direction. The Raven onboarding copy,
+button-led prelaunch flow, pricing language, web hero, web onboarding, public
+Telegram/Discord bot state machine, Stripe checkout handoff, and Sovereign
+Control Node path are implemented as local public-repo behavior in the current
+`arclink` branch. Where those paths touch Stripe, Telegram, Discord, Notion,
+Chutes, Cloudflare, Tailscale, Docker, or a production host, live external
+proof remains gated by the operations runbooks and explicit operator
+authorization.
 
 Some broader infrastructure items in the scope below are live foundations or planned expansion surfaces rather than fully customer-facing production features today: multi-host global fleet scheduling, wildcard Cloudflare production routing, Prometheus/Loki/Grafana operations surfaces, per-service public hostnames, SSH bastion, and large-scale canary release management. Keep them in the creative map, but avoid promising them as generally available until the product dashboard and operations runbooks mark them live.
 
@@ -52,9 +59,11 @@ Per-pod services:
 - Nextcloud files UI for vault/files
 - Code dashboard plugin
 - Private bot gateway for the user's agent
-- Notion integration with webhook verification and dashboard-secret handling
+- Brokered Notion SSOT preparation, webhook/indexing rails, and
+  dashboard-secret handling; live workspace verification stays proof-gated
 - Private GitHub backup for Hermes home and configuration snapshots
-- Unified per-pod dashboard wrapping the core activities
+- Unified per-pod dashboard intent wrapping the core activities; live runtime
+  access stays proof-gated until an authorized proof run
 
 Per-pod hostname target:
 
@@ -72,7 +81,9 @@ Sovereign Control Node scope:
 - SQLite-first local path with Postgres expansion path
 - Redis for jobs, pub/sub, rate limits, and cache paths
 - Traefik ingress with domain/Tailscale/Cloudflare routing modes
-- Provisioning workers, model-catalog worker, Stripe webhook worker, DNS drift worker, and provider-key control
+- Provisioning workers, model-catalog worker, Stripe webhook worker, DNS drift
+  worker, and local provider-key control boundaries; live provider key creation
+  and utilization proof stay gated
 - Admin/operator dashboard scope: overview, users, deployments, onboarding, health, provisioning, DNS, payments, infrastructure, bots, security, releases, audit, events, actions, sessions, provider, reconciliation
 
 Pricing:
@@ -424,7 +435,7 @@ Hire Founders
 ```text
 Control panel is open.
 
-Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/pair_channel`, and `/cancel`.
+Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/link_channel`, and `/cancel`.
 
 Pick one lane and I will keep the steps tight.
 ```
@@ -511,14 +522,14 @@ Hire Agent - {$price}/month
 Back To My Crew
 ```
 
-### Pair Channel
+### Link Channel
 
-Triggered by `/pair_channel` or `/pair-channel`.
+Triggered by `/link_channel` or `/link-channel`; `/pair_channel` and `/pair-channel` remain backward-compatible aliases.
 
 ```text
 Pairing lane open.
 
-On the other channel, tell Raven: `/pair-channel {code}`
+On the other channel, tell Raven: `/link-channel {code}`
 
 This code expires in 10 minutes. If your agent is already online, the other channel gets the same ArcLink identity, crew, tools, vault, Notion lane, and status. The chat session stays separate; ArcLink links both channels to the same agent account.
 ```
@@ -644,9 +655,10 @@ Registered public Telegram commands:
 | `/plan <sovereign\|operator\|scale>` | Choose sovereign, operator, or scale |
 | `/checkout` | Hire your first ArcLink agent |
 | `/agents` | Open your ArcLink crew manifest |
+| `/raven_name` | Set Raven's ArcLink-message display name for this channel or account |
 | `/connect_notion` | Connect Notion to your live pod |
 | `/config_backup` | Configure private pod backup |
-| `/pair_channel` | Pair Telegram and Discord to the same ArcLink account |
+| `/link_channel` | Link Telegram and Discord to the same ArcLink account |
 | `/cancel` | Close the active setup workflow |
 
 Hidden/account-state actions:

@@ -1,5 +1,896 @@
 # Build Completion Notes
 
+## 2026-05-08 Ralphie Documentation Gate Retry Repair
+
+Scope: repaired document-phase handoff clarity only. No implementation behavior
+changed in this retry.
+
+Rationale:
+
+- Rechecked the active plan, product matrix, build notes, closest README/AGENTS
+  guidance, API reference, architecture doc, operations runbook, user guide,
+  Notion guide, Raven guide, and plugin READMEs.
+- Confirmed the current project-facing docs already describe the final
+  no-secret product-reality behavior: single active owner, linked-resource
+  copy/duplicate into owned roots, disabled browser right-click sharing,
+  sanitized provider state, local provider-budget credit accounting, failed
+  renewal lifecycle metadata, shared-root Notion SSOT membership, and
+  managed-context memory boundaries.
+- Added explicit transition-readiness language to
+  `docs/arclink/document-phase-status.md` so the remaining live-proof and
+  product-policy rows are recorded as external/product gates rather than
+  document-phase blockers.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- Stale-copy sweeps passed for old sharing-model wording, deferred dashboard
+  data wiring, recipient-copy policy-question wording, live-proof overclaims,
+  and shipped speculative add-on copy.
+
+Known risks:
+
+- Live Stripe, Chutes, Telegram, Discord, Notion, Cloudflare, Tailscale, Docker
+  install/upgrade, and production host proof remain credential-gated.
+- Browser right-click Drive/Code share creation remains disabled until a live
+  ArcLink broker or approved Nextcloud-backed adapter exists and is proven.
+- Chutes threshold continuation copy, self-service provider changes, and scoped
+  peer-awareness cards remain product-policy gates.
+
+## 2026-05-08 Ralphie Raven Identity Build
+
+Scope: closed the approved Raven per-user/per-channel bot-name customization
+task from `IMPLEMENTATION_PLAN.md` without claiming platform profile mutation.
+
+Rationale:
+
+- Added `arclink_public_bot_identity` for local Raven display-name preferences.
+- Added `/raven_name` and `/raven-name` so users can set a channel override or,
+  after account linking, an account default. Channel overrides win over account
+  defaults, and selected-agent labels remain separate.
+- Kept the implementation truthful: ArcLink message rendering uses the
+  effective Raven name, while Telegram and Discord bot profile names remain
+  governed by platform bot registration until live platform proof is
+  authorized.
+- Reclassified the product matrix from 88 `real` / 17 `policy-question` rows
+  to 89 `real` / 16 `policy-question` rows.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_public_bots.py python/arclink_control.py python/arclink_discord.py python/arclink_telegram.py tests/test_arclink_public_bots.py tests/test_arclink_discord.py tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks:
+
+- This is local message-level display customization only. Live Telegram or
+  Discord profile mutation remains proof-gated and is not claimed.
+
+## 2026-05-08 Operator Policy Decision Intake
+
+Scope: captured the operator's answers to the remaining product-policy
+questions after the no-secret build gate completed.
+
+Rationale:
+
+- Added `research/OPERATOR_POLICY_DECISIONS_20260508.md` as the canonical
+  policy addendum for Raven per-channel identity, SSOT shared-root membership,
+  failed-renewal warnings/purge, living Drive/Code shares, recipient
+  copy/duplicate, one-operator behavior, Chutes per-user-account fallback, and
+  Refuel Pod credits.
+- Updated the Ralphie steering and build gate so the next pass reclassifies
+  former `policy-question` rows into buildable local work, proof-gated live
+  work, or remaining product questions.
+- Chutes research was public/no-secret only. Public sources show scoped key
+  create/list/delete, user/account usage endpoints, and current model pricing;
+  per-key usage metering remains unproven from public code and should stay
+  proof-gated until authorized account proof.
+- Nextcloud research was public/no-secret only. ArcLink already has optional
+  Nextcloud plumbing, and official Nextcloud docs expose OCS share and WebDAV
+  shared-mount capabilities; Ralphie should evaluate this as the preferred
+  living-share adapter where enabled.
+
+Verification run:
+
+- No code tests were run for this intake-only update.
+- Public sources consulted:
+  `https://llm.chutes.ai/v1/models`, `https://api.chutes.ai/pricing`,
+  `https://github.com/chutesai/chutes`,
+  `https://github.com/chutesai/chutes-api`,
+  `https://github.com/Veightor/chutes-agent-toolkit`, and official Nextcloud
+  OCS/WebDAV developer docs.
+
+Known risks:
+
+- The product matrix count is intentionally marked stale/pending
+  reclassification because the operator decisions arrived after the prior
+  terminal build reconciliation.
+- Live Chutes, Stripe, Notion, Nextcloud, Cloudflare, Tailscale, bot, Docker,
+  and host proof remain gated until explicitly authorized.
+
+## 2026-05-08 Ralphie Final Matrix Reconciliation Build
+
+Scope: completed the highest-priority P0/P1 reconciliation tasks from
+`IMPLEMENTATION_PLAN.md` after validating that the product matrix has no
+remaining `partial` or `gap` rows.
+
+Rationale:
+
+- Reconciled the active plan and product-reality steering checkboxes to the
+  current matrix outcome: 88 `real`, 0 `partial`, 0 `gap`, 9 `proof-gated`,
+  and 17 `policy-question` rows.
+- Kept product-owned choices as explicit policy questions rather than
+  inventing behavior: Raven identity beyond selected-agent labels,
+  cross-agent peer-awareness, SSOT sharing, linked-resource copy/duplicate,
+  Refuel Pod SKU/crediting, failed-renewal warning/purge cadence, and
+  one-operator versus multi-admin behavior.
+- Kept live/external proof rows gated without running live Stripe, Chutes,
+  Notion, Cloudflare, Tailscale, Docker install/upgrade, host deploy/upgrade,
+  public bot mutation, or deployed Hermes dashboard proof.
+
+Verification run:
+
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_mcp_schemas.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_product_config.py` passed.
+- `python3 tests/test_arclink_ingress.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed with two environment
+  skips for root-readable breadcrumb cases.
+- `python3 tests/test_arclink_pin_upgrade_detector.py` passed.
+- `python3 tests/test_arclink_upgrade_notifications.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 -m py_compile` over changed Python and Python test files passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run test:browser` passed with 45 passed and 3 expected
+  desktop skips for mobile-only layout checks.
+
+Known risks:
+
+- Live proof rows remain unrun because this BUILD gate does not authorize
+  live deploys, Docker install/upgrade, production payment flows, public bot
+  mutation, external provider proof, private-state inspection, or
+  host-mutating operations.
+- Policy-question rows remain product decisions; local surfaces are disabled,
+  fail-closed, or labeled until the operator chooses those behaviors.
+
+## 2026-05-08 Ralphie Threshold Continuation Policy Gate Build
+
+Scope: resolved the final `partial` product-reality row,
+`Raven/dashboard advises safe continuation paths near threshold`, by making the
+surface an explicit policy question instead of inventing fallback, refill, or
+Raven warning behavior.
+
+Rationale:
+
+- Added a sanitized Chutes `threshold_continuation` public state object for
+  warning/exhausted deployments and the provider boundary.
+- Rendered the dashboard policy gate in the Model tab while keeping Raven
+  notifications, provider fallback, and overage refill disabled until operator
+  policy exists.
+- Reconciled the matrix/gate counts from 88 `real`, 1 `partial`, 0 `gap`, 9
+  `proof-gated`, 16 `policy-question` to 88 `real`, 0 `partial`, 0 `gap`, 9
+  `proof-gated`, 17 `policy-question`.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_api_auth.py python/arclink_dashboard.py tests/test_arclink_chutes_and_adapters.py tests/test_arclink_hosted_api.py tests/test_arclink_dashboard.py` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run test:browser -- tests/browser/product-checks.spec.ts --project=desktop` passed.
+- `cd web && npm run test:browser -- tests/browser/product-checks.spec.ts --project=mobile` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live Chutes utilization/key management, provider fallback, refill credit
+  accounting, and Raven warning cadence remain gated by operator authorization
+  or product policy.
+- No live provider, billing, bot, Docker, host, Cloudflare, Tailscale, Notion,
+  or deployed dashboard proof was run.
+
+## 2026-05-08 Ralphie Dashboard UX Completion Build
+
+Scope: closed the user/admin dashboard UX partial rows from
+`IMPLEMENTATION_PLAN.md` without changing backend route contracts or exposing
+new live/provider actions.
+
+Rationale:
+
+- Improved the user dashboard with `Recovery Actions` and `Workspace
+  Readiness` panels that group service health, billing, bot handoff,
+  credential handoff, linked resources, Notion/SSOT readiness, and provider
+  state into tab-linked operational signals.
+- Improved the admin dashboard with `Operations Triage` over the existing
+  read models, surfacing section readiness, recent failures, queued actions,
+  disabled/proof-gated operations, and billing posture without presenting
+  unsupported worker actions as executable.
+- Kept Chutes threshold/refuel continuation guidance policy-gated: the
+  dashboard may show sanitized warning/exhausted state, but does not invent
+  fallback, overage, or Refuel Pod paths.
+- Reconciled the matrix/gate counts from 86 `real`, 3 `partial`, 0 `gap`, 9
+  `proof-gated`, 16 `policy-question` to 88 `real`, 1 `partial`, 0 `gap`, 9
+  `proof-gated`, 16 `policy-question`.
+
+Verification run:
+
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+- `cd web && npm run test:browser -- tests/browser/product-checks.spec.ts --project=desktop` passed.
+- `cd web && npm run test:browser -- tests/browser/product-checks.spec.ts --project=mobile` passed.
+
+Known risks:
+
+- Raven threshold notifications, provider fallback, overage/refuel, and failed
+  renewal cadence remain product-policy questions or proof-gated live work.
+- Live dashboard landing in a deployed Hermes runtime was not run; that still
+  requires explicit operator authorization and credentials.
+
+## 2026-05-08 Ralphie Linked Resource Projection Build
+
+Scope: closed the read-only `Linked` resource projection task from
+`IMPLEMENTATION_PLAN.md` without enabling browser right-click share-link
+creation.
+
+Rationale:
+
+- Chose system-managed ArcLink projections over public browser share links.
+  Accepted grants materialize a sanitized read-only projection under the
+  recipient deployment's `linked-resources` root, while the owner/recipient API
+  flow remains the source of truth.
+- Kept recipient copy/duplicate policy separate: the projection is a managed
+  read-only cache for Drive/Code browsing, not permission to copy into a
+  recipient Vault or Workspace.
+- Preserved secret hygiene by skipping secret-like files during directory
+  projection, exposing only sanitized `linked` paths/status in API/UI payloads,
+  and keeping Drive/Code `sharing: false`.
+- Reconciled the matrix/gate counts from 85 `real`, 4 `partial`, 0 `gap`, 9
+  `proof-gated`, 16 `policy-question` to 86 `real`, 3 `partial`, 0 `gap`, 9
+  `proof-gated`, 16 `policy-question`.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_provisioning.py python/arclink_executor.py tests/test_arclink_hosted_api.py tests/test_arclink_plugins.py tests/test_arclink_provisioning.py tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_product_config.py` passed.
+- `cd web && npm test -- --runInBand` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run test:browser -- tests/browser/product-checks.spec.ts --project=desktop` passed.
+- `cd web && npm run test:browser -- tests/browser/product-checks.spec.ts --project=mobile` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Projection materialization is local/static proof. Live cross-deployment
+  content projection still depends on an authorized deployed Control Node run.
+- Recipient copy/duplicate behavior remains an explicit operator-policy
+  question.
+
+## 2026-05-08 Ralphie Drive/Code Share-Link Policy Gate Build
+
+Scope: closed the Drive/Code right-click share-link task from
+`IMPLEMENTATION_PLAN.md` by keeping the browser-plugin surface disabled and
+recording the operator-policy gate.
+
+Rationale:
+
+- Evaluated the available local alternatives: revocable ArcLink share grants,
+  Nextcloud links, copied files, or leaving browser share-link creation
+  disabled. The repository already has governed API/MCP share grants, but the
+  product model for browser right-click share links is still an explicit
+  operator-policy question.
+- Kept Drive and Code right-click share-link creation hidden instead of
+  inventing link semantics. Agent-facing `shares.request` remains the
+  implemented governed path for named Vault/Workspace resources.
+- Made Code root capabilities mirror Drive's fail-closed posture by
+  advertising `sharing: false` for Workspace, Vault, and Linked roots. Linked
+  resources remain read-only and non-reshareable.
+- Reconciled the matrix/gate counts from 85 `real`, 5 `partial`, 0 `gap`, 9
+  `proof-gated`, 15 `policy-question` to 85 `real`, 4 `partial`, 0 `gap`, 9
+  `proof-gated`, 16 `policy-question`.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/code/dashboard/plugin_api.py tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This does not implement browser right-click share links. Exposing that UI
+  still requires the operator to choose ArcLink grants, Nextcloud links, copied
+  files, or a disabled model.
+- Live Raven delivery of share approval prompts and full share projection
+  browser proof remain gated/follow-up work.
+
+## 2026-05-08 Ralphie Control Node Deployment Style Build
+
+Scope: closed the operator setup deployment-style row from
+`IMPLEMENTATION_PLAN.md` and reconciled the already-implemented Raven
+`/link-channel` alias checklist item after focused bot verification.
+
+Rationale:
+
+- Added a Control Node install selector for `single-machine`, `hetzner`, and
+  `akamai-linode` instead of leaving the operator to infer the worker topology
+  from ingress and executor prompts.
+- Persisted the normalized choice as `ARCLINK_CONTROL_DEPLOYMENT_STYLE` in the
+  generated Docker/control config, with aliases such as `single_machine`,
+  `hcloud`, and `linode` normalized to the canonical values.
+- Aligned no-secret defaults with executable rails: `single-machine` defaults
+  toward local executor plus starter host registration, while `hetzner` and
+  `akamai-linode` default toward SSH worker placement.
+- Kept live fleet, provider, ingress, and worker proof gated; this slice records
+  and documents setup intent without mutating external hosts.
+- Verified the canonical `/link-channel` and `/link_channel` commands remain
+  registered and compatible with `/pair-channel` and `/pair_channel`; no live
+  bot mutation was run.
+
+Verification run:
+
+- `python3 -m py_compile tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_product_config.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This does not prove live Hetzner, Akamai Linode, Cloudflare, Tailscale, SSH
+  worker, Docker, provider, or host deployment behavior. Those remain gated by
+  explicit operator authorization and credentials.
+
+## 2026-05-08 Ralphie Local Chutes Usage Ingestion Build
+
+Scope: closed the local Chutes usage-ingestion and threshold-boundary task from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Added a local `record_chutes_usage_event` path instead of claiming live
+  Chutes metering. The helper applies sanitized metered events to deployment
+  metadata and immediately re-evaluates the existing fail-closed Chutes budget
+  boundary.
+- Usage audit events store only safe identifiers, token counts, and cents.
+  Raw provider payloads, headers, secret refs, and key material are not
+  persisted.
+- Live Chutes per-key utilization and live key/account management remain
+  proof-gated until an authorized account/API proof is available.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_api_auth.py python/arclink_dashboard.py python/arclink_hosted_api.py tests/test_arclink_chutes_and_adapters.py tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This is local metered-event ingestion. It does not call a live Chutes
+  utilization API.
+- Raven threshold notifications and Refuel/overage behavior remain blocked on
+  the existing product-policy decisions.
+
+## 2026-05-08 Ralphie Chutes Credential Lifecycle Build
+
+Scope: closed the Chutes credential-lifecycle definition task from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Chose the local fail-closed lifecycle instead of claiming live provider key
+  creation. Chutes inference is enabled only for a scoped per-user or
+  per-deployment `secret://` reference with a configured budget.
+- Operator-shared keys remain rejected as user isolation, plaintext and
+  unscoped references fail closed, and provider-state exposes only sanitized
+  lifecycle metadata.
+- Live Chutes key/account creation and live utilization proof remain
+  proof-gated until an authorized account/API proof is available.
+
+Verification run:
+
+- `python3 -m py_compile
+  python/arclink_chutes.py python/arclink_api_auth.py python/arclink_dashboard.py
+  python/arclink_hosted_api.py tests/test_arclink_chutes_and_adapters.py
+  tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This does not create live Chutes keys or ingest live Chutes utilization.
+- Refuel/overage behavior and threshold Raven notifications remain
+  policy-owned follow-up tasks.
+
+## 2026-05-08 Ralphie Agent Drive Sharing MCP Build
+
+Scope: closed the agent-facing Drive Sharing tool row from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Added `shares.request` to the existing ArcLink MCP rail instead of creating a
+  separate browser-session or secret-bearing agent path. The managed-context
+  plugin already injects the caller's bootstrap token into ArcLink MCP calls,
+  so the tool can stay scoped to the caller's linked deployment.
+- Reused the existing read-only share-grant model. Agent requests create
+  `pending_owner_approval`; owner approval and recipient acceptance remain on
+  the existing Raven/dashboard rails.
+- Kept Linked-root resharing disabled and left recipient copy/duplicate policy
+  as an explicit policy question.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_mcp_server.py plugins/hermes-agent/arclink-managed-context/__init__.py tests/test_arclink_mcp_schemas.py tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_mcp_schemas.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This does not add Drive/Code right-click share-link UI or materialized share
+  projection browser proof.
+- Live Raven delivery of owner approval prompts remains proof-gated.
+
+## 2026-05-08 Ralphie Setup SSOT Dashboard Verification Build
+
+Scope: closed the local Setup SSOT verification story from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Kept Raven's `/connect_notion` lane as preparation-only and put local
+  verification truth in the authenticated dashboard read model.
+- Added a no-secret Notion SSOT setup status that combines Raven setup
+  metadata, the deployment callback URL, stored webhook verification state, and
+  local Notion index presence without returning the webhook token.
+- Rendered the status in the user dashboard Memory/QMD tab and kept live
+  workspace/page permission proof explicitly proof-gated.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_dashboard.py tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+- `cd web && npm run test:browser` passed with 43 passed and 3 expected
+  desktop-skipped mobile-layout checks.
+
+Known risks:
+
+- Live Notion workspace/page permission proof was not run and still requires
+  explicit operator authorization and credentials.
+- Multi-agent SSOT sharing policy remains an operator product decision.
+
+## 2026-05-08 Ralphie Local Payment Gate Reconciliation Build
+
+Scope: reconciled the local payment-before-deployment product row from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Verified the existing local entitlement gate with onboarding, provisioning,
+  and hosted API tests. Unpaid sessions remain blocked, webhook entitlement
+  transition is covered locally, and paid claim-session creation is separated
+  from live Stripe account proof.
+- Kept live Stripe checkout/webhook proof on the existing proof-gated rows
+  because it requires external credentials and authorization.
+
+Verification run:
+
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+
+Known risks:
+
+- Live Stripe price objects, checkout sessions, and webhook delivery were not
+  run.
+
+## 2026-05-08 Ralphie Conversational Memory Sibling Guardrail Build
+
+Scope: closed the optional conversational-memory sibling extension contract
+from `IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Documented `arclink-managed-context` as ArcLink's governed retrieval-routing
+  layer, with optional conversational-memory plugins allowed only as sibling
+  Hermes plugins.
+- Guarded the important boundaries: same-user Hermes home only, no cross-user
+  vault/private-state reads, no direct shared Notion/SSOT writes, no broad
+  auto-capture into governed memory, and retrieval-first evidence rules.
+
+Verification run:
+
+- `python3 -m py_compile tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+
+Known risks:
+
+- This adds the supported extension contract only. It does not install or
+  certify any third-party conversational-memory plugin.
+
+## 2026-05-08 Ralphie Linked Channel Handoff Proof Build
+
+Scope: closed the local Raven channel-handoff verification row from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Reused the existing public bot pairing model instead of adding a live bot
+  mutation. The regression pairs Telegram to Discord, runs the fake Sovereign
+  worker, and proves the ready handoff queues to the sanitized explicit channel
+  targets from both linked sessions.
+- Kept live Telegram/Discord delivery as proof-gated. This slice proves the
+  local routing data path and queue target selection only.
+
+Verification run:
+
+- `python3 -m py_compile tests/test_arclink_sovereign_worker.py python/arclink_sovereign_worker.py python/arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+
+Known risks:
+
+- Live Telegram/Discord delivery was not run and still requires explicit
+  operator authorization.
+
+## 2026-05-08 Ralphie Ready Dashboard And Raven Conduit Build
+
+Scope: closed the local deployment-ready notification, Raven post-onboarding
+control-conduit, direct dashboard-link rendering, and share-test coverage tasks
+from `IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Changed Raven's live-user freeform reply from "onboarding only" to a truthful
+  control-conduit message: public slash commands still route to Raven, while
+  direct private-agent chat belongs in Helm.
+- Strengthened Sovereign worker ready-notification coverage so the queued
+  `public-bot-user` ping proves the Helm/dashboard link, `/agents`, and
+  `/link-channel` actions are included after deployment activation.
+- Strengthened browser dashboard coverage for read-only accepted shares, absent
+  share-link creation copy, and scoped Hermes/Drive/Code/Terminal links.
+- Reconciled the 114-row matrix to 75 `real`, 16 `partial`, 0 `gap`, 9
+  `proof-gated`, and 14 `policy-question` rows. Live Hermes dashboard landing
+  remains proof-gated instead of overclaimed.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_public_bots.py tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 -m py_compile python/arclink_sovereign_worker.py tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `cd web && npx playwright test tests/browser/product-checks.spec.ts -g "/dashboard renders with mocked data"` passed on desktop and mobile.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live Telegram/Discord delivery, live Hermes dashboard landing, and production
+  host/browser proof remain gated by explicit operator authorization.
+- Drive/Code right-click share-link creation and agent-facing share tooling
+  remain partial/disabled; this slice added fail-closed browser coverage rather
+  than enabling those UI actions.
+
+## 2026-05-08 Ralphie Shipped-Language Truth Gate Build
+
+Scope: closed the P0 shipped-language overclaim gate from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Demoted the creative brief's broad "implemented" status note to the current
+  local public-repo contract and named the live external proof gate for Stripe,
+  Telegram, Discord, Notion, Chutes, Cloudflare, Tailscale, Docker, and
+  production host paths.
+- Tightened partial-surface wording for Notion workspace verification, live
+  Hermes runtime access, and provider key creation/utilization so the brief no
+  longer reads as live-proofed production behavior.
+- Added documentation truth regressions that keep the creative brief labeled
+  with the proof gates and fail on shipped docs that claim live external proof
+  has passed without an authorized run.
+
+Verification run:
+
+- `python3 -m py_compile tests/test_documentation_truths.py tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This was a static shipped-copy truth pass. Live Stripe, Telegram, Discord,
+  Notion, Chutes, Cloudflare, Tailscale, Docker, and host proof remain gated by
+  explicit operator authorization.
+
+## 2026-05-08 Ralphie Local Memory Fallback Build
+
+Scope: closed the local-only/non-LLM memory synthesis fallback row from
+`IMPLEMENTATION_PLAN.md` and reclassified the speculative Refuel Pod rows as
+policy questions with a shipped-copy guard. It also reclassified the SSOT
+share-grant row as a policy question with user-facing fail-closed Notion copy.
+
+Rationale:
+
+- Added a deterministic `local-non-llm-fallback` model that runs only when
+  memory synthesis is explicitly enabled without complete LLM credentials.
+- Preserved the existing auto-disabled default when no synthesis provider is
+  configured, so routine installs do not start generating cards unexpectedly.
+- Kept fallback cards low-confidence, low-trust, no-network routing hints based
+  on bounded source metadata/snippets; they still tell agents to use retrieval
+  tools for evidence before answering or changing state.
+- Added a public hygiene regression that fails if speculative `ArcLink Refuel
+  Pod` copy appears outside planning/consensus artifacts before SKU, credit
+  accounting, and Chutes proof policy exist.
+- Added Notion guide wording and a regression that explicitly keep
+  self-service SSOT share/accept grants unavailable until the operator chooses
+  a shared-root, per-agent/page grant, or operator-approved-only policy.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_memory_synthesizer.py python/arclink_control.py tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_arclink_notion_skill_text.py` passed.
+
+Known risks:
+
+- The fallback is intentionally lower fidelity than an LLM synthesis pass. Live
+  LLM behavior and production memory-synth service proof remain credential/live
+  environment gated.
+- Refuel Pod remains disabled/policy-question; no SKU, checkout, or provider
+  credit application path was implemented in this slice.
+- SSOT sharing remains policy-question; no Notion share grant workflow was
+  implemented in this slice.
+
+## 2026-05-08 Ralphie Memory Trust Signals Build
+
+Scope: closed the local memory-card trust/contradiction P1 from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Extended the memory synthesis prompt and prompt version to request a bounded
+  `trust_score` plus explicit contradiction and disagreement signals.
+- Normalized the fields into existing `card_json` and rendered them into
+  recall-stub card text as retrieval hints, keeping confidence rendering and
+  the existing memory table schema intact.
+- Preserved the managed-context guardrail that synthesis cards are awareness
+  hints only and require MCP retrieval before answering or changing state.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_memory_synthesizer.py tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+
+Known risks:
+
+- Live memory synthesis model behavior was not exercised; this remains local
+  no-secret proof through the fake model client.
+
+## 2026-05-08 Ralphie Health Visibility Build
+
+Scope: closed the user/admin health visibility P0, policy-classified the
+one-operator P0, and verified the Hermes/component upgrade-rail P0 from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Kept the existing session boundary: user dashboard/provisioning routes remain
+  caller-scoped, while the admin service-health route remains admin-session
+  only.
+- Added focused hosted API assertions proving a user's dashboard does not render
+  another user's service-health signal, and proving the admin health route sees
+  health rows across multiple deployments with deployment filtering.
+- Classified the one-operator versus multi-admin behavior as an operator-policy
+  question instead of enforcing a singleton admin rule without product approval.
+  Current shipped surfaces do not claim exactly one operator; admin roles and
+  active admin sessions remain explicit.
+- Verified the component upgrade rails without mutating the host: pin-upgrade
+  detection, upgrade notification fanout, deploy-key handling, main-branch
+  refusal, deploy operation windows, health ordering, live smoke ordering, and
+  active-agent runtime realignment are covered by the focused regression suites.
+
+Verification run:
+
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 -m py_compile tests/test_arclink_hosted_api.py` passed.
+- `git diff --check` passed.
+- Public-copy sweep for exact one-operator claims found no shipped UI/docs
+  overclaim outside the plan/research policy question.
+- `python3 tests/test_arclink_pin_upgrade_detector.py` passed.
+- `python3 tests/test_arclink_upgrade_notifications.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+
+Known risks:
+
+- This is local no-secret proof only. Live host health, Docker upgrade, and
+  production deploy/upgrade proof remain gated by explicit operator
+  authorization.
+
+## 2026-05-08 Ralphie Hermes Upgrade Route Build
+
+Scope: closed the public Hermes-upgrade command gap from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Added `/upgrade-hermes` and platform-safe `/upgrade_hermes` handling in Raven
+  as a non-mutating route. The reply explicitly refuses direct `hermes update`
+  behavior and points users to ArcLink-managed component pin, deploy, health,
+  and smoke rails.
+- Registered Telegram as `upgrade_hermes` and Discord as `upgrade-hermes`
+  rather than exposing a Telegram-invalid hyphenated command.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_public_bots.py tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py && python3 tests/test_arclink_discord.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This route does not execute upgrades. Live component upgrades, deploy
+  upgrades, and post-upgrade health/smoke proof remain on the operator
+  deploy/control rails.
+
+## 2026-05-08 Ralphie Drive Share Revoke Build
+
+Scope: closed the local Drive/Code share-grant lifecycle gap from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Added owner-scoped `POST /user/share-grants/revoke` on the existing hosted
+  API and control-DB share grant model instead of introducing a new Drive/Code
+  projection path without browser proof. Accepted shares now leave
+  `/user/linked-resources` as soon as the owner revokes the grant.
+- Kept linked resources read-only, non-reshareable, CSRF-protected, and
+  user-scoped. Recipients cannot revoke or mutate another user's grant through
+  this route; denied grants remain closed.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_hosted_api.py tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `cd web && npm test -- --runTestsByPath tests/test_api_client.mjs` passed.
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks:
+
+- Drive/Code projection materialization, right-click share UI, full share
+  browser proof, and live Raven notification delivery remain future or
+  credential-gated work.
+
+## 2026-05-08 Ralphie Retry 2 Dashboard And Raven Share Approval Build
+
+Scope: closed the repairable retry blockers for dashboard auxiliary-load
+feedback and Raven share approval buttons from `IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Kept raw credential values out of the browser and continued using masked
+  `secret://` refs plus acknowledgement/removal. The dashboard now shows an
+  explicit credential-handoff unavailable state when the credentials endpoint
+  fails instead of silently showing an empty panel.
+- Kept linked resources read-only and account scoped. The dashboard now shows
+  an explicit linked-resource unavailable state when the linked-resource
+  endpoint fails instead of silently implying there are no shares.
+- Added the missing Raven owner approval surface for Drive/Code shares:
+  creating a share grant queues a `public-bot-user` notification with
+  Telegram/Discord `Approve` and `Deny` buttons; Raven processes
+  `/share-approve {grant_id}` and `/share-deny {grant_id}` only from a public
+  channel linked to the grant owner. The hosted API also exposes
+  `POST /user/share-grants/deny`.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_public_bots.py tests/test_arclink_hosted_api.py tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py && python3 tests/test_arclink_discord.py` passed.
+- Web checks passed: `npm test`, `npm run lint`, `npm run build`, and
+  `npm run test:browser` with 43 passed and 3 desktop-skipped mobile-layout
+  checks. The first browser run failed because it was started concurrently with
+  `npm run build` while `.next` was being written; rerunning it by itself
+  passed.
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks:
+
+- Live backend browser proof, live Telegram/Discord delivery, live provider
+  credential smoke, Stripe, Notion, Cloudflare, Tailscale, Docker
+  install/upgrade, and host deploy/upgrade proof remain credential-gated.
+- Drive/Code right-click share creation, agent-facing share tooling, revoke
+  and projection materialization, and full linked-resource browser proof remain
+  BUILD work.
+- Raw credential reveal remains intentionally unsupported in the dashboard; use
+  the secure completion bundle and acknowledgement/removal contract.
+
+## 2026-05-08 Ralphie Dashboard Credential And Linked Resource Build
+
+Scope: advanced the product-reality credential handoff and linked-resource
+dashboard tasks from `IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Used the existing secure completion bundle and masked `secret://` handoff
+  contract instead of introducing browser raw-secret reveal. The dashboard now
+  gives users storage guidance and an acknowledgement control while preserving
+  the no-raw-secret API boundary.
+- Reused the accepted share-grant read model for the Drive tab rather than
+  adding a separate sharing UI. The dashboard now shows accepted resources as
+  read-only Linked resources and keeps reshare unavailable.
+
+Verification run:
+
+- `npm test` passed.
+- `npm run lint` passed.
+- `npm run build` passed.
+- `npm run test:browser` passed with 41 passed and 3 desktop-skipped
+  mobile-layout tests.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Raw credential reveal, live provider credential smoke, Raven share approval
+  buttons, and browser proof against a live backend remain proof-gated or
+  future lifecycle work.
+
 ## 2026-05-08 Ralphie BUILD Verification Pass
 
 Scope: executed the active `IMPLEMENTATION_PLAN.md` BUILD verification tasks
@@ -1733,3 +2624,392 @@ Known risks:
   PDF vision model calls, or live memory synthesis LLM calls.
 - Slice 7 documentation and validation coverage remains open before the full
   Ralphie BUILD can be declared complete.
+
+## 2026-05-08 Ralphie Product Isolation Floor Build
+
+Scope: advanced the highest-priority product-reality isolation floor by
+tightening public Raven channel-linking and active-agent selection boundaries
+after the hosted API user-route isolation checks were added.
+
+Rationale:
+
+- Refused channel-pair claims when the target channel already belongs to a
+  different ArcLink account instead of overwriting that channel's session. This
+  keeps pairing as a same-user/same-account bridge and fails closed when account
+  ownership is ambiguous.
+- Honored `active_deployment_id` only when the deployment belongs to the
+  session's user. This preserves same-account agent switching while preventing
+  stale or malformed session metadata from selecting another user's pod.
+- Kept `/link-channel` and `/link_channel` as canonical user-facing commands
+  while preserving `/pair-channel` and `/pair_channel` compatibility.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_public_bots.py python/arclink_api_auth.py python/arclink_discord.py python/arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Full BUILD is not complete. Credential acknowledgement/removal and the first
+  linked-resource grant core are now covered by the next note below; right-click
+  sharing UI, Raven approval notifications, live Stripe/bot/Notion proof,
+  billing renewal policy, and remaining product matrix gaps still need
+  dedicated passes or operator-policy decisions.
+
+## 2026-05-08 Ralphie Credential And Linked Resource Build
+
+Scope: closed the next highest-priority local product-reality gaps for
+credential acknowledgement/removal and the first read-only linked-resource share
+model.
+
+Rationale:
+
+- Added a credential-handoff state machine in the hosted API. Users can read
+  pending handoff metadata with masked secret refs only, acknowledge storage
+  with CSRF, and the handoff is removed from future user API reads while
+  audit/event rows record the transition.
+- Added a read-only share-grant lifecycle: owner request, owner approval,
+  recipient acceptance, and recipient-only linked-resource reads. Share
+  creation refuses `linked` roots so accepted shares cannot be reshared.
+- Exposed a third `Linked` root in Drive and Code when a linked-resource
+  projection is present. The root is read-only and unavailable by default so
+  standalone plugin installs still degrade cleanly.
+- Kept Drive/Code right-click sharing and Raven approve/deny notifications
+  disabled instead of implying UI behavior that is not yet wired.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_control.py python/arclink_api_auth.py python/arclink_hosted_api.py plugins/hermes-agent/drive/dashboard/plugin_api.py plugins/hermes-agent/code/dashboard/plugin_api.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+
+Known risks:
+
+- Full BUILD is still incomplete. Right-click share UI, Raven share
+  approve/deny notification buttons, share revoke/projector materialization,
+  live Stripe/bot/Notion proof, billing renewal policy, and remaining product
+  matrix rows still need follow-up passes or operator-policy decisions.
+
+## 2026-05-08 Ralphie Linked Root Git Guard Follow-up
+
+Scope: closed the Attempt 3 linked-root Code Git mutation guard gap without
+changing the read-only linked-resource product boundary.
+
+Rationale:
+
+- Routed Code Git write endpoints through the same linked-root read-only guard
+  already used by normal Code file mutations. Repo discovery, open, status, and
+  diff stay readable for accepted linked resources.
+- Added a regression fixture with a real Git repository under the `Linked`
+  root. The test proves status/diff reads work while stage, unstage, discard,
+  commit, gitignore, pull, and push all fail with the linked-resource guard
+  before changing the index, worktree, or `.gitignore`.
+- Normalized root-level repo display paths from `/.` to `/` so linked root
+  source-control entries are represented consistently with other root views.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/code/dashboard/plugin_api.py plugins/hermes-agent/drive/dashboard/plugin_api.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Full BUILD is still incomplete. Dashboard credential UI wiring, Drive/Code
+  right-click sharing, Raven share approve/deny buttons, share revoke/projector
+  materialization, live Stripe/bot/Notion proof, billing renewal policy, and
+  remaining product matrix rows still need follow-up passes or operator-policy
+  decisions.
+
+## 2026-05-08 Ralphie Chutes Boundary Build
+
+Scope: advanced the Section 6 P0 Chutes provider gap by adding a local,
+fail-closed per-user/per-deployment credential and budget boundary with
+sanitized user/admin visibility.
+
+Rationale:
+
+- Used scoped `secret://` references plus deployment metadata budgets as the
+  local adapter contract instead of reading live keys or inventing a live
+  Chutes account API. Operator-shared `CHUTES_API_KEY` presence is explicitly
+  rejected as user isolation.
+- Kept usage enforcement fail-closed: missing scoped secret, missing budget,
+  suspended/revoked state, and hard-limit exhaustion block inference in the
+  adapter boundary. Warning thresholds remain allowed but visible.
+- Exposed only sanitized state through provider-state and dashboard model data:
+  credential state, isolation mode, budget counters, allowance, and reason. Raw
+  env values and `secret://` refs are not returned by provider-state.
+- Left live Chutes key creation and live usage ingestion proof-gated because
+  those require external account capability proof and operator authorization.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Runtime usage metering still needs to feed real Chutes spend into the local
+  boundary before live budget enforcement can be claimed end to end.
+- Raven threshold/refuel notifications and failed-renewal policy remain open.
+- Live Chutes account/key creation and API proof were not run.
+
+## 2026-05-08 Ralphie Pricing And Entitlement Consistency Build
+
+Scope: closed the Section 6 P0 local pricing and entitlement-count checks for
+Founders, Sovereign, Scale, and Agentic Expansion.
+
+Rationale:
+
+- Added static consistency coverage tying together Compose price defaults,
+  `config/env.example`, API/operations docs, public bot dollar constants, and
+  web onboarding price labels.
+- Kept the public hygiene provider-name gate current by recognizing the
+  Chutes-specific provider-state API/test surfaces as model-provider context.
+- Documented monthly-cent defaults beside the existing Stripe price-id defaults
+  so operator-facing config surfaces match the public `$149/$199/$275` and
+  `$99/$79` labels.
+- Added onboarding coverage proving Founders and Sovereign reserve one
+  entitlement-gated deployment slot, while Scale reserves three, before any
+  provisioning can execute.
+
+Verification run:
+
+- `python3 -m py_compile tests/test_arclink_product_config.py tests/test_arclink_onboarding.py tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_arclink_product_config.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live Stripe price objects and checkout/webhook proof remain credential-gated
+  and were not run.
+- Failed-renewal reminder cadence, grace period, retention, and purge policy
+  remain open.
+
+## 2026-05-08 Ralphie Knowledge And Linked-Root Verification Build
+
+Scope: closed the locally provable Section 4 P0 knowledge/retrieval checks and
+the Section 5 linked-root preservation check without live credentials or host
+mutation.
+
+Rationale:
+
+- Used existing qmd, Notion index, managed-context, MCP schema, hosted API, and
+  plugin regression suites as no-secret proof rather than adding duplicate
+  harnesses. These suites cover vault/PDF/Notion collections, webhook-driven
+  indexing queues, recall-stub guardrails, preferred MCP retrieval recipes,
+  user-scoped daily plate context, and read-only Linked roots.
+- Left Setup SSOT policy/model work open because the canonical Notion ownership
+  model and credential-confirmation sequencing still need product decisions or a
+  scoped implementation pass.
+- Kept Drive/Code share-link UI and projection/browser proof classified as
+  partial instead of claiming a full visible sharing lifecycle.
+
+Verification run:
+
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_notion_knowledge.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_memory_sync.py` passed.
+- `python3 tests/test_arclink_mcp_schemas.py` passed.
+- `python3 tests/test_arclink_mcp_http_compat.py` passed.
+
+Known risks:
+
+- Full BUILD is still incomplete. Setup SSOT sequencing/model, shipped-language
+  copy demotion, Raven direct-agent-chat semantics, billing renewal policy,
+  one-operator policy, live Stripe/bot/Notion/Chutes proof, and broader browser
+  validation remain open.
+
+## 2026-05-08 Ralphie Setup SSOT Sequencing Build
+
+Scope: closed the Section 4 P0 Setup SSOT sequencing/model slice for Raven's
+public Notion setup lane.
+
+Rationale:
+
+- Kept the current Notion integration model on ArcLink's brokered shared-root
+  SSOT rail. User-owned OAuth and email-share-only API access were not presented
+  as real because the repository does not prove those paths.
+- Added a Raven gate that blocks `/connect_notion` until the deployment's
+  credential handoff rows are acknowledged/removed through the existing
+  dashboard flow. The gate reads only public control-plane handoff status, not
+  secret material.
+- Preserved live Notion verification as dashboard/operator work and kept chat
+  copy explicit that tokens and API keys do not belong in Raven messages.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_public_bots.py tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+
+Known risks:
+
+- Live Notion workspace verification remains proof-gated.
+- Multi-agent SSOT sharing policy remains an operator product decision.
+- The full BUILD backlog still has unrelated open P0/P1 tasks.
+
+## 2026-05-08 Ralphie Managed-Context Cadence And Almanac Truth Build
+
+Scope: closed the Section 4 P1 managed-context cheap-layer versus
+expensive-layer cadence slice and the Almanac copy-truth slice.
+
+Rationale:
+
+- Kept the existing injection gates intact: full managed context still appears
+  only for first turns, revision/runtime changes, relevant turns, relevant
+  follow-ups, or recipes that require full context.
+- Labeled compact resource and tool-recipe injections as cheap cadence layers,
+  and full refreshed managed-context injection as the expensive cadence layer.
+- Added telemetry fields for `cadence_layer`, `cadence_layers`, and
+  `cadence_reasons` so operators can see why each layer injected without
+  recording user messages or secrets.
+- Confirmed shipped docs, web, Python, plugins, templates, config, and tests do
+  not present Almanac as a top-level product identity; research artifacts now
+  classify it as planning vocabulary only.
+
+Verification run:
+
+- `python3 -m py_compile plugins/hermes-agent/arclink-managed-context/__init__.py tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `rg -n "Almanac|almanac" README.md docs web python plugins tests config templates` returned no matches.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This is a local plugin cadence contract; live token-spend measurement was not
+  run and remains external operational proof.
+- The memory synthesis local-only fallback and optional conversational-memory
+  extension-point tasks remain open.
+
+## 2026-05-08 Ralphie Failed-Renewal Lifecycle Build
+
+Scope: closed the Section 6 P1 billing renewal slice by implementing local
+provider suspension and truthfully modeling the remaining policy-owned renewal
+steps.
+
+Rationale:
+
+- Chose fail-closed provider suspension for non-current billing states because
+  it is directly enforceable from local entitlement state and preserves the
+  existing Chutes credential/budget boundary.
+- Left reminder cadence, grace period, data retention, and purge timing as
+  `policy_question` fields instead of inventing destructive account-removal
+  behavior without an operator decision.
+- Exposed the same sanitized lifecycle in user billing, provider-state, the
+  dashboard read model, and the Next.js billing tab without returning provider
+  secrets.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_api_auth.py python/arclink_dashboard.py tests/test_arclink_chutes_and_adapters.py tests/test_arclink_hosted_api.py tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+- `cd web && npm run test:browser` passed with 43 passed and 3 expected desktop mobile-layout skips.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Raven daily reminders, grace-period copy, data retention, and purge/removal
+  policy remain blocked on the operator-policy question recorded in
+  `consensus/build_gate.md`.
+- Live Stripe and Chutes behavior were not run; those remain credential-gated.
+
+## 2026-05-08 Ralphie Admin Action Truth Build
+
+Scope: closed the P1 admin-action truthfulness slice without running live host
+or provider mutations.
+
+Rationale:
+
+- Reused the existing action worker boundary instead of widening admin
+  mutations: `restart`, `dns_repair`, `rotate_chutes_key`, `refund`, and
+  `cancel` are modeled worker actions; not-yet-wired actions remain visible as
+  disabled/pending rather than pretending to execute.
+- Published the same execution-readiness contract in the admin read model,
+  scale-operations snapshot, Next.js admin action form, and lightweight product
+  surface.
+- Kept action queuing reason-required, CSRF-protected, audited, and
+  secret-safe.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_dashboard.py python/arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run test:browser` passed with 45 passed and 3 expected desktop mobile-layout skips.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live executor/provider effects were not run; live deploy, DNS, Stripe, and
+  Chutes mutations remain gated by explicit operator authorization.
+- Broader operator setup choices, admin dashboard hierarchy, and sharing
+  projection work remain open BUILD tasks.
+
+## 2026-05-08 Ralphie Provider Settings Truth Build
+
+Scope: moved the provider-add/settings journey out of `partial` by making the
+current no-secret product posture explicit in API and dashboard surfaces.
+
+Rationale:
+
+- Chose a disabled, policy-question settings posture instead of adding a live
+  provider mutation path, because self-service provider changes and `/provider`
+  semantics are product decisions and raw provider token collection would touch
+  credential handoff policy.
+- Published the posture in `/user/provider-state` as sanitized
+  `provider_settings` metadata, with dashboard mutation disabled, raw provider
+  token collection forbidden, and live provider mutation proof-gated.
+- Rendered the same state on the user dashboard Model tab so users see current
+  provider/model/budget status without being invited to paste secrets or assume
+  live key changes are available.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `cd web && node --test web/tests/test_api_client.mjs` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run test:browser` passed with 45 passed and 3 expected
+  desktop mobile-layout skips.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- User self-service provider changes remain a policy question in
+  `consensus/build_gate.md`; no Hermes `/provider` mutation, raw provider-key
+  intake, or live Chutes key change was implemented.
+- Live Chutes key/account proof remains gated by explicit operator
+  authorization and credentials.

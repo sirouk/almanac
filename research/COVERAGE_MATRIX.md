@@ -1,51 +1,88 @@
 # Coverage Matrix
 
-## Goal Coverage Against BUILD Backlog
+## Goal Coverage Against Active Mission
 
-| Goal / criterion | Current coverage | Remaining BUILD gap | Validation surface |
+| Goal / criterion | Current coverage | Remaining BUILD work | Validation surface |
 | --- | --- | --- | --- |
-| High-risk dashboard, qmd, Notion, SSOT, token, generated cleanup, and path traversal boundaries | Slices 1 security items are checked in the plan and steering file | Preserve fail-closed behavior whenever plugin, install, qmd, Notion, PDF, or resource-sync code is touched | `tests/test_arclink_plugins.py`, `tests/test_arclink_agent_user_services.py`, `tests/test_loopback_service_hardening.py`, `tests/test_arclink_notion_knowledge.py`, `tests/test_notion_ssot.py`, `tests/test_ssot_broker.py`, `tests/test_pdf_ingest_env.py` |
-| Hosted web onboarding, checkout, auth, login, status, dashboard, and admin views | Slice 2 hosted web/API items are checked | Preserve HttpOnly/CSRF, user/admin scoping, fake/live copy, checkout truth, and API shape handling while extending journeys | `tests/test_arclink_api_auth.py`, `tests/test_arclink_hosted_api.py`, `tests/test_arclink_dashboard.py`, `web/tests/test_api_client.mjs`, `web/tests/browser/product-checks.spec.ts` |
-| Admin/provisioning surfaces are truthful | Slice 3 control-plane truthfulness items are checked | Preserve unavailable/dry-run/pending/applied/proof state distinctions | `tests/test_arclink_action_worker.py`, `tests/test_arclink_admin_actions.py`, `tests/test_arclink_provisioning.py`, `tests/test_arclink_sovereign_worker.py`, `tests/test_arclink_fleet.py`, `tests/test_arclink_rollout.py`, `tests/test_arclink_evidence.py`, `tests/test_arclink_live_runner.py` |
-| Shared Host, Docker, and Control Node operations have matching docs, defaults, health, and dependency coverage | Slice 4 Shared Host and Docker operational parity items are checked | Preserve branch default, dependency, health, release-state, Nextcloud, path quoting, and Docker trust-boundary repairs while updating docs | `tests/test_arclink_docker.py`, `tests/test_deploy_regressions.py`, `tests/test_health_regressions.py`, shell syntax checks |
-| Private Curator onboarding failure/cancel/skip/retry paths are visible and recoverable | Slice 5 private onboarding items are checked | Preserve failure surfacing, credential-channel policy, denial cleanup, durable backup skip, completion-ack retry, and provider validation | `tests/test_arclink_curator_onboarding_regressions.py`, `tests/test_arclink_enrollment_provisioner_regressions.py`, `tests/test_onboarding_completion_messages.py`, provider-auth tests |
-| Public bot onboarding failure/cancel/skip/retry paths are visible and recoverable | Slice 5 public bot onboarding items are checked | Preserve public `/cancel` semantics, backup and Notion command clarity, API-key provider validation, and fake/live-safe behavior | `tests/test_arclink_public_bots.py`, `tests/test_arclink_telegram.py`, `tests/test_arclink_discord.py`, `tests/test_arclink_onboarding_prompts.py` |
-| Knowledge freshness and generated markdown safety match `AGENTS.md` | Slice 6 knowledge freshness and generated content safety items are checked | Preserve endpoint redaction, full-source hashing, PDF rewrite detection, SSOT claim/lock, resource skill text, and generated-root containment whenever knowledge code is touched | `tests/test_pdf_ingest_env.py`, `tests/test_memory_synthesizer.py`, `tests/test_arclink_ssot_batcher.py`, `tests/test_arclink_resources_skill.py`, `tests/test_arclink_notion_webhook.py` |
-| Docs classify canonical versus stale/speculative/proof-gated material | Slice 7 documentation tasks are checked in the active plan and steering file | BUILD review must confirm docs still match behavior in the dirty worktree and keep live/proof-gated claims explicit | `tests/test_documentation_truths.py`, public hygiene checks, docs review |
-| Validation is run and summarized | Validation floor and web/live-proof prerequisites are documented in the plan | BUILD must run the relevant no-secret checks and summarize skipped proof-gated checks with concrete reasons | `git diff --check`, `bash -n`, focused Python tests, `npm test`, `npm run lint`, `npm run test:browser` when applicable |
+| Product claims classified as `real`, `partial`, `gap`, `proof-gated`, or `policy-question` | `research/PRODUCT_REALITY_MATRIX.md` has 114 classified rows with 98 real, 12 proof-gated, and 4 policy-question rows | Keep the matrix updated as behavior changes; do not claim done while proof/policy gates remain unresolved or unlabeled | Matrix review, focused tests, docs diff |
+| Ecosystem hardening preserved | `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` has detailed checklist items marked complete | Treat hardening items as invariants when touching dashboard plugins, qmd, Notion, SSOT, Docker, token, cleanup, auth, checkout, provisioning, health, docs, or validation | Existing plugin, qmd, Notion, SSOT, Docker/static, deploy, health, and docs tests |
+| Website, Telegram, and Discord onboarding starts are truthful | Web routes and public bot adapters exist | Re-verify start, resume, cancel, checkout, failure, and no-secret fake-bot flows; keep live delivery/payment proof gated | Hosted API, public bot, Telegram, Discord, and web tests |
+| Payment-gated deployment is enforced | Local entitlement/provisioning gate rows are mostly `real` | Preserve local gates and avoid claiming live Stripe truth without proof | Onboarding, entitlement, provisioning, hosted API tests; live proof only if authorized |
+| Credential handoff is safe | API/dashboard rows classify reveal, copy/store guidance, ack, and post-ack hiding as `real` | Preserve no-raw-secret responses and channel notification safety | Hosted API/auth/dashboard/security tests |
+| User/admin dashboard isolation is enforced | User-only dashboard, provider, health, billing, credentials, channels, linked resources, and admin all-system health have local evidence | Expand or rerun isolation tests when touching any route, dashboard panel, share, provider, or bot session | `tests/test_arclink_hosted_api.py`, `tests/test_arclink_api_auth.py`, `tests/test_arclink_dashboard.py`, browser tests |
+| Raven is a truthful post-onboarding control conduit | Agent inventory, switching, labels, explicit channel identifiers, channel linking aliases, share approvals, upgrade guidance, and local Raven display-name preferences have local coverage | Preserve channel/account Raven display-name scoping, selected-agent labels, and platform-profile truthfulness | Public bot, Telegram, Discord tests |
+| Knowledge, Almanac, qmd, Notion, SSOT, and memory are truthful | qmd collections, SSOT broker, shared-root SSOT membership, Notion index, recall stubs, trust/conflict metadata, local fallback, recall budgets, and optional conversational-memory sibling boundaries have local rows; Almanac is treated as knowledge-store lineage/planning vocabulary, not the top-level product | Preserve sibling-plugin boundaries and keep peer-awareness policy-gated until the operator defines the scope | qmd, MCP, Notion, SSOT, memory, managed-context tests |
+| Drive sharing and linked resources are real or disabled | Share grants, owner approve/deny, no-reshare, agent-facing `shares.request`, read-only `Linked` roots, living projection/revoke cleanup, recipient copy/duplicate, and browser proof exist; Drive/Code right-click share-link creation is disabled | Preserve living linked-resource behavior; keep browser sharing disabled until a live ArcLink broker or approved Nextcloud/WebDAV/OCS adapter exists | Hosted API share tests, public bot tests, plugin tests, browser tests |
+| Pricing, billing, and Chutes are truthful | Pricing, entitlement counts, Chutes isolated credential metadata, fail-closed local boundary, local usage ingestion, Refuel Pod local credits, failed-renewal lifecycle metadata, and explicit threshold-continuation gates exist | Preserve local credit and suspension semantics; keep live key-management/utilization/purchase proof gated | Product config, hosted API, Chutes adapter, billing, public bot tests |
+| Operator setup, ingress, fleet, and admin UX are truthful | Deploy, Docker, Control Node, setup-style selector, singleton operator ownership, ingress, admin API, action truthfulness, and health surfaces exist | Preserve setup/action truth and finish Cloudflare/Tailscale proof only when authorized | Deploy/Docker/health/ingress/admin tests; live proof only if authorized |
+| Upgrades are controlled through ArcLink | Pins, deploy rails, upgrade detector, and public upgrade command guidance are currently `real` | Preserve behavior if touched; no unmanaged Hermes upgrade exposure | Deploy regression, pin upgrade, public bot, docs tests |
+| Focused validation is run and summarized | Validation floor is documented in the plan and dependency research | BUILD must run nearest no-secret checks and record skipped proof-gated checks with concrete reasons | `git diff --check`, shell syntax, Python tests, web tests, browser tests where applicable |
 
-## Slice Coverage
+## Product-Reality Row Summary
 
-| Slice | Current status | Exit criteria |
-| --- | --- | --- |
-| 1. Security and trust boundaries | Completed baseline gate | Relevant tests rerun whenever touched; no secret/path/retrieval/destructive boundary regression. |
-| 2. Hosted web/API journey | Completed baseline gate | Browser contract remains coherent; success/cancel/status reflect backend state; user/admin scopes are enforced. |
-| 3. Control-plane truthfulness | Completed baseline gate | Admin actions, provisioner, fleet, rollout, and evidence remain truthful about disabled, pending, dry-run, applied, failed, skipped, and proof-gated states. |
-| 4. Shared Host and Docker operations | Completed baseline gate | Bare-metal and Docker docs/defaults/health agree with code; no live upgrade without operator consent. |
-| 5. Onboarding recovery | Completed baseline gate | Failure, denial, skip, retry, cancel, provider validation, and credential handling remain visible, durable, and recoverable. |
-| 6. Knowledge freshness and cleanup | Completed baseline gate | Generated content remains secret-free; freshness uses content hashes; PDF rewrites are detected; SSOT processing is claim-locked. |
-| 7. Docs and validation | Completed baseline gate; needs BUILD verification | Canonical/stale/speculative/proof-gated docs remain marked; validation prerequisites and skip conditions match actual checks. |
+These counts reflect the current matrix after the 2026-05-08 operator-policy
+reclassification pass.
+
+| Status | Count |
+| --- | ---: |
+| `real` | 98 |
+| `partial` | 0 |
+| `gap` | 0 |
+| `proof-gated` | 12 |
+| `policy-question` | 4 |
+
+| Status | BUILD meaning |
+| --- | --- |
+| `real` | Static code/test evidence supports the claim; preserve with tests when touched. |
+| `partial` | Some implementation exists, but the complete journey, UI, docs, validation, or live boundary remains incomplete. |
+| `gap` | No current rows are classified this way; if a gap appears, repair or disable before completion. |
+| `proof-gated` | The row needs live/external proof or credentials that are not authorized in no-secret BUILD. |
+| `policy-question` | Code cannot decide the product/security answer; ask the operator and keep the surface disabled, partial, or labeled. |
+
+Current `partial` row targets: none.
 
 ## Required Artifact Coverage
 
 | Required artifact | Coverage status |
 | --- | --- |
-| `research/RESEARCH_SUMMARY.md` | Summarizes objective, repository findings, path comparison, current state, assumptions, risks, and PLAN verdict with `<confidence>`. |
-| `research/CODEBASE_MAP.md` | Maps root entrypoints, major directories, runtime lanes, Docker services, completed hotspots, remaining hotspots, and architecture assumptions. |
-| `research/DEPENDENCY_RESEARCH.md` | Documents stack components, alternatives, source composition, dependency risks, and validation dependencies. |
-| `research/COVERAGE_MATRIX.md` | Maps goals and slices to current coverage, remaining BUILD gaps, and validation surfaces. |
-| `research/STACK_SNAPSHOT.md` | Provides ranked stack hypotheses, deterministic confidence score, source signals, and alternatives. |
-| `IMPLEMENTATION_PLAN.md` | Defines goal, non-negotiables, selected architecture, validation criteria, actionable slices, and BUILD handoff order. |
-| `consensus/build_gate.md` | Allows no-secret BUILD work; names proof-gated flows; no planning-only blocker is identified. |
+| `research/RESEARCH_SUMMARY.md` | Summarizes scope, confidence, stack finding, path comparison, assumptions, risks, and handoff verdict. |
+| `research/CODEBASE_MAP.md` | Maps root entrypoints, directories, runtime lanes, product entrypoints, services, hotspots, tests, and assumptions. |
+| `research/DEPENDENCY_RESEARCH.md` | Documents stack components, versions, alternatives, external proof posture, risks, and validation dependencies. |
+| `research/COVERAGE_MATRIX.md` | Maps active goals to coverage, remaining work, validation surfaces, row semantics, and completion criteria. |
+| `research/STACK_SNAPSHOT.md` | Provides ranked stack hypotheses, deterministic confidence score, evidence, and rejected alternatives. |
+| `IMPLEMENTATION_PLAN.md` | Provides goal, constraints, selected architecture, validation criteria, and actionable BUILD tasks. |
+| `consensus/build_gate.md` | Records no-secret BUILD permission, live-flow blockers, proof gates, and operator-policy questions. |
 
-## Coverage Verdict
+## Minimum BUILD Completion Contract
 
-Planning coverage is sufficient for BUILD handoff. The BUILD phase should not
-claim completion until every unchecked item in `IMPLEMENTATION_PLAN.md` and
-`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` is fixed with
-tests/docs or explicitly marked blocked with a concrete operator-policy
-question.
+BUILD can claim terminal completion only when every active steering and plan
+task has one of these outcomes:
 
-No planning artifact contains a fallback placeholder marker. No open checkbox
-task markers remain in the active implementation plan or steering backlog after
-this PLAN pass.
+| Outcome | Required evidence |
+| --- | --- |
+| Repaired locally | Behavior, focused tests, nearest docs/UI/API copy, and validation notes agree; matrix row moves to `real`. |
+| Proof-gated | Visible surface is disabled, labeled, or fail-closed; exact external authorization or credential needed is named. |
+| Policy-question | Visible claim is disabled, partial, or labeled; matrix and build gate name the operator decision needed. |
+
+Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale, Docker
+install/upgrade, and production host proof are not required unless explicitly
+authorized. Public copy must not claim those flows are complete without proof.
+
+## Readiness Notes
+
+- No-secret BUILD work is allowed by `consensus/build_gate.md`.
+- The stack snapshot classifies ArcLink as a multi-runtime platform rather
+  than a single web-app classification and records a deterministic confidence
+  score.
+- The build gate now records the received 2026-05-08 operator-policy decisions,
+  the remaining policy questions, and a proof-escalation path for live/external
+  rows.
+- `IMPLEMENTATION_PLAN.md` must be re-reviewed and modified after this and any
+  later research/gate refresh so it remains the BUILD handoff anchor.
+- The highest-risk remaining local task is preservation: keep user isolation,
+  secret handling, linked-resource read-only behavior, singleton operator
+  ownership, Chutes fail-closed state, and SSOT/qmd boundaries intact while
+  running focused validation.
+- If BUILD updates supporting research artifacts, update the closest
+  implementation-plan rows in the same slice so the plan remains the handoff
+  anchor.

@@ -1,109 +1,163 @@
 # Research Summary
 
-<confidence>94</confidence>
+<confidence>96</confidence>
 
-## Objective
+## Scope
 
-Prepare BUILD handoff for the ArcLink ecosystem gap repair mission. The mission
-is to close verified May 2026 gaps across Shared Host, Shared Host Docker,
-Sovereign Control Node, hosted web/API, private and public onboarding, Hermes
-runtime plugins, qmd/Notion/SSOT knowledge rails, documentation, validation,
-and operator/user journeys.
+This PLAN pass inspected the public ArcLink repository structure, runtime
+manifests, service topology, tests, steering files, and existing research
+artifacts. It did not inspect private state, user homes, secret files, deploy
+keys, OAuth material, bot tokens, `.env` values, or live provider accounts. It
+also did not run live deploys, upgrades, payment flows, public bot mutations,
+Docker install/upgrade flows, or external Chutes, Notion, Cloudflare, or
+Tailscale proof.
 
-The controlling backlog remains
-`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`. BUILD must not
-route to terminal `done` while unchecked tasks remain in that steering file or
-`IMPLEMENTATION_PLAN.md`.
+The active BUILD sources are:
 
-## Repository Findings
+- `research/RALPHIE_ARCLINK_PRODUCT_REALITY_AND_JOURNEY_STEERING.md`
+- `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`
+- `research/RALPHIE_MEMORY_SYSTEM_CHERRYPICK_STUDY.md`
+- `research/PRODUCT_REALITY_MATRIX.md`
+- `research/OPERATOR_POLICY_DECISIONS_20260508.md`
+- `consensus/build_gate.md`
+- `IMPLEMENTATION_PLAN.md`
 
-ArcLink is a multi-runtime platform, not a single library or web app:
+The ecosystem-gap steering file has its detailed checklist marked complete in
+the current public artifact. Treat it as a hardening-preservation baseline:
+future BUILD work must not reopen those security, host, Docker, qmd, Notion,
+SSOT, token, generated cleanup, onboarding, docs, or validation boundaries.
 
-- Bash wrappers own deploy, Docker, bootstrap, health, service installation,
-  qmd/PDF jobs, backup, upgrade, and runtime orchestration.
-- Python modules own the control plane, hosted API, browser/API auth,
-  onboarding, provisioning, Docker supervisor, action worker, MCP tools,
-  Notion/SSOT rails, memory synthesis, evidence, fleet, rollout, diagnostics,
-  and dashboard plugin APIs.
-- Docker Compose and systemd define the Shared Host Docker and bare-metal
-  Shared Host topologies.
-- The Next.js app owns the hosted onboarding, checkout, login, dashboard, and
-  admin UI surfaces.
-- ArcLink-owned Hermes plugins, hooks, generated config, and skills provide
-  runtime behavior without modifying Hermes core.
-- qmd, PDF ingest, Notion indexing, SSOT writes, memory synthesis, and resource
-  skills form the knowledge rails whose freshness and generated-content safety
-  gates are now completed baseline behavior to preserve.
+## Current Product Reality
 
-Repository composition verified during this PLAN pass from public repo files:
-54 first-party `python/arclink_*.py` modules, 99 Python test files, 82 shell
-scripts, 29 systemd units, 36 web source/test/config TS/TSX/MJS/JS files, 24
-`arclink_*` control DB table definitions, 4 Hermes plugins, 11 skills, and 26
-Compose services.
+The product reality matrix currently contains 114 rows:
+
+| Status | Count |
+| --- | ---: |
+| `real` | 98 |
+| `partial` | 0 |
+| `gap` | 0 |
+| `proof-gated` | 12 |
+| `policy-question` | 4 |
+
+This is no longer the raw pre-decision snapshot. The 2026-05-08
+operator-policy addendum has been reconciled into the product matrix for Raven
+identity customization, shared-root SSOT membership, failed-renewal lifecycle,
+living linked resources, recipient copy/duplicate, exactly-one-operator
+behavior, Refuel Pod local credits, and the Chutes account/OAuth fallback.
+
+Current `partial` rows: none.
+
+Highest-risk remaining BUILD work after this PLAN refresh:
+
+- Preserve and extend user isolation across dashboard, provider, channel,
+  share, health, credential, billing, Notion/SSOT, and linked-resource
+  surfaces while adding tests for each touched path.
+- Keep browser right-click Drive/Code share-link creation disabled until a live
+  shared backend exists or the operator chooses to build an ArcLink broker in
+  this repo.
+- Keep live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
+  Docker install/upgrade, and host deploy/upgrade proof gated until explicitly
+  authorized.
+- Resolve the remaining four product-policy questions: scoped agent
+  self-model or peer-awareness cards, browser right-click sharing enablement,
+  public Chutes threshold-continuation copy, and user self-service provider
+  changes.
+
+## Stack Finding
+
+ArcLink is a multi-runtime product platform, not a single Node.js app. The
+current public signals show:
+
+- Python control plane, hosted API, public bots, provisioning, MCP, Notion,
+  memory synthesis, fleet, rollout, and plugin APIs.
+- Bash deploy, Docker, bootstrap, health, qmd, PDF, service, backup, and
+  upgrade wrappers.
+- Next.js, React, TypeScript, and Tailwind hosted web/dashboard application.
+- Docker Compose services and systemd units for Shared Host, Shared Host
+  Docker, and Sovereign Control Node lanes.
+- Pinned Hermes runtime, qmd retrieval, ArcLink Hermes plugins, hooks, and
+  skills for agent behavior without Hermes core edits.
+
+Public source composition used by this handoff:
+
+| Signal | Count |
+| --- | ---: |
+| Python files | 168 |
+| Python regression tests | 99 |
+| Shell/script entrypoints | 86 |
+| Markdown files | 100 |
+| systemd unit/timer/path files | 29 |
+| Web TypeScript/JavaScript files | 21 |
+| Public JSON/YAML files | 23 |
 
 ## Implementation Path Comparison
 
 | Path | Strengths | Weaknesses | Decision |
 | --- | --- | --- | --- |
-| Slice repairs through existing ArcLink wrappers, Python modules, web app, plugins, Compose, systemd units, and focused tests | Matches repository boundaries, preserves operator workflows, avoids Hermes core edits, and lets high-risk gates remain testable | Requires careful sequencing across many surfaces | Selected |
-| Disable or mark unsafe/unimplemented surfaces unavailable until a real provider, worker, or policy path exists | Prevents misleading product claims and avoids credential-dependent guesses | Leaves some journeys blocked until operator policy is defined | Acceptable for policy-owned or unsafe operations |
-| Rebuild as a new hosted control app first | Could simplify one browser journey | Leaves deploy, Docker, agent runtime, qmd, Notion, and Shared Host gaps open | Rejected |
-| Patch Hermes core or rely on private-state workarounds | Might hide a local symptom quickly | Violates constraints and creates upgrade debt | Rejected |
-| Documentation-only reconciliation | Low code risk | Does not close verified behavior gaps | Rejected except for explicitly blocked policy-only items |
+| Repair existing ArcLink Bash, Python, web, plugin, Compose, and systemd surfaces | Preserves operator workflows and current tests; respects Hermes-core boundary | Requires careful sequencing across many surfaces | Selected default |
+| Fail closed or label unavailable until provider proof or policy exists | Prevents false claims and keeps no-secret work safe | Leaves product gaps visible until policy/live proof is available | Use for external or policy-owned claims |
+| Rewrite as a new hosted web app first | Could simplify one browser journey | Does not repair Shared Host, Docker, agent runtime, qmd, Notion, public bot, or dashboard-plugin contracts | Rejected |
+| Documentation-only repair | Low implementation risk | Violates the mission requirement to fix behavior before docs | Rejected except for explicitly proof-gated or policy-only decisions |
 
-## Current State
+## Artifacts Updated
 
-Slices 1 through 6 are completed baseline gates in the active plan:
+- `research/RESEARCH_SUMMARY.md`: current scope, confidence, stack finding,
+  matrix summary, assumptions, and risks.
+- `research/CODEBASE_MAP.md`: portable map of directories, entrypoints,
+  runtime lanes, source composition, and architecture assumptions.
+- `research/DEPENDENCY_RESEARCH.md`: stack components, versions, alternatives,
+  dependency risks, and validation dependencies.
+- `research/COVERAGE_MATRIX.md`: goal coverage, required artifact coverage,
+  product matrix status semantics, and completion rules.
+- `research/STACK_SNAPSHOT.md`: ArcLink-specific multi-runtime stack
+  hypotheses, deterministic confidence score, and rejected single-stack
+  alternatives.
+- `IMPLEMENTATION_PLAN.md`: project-specific BUILD plan with validation
+  criteria and actionable tasks.
+- `consensus/build_gate.md`: no-secret build permission, blocked live flows,
+  and operator-policy questions.
 
-- Security and trust boundaries.
-- Hosted web/API identity, checkout, and dashboard.
-- Control-plane execution truthfulness.
-- Shared Host and Docker operational parity.
-- Private Curator and public bot onboarding recovery.
-- Knowledge freshness and generated content safety.
+This refresh records the current post-policy matrix totals, corrects the stack
+snapshot to ArcLink's multi-runtime architecture, and confirms there are no
+`partial` or `gap` rows.
 
-Slice 7 / Priority 6 documentation and validation coverage is also checked in
-the active plan and steering file:
-
-- Documentation status, first-day/operator runbooks, Docker/data-safety truth,
-  and validation dependency clarity.
-
-Current backlog state after this PLAN pass: no open checkbox task markers remain in
-`IMPLEMENTATION_PLAN.md` or
-`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`. BUILD should
-therefore proceed as a verification and review handoff: preserve the completed
-gates, run focused validation, repair any newly discovered regressions, and
-keep proof-gated/live flows blocked unless the operator explicitly authorizes
-them.
+Retry repair note: the build gate now names the remaining proof and policy
+gates. `IMPLEMENTATION_PLAN.md` must remain the newest active handoff artifact
+after this research refresh so BUILD does not loop on stale plan detection.
 
 ## Assumptions
 
-- Public repo code, tests, docs, wrappers, generated config, systemd units,
-  Compose services, web/API code, hooks, plugins, and skills are in scope.
-- Private state, user homes, tokens, deploy keys, OAuth credentials, bot
-  tokens, live `.env` values, live deploys, production payment flows, public bot
-  mutations, and external credential-dependent proof are out of scope unless
-  the operator explicitly authorizes them during BUILD.
-- Shared Host, Docker, and Sovereign Control Node should remain distinct while
-  their contracts, defaults, health checks, and docs become aligned.
-- Behavior must be fixed before docs; docs should mark unproved or policy-owned
-  areas as proof-gated or blocked instead of inventing product truth.
+- Public repository files are sufficient for PLAN-level stack and static
+  product classification.
+- Live provider capabilities require explicit operator authorization and cannot
+  be inferred from local code.
+- Code and focused tests should be treated as truth when docs disagree; docs
+  should be updated after behavior is repaired.
+- Shared Host, Shared Host Docker, and Sovereign Control Node are separate
+  lanes that need aligned but not collapsed contracts.
+- ArcLink behavior belongs in public repo wrappers, generated config, plugins,
+  hooks, service units, hosted API, public bots, web dashboards, and tests, not
+  in Hermes core.
 
-## Planning Verdict
+## Remaining Blockers And Risks
 
-PLAN is ready for BUILD handoff. Required artifacts are project-specific and
-portable, the implementation plan contains no fallback placeholder marker, and
-no planning-only blocker was identified.
+- Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
+  Docker install/upgrade, and host deploy/upgrade proof is blocked without
+  operator authorization.
+- Product policy is still required for scoped agent self-model or
+  peer-awareness cards, browser right-click sharing enablement, self-service
+  provider changes, and exact public threshold copy after Refuel
+  Pod/provider-fallback rails exist.
+- Remaining decisions should be handled in dependency order: first isolation
+  and secrets, then billing/provider lifecycle, then sharing/knowledge, then
+  admin role/action behavior, then Raven and trust-signal presentation.
+- Existing local code has many repaired rows. BUILD must preserve those
+  boundaries and run focused validation before declaring terminal completion.
 
-## Remaining Risks
+## Verdict
 
-- The worktree already contains many modified files; BUILD must avoid reverting
-  unrelated edits and keep any later commit scoped.
-- Public bot mutation, live Stripe, Cloudflare, Tailscale, Docker
-  install/upgrade, and host deploy/upgrade checks remain proof-gated unless the
-  operator authorizes them.
-- Documentation and validation claims still need BUILD review against the dirty
-  worktree before release completion is declared.
-- Live-proof and credential-dependent validation choices may require operator
-  policy; those should become explicit blocked questions rather than inferred
-  behavior.
+PLAN is ready for no-secret BUILD handoff. Confidence is 96/100: repository
+shape, runtime stack, active artifacts, matrix coverage, and validation surfaces
+are clear; confidence is capped because live external proof and multiple
+remaining operator-policy presentation/scope decisions remain intentionally
+gated.

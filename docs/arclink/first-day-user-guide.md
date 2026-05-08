@@ -21,11 +21,18 @@ Dashboard access is protected by ArcLink's generated web-access credential and
 session proxy. Do not send dashboard passwords or session material in shared
 channels.
 
+When ArcLink presents credential handoff items, copy them into a password
+manager and then acknowledge storage in the user session. After acknowledgement,
+the user API hides that handoff from future responses; reissue requires an
+operator rotation or recovery action.
+
 The dashboard includes:
 
 - **Drive:** browse and manage vault files inside the allowed vault/workspace
-  root.
+  root. Accepted linked resources appear under a read-only `Linked` root when
+  the projection is available.
 - **Code:** edit files and inspect git status inside the configured workspace.
+  Linked resources are readable but not writable or reshareable.
 - **Terminal:** managed pty sessions with bounded scrollback, same-origin SSE
   streaming, polling fallback, and confirmation-gated close.
 

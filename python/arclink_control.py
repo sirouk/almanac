@@ -987,6 +987,55 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS arclink_refuel_credits (
+          credit_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          deployment_id TEXT NOT NULL DEFAULT '',
+          source_kind TEXT NOT NULL DEFAULT '',
+          source_id TEXT NOT NULL DEFAULT '',
+          credit_cents INTEGER NOT NULL,
+          remaining_cents INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_credential_handoffs (
+          handoff_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          deployment_id TEXT NOT NULL,
+          credential_kind TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          secret_ref TEXT NOT NULL DEFAULT '',
+          delivery_hint TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          revealed_at TEXT NOT NULL DEFAULT '',
+          acknowledged_at TEXT NOT NULL DEFAULT '',
+          removed_at TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_share_grants (
+          grant_id TEXT PRIMARY KEY,
+          owner_user_id TEXT NOT NULL,
+          recipient_user_id TEXT NOT NULL,
+          resource_kind TEXT NOT NULL,
+          resource_root TEXT NOT NULL,
+          resource_path TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          access_mode TEXT NOT NULL DEFAULT 'read',
+          status TEXT NOT NULL,
+          approved_at TEXT NOT NULL DEFAULT '',
+          accepted_at TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS arclink_provisioning_jobs (
           job_id TEXT PRIMARY KEY,
           deployment_id TEXT NOT NULL,
@@ -1146,6 +1195,17 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           channel_identity TEXT NOT NULL DEFAULT '',
           metadata_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_public_bot_identity (
+          scope_kind TEXT NOT NULL,
+          user_id TEXT NOT NULL DEFAULT '',
+          channel TEXT NOT NULL DEFAULT '',
+          channel_identity TEXT NOT NULL DEFAULT '',
+          raven_display_name TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (scope_kind, user_id, channel, channel_identity)
         );
 
         CREATE TABLE IF NOT EXISTS arclink_channel_pairing_codes (
@@ -1381,6 +1441,36 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_arclink_refuel_credits_user_status
+        ON arclink_refuel_credits (user_id, status, deployment_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_credential_handoffs_deployment_kind
+        ON arclink_credential_handoffs (deployment_id, credential_kind)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_credential_handoffs_user_status
+        ON arclink_credential_handoffs (user_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_share_grants_owner_status
+        ON arclink_share_grants (owner_user_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_share_grants_recipient_status
+        ON arclink_share_grants (recipient_user_id, status)
+        """
+    )
+    conn.execute(
+        """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_provisioning_jobs_idempotency
         ON arclink_provisioning_jobs (idempotency_key)
         WHERE idempotency_key != ''
@@ -1427,6 +1517,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_arclink_channel_pairing_codes_claimed
         ON arclink_channel_pairing_codes (claimed_session_id, claimed_at)
         WHERE claimed_session_id != ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_public_bot_identity_channel
+        ON arclink_public_bot_identity (scope_kind, channel, channel_identity, user_id)
         """
     )
     conn.execute(
@@ -1763,6 +1859,7 @@ ARCLINK_PREFIX_NOUNS = (
     "window",
 )
 ARCLINK_ENTITLEMENT_STATES = {"none", "paid", "comp", "past_due", "cancelled"}
+ARCLINK_REFUEL_CREDIT_STATUSES = {"active", "exhausted", "revoked"}
 ARCLINK_PROVISIONING_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 ARCLINK_PROVISIONING_JOB_TRANSITIONS = {
     "queued": {"running", "cancelled"},
@@ -2179,6 +2276,242 @@ def comp_arclink_subscription(
     user = set_arclink_user_entitlement(conn, user_id=user_id, entitlement_state="comp")
     advance_arclink_entitlement_gates_for_user(conn, user_id=user_id)
     return user
+
+
+def refuel_credit_sku_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    source = env or os.environ
+
+    def _positive_int(name: str, default: int) -> int:
+        try:
+            value = int(str(source.get(name) or "").strip())
+        except ValueError:
+            return default
+        return value if value > 0 else default
+
+    return {
+        "sku_id": str(source.get("ARCLINK_REFUEL_SKU_ID") or "refuel-local-credit").strip(),
+        "credit_cents": _positive_int("ARCLINK_REFUEL_CREDIT_CENTS", 2500),
+        "currency": str(source.get("ARCLINK_REFUEL_CURRENCY") or "usd").strip().lower() or "usd",
+        "accounting_model": "fair_credit_local_ledger",
+        "live_purchase": "proof_gated",
+        "provider_balance_application": "local_budget_accounting_only_until_live_chutes_proof",
+    }
+
+
+def grant_arclink_refuel_credit(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    actor_id: str,
+    reason: str,
+    credit_cents: int | None = None,
+    deployment_id: str = "",
+    source_kind: str = "manual",
+    source_id: str = "",
+    metadata: Mapping[str, Any] | None = None,
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_actor = str(actor_id or "").strip()
+    clean_reason = str(reason or "").strip()
+    if not clean_user:
+        raise ValueError("ArcLink refuel credit requires a user id")
+    if not clean_actor:
+        raise ValueError("ArcLink refuel credit requires an actor id")
+    if not clean_reason:
+        raise ValueError("ArcLink refuel credit requires a reason")
+    user = conn.execute("SELECT user_id FROM arclink_users WHERE user_id = ?", (clean_user,)).fetchone()
+    if user is None:
+        raise KeyError(clean_user)
+    clean_deployment = str(deployment_id or "").strip()
+    if clean_deployment:
+        deployment = conn.execute(
+            "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment,),
+        ).fetchone()
+        if deployment is None:
+            raise KeyError(clean_deployment)
+        if str(deployment["user_id"] or "") != clean_user:
+            raise ValueError("ArcLink refuel credit deployment does not belong to user")
+    cents = int(credit_cents if credit_cents is not None else refuel_credit_sku_config()["credit_cents"])
+    if cents <= 0:
+        raise ValueError("ArcLink refuel credit cents must be positive")
+    now = utc_now_iso()
+    credit_id = _arclink_id("refuel")
+    conn.execute(
+        """
+        INSERT INTO arclink_refuel_credits (
+          credit_id, user_id, deployment_id, source_kind, source_id,
+          credit_cents, remaining_cents, status, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        """,
+        (
+            credit_id,
+            clean_user,
+            clean_deployment,
+            str(source_kind or "").strip() or "manual",
+            str(source_id or "").strip(),
+            cents,
+            cents,
+            _arclink_json(metadata),
+            now,
+            now,
+        ),
+    )
+    append_arclink_audit(
+        conn,
+        action="refuel_credit_granted",
+        actor_id=clean_actor,
+        target_kind="user",
+        target_id=clean_user,
+        reason=clean_reason,
+        metadata={"credit_id": credit_id, "deployment_id": clean_deployment, "credit_cents": cents},
+        commit=False,
+    )
+    _arclink_commit(conn, commit=commit)
+    return dict(conn.execute("SELECT * FROM arclink_refuel_credits WHERE credit_id = ?", (credit_id,)).fetchone())
+
+
+def arclink_refuel_credit_balance(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str = "",
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    rows = conn.execute(
+        """
+        SELECT credit_id, deployment_id, credit_cents, remaining_cents, status, created_at, updated_at
+        FROM arclink_refuel_credits
+        WHERE user_id = ?
+          AND status = 'active'
+          AND remaining_cents > 0
+          AND (? = '' OR deployment_id = '' OR deployment_id = ?)
+        ORDER BY created_at ASC, credit_id ASC
+        """,
+        (clean_user, clean_deployment, clean_deployment),
+    ).fetchall()
+    total = sum(int(row["remaining_cents"] or 0) for row in rows)
+    return {
+        "user_id": clean_user,
+        "deployment_id": clean_deployment,
+        "remaining_cents": total,
+        "currency": refuel_credit_sku_config()["currency"],
+        "accounting_model": "fair_credit_local_ledger",
+        "credits": [dict(row) for row in rows],
+    }
+
+
+def apply_arclink_refuel_credit_to_chutes_budget(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    requested_cents: int,
+    actor_id: str,
+    reason: str,
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    clean_actor = str(actor_id or "").strip()
+    clean_reason = str(reason or "").strip()
+    if not clean_user or not clean_deployment:
+        raise ValueError("ArcLink refuel application requires user and deployment ids")
+    if not clean_actor:
+        raise ValueError("ArcLink refuel application requires an actor id")
+    if not clean_reason:
+        raise ValueError("ArcLink refuel application requires a reason")
+    amount = int(requested_cents or 0)
+    if amount <= 0:
+        raise ValueError("ArcLink refuel application requires positive cents")
+    deployment = conn.execute(
+        "SELECT user_id, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (clean_deployment,),
+    ).fetchone()
+    if deployment is None:
+        raise KeyError(clean_deployment)
+    if str(deployment["user_id"] or "") != clean_user:
+        raise ValueError("ArcLink refuel target deployment does not belong to user")
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_refuel_credits
+        WHERE user_id = ?
+          AND status = 'active'
+          AND remaining_cents > 0
+          AND (deployment_id = '' OR deployment_id = ?)
+        ORDER BY created_at ASC, credit_id ASC
+        """,
+        (clean_user, clean_deployment),
+    ).fetchall()
+    remaining_to_apply = amount
+    applied_rows: list[dict[str, Any]] = []
+    now = utc_now_iso()
+    for row in rows:
+        if remaining_to_apply <= 0:
+            break
+        available = int(row["remaining_cents"] or 0)
+        applied = min(available, remaining_to_apply)
+        new_remaining = available - applied
+        new_status = "exhausted" if new_remaining == 0 else "active"
+        conn.execute(
+            """
+            UPDATE arclink_refuel_credits
+            SET remaining_cents = ?, status = ?, updated_at = ?
+            WHERE credit_id = ?
+            """,
+            (new_remaining, new_status, now, str(row["credit_id"] or "")),
+        )
+        applied_rows.append({"credit_id": str(row["credit_id"] or ""), "applied_cents": applied, "remaining_cents": new_remaining})
+        remaining_to_apply -= applied
+    applied_total = amount - remaining_to_apply
+    if applied_total <= 0:
+        raise ValueError("ArcLink refuel credit balance is empty")
+
+    metadata = json_loads(str(deployment["metadata_json"] or "{}"), {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    chutes_meta = metadata.get("chutes")
+    if not isinstance(chutes_meta, dict):
+        chutes_meta = {}
+    chutes_meta["refuel_applied_credit_cents"] = int(chutes_meta.get("refuel_applied_credit_cents") or 0) + applied_total
+    chutes_meta["monthly_budget_cents"] = int(chutes_meta.get("monthly_budget_cents") or 0) + applied_total
+    chutes_meta["refuel_provider_balance_application"] = "local_budget_accounting_only_until_live_chutes_proof"
+    metadata["chutes"] = chutes_meta
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+        (_arclink_json(metadata), now, clean_deployment),
+    )
+    append_arclink_audit(
+        conn,
+        action="refuel_credit_applied",
+        actor_id=clean_actor,
+        target_kind="deployment",
+        target_id=clean_deployment,
+        reason=clean_reason,
+        metadata={
+            "user_id": clean_user,
+            "requested_cents": amount,
+            "applied_cents": applied_total,
+            "remaining_unapplied_cents": remaining_to_apply,
+            "credits": applied_rows,
+        },
+        commit=False,
+    )
+    _arclink_commit(conn, commit=commit)
+    return {
+        "user_id": clean_user,
+        "deployment_id": clean_deployment,
+        "requested_cents": amount,
+        "applied_cents": applied_total,
+        "remaining_unapplied_cents": remaining_to_apply,
+        "accounting_model": "fair_credit_local_ledger",
+        "provider_balance_application": "local_budget_accounting_only_until_live_chutes_proof",
+        "credits": applied_rows,
+    }
 
 
 def append_arclink_audit(
@@ -14921,7 +15254,7 @@ def _memory_synthesis_card_lines(
         return []
     return [
         "Semantic synthesis cards:",
-        "- LLM-compressed recall hints only: use retrieval tools for evidence, exact text, citations, or state changes.",
+        "- Compact recall hints only: use retrieval tools for evidence, exact text, citations, or state changes.",
         *lines,
     ]
 

@@ -568,6 +568,56 @@ def test_targeted_comp_advances_only_named_deployment_without_global_comp() -> N
     print("PASS test_targeted_comp_advances_only_named_deployment_without_global_comp")
 
 
+def test_refuel_credit_uses_fair_local_accounting_without_live_purchase() -> None:
+    control = load_module("arclink_control.py", "arclink_control_refuel_credit_test")
+    chutes_provider_key = "chutes"
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_refuel", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_refuel",
+        user_id="user_refuel",
+        prefix="refuel-local",
+        status="active",
+        metadata={chutes_provider_key: {"monthly_budget_cents": 1000, "used_cents": 900}},
+    )
+
+    sku = control.refuel_credit_sku_config({"ARCLINK_REFUEL_CREDIT_CENTS": "1500"})
+    expect(sku["credit_cents"] == 1500, str(sku))
+    expect(sku["live_purchase"] == "proof_gated", str(sku))
+    credit = control.grant_arclink_refuel_credit(
+        conn,
+        user_id="user_refuel",
+        actor_id="admin_refuel",
+        reason="local credit ledger test",
+        credit_cents=1500,
+        source_kind="test",
+    )
+    expect(credit["remaining_cents"] == 1500, str(dict(credit)))
+    balance = control.arclink_refuel_credit_balance(conn, user_id="user_refuel", deployment_id="dep_refuel")
+    expect(balance["remaining_cents"] == 1500, str(balance))
+
+    applied = control.apply_arclink_refuel_credit_to_chutes_budget(
+        conn,
+        user_id="user_refuel",
+        deployment_id="dep_refuel",
+        requested_cents=1200,
+        actor_id="admin_refuel",
+        reason="apply local credit",
+    )
+    expect(applied["applied_cents"] == 1200, str(applied))
+    expect(applied["provider_balance_application"] == "local_budget_accounting_only_until_live_chutes_proof", str(applied))
+    balance_after = control.arclink_refuel_credit_balance(conn, user_id="user_refuel", deployment_id="dep_refuel")
+    expect(balance_after["remaining_cents"] == 300, str(balance_after))
+    row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_refuel'").fetchone()
+    metadata = json.loads(row["metadata_json"])
+    expect(metadata[chutes_provider_key]["monthly_budget_cents"] == 2200, str(metadata))
+    expect(metadata[chutes_provider_key]["refuel_applied_credit_cents"] == 1200, str(metadata))
+    audit = conn.execute("SELECT action, target_kind FROM arclink_audit_log WHERE action = 'refuel_credit_applied'").fetchone()
+    expect(audit["target_kind"] == "deployment", str(dict(audit)))
+    print("PASS test_refuel_credit_uses_fair_local_accounting_without_live_purchase")
+
+
 def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_test")
@@ -819,6 +869,7 @@ def main() -> int:
     test_profile_only_upsert_preserves_paid_and_comp_entitlements()
     test_new_user_without_explicit_entitlement_defaults_to_none()
     test_targeted_comp_advances_only_named_deployment_without_global_comp()
+    test_refuel_credit_uses_fair_local_accounting_without_live_purchase()
     test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding()
     test_subscription_created_sets_paid_and_mirrors_subscription()
     test_subscription_deleted_cancels_entitlement_and_audits()

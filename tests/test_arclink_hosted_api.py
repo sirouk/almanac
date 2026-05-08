@@ -2,26 +2,38 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 
 from arclink_test_helpers import auth_headers, expect, load_module, memory_db
 
 
-def seed_paid_deployment(control, onboarding, conn):
+def seed_paid_deployment(
+    control,
+    onboarding,
+    conn,
+    *,
+    session_id: str = "onb_hosted",
+    email: str = "hosted-user@example.test",
+    display_name: str = "Hosted User",
+    prefix: str = "hosted-vault-1a2b",
+    model_id: str = "model-hosted",
+):
     session = onboarding.create_or_resume_arclink_onboarding_session(
         conn,
         channel="web",
-        channel_identity="hosted-user@example.test",
-        session_id="onb_hosted",
-        email_hint="hosted-user@example.test",
-        display_name_hint="Hosted User",
+        channel_identity=email,
+        session_id=session_id,
+        email_hint=email,
+        display_name_hint=display_name,
         selected_plan_id="sovereign",
-        selected_model_id="model-hosted",
+        selected_model_id=model_id,
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
         conn,
         session_id=session["session_id"],
         base_domain="example.test",
-        prefix="hosted-vault-1a2b",
+        prefix=prefix,
     )
     control.set_arclink_user_entitlement(conn, user_id=prepared["user_id"], entitlement_state="paid")
     control.upsert_arclink_service_health(
@@ -379,6 +391,9 @@ def test_user_billing_route_returns_entitlement_and_subscriptions() -> None:
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload["entitlement"]["state"] == "paid", str(payload))
     expect("subscriptions" in payload, str(payload))
+    lifecycle = payload["renewal_lifecycle"]
+    expect(lifecycle["provider_access"] == "allowed", str(lifecycle))
+    expect(lifecycle["purge_policy"] == "not_applicable", str(lifecycle))
 
     print("PASS test_user_billing_route_returns_entitlement_and_subscriptions")
 
@@ -407,6 +422,501 @@ def test_user_provisioning_status_route() -> None:
     print("PASS test_user_provisioning_status_route")
 
 
+def test_user_routes_are_isolated_across_accounts() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_isolation_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_isolation_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_isolation_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_isolation_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    user_a = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_iso_a",
+        email="isolation-a@example.test",
+        display_name="Isolation A",
+        prefix="isolation-a-1a2b",
+        model_id="model-a",
+    )
+    user_b = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_iso_b",
+        email="isolation-b@example.test",
+        display_name="Isolation B",
+        prefix="isolation-b-1a2b",
+        model_id="model-b",
+    )
+    control.upsert_arclink_service_health(
+        conn,
+        deployment_id=user_b["deployment_id"],
+        service_name="foreign-health-watch",
+        status="degraded",
+    )
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_iso_a",
+        user_id=user_a["user_id"],
+        stripe_customer_id="cus_iso_a",
+        stripe_subscription_id="stripe_sub_iso_a",
+        status="active",
+    )
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_iso_b",
+        user_id=user_b["user_id"],
+        stripe_customer_id="cus_iso_b",
+        stripe_subscription_id="stripe_sub_iso_b",
+        status="active",
+    )
+    session_a = api.create_arclink_user_session(conn, user_id=user_a["user_id"], session_id="usess_iso_a")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/dashboard",
+        headers=auth_headers(session_a),
+        query={"user_id": user_b["user_id"]},
+        config=config,
+    )
+    expect(status == 401, f"cross-user dashboard query expected 401 got {status}: {payload}")
+    expect("another user" in str(payload.get("error", "")), str(payload))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/dashboard",
+        headers=auth_headers(session_a),
+        config=config,
+    )
+    expect(status == 200, f"own dashboard expected 200 got {status}: {payload}")
+    rendered = json.dumps(payload, sort_keys=True)
+    expect(user_a["deployment_id"] in rendered and user_a["user_id"] in rendered, rendered)
+    expect(user_b["deployment_id"] not in rendered and user_b["user_id"] not in rendered, rendered)
+    expect("foreign-health-watch" not in rendered, rendered)
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/provider-state",
+        headers=auth_headers(session_a),
+        config=config,
+    )
+    expect(status == 200, f"provider state expected 200 got {status}: {payload}")
+    provider_text = json.dumps(payload, sort_keys=True)
+    expect("model-a" in provider_text and user_a["deployment_id"] in provider_text, provider_text)
+    expect("model-b" not in provider_text and user_b["deployment_id"] not in provider_text, provider_text)
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/provisioning",
+        headers=auth_headers(session_a),
+        query={"deployment_id": user_b["deployment_id"]},
+        config=config,
+    )
+    expect(status == 401, f"cross-user provisioning query expected 401 got {status}: {payload}")
+    expect("another user deployment" in str(payload.get("error", "")), str(payload))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/billing",
+        headers=auth_headers(session_a),
+        config=config,
+    )
+    expect(status == 200, f"billing expected 200 got {status}: {payload}")
+    billing_text = json.dumps(payload, sort_keys=True)
+    expect("sub_iso_a" in billing_text and "cus_iso_a" in billing_text, billing_text)
+    expect("sub_iso_b" not in billing_text and "cus_iso_b" not in billing_text, billing_text)
+
+    print("PASS test_user_routes_are_isolated_across_accounts")
+
+
+def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_credentials_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_credentials_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_credentials_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_credentials_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    user_a = seed_paid_deployment(control, onboarding, conn)
+    user_b = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_creds_b",
+        email="creds-b@example.test",
+        display_name="Credentials B",
+        prefix="creds-b-1a2b",
+        model_id="model-b",
+    )
+    session_a = api.create_arclink_user_session(conn, user_id=user_a["user_id"], session_id="usess_creds_a")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/credentials", headers={}, config=config,
+    )
+    expect(status == 401, f"expected credentials auth failure got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/credentials",
+        headers=auth_headers(session_a),
+        query={"deployment_id": user_b["deployment_id"]},
+        config=config,
+    )
+    expect(status == 401, f"cross-user credentials expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/credentials",
+        headers=auth_headers(session_a),
+        config=config,
+    )
+    expect(status == 200, f"expected credentials 200 got {status}: {payload}")
+    credentials = payload["credentials"]
+    expect(credentials, f"expected pending credential handoffs: {payload}")
+    rendered = json.dumps(payload, sort_keys=True)
+    expect("raw_secret" in rendered, rendered)
+    expect("secret://masked" in rendered, rendered)
+    expect("dashboard_password" in rendered, rendered)
+    expect(user_b["deployment_id"] not in rendered and user_b["user_id"] not in rendered, rendered)
+    handoff_id = credentials[0]["handoff_id"]
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/credentials/acknowledge",
+        headers=auth_headers(session_a),
+        body=json.dumps({"handoff_id": handoff_id}),
+        config=config,
+    )
+    expect(status == 401, f"credential ack without CSRF expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/credentials/acknowledge",
+        headers=auth_headers(session_a, csrf=True),
+        body=json.dumps({"handoff_id": handoff_id}),
+        config=config,
+    )
+    expect(status == 200, f"credential ack expected 200 got {status}: {payload}")
+    credential = payload["credential"]
+    expect(credential["status"] == "removed", str(credential))
+    expect("secret_ref" not in credential, str(credential))
+    expect(credential["delivery_hint"] == "", str(credential))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/credentials",
+        headers=auth_headers(session_a),
+        query={"deployment_id": user_a["deployment_id"]},
+        config=config,
+    )
+    expect(status == 200, f"post-ack credentials expected 200 got {status}: {payload}")
+    rendered_after = json.dumps(payload, sort_keys=True)
+    expect(handoff_id not in rendered_after, rendered_after)
+    expect(payload["removed_count"] >= 1, str(payload))
+
+    print("PASS test_user_credentials_are_acknowledged_and_removed_after_storage")
+
+
+def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_share_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_share_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_share_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_share_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    owner = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_owner",
+        email="share-owner@example.test",
+        display_name="Share Owner",
+        prefix="share-owner-1a2b",
+    )
+    recipient = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_recipient",
+        email="share-recipient@example.test",
+        display_name="Share Recipient",
+        prefix="share-recipient-1a2b",
+    )
+    owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_owner")
+    recipient_session = api.create_arclink_user_session(conn, user_id=recipient["user_id"], session_id="usess_share_recipient")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = Path(tmp)
+        owner_vault = state_root / "owner" / "vault"
+        recipient_linked = state_root / "recipient" / "linked-resources"
+        shared_dir = owner_vault / "Projects" / "brief"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        (shared_dir / "overview.md").write_text("# Project Brief\n\nShared read-only context.\n", encoding="utf-8")
+        (shared_dir / ".env").write_text("TOKEN=do-not-project\n", encoding="utf-8")
+        for deployment, roots in (
+            (
+                owner,
+                {
+                    "vault": str(owner_vault),
+                    "code_workspace": str(state_root / "owner" / "workspace"),
+                    "linked_resources": str(state_root / "owner" / "linked-resources"),
+                },
+            ),
+            (
+                recipient,
+                {
+                    "vault": str(state_root / "recipient" / "vault"),
+                    "code_workspace": str(state_root / "recipient" / "workspace"),
+                    "linked_resources": str(recipient_linked),
+                },
+            ),
+        ):
+            conn.execute(
+                "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+                (json.dumps({"state_roots": roots}, sort_keys=True), deployment["deployment_id"]),
+            )
+        conn.commit()
+
+        body = {
+            "recipient_user_id": recipient["user_id"],
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/brief",
+            "display_name": "Project Brief",
+        }
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=auth_headers(owner_session),
+            body=json.dumps(body),
+            config=config,
+        )
+        expect(status == 401, f"share create without CSRF expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=auth_headers(owner_session, csrf=True),
+            body=json.dumps(body),
+            config=config,
+        )
+        expect(status == 201, f"share create expected 201 got {status}: {payload}")
+        grant = payload["grant"]
+        grant_id = grant["grant_id"]
+        expect(grant["status"] == "pending_owner_approval", str(grant))
+        expect(grant["reshare_allowed"] is False, str(grant))
+        expect(grant["projection"]["status"] == "not_materialized", str(grant))
+        expect(payload["owner_notification"]["queued"] is False, str(payload["owner_notification"]))
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/accept",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 401, f"accept before approval expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/approve",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 401, f"recipient approve expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/approve",
+            headers=auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"owner approve expected 200 got {status}: {payload}")
+        expect(payload["grant"]["status"] == "approved", str(payload))
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/accept",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"recipient accept expected 200 got {status}: {payload}")
+        expect(payload["grant"]["status"] == "accepted", str(payload))
+        projection = payload["grant"]["projection"]
+        expect(projection["status"] == "materialized", str(projection))
+        expect(projection["linked_root"] == "linked", str(projection))
+        expect(projection["linked_path"].startswith(f"/{grant_id}"), str(projection))
+        expect(projection["projection_mode"] == "living_symlink", str(projection))
+        expect(projection["read_only"] is True, str(projection))
+        projected_dir = recipient_linked / projection["linked_path"].strip("/")
+        expect(projected_dir.is_symlink(), "accepted linked directory should be a living link")
+        expect((projected_dir / "overview.md").read_text(encoding="utf-8").startswith("# Project Brief"), str(projection))
+        (shared_dir / "overview.md").write_text("# Project Brief\n\nUpdated at source.\n", encoding="utf-8")
+        expect("Updated at source" in (projected_dir / "overview.md").read_text(encoding="utf-8"), "linked projection should stay live")
+        manifest = recipient_linked / ".arclink-linked-resources.json"
+        expect(manifest.is_file(), "linked resource manifest should be written")
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        expect(projection["linked_path"].strip("/") in manifest_payload["entries"], str(manifest_payload))
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="GET",
+            path="/api/v1/user/linked-resources",
+            headers=auth_headers(recipient_session),
+            config=config,
+        )
+        expect(status == 200, f"linked resources expected 200 got {status}: {payload}")
+        linked = payload["linked_resources"]
+        expect(len(linked) == 1 and linked[0]["grant_id"] == grant_id, str(payload))
+        expect(linked[0]["owner_user_id"] == owner["user_id"], str(linked[0]))
+        expect(linked[0]["reshare_allowed"] is False, str(linked[0]))
+        expect(linked[0]["linked_path"] == projection["linked_path"], str(linked[0]))
+        expect(linked[0]["projection"]["status"] == "materialized", str(linked[0]))
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="GET",
+            path="/api/v1/user/linked-resources",
+            headers=auth_headers(owner_session),
+            query={"user_id": recipient["user_id"]},
+            config=config,
+        )
+        expect(status == 401, f"cross-user linked resources expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/revoke",
+            headers=auth_headers(owner_session),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 401, f"revoke without CSRF expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/revoke",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 401, f"recipient revoke expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/revoke",
+            headers=auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"owner revoke expected 200 got {status}: {payload}")
+        expect(payload["grant"]["status"] == "revoked", str(payload))
+        expect(payload["grant"]["revoked_at"], str(payload))
+        expect(payload["grant"]["projection"]["status"] == "removed", str(payload["grant"]))
+        expect(not projected_dir.exists(), "revoked linked projection should be removed")
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        expect(projection["linked_path"].strip("/") not in manifest_payload.get("entries", {}), str(manifest_payload))
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="GET",
+            path="/api/v1/user/linked-resources",
+            headers=auth_headers(recipient_session),
+            config=config,
+        )
+        expect(status == 200, f"linked resources after revoke expected 200 got {status}: {payload}")
+        expect(payload["linked_resources"] == [], str(payload))
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/revoke",
+            headers=auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"idempotent owner revoke expected 200 got {status}: {payload}")
+        expect(payload["grant"]["status"] == "revoked", str(payload))
+
+        reshare_body = dict(body)
+        reshare_body["recipient_user_id"] = owner["user_id"]
+        reshare_body["resource_root"] = "linked"
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps(reshare_body),
+            config=config,
+        )
+        expect(status == 401, f"linked-root reshare expected 401 got {status}: {payload}")
+
+        deny_body = dict(body)
+        deny_body["resource_path"] = "/Projects/closed.md"
+        deny_body["display_name"] = "Closed Brief"
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=auth_headers(owner_session, csrf=True),
+            body=json.dumps(deny_body),
+            config=config,
+        )
+        expect(status == 201, f"share create for deny expected 201 got {status}: {payload}")
+        denied_grant_id = payload["grant"]["grant_id"]
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/deny",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": denied_grant_id}),
+            config=config,
+        )
+        expect(status == 401, f"recipient deny expected 401 got {status}: {payload}")
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/deny",
+            headers=auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": denied_grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"owner deny expected 200 got {status}: {payload}")
+        expect(payload["grant"]["status"] == "denied", str(payload))
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/accept",
+            headers=auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": denied_grant_id}),
+            config=config,
+        )
+        expect(status == 401, f"accept denied share expected 401 got {status}: {payload}")
+
+    print("PASS test_user_share_grants_create_approved_accepted_linked_resources")
+
+
 def test_admin_service_health_route() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_health_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_health_test")
@@ -414,7 +924,7 @@ def test_admin_service_health_route() -> None:
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_health_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
-    seed_paid_deployment(control, onboarding, conn)
+    first_deployment = seed_paid_deployment(control, onboarding, conn)
     api.upsert_arclink_admin(conn, admin_id="admin_health", email="health@example.test", role="ops")
     session = api.create_arclink_admin_session(conn, admin_id="admin_health", session_id="asess_health")
 
@@ -423,6 +933,25 @@ def test_admin_service_health_route() -> None:
         conn, method="GET", path="/api/v1/admin/service-health", headers={}, config=config,
     )
     expect(status == 401, f"expected 401 got {status}")
+
+    user_prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_health_user",
+        email="health-user@example.test",
+        display_name="Health User",
+        prefix="health-user-1a2b",
+    )
+    user_session = api.create_arclink_user_session(conn, user_id=user_prepared["user_id"], session_id="usess_health_user")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/service-health",
+        headers=auth_headers(user_session),
+        config=config,
+    )
+    expect(status == 401, f"user session should not read admin health got {status}: {payload}")
 
     # With auth -> 200
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -433,6 +962,19 @@ def test_admin_service_health_route() -> None:
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect("service_health" in payload, str(payload))
     expect("recent_failures" in payload, str(payload))
+    health_deployments = {row["deployment_id"] for row in payload["service_health"]}
+    expect(first_deployment["deployment_id"] in health_deployments, str(payload["service_health"]))
+    expect(user_prepared["deployment_id"] in health_deployments, str(payload["service_health"]))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/admin/service-health",
+        headers=auth_headers(session),
+        query={"deployment_id": user_prepared["deployment_id"]},
+        config=config,
+    )
+    expect(status == 200, f"filtered admin health expected 200 got {status}: {payload}")
+    filtered_deployments = {row["deployment_id"] for row in payload["service_health"]}
+    expect(filtered_deployments == {user_prepared["deployment_id"]}, str(payload["service_health"]))
 
     print("PASS test_admin_service_health_route")
 
@@ -1395,8 +1937,26 @@ def test_user_provider_state_route() -> None:
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_uprov_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_uprov_test")
     conn = memory_db(control)
-    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test", "CHUTES_API_KEY": "raw_operator_secret_value"})
     prepared = seed_paid_deployment(control, onboarding, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps(
+                {
+                    "selected_model_id": "model-hosted",
+                    "chutes": {
+                        "secret_ref": f"secret://arclink/chutes/{prepared['deployment_id']}",
+                        "monthly_budget_cents": 10000,
+                        "used_cents": 8500,
+                        "warning_threshold_percent": 80,
+                    },
+                }
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
     session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_uprov")
 
     # No auth -> 401
@@ -1414,8 +1974,85 @@ def test_user_provider_state_route() -> None:
     expect("provider" in payload, str(payload))
     expect("default_model" in payload, str(payload))
     expect("deployment_models" in payload, str(payload))
+    provider_text = json.dumps(payload, sort_keys=True)
+    expect("raw_operator_secret_value" not in provider_text, provider_text)
+    expect(f"secret://arclink/chutes/{prepared['deployment_id']}" not in provider_text, provider_text)
+    model = payload["deployment_models"][0]
+    expect(model["credential_state"] == "budget_warning", str(model))
+    expect(model["allow_inference"] is True, str(model))
+    expect(model["chutes"]["budget"]["status"] == "warning", str(model))
+    expect(model["provider_detail"]["budget"]["status"] == "warning", str(model))
+    continuation = model["provider_detail"]["threshold_continuation"]
+    expect(continuation["status"] == "policy_question", str(continuation))
+    expect(continuation["raven_notifications"] == "disabled_until_warning_cadence_policy", str(continuation))
+    expect(continuation["provider_fallback"] == "policy_question", str(continuation))
+    expect(continuation["overage_refill"] == "policy_question", str(continuation))
+    lifecycle = model["chutes"]["credential_lifecycle"]
+    expect(lifecycle["canonical_mode"] == "scoped_secret_ref_per_user_or_deployment", str(lifecycle))
+    expect(lifecycle["current_mode"] == "per_deployment_secret_ref", str(lifecycle))
+    expect(lifecycle["posture"] == "active_scoped_secret_ref", str(lifecycle))
+    expect(payload["provider_boundary"]["credential_lifecycle"]["live_key_creation"] == "proof_gated", str(payload["provider_boundary"]))
+    expect(payload["provider_boundary"]["threshold_continuation"]["status"] == "policy_question", str(payload["provider_boundary"]))
+    settings = payload["provider_settings"]
+    expect(settings["self_service_provider_add"] == "policy_question", str(settings))
+    expect(settings["dashboard_mutation"] == "disabled", str(settings))
+    expect(settings["secret_input_policy"] == "dashboard_never_collects_raw_provider_tokens", str(settings))
+    expect("raw provider" in settings["guidance"].lower() or "provider state" in settings["guidance"].lower(), str(settings))
 
     print("PASS test_user_provider_state_route")
+
+
+def test_provider_state_suspends_chutes_on_past_due_billing() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provider_billing_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_provider_billing_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_provider_billing_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_provider_billing_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps({
+                "chutes": {
+                    "secret_ref": f"secret://arclink/chutes/{prepared['deployment_id']}",
+                    "monthly_budget_cents": 10000,
+                    "used_cents": 1000,
+                }
+            }),
+            prepared["deployment_id"],
+        ),
+    )
+    control.set_arclink_user_entitlement(conn, user_id=prepared["user_id"], entitlement_state="past_due")
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_provider_billing")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/provider-state",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    item = payload["deployment_models"][0]
+    expect(item["credential_state"] == "billing_suspended", str(item))
+    expect(item["allow_inference"] is False, str(item))
+    lifecycle = item["chutes"]["billing_lifecycle"]
+    expect(lifecycle["payment_state"] == "past_due", str(lifecycle))
+    expect(lifecycle["provider_access"] == "suspended", str(lifecycle))
+    expect(lifecycle["warning_cadence"] == "immediate_notice_then_daily_reminders", str(lifecycle))
+    expect(lifecycle["grace_period"] == "provider_suspended_immediately", str(lifecycle))
+    expect(lifecycle["data_retention"] == "account_data_removed_warning_day_7", str(lifecycle))
+    expect(lifecycle["purge_policy"] == "audited_purge_queue_day_14", str(lifecycle))
+    expect(lifecycle["day_7_action"] == "warn_account_and_data_removal", str(lifecycle))
+    expect(lifecycle["day_14_action"] == "queue_audited_purge", str(lifecycle))
+
+    status, billing, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/billing",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {billing}")
+    expect(billing["renewal_lifecycle"]["provider_access"] == "suspended", str(billing))
+    expect(billing["renewal_lifecycle"]["warning_cadence"] == "immediate_notice_then_daily_reminders", str(billing))
+    expect(billing["renewal_lifecycle"]["purge_policy"] == "audited_purge_queue_day_14", str(billing))
+    print("PASS test_provider_state_suspends_chutes_on_past_due_billing")
 
 
 def test_admin_provider_state_route() -> None:
@@ -1423,7 +2060,27 @@ def test_admin_provider_state_route() -> None:
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_aprov_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_aprov_test")
     conn = memory_db(control)
-    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test", "CHUTES_API_KEY": "raw_operator_secret_value"})
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_aprov_onboarding_test")
+    prepared = seed_paid_deployment(control, onboarding, conn, session_id="onb_admin_provider")
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps(
+                {
+                    "selected_model_id": "model-hosted",
+                    "chutes": {
+                        "secret_ref": f"secret://arclink/chutes/{prepared['deployment_id']}",
+                        "key_id": "key_admin_visible",
+                        "monthly_budget_cents": 10000,
+                        "used_cents": 10000,
+                    },
+                }
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
     api.upsert_arclink_admin(conn, admin_id="admin_aprov", email="aprov@example.test", role="ops")
     session = api.create_arclink_admin_session(conn, admin_id="admin_aprov", session_id="asess_aprov")
 
@@ -1441,6 +2098,17 @@ def test_admin_provider_state_route() -> None:
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload["provider"] == "chutes", str(payload))
     expect("default_model" in payload, str(payload))
+    provider_text = json.dumps(payload, sort_keys=True)
+    expect("raw_operator_secret_value" not in provider_text, provider_text)
+    expect(f"secret://arclink/chutes/{prepared['deployment_id']}" not in provider_text, provider_text)
+    expect(payload["chutes_summary"]["blocked_count"] == 1, str(payload))
+    model = payload["deployment_models"][0]
+    expect(model["credential_state"] == "budget_exhausted", str(model))
+    expect(model["allow_inference"] is False, str(model))
+    expect(model["chutes"]["key_id"] == "key_admin_visible", str(model))
+    lifecycle = model["chutes"]["credential_lifecycle"]
+    expect(lifecycle["current_mode"] == "per_deployment_secret_ref", str(lifecycle))
+    expect(lifecycle["posture"] == "suspended_or_exhausted", str(lifecycle))
 
     print("PASS test_admin_provider_state_route")
 
@@ -2161,6 +2829,9 @@ def main() -> int:
     test_stripe_webhook_route_rejects_without_secret()
     test_user_billing_route_returns_entitlement_and_subscriptions()
     test_user_provisioning_status_route()
+    test_user_routes_are_isolated_across_accounts()
+    test_user_credentials_are_acknowledged_and_removed_after_storage()
+    test_user_share_grants_create_approved_accepted_linked_resources()
     test_admin_service_health_route()
     test_admin_provisioning_jobs_route()
     test_admin_audit_route()
@@ -2182,6 +2853,7 @@ def main() -> int:
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
     test_user_provider_state_route()
+    test_provider_state_suspends_chutes_on_past_due_billing()
     test_admin_provider_state_route()
     test_admin_reconciliation_route()
     test_stripe_webhook_rejects_bad_signature()
@@ -2204,7 +2876,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 53 ArcLink hosted API tests")
+    print("PASS all 57 ArcLink hosted API tests")
     return 0
 
 

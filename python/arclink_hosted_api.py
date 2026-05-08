@@ -28,11 +28,16 @@ from arclink_api_auth import (
     ArcLinkApiAuthError,
     ArcLinkRateLimitError,
     _header as _api_header,
+    accept_user_share_grant_api,
+    acknowledge_user_credential_api,
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
+    approve_user_share_grant_api,
     create_arclink_admin_login_session_api,
     create_arclink_user_login_session_api,
+    create_user_share_grant_api,
     create_user_portal_link_api,
+    deny_user_share_grant_api,
     extract_arclink_csrf_token,
     extract_arclink_session_credentials,
     open_public_onboarding_checkout_api,
@@ -48,11 +53,14 @@ from arclink_api_auth import (
     cancel_onboarding_session_api,
     claim_session_from_onboarding_api,
     read_provider_state_api,
+    read_user_credentials_api,
     read_user_billing_api,
     read_user_dashboard_api,
+    read_user_linked_resources_api,
     read_user_provisioning_status_api,
     require_arclink_csrf,
     revoke_arclink_session,
+    revoke_user_share_grant_api,
     start_public_onboarding_api,
 )
 from arclink_dashboard import build_operator_snapshot, build_scale_operations_snapshot
@@ -564,6 +572,160 @@ def _handle_user_provisioning_status(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_credentials(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: dict[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_credentials_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        deployment_id=query.get("deployment_id", ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_credential_ack(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = acknowledge_user_credential_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        handoff_id=str(body.get("handoff_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grant_create(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = create_user_share_grant_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        recipient_user_id=str(body.get("recipient_user_id") or ""),
+        resource_kind=str(body.get("resource_kind") or "drive"),
+        resource_root=str(body.get("resource_root") or "vault"),
+        resource_path=str(body.get("resource_path") or ""),
+        display_name=str(body.get("display_name") or ""),
+        access_mode=str(body.get("access_mode") or "read"),
+        metadata=body.get("metadata"),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grant_approve(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = approve_user_share_grant_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        grant_id=str(body.get("grant_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grant_deny(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = deny_user_share_grant_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        grant_id=str(body.get("grant_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grant_accept(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = accept_user_share_grant_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        grant_id=str(body.get("grant_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grant_revoke(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = revoke_user_share_grant_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        grant_id=str(body.get("grant_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_linked_resources(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: dict[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_linked_resources_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        user_id=query.get("user_id", ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 _ADMIN_READ_HANDLERS: dict[str, tuple[Any, tuple[str, ...]]] = {
     "admin_service_health": (read_admin_service_health_api, ("deployment_id", "status", "since")),
     "admin_provisioning_jobs": (read_admin_provisioning_jobs_api, ("deployment_id", "status", "since")),
@@ -628,6 +790,7 @@ def _handle_provider_state(
         session_id=creds["session_id"],
         session_token=creds["session_token"],
         session_kind=session_kind,
+        env=config.env,
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -988,6 +1151,61 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "parameters": [_qparam("deployment_id")],
         "responses": {"200": {"description": "Provisioning data"}, "401": {"description": "Unauthorized"}},
     },
+    "user_credentials": {
+        "summary": "Read pending credential handoff state",
+        "tags": ["user"],
+        "parameters": [_qparam("deployment_id")],
+        "responses": {"200": {"description": "Credential handoff metadata"}, "401": {"description": "Unauthorized"}},
+    },
+    "user_credential_ack": {
+        "summary": "Acknowledge credential storage and remove future handoff visibility",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"handoff_id": {"type": "string"}}, required=["handoff_id"]),
+        "responses": {"200": {"description": "Credential handoff removed"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_create": {
+        "summary": "Request a read-only Drive/Code share grant",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({
+            "recipient_user_id": {"type": "string"},
+            "resource_kind": {"type": "string", "enum": ["drive", "code"]},
+            "resource_root": {"type": "string", "enum": ["vault", "workspace"]},
+            "resource_path": {"type": "string"},
+            "display_name": {"type": "string"},
+            "access_mode": {"type": "string", "enum": ["read"]},
+        }, required=["recipient_user_id", "resource_kind", "resource_root", "resource_path"]),
+        "responses": {"201": {"description": "Share grant requested"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_approve": {
+        "summary": "Owner-approve a pending share grant",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"grant_id": {"type": "string"}}, required=["grant_id"]),
+        "responses": {"200": {"description": "Share grant approved"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_deny": {
+        "summary": "Owner-deny a pending share grant",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"grant_id": {"type": "string"}}, required=["grant_id"]),
+        "responses": {"200": {"description": "Share grant denied"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_accept": {
+        "summary": "Accept an approved linked resource share",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"grant_id": {"type": "string"}}, required=["grant_id"]),
+        "responses": {"200": {"description": "Share accepted"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_revoke": {
+        "summary": "Owner-revoke a share grant",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"grant_id": {"type": "string"}}, required=["grant_id"]),
+        "responses": {"200": {"description": "Share revoked"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_linked_resources": {
+        "summary": "Read accepted linked resources for the authenticated user",
+        "tags": ["user"],
+        "parameters": [_qparam("user_id")],
+        "responses": {"200": {"description": "Linked resources"}, "401": {"description": "Unauthorized"}},
+    },
     "admin_dashboard": {
         "summary": "Read admin dashboard (all deployments)",
         "tags": ["admin"],
@@ -1059,7 +1277,7 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "responses": {"200": {"description": "Scale operations snapshot"}, "401": {"description": "Unauthorized"}},
     },
     "admin_provider_state": {
-        "summary": "Read provider/model state (admin)",
+        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (admin)",
         "tags": ["admin"],
         "responses": {"200": {"description": "Provider state"}, "401": {"description": "Unauthorized"}},
     },
@@ -1074,7 +1292,7 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "responses": {"200": {"description": "Session revoked"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "user_provider_state": {
-        "summary": "Read provider/model state (user)",
+        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (user)",
         "tags": ["user"],
         "responses": {"200": {"description": "Provider state"}, "401": {"description": "Unauthorized"}},
     },
@@ -1176,6 +1394,14 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/billing"): "user_billing",
     ("POST", "/user/portal"): "user_portal_link",
     ("GET", "/user/provisioning"): "user_provisioning_status",
+    ("GET", "/user/credentials"): "user_credentials",
+    ("POST", "/user/credentials/acknowledge"): "user_credential_ack",
+    ("POST", "/user/share-grants"): "user_share_grant_create",
+    ("POST", "/user/share-grants/approve"): "user_share_grant_approve",
+    ("POST", "/user/share-grants/deny"): "user_share_grant_deny",
+    ("POST", "/user/share-grants/accept"): "user_share_grant_accept",
+    ("POST", "/user/share-grants/revoke"): "user_share_grant_revoke",
+    ("GET", "/user/linked-resources"): "user_linked_resources",
     ("GET", "/admin/dashboard"): "admin_dashboard",
     ("GET", "/admin/service-health"): "admin_service_health",
     ("GET", "/admin/provisioning-jobs"): "admin_provisioning_jobs",
@@ -1287,6 +1513,22 @@ def route_arclink_hosted_api(
             result = _handle_user_portal_link(conn, headers, parsed_body, request_id, cfg, stripe)
         elif route_key == "user_provisioning_status":
             result = _handle_user_provisioning_status(conn, headers, clean_query, request_id, cfg)
+        elif route_key == "user_credentials":
+            result = _handle_user_credentials(conn, headers, clean_query, request_id, cfg)
+        elif route_key == "user_credential_ack":
+            result = _handle_user_credential_ack(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_create":
+            result = _handle_user_share_grant_create(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_approve":
+            result = _handle_user_share_grant_approve(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_deny":
+            result = _handle_user_share_grant_deny(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_accept":
+            result = _handle_user_share_grant_accept(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_revoke":
+            result = _handle_user_share_grant_revoke(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_linked_resources":
+            result = _handle_user_linked_resources(conn, headers, clean_query, request_id, cfg)
         elif route_key == "admin_dashboard":
             result = _handle_admin_dashboard(conn, headers, clean_query, request_id, cfg)
         elif route_key in _ADMIN_READ_HANDLERS:

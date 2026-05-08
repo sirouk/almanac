@@ -6,9 +6,10 @@ import os
 import sqlite3
 from typing import Any, Mapping
 
-from arclink_control import append_arclink_audit, utc_now_iso
+from arclink_control import append_arclink_audit, get_setting, utc_now_iso
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
+from arclink_chutes import evaluate_chutes_deployment_boundary, renewal_lifecycle_for_billing_state
 from arclink_product import primary_provider
 
 
@@ -29,7 +30,9 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_ACTION_INTENT_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled"})
+ARCLINK_ACTION_INTENT_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "pending_not_implemented"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"})
+ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
 ARCLINK_USER_DASHBOARD_SECTIONS = (
     "deployment_health",
     "access_links",
@@ -45,6 +48,19 @@ ARCLINK_USER_DASHBOARD_SECTIONS = (
     "security",
     "support",
 )
+
+
+def admin_action_execution_readiness(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    source_env = env or os.environ
+    executor_adapter = str(source_env.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower() or "disabled"
+    return {
+        "executable": sorted(ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES),
+        "pending_not_implemented": sorted(ARCLINK_PENDING_ADMIN_ACTION_TYPES),
+        "disabled": sorted(ARCLINK_PENDING_ADMIN_ACTION_TYPES),
+        "executor_adapter": executor_adapter,
+        "queue_policy": "admin UI queues only modeled worker actions; pending actions stay disabled until worker wiring lands",
+        "note": "pending_not_implemented actions record honest pending status instead of fake success",
+    }
 ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
     "onboarding_funnel",
     "users",
@@ -190,11 +206,7 @@ def build_scale_operations_snapshot(
         and os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "").strip().lower()
         not in ("0", "false", "no", "off")
     )
-    executor_adapter = str(os.environ.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower()
-
-    # Classify action types by execution readiness
-    _EXECUTABLE_ACTIONS = {"restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"}
-    _PENDING_ACTIONS = {"comp", "suspend", "unsuspend", "reprovision", "rollout", "force_resynth", "rotate_bot_key"}
+    action_readiness = admin_action_execution_readiness()
 
     return {
         "fleet_capacity": capacity,
@@ -207,15 +219,11 @@ def build_scale_operations_snapshot(
         "rollout_surface": "internal_read_only",
         "provisioner": {
             "enabled": provisioner_enabled,
-            "executor_adapter": executor_adapter,
+            "executor_adapter": action_readiness["executor_adapter"],
             "status": "active" if provisioner_enabled else "disabled",
             "note": "" if provisioner_enabled else "ARCLINK_CONTROL_PROVISIONER_ENABLED is not set; provisioning worker is idle",
         },
-        "action_execution_readiness": {
-            "executable": sorted(_EXECUTABLE_ACTIONS),
-            "pending_not_implemented": sorted(_PENDING_ACTIONS),
-            "note": "pending_not_implemented actions will record honest pending status instead of fake success",
-        },
+        "action_execution_readiness": action_readiness,
     }
 
 
@@ -304,6 +312,81 @@ def _health_status(health: list[dict[str, Any]]) -> str:
     return "unknown"
 
 
+def _notion_index_available(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM notion_index_documents WHERE state = 'active' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def _deployment_notion_setup(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    urls: Mapping[str, str],
+) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM arclink_onboarding_sessions
+        WHERE deployment_id = ?
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+        """,
+        (deployment_id,),
+    ).fetchone()
+    session_metadata = _json_loads(str(row["metadata_json"] or "{}")) if row is not None else {}
+    public_status = str(session_metadata.get("connect_notion_public_status") or "").strip()
+    configured = bool(str(get_setting(conn, "notion_webhook_verification_token", "") or "").strip())
+    installed_at = str(get_setting(conn, "notion_webhook_verification_token_installed_at", "") or "").strip()
+    verified_at = str(get_setting(conn, "notion_webhook_verified_at", "") or "").strip()
+    armed_until = str(get_setting(conn, "notion_webhook_verification_token_armed_until", "") or "").strip()
+    index_available = _notion_index_available(conn)
+    dashboard_url = str(urls.get("dashboard") or "").rstrip("/")
+    callback_url = str(urls.get("notion") or (f"{dashboard_url}/notion/webhook" if dashboard_url else "")).strip()
+    ready_for_dashboard = public_status == "ready_for_dashboard_verification"
+    if ready_for_dashboard and verified_at and configured and index_available:
+        status = "verified"
+    elif ready_for_dashboard and verified_at and configured:
+        status = "verified_waiting_for_index"
+    elif ready_for_dashboard:
+        status = "pending_dashboard_verification"
+    elif public_status == "awaiting_user_setup":
+        status = "awaiting_user_setup"
+    elif armed_until:
+        status = "webhook_install_armed"
+    elif configured:
+        status = "webhook_token_installed"
+    elif callback_url:
+        status = "available"
+    else:
+        status = "unavailable"
+    return {
+        "status": status,
+        "model": "brokered_shared_root",
+        "callback_url": callback_url,
+        "public_status": public_status or "not_requested",
+        "requested_at": str(session_metadata.get("connect_notion_requested_at") or ""),
+        "ready_at": str(session_metadata.get("connect_notion_user_marked_ready_at") or ""),
+        "webhook": {
+            "configured": configured,
+            "verified": bool(verified_at),
+            "installed_at": installed_at,
+            "verified_at": verified_at,
+            "armed": bool(armed_until),
+            "armed_until": armed_until,
+        },
+        "index": {
+            "status": "available" if index_available else "not_seen",
+        },
+        "verification": {
+            "dashboard": status,
+            "email_share": "not_proof",
+            "live_workspace": "proof_gated",
+        },
+    }
+
+
 def _user_dashboard_sections(
     *,
     urls: Mapping[str, str],
@@ -311,6 +394,7 @@ def _user_dashboard_sections(
     onboarding: Mapping[str, Any],
     model: Mapping[str, Any],
     billing: Mapping[str, Any],
+    notion_setup: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     qmd = next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""})
     memory = next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""})
@@ -375,6 +459,7 @@ def _user_dashboard_sections(
             "status": _health_status([qmd, memory]),
             "qmd": qmd,
             "memory": memory,
+            "notion": notion_setup,
         },
         {
             "section": "skills",
@@ -492,6 +577,38 @@ def _deployment_onboarding(conn: sqlite3.Connection, deployment_id: str) -> dict
     }
 
 
+def _deployment_agent_label(
+    conn: sqlite3.Connection,
+    deployment: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any],
+) -> str:
+    candidate = str(metadata.get("agent_name") or metadata.get("display_name") or "").strip()
+    if candidate:
+        return candidate[:80]
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    if deployment_id:
+        row = conn.execute(
+            """
+            SELECT display_name_hint
+            FROM arclink_onboarding_sessions
+            WHERE deployment_id = ? AND display_name_hint != ''
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (deployment_id,),
+        ).fetchone()
+        if row is not None and str(row["display_name_hint"] or "").strip():
+            return str(row["display_name_hint"] or "").strip()[:80]
+    agent_id = str(deployment.get("agent_id") or "").strip()
+    if agent_id:
+        return agent_id[:80]
+    prefix = str(deployment.get("prefix") or "").strip()
+    if prefix:
+        return f"Agent {prefix.rsplit('-', 1)[-1][:24]}"
+    return "Private agent"
+
+
 def read_arclink_user_dashboard(
     conn: sqlite3.Connection,
     *,
@@ -536,19 +653,44 @@ def read_arclink_user_dashboard(
         metadata = _json_loads(str(dep.get("metadata_json") or "{}"))
         model_id = onboarding.get("selected_model_id") or metadata.get("selected_model_id") or ""
         urls = _deployment_urls(str(dep["prefix"] or ""), str(dep["base_domain"] or ""), metadata)
+        notion_setup = _deployment_notion_setup(conn, deployment_id=str(dep["deployment_id"] or ""), urls=urls)
         billing = {
             "entitlement_state": str(user["entitlement_state"] or "none"),
             "entitlement_updated_at": str(user["entitlement_updated_at"] or ""),
             "subscriptions": subscriptions,
+            "renewal_lifecycle": renewal_lifecycle_for_billing_state(str(user["entitlement_state"] or "")),
         }
+        provider = primary_provider({})
         model = {
-            "provider": primary_provider({}),
+            "provider": provider,
             "model_id": str(model_id or ""),
             "credential_state": "secret_ref_pending",
         }
+        if provider == "chutes":
+            boundary = evaluate_chutes_deployment_boundary(
+                str(dep["deployment_id"] or ""),
+                str(dep["user_id"] or ""),
+                metadata,
+                env=os.environ,
+                billing_state=str(user["entitlement_state"] or ""),
+            )
+            public_boundary = boundary.to_public()
+            model.update(
+                {
+                    "credential_state": boundary.credential_state,
+                    "allow_inference": boundary.allow_inference,
+                    "isolation_mode": boundary.isolation_mode,
+                    "credential_lifecycle": public_boundary.get("credential_lifecycle", {}),
+                    "budget": public_boundary.get("budget", {}),
+                    "billing_lifecycle": public_boundary.get("billing_lifecycle", {}),
+                    "threshold_continuation": public_boundary.get("threshold_continuation", {}),
+                    "provider_note": boundary.reason,
+                }
+            )
         deployment_cards.append(
             {
                 "deployment_id": str(dep["deployment_id"] or ""),
+                "agent_label": _deployment_agent_label(conn, dep, metadata=metadata),
                 "status": str(dep["status"] or ""),
                 "prefix": str(dep["prefix"] or ""),
                 "base_domain": str(dep["base_domain"] or ""),
@@ -556,11 +698,19 @@ def read_arclink_user_dashboard(
                 "billing": billing,
                 "bot_contact": onboarding,
                 "model": model,
+                "notion_setup": notion_setup,
                 "freshness": {
                     "qmd": next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""}),
                     "memory": next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""}),
                 },
-                "sections": _user_dashboard_sections(urls=urls, health=health, onboarding=onboarding, model=model, billing=billing),
+                "sections": _user_dashboard_sections(
+                    urls=urls,
+                    health=health,
+                    onboarding=onboarding,
+                    model=model,
+                    billing=billing,
+                    notion_setup=notion_setup,
+                ),
                 "service_health": health,
                 "recent_events": _deployment_events(conn, str(dep["deployment_id"]), limit=recent_limit),
             }
@@ -576,6 +726,7 @@ def read_arclink_user_dashboard(
         "entitlement": {
             "state": str(user["entitlement_state"] or "none"),
             "updated_at": str(user["entitlement_updated_at"] or ""),
+            "renewal_lifecycle": renewal_lifecycle_for_billing_state(str(user["entitlement_state"] or "")),
         },
         "deployments": deployment_cards,
     }
@@ -1059,6 +1210,7 @@ def read_arclink_admin_dashboard(
         "dns_drift": dns_drift,
         "provisioning_jobs": provisioning_jobs,
         "action_intents": action_intents,
+        "action_execution_readiness": admin_action_execution_readiness(),
         "events": events,
         "audit_rows": audit_rows,
         "audit": audit_rows,

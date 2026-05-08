@@ -61,10 +61,18 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 |--------|------|-------------|
 | POST | `/auth/user/logout` | Revoke user session (CSRF) |
 | GET | `/user/dashboard` | User deployment overview |
-| GET | `/user/billing` | Billing/entitlement status |
+| GET | `/user/billing` | Billing/entitlement status plus the local renewal lifecycle gate |
 | POST | `/user/portal` | Create Stripe portal link (CSRF) |
 | GET | `/user/provisioning` | Deployment provisioning status |
-| GET | `/user/provider-state` | Provider adapter state |
+| GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
+| POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |
+| POST | `/user/share-grants` | Request a read-only Drive/Code share grant (CSRF) |
+| POST | `/user/share-grants/approve` | Owner-approve a pending share grant (CSRF) |
+| POST | `/user/share-grants/deny` | Owner-deny a pending share grant (CSRF) |
+| POST | `/user/share-grants/accept` | Recipient accepts an approved share grant (CSRF) |
+| POST | `/user/share-grants/revoke` | Owner revokes a share grant and removes accepted linked-resource visibility (CSRF) |
+| GET | `/user/linked-resources` | Accepted linked resources for the authenticated user |
+| GET | `/user/provider-state` | Provider adapter state, including sanitized Chutes budget, credential, and billing-suspension boundary |
 
 ### Admin (session_kind=admin)
 
@@ -81,7 +89,7 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | POST | `/admin/actions` | Queue admin action (CSRF) |
 | GET | `/admin/reconciliation` | Reconciliation drift summary |
 | GET | `/admin/operator-snapshot` | Operator snapshot (host readiness, diagnostics, journey blockers, evidence status) |
-| GET | `/admin/provider-state` | Provider adapter state |
+| GET | `/admin/provider-state` | Provider adapter state, including sanitized Chutes budget summaries |
 | GET | `/admin/scale-operations` | Fleet capacity, placements, stale actions, rollouts, last executor result |
 | POST | `/admin/sessions/revoke` | Revoke any session (CSRF) |
 
@@ -114,9 +122,17 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_FOUNDERS_PRICE_ID` | `price_arclink_founders` | Limited 100 Founders Stripe price ($149/month target) |
 | `ARCLINK_SOVEREIGN_PRICE_ID` | `price_arclink_sovereign` | Sovereign Stripe price ($199/month target) |
 | `ARCLINK_SCALE_PRICE_ID` | `price_arclink_scale` | Scale Stripe price ($275/month target) |
+| `ARCLINK_FIRST_AGENT_PRICE_ID` | `price_arclink_founders` | Legacy first-agent alias for Limited 100 Founders |
 | `ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID` | `price_arclink_sovereign_agent_expansion` | Sovereign Agentic Expansion Stripe price ($99/month target) |
 | `ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID` | `price_arclink_scale_agent_expansion` | Scale Agentic Expansion Stripe price ($79/month target) |
 | `ARCLINK_ADDITIONAL_AGENT_PRICE_ID` | `price_arclink_sovereign_agent_expansion` | Legacy alias for Sovereign Agentic Expansion |
+| `ARCLINK_FOUNDERS_MONTHLY_CENTS` | `14900` | Limited 100 Founders public price label |
+| `ARCLINK_SOVEREIGN_MONTHLY_CENTS` | `19900` | Sovereign public price label |
+| `ARCLINK_SCALE_MONTHLY_CENTS` | `27500` | Scale public price label |
+| `ARCLINK_FIRST_AGENT_MONTHLY_CENTS` | `14900` | Legacy first-agent monthly price alias |
+| `ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS` | `9900` | Sovereign Agentic Expansion public price label |
+| `ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS` | `7900` | Scale Agentic Expansion public price label |
+| `ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS` | `9900` | Legacy additional-agent monthly price alias |
 
 ## Web Client Integration
 
@@ -138,7 +154,32 @@ The Next.js admin dashboard (`web/src/app/admin/page.tsx`) is wired to the hoste
 | scale-operations | `/admin/scale-operations` | GET |
 | sessions (revoke) | `/admin/sessions/revoke` | POST |
 
-The user dashboard (`web/src/app/dashboard/page.tsx`) consumes `/user/dashboard`, `/user/billing`, `/user/provisioning`, and `/user/provider-state`.
+`/user/billing` includes `renewal_lifecycle`, which fails provider access
+closed for non-current billing states. Non-current renewals now use the
+approved lifecycle contract: immediate notice followed by daily reminders,
+provider access suspended immediately, a day-7 account/data removal warning,
+and day-14 audited purge queue metadata.
+`/user/provider-state` and `/admin/provider-state` expose the same sanitized
+boundary for Chutes deployments without returning key material. The Chutes
+credential lifecycle is explicit: inference is disabled until a scoped
+per-user or per-deployment `secret://` reference and budget are present;
+operator-shared keys are rejected as user isolation, per-user Chutes account
+OAuth is the fallback when per-key metering is unavailable, local
+provider-budget credit accounting stays separate from live
+purchase/provider-balance proof, and threshold continuation guidance remains
+policy-gated until public continuation copy and self-service provider-change
+policy exists.
+
+The user dashboard (`web/src/app/dashboard/page.tsx`) consumes
+`/user/dashboard`, `/user/billing`, `/user/provisioning`, `/user/provider-state`,
+`/user/credentials`, `/user/credentials/acknowledge`, and
+`/user/linked-resources`. The web API client also exposes
+`/user/share-grants/deny` and `/user/share-grants/revoke` for owner-scoped
+share closure flows. The hosted API and OpenAPI catalog define share create,
+approve, deny, accept, revoke, and linked-resource reads; the current Next.js
+dashboard intentionally wires only credential acknowledgement, linked-resource
+listing, and read-only share status until full share creation, approval,
+acceptance, and revocation UI is built.
 
 ## Assumptions and Ownership
 

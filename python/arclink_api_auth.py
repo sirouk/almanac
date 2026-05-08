@@ -7,11 +7,23 @@ import hashlib
 import hmac
 from http.cookies import SimpleCookie
 import json
+import os
+from pathlib import Path
 import secrets
+import shutil
 import sqlite3
+import tempfile
 from typing import Any, Mapping
 
-from arclink_control import append_arclink_audit, parse_utc_iso, utc_after_seconds_iso, utc_now, utc_now_iso
+from arclink_control import (
+    append_arclink_audit,
+    append_arclink_event,
+    parse_utc_iso,
+    queue_notification,
+    utc_after_seconds_iso,
+    utc_now,
+    utc_now_iso,
+)
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_dashboard import queue_arclink_admin_action, read_arclink_admin_dashboard, read_arclink_user_dashboard
 from arclink_onboarding import (
@@ -22,11 +34,24 @@ from arclink_onboarding import (
 )
 from arclink_entitlements import ReconciliationDrift, detect_stripe_reconciliation_drift
 from arclink_product import chutes_default_model, primary_provider
+from arclink_chutes import (
+    chutes_credential_lifecycle,
+    chutes_threshold_continuation_policy,
+    evaluate_chutes_deployment_boundary,
+    renewal_lifecycle_for_billing_state,
+)
 
 
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
 ARCLINK_ADMIN_MUTATION_ROLES = frozenset({"owner", "admin", "ops"})
 ARCLINK_SESSION_STATUSES = frozenset({"active", "revoked"})
+ARCLINK_CREDENTIAL_HANDOFF_KINDS = frozenset({"dashboard_password", "chutes_api_key", "notion_token"})
+ARCLINK_CREDENTIAL_HANDOFF_STATUSES = frozenset({"available", "removed"})
+ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code"})
+ARCLINK_SHARE_RESOURCE_ROOTS = frozenset({"vault", "workspace"})
+ARCLINK_SHARE_ACCESS_MODES = frozenset({"read"})
+ARCLINK_SHARE_STATUSES = frozenset({"pending_owner_approval", "approved", "accepted", "revoked", "denied"})
+ARCLINK_LINKED_RESOURCE_MANIFEST = ".arclink-linked-resources.json"
 ARCLINK_SESSION_ID_HEADER = "x-arclink-session-id"
 ARCLINK_SESSION_TOKEN_HEADER = "x-arclink-session-token"
 ARCLINK_CSRF_HEADER = "x-arclink-csrf-token"
@@ -274,6 +299,22 @@ def upsert_arclink_admin(
         raise ArcLinkApiAuthError("ArcLink admin id and email are required")
     if clean_role not in ARCLINK_ADMIN_ROLES:
         raise ArcLinkApiAuthError(f"unsupported ArcLink admin role: {clean_role or 'blank'}")
+    clean_status = str(status or "").strip().lower() or "active"
+    if clean_role == "owner" and clean_status == "active":
+        existing_owner = conn.execute(
+            """
+            SELECT admin_id
+            FROM arclink_admins
+            WHERE role = 'owner'
+              AND status = 'active'
+              AND admin_id != ?
+            ORDER BY created_at ASC, admin_id ASC
+            LIMIT 1
+            """,
+            (clean_admin,),
+        ).fetchone()
+        if existing_owner is not None:
+            raise ArcLinkApiAuthError("ArcLink single-operator policy allows only one active owner")
     clean_password_hash = str(password_hash or "").strip()
     if password:
         clean_password_hash = hash_arclink_admin_password(password)
@@ -294,7 +335,7 @@ def upsert_arclink_admin(
           role_scope_json = excluded.role_scope_json,
           updated_at = excluded.updated_at
         """,
-        (clean_admin, clean_email, clean_role, status, clean_password_hash, _json(role_scope), now, now),
+        (clean_admin, clean_email, clean_role, clean_status, clean_password_hash, _json(role_scope), now, now),
     )
     grant_arclink_admin_role(
         conn,
@@ -814,6 +855,7 @@ def read_user_billing_api(
     billing = {
         "entitlement": dashboard.get("entitlement", {}),
         "subscriptions": [],
+        "renewal_lifecycle": renewal_lifecycle_for_billing_state(str(dashboard.get("entitlement", {}).get("state") or "")),
     }
     for dep in dashboard.get("deployments", []):
         for sub in dep.get("billing", {}).get("subscriptions", []):
@@ -852,6 +894,14 @@ def read_user_provisioning_status_api(
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
     target_user = str(session["user_id"] or "")
+    clean_deployment_id = str(deployment_id or "").strip()
+    if clean_deployment_id:
+        row = conn.execute(
+            "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment_id,),
+        ).fetchone()
+        if row is not None and str(row["user_id"] or "") != target_user:
+            raise ArcLinkApiAuthError("ArcLink user session cannot read another user deployment")
     dashboard = read_arclink_user_dashboard(conn, user_id=target_user, deployment_id=deployment_id)
     from arclink_product import launch_phrase  # local import to avoid cycle
     deployments = []
@@ -864,6 +914,1120 @@ def read_user_provisioning_status_api(
             "recent_events": dep.get("recent_events", []),
         })
     return ArcLinkApiResponse(status=200, payload={"deployments": deployments})
+
+
+def _stable_handoff_id(deployment_id: str, credential_kind: str) -> str:
+    digest = hashlib.sha256(f"{deployment_id}:{credential_kind}".encode("utf-8")).hexdigest()[:24]
+    return f"cred_{digest}"
+
+
+def _credential_label(kind: str) -> str:
+    return {
+        "dashboard_password": "Dashboard password",
+        "chutes_api_key": "Chutes provider key",
+        "notion_token": "Notion integration token",
+    }.get(kind, kind.replace("_", " ").title())
+
+
+def _deployment_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
+    refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
+    defaults = {
+        "dashboard_password": f"secret://arclink/dashboard/{deployment_id}/password",
+        "chutes_api_key": f"secret://arclink/chutes/{deployment_id}",
+    }
+    result: dict[str, str] = {}
+    for key in sorted(ARCLINK_CREDENTIAL_HANDOFF_KINDS):
+        value = str((refs or {}).get(key) or defaults.get(key) or "").strip()
+        if value:
+            result[key] = value
+    return result
+
+
+def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deployment_id: str) -> None:
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ? AND user_id = ?",
+        (deployment_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkApiAuthError("ArcLink user session cannot read another user deployment")
+    metadata = _json_loads(str(row["metadata_json"] or "{}"))
+    now = utc_now_iso()
+    for kind, secret_ref in _deployment_secret_refs(deployment_id, metadata).items():
+        if kind not in ARCLINK_CREDENTIAL_HANDOFF_KINDS:
+            continue
+        _reject_secret_material({"secret_ref": secret_ref})
+        conn.execute(
+            """
+            INSERT INTO arclink_credential_handoffs (
+              handoff_id, user_id, deployment_id, credential_kind, display_name,
+              secret_ref, delivery_hint, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
+            ON CONFLICT(deployment_id, credential_kind) DO UPDATE SET
+              user_id = excluded.user_id,
+              secret_ref = CASE
+                WHEN arclink_credential_handoffs.status = 'available' THEN excluded.secret_ref
+                ELSE arclink_credential_handoffs.secret_ref
+              END,
+              updated_at = excluded.updated_at
+            """,
+            (
+                _stable_handoff_id(deployment_id, kind),
+                user_id,
+                deployment_id,
+                kind,
+                _credential_label(kind),
+                secret_ref,
+                "Copy the credential from the secure completion bundle into your password manager, then acknowledge storage here.",
+                now,
+                now,
+            ),
+        )
+    conn.commit()
+
+
+def _public_credential_handoff(row: Mapping[str, Any]) -> dict[str, Any]:
+    status = str(row.get("status") or "")
+    removed = status == "removed" or bool(str(row.get("removed_at") or ""))
+    payload = {
+        "handoff_id": str(row.get("handoff_id") or ""),
+        "deployment_id": str(row.get("deployment_id") or ""),
+        "credential_kind": str(row.get("credential_kind") or ""),
+        "display_name": str(row.get("display_name") or ""),
+        "status": status,
+        "revealed_at": str(row.get("revealed_at") or ""),
+        "acknowledged_at": str(row.get("acknowledged_at") or ""),
+        "removed_at": str(row.get("removed_at") or ""),
+        "delivery_hint": "" if removed else str(row.get("delivery_hint") or ""),
+        "copy_guidance": "" if removed else "Store it in a password manager; do not paste it into shared channels.",
+        "raw_secret": "",
+    }
+    if not removed:
+        payload["secret_ref"] = mask_secret_ref(str(row.get("secret_ref") or ""))
+        payload["reveal_mode"] = "secure_completion_bundle"
+    return payload
+
+
+def read_user_credentials_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    deployment_id: str = "",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(session["user_id"] or "")
+    deployment_args: list[Any] = [target_user]
+    deployment_filter = ""
+    clean_deployment = str(deployment_id or "").strip()
+    if clean_deployment:
+        deployment_filter = "AND deployment_id = ?"
+        deployment_args.append(clean_deployment)
+    deployments = [
+        str(row["deployment_id"] or "")
+        for row in conn.execute(
+            f"SELECT deployment_id FROM arclink_deployments WHERE user_id = ? {deployment_filter}",
+            tuple(deployment_args),
+        ).fetchall()
+    ]
+    if clean_deployment and not deployments:
+        raise ArcLinkApiAuthError("ArcLink user session cannot read another user deployment")
+    for dep_id in deployments:
+        _ensure_credential_handoffs(conn, user_id=target_user, deployment_id=dep_id)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_credential_handoffs
+        WHERE user_id = ?
+          AND (? = '' OR deployment_id = ?)
+        ORDER BY deployment_id, credential_kind
+        """,
+        (target_user, clean_deployment, clean_deployment),
+    ).fetchall()
+    credentials = [_public_credential_handoff(rowdict(row)) for row in rows if str(row["status"] or "") != "removed"]
+    removed_count = sum(1 for row in rows if str(row["status"] or "") == "removed")
+    return ArcLinkApiResponse(
+        status=200,
+        payload={
+            "instructions": {
+                "copy": "Copy each credential from the secure completion bundle into your password manager.",
+                "acknowledge": "After acknowledgement, ArcLink removes the handoff from future user API responses.",
+                "reissue": "Ask the operator to rotate or reissue a removed credential.",
+            },
+            "credentials": credentials,
+            "removed_count": removed_count,
+        },
+    )
+
+
+def acknowledge_user_credential_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    handoff_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    target_user = str(session["user_id"] or "")
+    clean_handoff = str(handoff_id or "").strip()
+    row = conn.execute(
+        "SELECT * FROM arclink_credential_handoffs WHERE handoff_id = ?",
+        (clean_handoff,),
+    ).fetchone()
+    if row is None or str(row["user_id"] or "") != target_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot acknowledge another user's credential")
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_credential_handoffs
+        SET status = 'removed',
+            acknowledged_at = CASE WHEN acknowledged_at = '' THEN ? ELSE acknowledged_at END,
+            removed_at = CASE WHEN removed_at = '' THEN ? ELSE removed_at END,
+            updated_at = ?
+        WHERE handoff_id = ? AND user_id = ?
+        """,
+        (now, now, now, clean_handoff, target_user),
+    )
+    append_arclink_audit(
+        conn,
+        action="credential_handoff_acknowledged",
+        actor_id=target_user,
+        target_kind="credential_handoff",
+        target_id=clean_handoff,
+        reason="user confirmed credential storage",
+        metadata={"deployment_id": str(row["deployment_id"] or ""), "credential_kind": str(row["credential_kind"] or "")},
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=str(row["deployment_id"] or ""),
+        event_type="credential_handoff_removed",
+        metadata={"credential_kind": str(row["credential_kind"] or ""), "user_id": target_user},
+        commit=False,
+    )
+    conn.commit()
+    public = _public_credential_handoff(rowdict(conn.execute("SELECT * FROM arclink_credential_handoffs WHERE handoff_id = ?", (clean_handoff,)).fetchone()))
+    return ArcLinkApiResponse(status=200, payload={"credential": public})
+
+
+def _clean_share_path(value: str) -> str:
+    text = str(value or "").replace("\\", "/").strip()
+    if not text or text in {"/", ".", "./"}:
+        raise ArcLinkApiAuthError("ArcLink share requires a named file or directory path")
+    text = text.lstrip("/")
+    parts: list[str] = []
+    for part in text.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ArcLinkApiAuthError("ArcLink share path traversal is not allowed")
+        lowered = part.lower()
+        if lowered in {".ssh", "secrets"} or lowered == ".env" or lowered.startswith(".env.") or "bootstrap-token" in lowered:
+            raise ArcLinkApiAuthError("ArcLink share path cannot target private runtime or secret material")
+        parts.append(part)
+    if not parts:
+        raise ArcLinkApiAuthError("ArcLink share requires a named file or directory path")
+    return "/" + "/".join(parts)
+
+
+def _safe_projection_segment(value: str, *, fallback: str = "linked-resource") -> str:
+    segment = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in str(value or "").strip())
+    segment = "-".join(part for part in segment.split("-") if part).strip(".-_")
+    return (segment[:96] or fallback).strip(".-_") or fallback
+
+
+def _render_share_state_roots(*, deployment_id: str, prefix: str, state_root_base: str) -> dict[str, str]:
+    base = str(state_root_base or "/arcdata/deployments").rstrip("/")
+    root = f"{base}/{_safe_projection_segment(deployment_id, fallback='deployment')}-{_safe_projection_segment(prefix, fallback='pod')}"
+    return {
+        "root": root,
+        "vault": f"{root}/vault",
+        "code_workspace": f"{root}/workspace",
+        "linked_resources": f"{root}/linked-resources",
+    }
+
+
+def _deployment_state_roots_for_user(conn: sqlite3.Connection, user_id: str) -> dict[str, str]:
+    rows = conn.execute(
+        """
+        SELECT deployment_id, prefix, status, metadata_json
+        FROM arclink_deployments
+        WHERE user_id = ?
+        ORDER BY
+          CASE status
+            WHEN 'active' THEN 0
+            WHEN 'running' THEN 1
+            WHEN 'provisioning' THEN 2
+            WHEN 'provisioning_ready' THEN 3
+            ELSE 9
+          END,
+          updated_at DESC,
+          deployment_id DESC
+        """,
+        (str(user_id or "").strip(),),
+    ).fetchall()
+    for row in rows:
+        metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+        raw_roots = metadata.get("state_roots")
+        if isinstance(raw_roots, Mapping):
+            roots = {str(key): str(value) for key, value in raw_roots.items() if str(value or "").strip()}
+            if roots.get("vault") or roots.get("code_workspace") or roots.get("linked_resources"):
+                return roots
+        state_root_base = str(metadata.get("state_root_base") or os.environ.get("ARCLINK_STATE_ROOT_BASE") or "/arcdata/deployments")
+        return _render_share_state_roots(
+            deployment_id=str(row["deployment_id"] or ""),
+            prefix=str(row["prefix"] or ""),
+            state_root_base=state_root_base,
+        )
+    return {}
+
+
+def _path_within(root: Path, path: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _sensitive_share_projection_path(path: Path) -> bool:
+    lowered_parts = {part.lower() for part in path.parts}
+    if lowered_parts & {".ssh", "secrets"}:
+        return True
+    name = path.name.lower()
+    if name == ".env" or name.startswith(".env.") or "bootstrap-token" in name:
+        return True
+    if name in {"id_dsa", "id_ecdsa", "id_ed25519", "id_rsa"}:
+        return True
+    return False
+
+
+def _chmod_read_only(path: Path) -> None:
+    try:
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    except OSError:
+        pass
+
+
+def _linked_manifest_path(linked_root: Path) -> Path:
+    return linked_root / ARCLINK_LINKED_RESOURCE_MANIFEST
+
+
+def _load_linked_manifest(linked_root: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(_linked_manifest_path(linked_root).read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+    return {"version": 1, "entries": entries}
+
+
+def _write_linked_manifest(linked_root: Path, payload: Mapping[str, Any]) -> None:
+    linked_root.mkdir(parents=True, exist_ok=True)
+    path = _linked_manifest_path(linked_root)
+    fd, tmp_name = tempfile.mkstemp(dir=str(linked_root), prefix=".arclink-linked-", suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(payload), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+        _chmod_read_only(path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _upsert_linked_manifest_entry(
+    linked_root: Path,
+    *,
+    slug: str,
+    grant_id: str,
+    source: Path,
+    linked_path: str,
+    entry_path: str,
+    resource_kind: str,
+    owner_user_id: str,
+    updated_at: str,
+) -> None:
+    payload = _load_linked_manifest(linked_root)
+    entries = dict(payload.get("entries") or {})
+    entries[slug] = {
+        "grant_id": grant_id,
+        "source_path": str(source),
+        "linked_path": linked_path,
+        "entry_path": entry_path,
+        "resource_kind": resource_kind,
+        "owner_user_id": owner_user_id,
+        "read_only": True,
+        "projection_mode": "living_symlink",
+        "updated_at": updated_at,
+    }
+    payload["entries"] = entries
+    _write_linked_manifest(linked_root, payload)
+
+
+def _remove_linked_manifest_entry(linked_root: Path, *, slug: str) -> None:
+    payload = _load_linked_manifest(linked_root)
+    entries = dict(payload.get("entries") or {})
+    if slug in entries:
+        entries.pop(slug, None)
+        payload["entries"] = entries
+        _write_linked_manifest(linked_root, payload)
+
+
+def _remove_projection_path(root: Path, target: Path) -> bool:
+    root_resolved = root.expanduser().resolve(strict=False)
+    target_path = target.expanduser()
+    if target_path.is_symlink():
+        parent_resolved = target_path.parent.resolve(strict=False)
+        if parent_resolved != root_resolved and not _path_within(root_resolved, parent_resolved):
+            raise ArcLinkApiAuthError("ArcLink linked resource projection path is outside the linked root")
+        target_path.unlink(missing_ok=True)
+        return True
+    target_resolved = target_path.resolve(strict=False)
+    if target_resolved != root_resolved and not _path_within(root_resolved, target_resolved):
+        raise ArcLinkApiAuthError("ArcLink linked resource projection path is outside the linked root")
+    if not target_resolved.exists() and not target_resolved.is_symlink():
+        return False
+    if target_resolved.is_symlink() or target_resolved.is_file():
+        try:
+            target_resolved.chmod(0o600)
+        except OSError:
+            pass
+        target_resolved.unlink(missing_ok=True)
+        return True
+    for current_root, dirnames, filenames in os.walk(target_resolved, topdown=False):
+        current = Path(current_root)
+        for name in filenames:
+            child = current / name
+            try:
+                child.chmod(0o600)
+            except OSError:
+                pass
+        for name in dirnames:
+            child = current / name
+            try:
+                child.chmod(0o700)
+            except OSError:
+                pass
+        try:
+            current.chmod(0o700)
+        except OSError:
+            pass
+    shutil.rmtree(target_resolved)
+    return True
+
+
+def _copy_projection_tree(source: Path, destination: Path) -> int:
+    skipped = 0
+    if source.is_symlink():
+        raise ArcLinkApiAuthError("ArcLink share projections do not follow symlinks")
+    if source.is_file():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        _chmod_read_only(destination)
+        return skipped
+    destination.mkdir(parents=True, exist_ok=True)
+    for current_root, dirnames, filenames in os.walk(source):
+        current = Path(current_root)
+        rel = current.relative_to(source)
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not (current / name).is_symlink() and not _sensitive_share_projection_path(current / name)
+        ]
+        skipped += len([name for name in filenames if _sensitive_share_projection_path(current / name) or (current / name).is_symlink()])
+        target_dir = destination / rel
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for name in filenames:
+            child = current / name
+            if child.is_symlink() or _sensitive_share_projection_path(child):
+                continue
+            target_file = target_dir / name
+            shutil.copy2(child, target_file)
+            _chmod_read_only(target_file)
+    for current_root, dirnames, _filenames in os.walk(destination, topdown=False):
+        for name in dirnames:
+            _chmod_read_only(Path(current_root) / name)
+        _chmod_read_only(Path(current_root))
+    return skipped
+
+
+def _share_projection_public(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    projection = metadata.get("projection")
+    if not isinstance(projection, Mapping):
+        return {
+            "status": "not_materialized",
+            "linked_root": "linked",
+            "linked_path": "",
+            "entry_path": "",
+            "read_only": True,
+        }
+    return {
+        "status": str(projection.get("status") or "not_materialized"),
+        "linked_root": "linked",
+        "linked_path": str(projection.get("linked_path") or ""),
+        "entry_path": str(projection.get("entry_path") or ""),
+        "resource_kind": str(projection.get("resource_kind") or ""),
+        "projection_mode": str(projection.get("projection_mode") or ""),
+        "materialized_at": str(projection.get("materialized_at") or ""),
+        "removed_at": str(projection.get("removed_at") or ""),
+        "reason": str(projection.get("reason") or ""),
+        "read_only": True,
+        "skipped_sensitive_count": int(projection.get("skipped_sensitive_count") or 0),
+    }
+
+
+def _public_share_grant(row: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = json_loads_safe(str(row.get("metadata_json") or "{}"))
+    projection = _share_projection_public(metadata)
+    return {
+        "grant_id": str(row.get("grant_id") or ""),
+        "owner_user_id": str(row.get("owner_user_id") or ""),
+        "recipient_user_id": str(row.get("recipient_user_id") or ""),
+        "resource_kind": str(row.get("resource_kind") or ""),
+        "resource_root": str(row.get("resource_root") or ""),
+        "resource_path": str(row.get("resource_path") or ""),
+        "display_name": str(row.get("display_name") or ""),
+        "access_mode": str(row.get("access_mode") or ""),
+        "status": str(row.get("status") or ""),
+        "reshare_allowed": False,
+        "linked_root": projection["linked_root"],
+        "linked_path": projection["linked_path"],
+        "projection": projection,
+        "approved_at": str(row.get("approved_at") or ""),
+        "accepted_at": str(row.get("accepted_at") or ""),
+        "revoked_at": str(row.get("revoked_at") or ""),
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def _share_approval_button_extra(*, channel: str, grant_id: str) -> dict[str, Any]:
+    approve_command = f"/share-approve {grant_id}"
+    deny_command = f"/share-deny {grant_id}"
+    if channel == "telegram":
+        return {
+            "telegram_reply_markup": {
+                "inline_keyboard": [[
+                    {"text": "Deny", "callback_data": f"arclink:{deny_command}"},
+                    {"text": "Approve", "callback_data": f"arclink:{approve_command}"},
+                ]]
+            }
+        }
+    if channel == "discord":
+        return {
+            "discord_components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 2,
+                            "label": "Deny",
+                            "custom_id": f"arclink:{deny_command}",
+                        },
+                        {
+                            "type": 2,
+                            "style": 1,
+                            "label": "Approve",
+                            "custom_id": f"arclink:{approve_command}",
+                        },
+                    ],
+                }
+            ]
+        }
+    return {}
+
+
+def _queue_share_grant_owner_notification(
+    conn: sqlite3.Connection,
+    *,
+    grant: Mapping[str, Any],
+) -> dict[str, Any]:
+    owner_user = str(grant.get("owner_user_id") or "").strip()
+    grant_id = str(grant.get("grant_id") or "").strip()
+    if not owner_user or not grant_id:
+        return {"queued": False, "reason": "missing_owner_or_grant"}
+    row = conn.execute(
+        """
+        SELECT channel, channel_identity
+        FROM arclink_onboarding_sessions
+        WHERE user_id = ?
+          AND LOWER(channel) IN ('telegram', 'discord')
+          AND channel_identity != ''
+        ORDER BY
+          CASE WHEN deployment_id != '' THEN 0 ELSE 1 END,
+          updated_at DESC,
+          created_at DESC,
+          session_id DESC
+        LIMIT 1
+        """,
+        (owner_user,),
+    ).fetchone()
+    if row is None:
+        return {"queued": False, "reason": "no_public_channel"}
+
+    channel = str(row["channel"] or "").strip().lower()
+    target = str(row["channel_identity"] or "").strip()
+    if channel not in {"telegram", "discord"} or not target:
+        return {"queued": False, "reason": "unsupported_public_channel"}
+
+    resource_label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource").strip()
+    resource_root = str(grant.get("resource_root") or "").strip()
+    resource_path = str(grant.get("resource_path") or "").strip()
+    recipient = str(grant.get("recipient_user_id") or "").strip()
+    message = (
+        "Raven share approval requested.\n\n"
+        f"Recipient `{recipient}` is asking for read-only access to `{resource_label}` "
+        f"from `{resource_root}:{resource_path}`.\n\n"
+        "Approve to let the recipient accept it as a read-only Linked resource. "
+        "Deny leaves the share closed. Accepted Linked resources cannot be reshared."
+    )
+    notification_id = queue_notification(
+        conn,
+        target_kind="public-bot-user",
+        target_id=target,
+        channel_kind=channel,
+        message=message,
+        extra={
+            "share_grant_id": grant_id,
+            "recipient_user_id": recipient,
+            "resource_kind": str(grant.get("resource_kind") or ""),
+            "resource_root": resource_root,
+            "resource_path": resource_path,
+            **_share_approval_button_extra(channel=channel, grant_id=grant_id),
+        },
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_grant",
+        subject_id=grant_id,
+        event_type="share_grant_owner_notification_queued",
+        metadata={"channel": channel, "notification_id": notification_id},
+    )
+    return {"queued": True, "channel": channel, "notification_id": notification_id}
+
+
+def _materialize_share_projection(
+    conn: sqlite3.Connection,
+    *,
+    grant: Mapping[str, Any],
+    now: str,
+) -> dict[str, Any]:
+    grant_id = str(grant.get("grant_id") or "").strip()
+    owner_user = str(grant.get("owner_user_id") or "").strip()
+    recipient_user = str(grant.get("recipient_user_id") or "").strip()
+    resource_root = str(grant.get("resource_root") or "").strip().lower()
+    source_key = "vault" if resource_root == "vault" else "code_workspace"
+    metadata = json_loads_safe(str(grant.get("metadata_json") or "{}"))
+    projection: dict[str, Any] = {
+        "status": "not_materialized",
+        "linked_root": "linked",
+        "linked_path": "",
+        "entry_path": "",
+        "read_only": True,
+    }
+    try:
+        owner_roots = _deployment_state_roots_for_user(conn, owner_user)
+        recipient_roots = _deployment_state_roots_for_user(conn, recipient_user)
+        source_root_text = str(owner_roots.get(source_key) or "").strip()
+        linked_root_text = str(recipient_roots.get("linked_resources") or "").strip()
+        if not source_root_text or not linked_root_text:
+            projection.update({"status": "pending_materialization", "reason": "deployment_roots_unavailable"})
+            metadata["projection"] = projection
+            return metadata
+
+        source_root = Path(source_root_text).expanduser().resolve(strict=False)
+        linked_root = Path(linked_root_text).expanduser().resolve(strict=False)
+        clean_share_path = _clean_share_path(str(grant.get("resource_path") or ""))
+        source = (source_root / clean_share_path.strip("/")).resolve(strict=False)
+        if source != source_root and not _path_within(source_root, source):
+            projection.update({"status": "blocked", "reason": "source_outside_owner_root"})
+            metadata["projection"] = projection
+            return metadata
+        if _sensitive_share_projection_path(source):
+            projection.update({"status": "blocked", "reason": "source_private"})
+            metadata["projection"] = projection
+            return metadata
+        if not source.exists():
+            projection.update({"status": "pending_materialization", "reason": "source_unavailable"})
+            metadata["projection"] = projection
+            return metadata
+        if source.is_symlink():
+            projection.update({"status": "blocked", "reason": "source_symlink"})
+            metadata["projection"] = projection
+            return metadata
+
+        label = str(grant.get("display_name") or source.name or "linked-resource")
+        slug = f"{_safe_projection_segment(grant_id, fallback='share')}-{_safe_projection_segment(label)}"
+        projection_root = (linked_root / slug).resolve(strict=False)
+        if projection_root != linked_root and not _path_within(linked_root, projection_root):
+            projection.update({"status": "blocked", "reason": "projection_outside_linked_root"})
+            metadata["projection"] = projection
+            return metadata
+
+        linked_root.mkdir(parents=True, exist_ok=True)
+        _remove_projection_path(linked_root, projection_root)
+        if source.is_file():
+            projection_root.mkdir(parents=True, exist_ok=True)
+            entry_path = projection_root / source.name
+            os.symlink(str(source), str(entry_path), target_is_directory=False)
+            _chmod_read_only(projection_root)
+            linked_path = "/" + slug
+            entry_display = f"/{slug}/{source.name}"
+            resource_kind = "file"
+        elif source.is_dir():
+            os.symlink(str(source), str(projection_root), target_is_directory=True)
+            linked_path = "/" + slug
+            entry_display = linked_path
+            resource_kind = "directory"
+        else:
+            projection.update({"status": "blocked", "reason": "source_not_file_or_directory"})
+            metadata["projection"] = projection
+            return metadata
+        _upsert_linked_manifest_entry(
+            linked_root,
+            slug=slug,
+            grant_id=grant_id,
+            source=source,
+            linked_path=linked_path,
+            entry_path=entry_display,
+            resource_kind=resource_kind,
+            owner_user_id=owner_user,
+            updated_at=now,
+        )
+
+        projection.update(
+            {
+                "status": "materialized",
+                "linked_path": linked_path,
+                "entry_path": entry_display,
+                "resource_kind": resource_kind,
+                "projection_mode": "living_symlink",
+                "materialized_at": now,
+                "skipped_sensitive_count": 0,
+                "reason": "",
+            }
+        )
+        metadata["projection"] = projection
+        append_arclink_event(
+            conn,
+            subject_kind="share_grant",
+            subject_id=grant_id,
+            event_type="share_projection_materialized",
+            metadata={
+                "recipient_user_id": recipient_user,
+                "linked_path": linked_path,
+                "entry_path": entry_display,
+                "resource_kind": resource_kind,
+                "projection_mode": "living_symlink",
+                "skipped_sensitive_count": 0,
+            },
+            commit=False,
+        )
+        return metadata
+    except (OSError, ArcLinkApiAuthError, ValueError):
+        projection.update({"status": "pending_materialization", "reason": "materialization_failed"})
+        metadata["projection"] = projection
+        append_arclink_event(
+            conn,
+            subject_kind="share_grant",
+            subject_id=grant_id,
+            event_type="share_projection_materialization_failed",
+            metadata={"recipient_user_id": recipient_user, "reason": projection["reason"]},
+            commit=False,
+        )
+        return metadata
+
+
+def _remove_share_projection(
+    conn: sqlite3.Connection,
+    *,
+    grant: Mapping[str, Any],
+    now: str,
+) -> dict[str, Any]:
+    metadata = json_loads_safe(str(grant.get("metadata_json") or "{}"))
+    projection = metadata.get("projection")
+    if not isinstance(projection, Mapping):
+        metadata["projection"] = {
+            "status": "removed",
+            "linked_root": "linked",
+            "linked_path": "",
+            "entry_path": "",
+            "removed_at": now,
+            "read_only": True,
+        }
+        return metadata
+
+    linked_path = str(projection.get("linked_path") or "").strip()
+    removed = False
+    if linked_path.startswith("/"):
+        recipient_user = str(grant.get("recipient_user_id") or "").strip()
+        recipient_roots = _deployment_state_roots_for_user(conn, recipient_user)
+        linked_root_text = str(recipient_roots.get("linked_resources") or "").strip()
+        if linked_root_text:
+            linked_root = Path(linked_root_text).expanduser().resolve(strict=False)
+            target = linked_root / linked_path.strip("/")
+            try:
+                removed = _remove_projection_path(linked_root, target)
+                slug = linked_path.strip("/").split("/", 1)[0]
+                if slug:
+                    _remove_linked_manifest_entry(linked_root, slug=slug)
+            except (OSError, ArcLinkApiAuthError):
+                removed = False
+    updated_projection = dict(projection)
+    updated_projection.update({"status": "removed", "removed_at": now, "read_only": True})
+    metadata["projection"] = updated_projection
+    append_arclink_event(
+        conn,
+        subject_kind="share_grant",
+        subject_id=str(grant.get("grant_id") or ""),
+        event_type="share_projection_removed",
+        metadata={
+            "recipient_user_id": str(grant.get("recipient_user_id") or ""),
+            "linked_path": linked_path,
+            "removed": removed,
+        },
+        commit=False,
+    )
+    return metadata
+
+
+def create_user_share_grant_for_owner(
+    conn: sqlite3.Connection,
+    *,
+    owner_user_id: str,
+    recipient_user_id: str,
+    resource_kind: str,
+    resource_root: str,
+    resource_path: str,
+    display_name: str = "",
+    access_mode: str = "read",
+    metadata: Mapping[str, Any] | None = None,
+    requested_by_agent_id: str = "",
+) -> ArcLinkApiResponse:
+    owner_user = str(owner_user_id or "").strip()
+    recipient = str(recipient_user_id or "").strip()
+    if not owner_user:
+        raise ArcLinkApiAuthError("ArcLink share requires an owner user")
+    if conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ?", (owner_user,)).fetchone() is None:
+        raise KeyError(owner_user)
+    if not recipient or recipient == owner_user:
+        raise ArcLinkApiAuthError("ArcLink share requires a different recipient user")
+    if conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ?", (recipient,)).fetchone() is None:
+        raise KeyError(recipient)
+    kind = str(resource_kind or "").strip().lower()
+    root = str(resource_root or "").strip().lower()
+    mode = str(access_mode or "read").strip().lower()
+    if kind not in ARCLINK_SHARE_RESOURCE_KINDS:
+        raise ArcLinkApiAuthError("ArcLink share requires a supported resource kind")
+    if root not in ARCLINK_SHARE_RESOURCE_ROOTS:
+        raise ArcLinkApiAuthError("ArcLink share cannot originate from linked or unknown roots")
+    if mode not in ARCLINK_SHARE_ACCESS_MODES:
+        raise ArcLinkApiAuthError("ArcLink share grants are read-only")
+    clean_path = _clean_share_path(resource_path)
+    safe_metadata = dict(metadata or {})
+    clean_agent = str(requested_by_agent_id or "").strip()
+    if clean_agent:
+        safe_metadata["requested_by_agent_id"] = clean_agent
+    _reject_secret_material(safe_metadata)
+    now = utc_now_iso()
+    grant_id = _new_id("share")
+    conn.execute(
+        """
+        INSERT INTO arclink_share_grants (
+          grant_id, owner_user_id, recipient_user_id, resource_kind, resource_root,
+          resource_path, display_name, access_mode, status, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_owner_approval', ?, ?, ?)
+        """,
+        (
+            grant_id,
+            owner_user,
+            recipient,
+            kind,
+            root,
+            clean_path,
+            str(display_name or "").strip()[:160],
+            mode,
+            _json(safe_metadata),
+            now,
+            now,
+        ),
+    )
+    audit_metadata = {
+        "recipient_user_id": recipient,
+        "resource_kind": kind,
+        "resource_root": root,
+        "resource_path": clean_path,
+    }
+    if clean_agent:
+        audit_metadata["requested_by_agent_id"] = clean_agent
+    append_arclink_audit(
+        conn,
+        action="share_grant_requested",
+        actor_id=owner_user,
+        target_kind="share_grant",
+        target_id=grant_id,
+        reason="read-only linked resource share requested",
+        metadata=audit_metadata,
+        commit=False,
+    )
+    conn.commit()
+    grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone())
+    owner_notification = _queue_share_grant_owner_notification(conn, grant=grant)
+    return ArcLinkApiResponse(
+        status=201,
+        payload={
+            "grant": _public_share_grant(grant),
+            "owner_notification": owner_notification,
+        },
+    )
+
+
+def create_user_share_grant_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    recipient_user_id: str,
+    resource_kind: str,
+    resource_root: str,
+    resource_path: str,
+    display_name: str = "",
+    access_mode: str = "read",
+    metadata: Mapping[str, Any] | None = None,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    return create_user_share_grant_for_owner(
+        conn,
+        owner_user_id=str(session["user_id"] or ""),
+        recipient_user_id=recipient_user_id,
+        resource_kind=resource_kind,
+        resource_root=resource_root,
+        resource_path=resource_path,
+        display_name=display_name,
+        access_mode=access_mode,
+        metadata=metadata,
+    )
+
+
+def approve_user_share_grant_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    grant_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    owner_user = str(session["user_id"] or "")
+    clean_grant = str(grant_id or "").strip()
+    row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
+    if row is None or str(row["owner_user_id"] or "") != owner_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot approve another user's share")
+    if str(row["status"] or "") != "pending_owner_approval":
+        raise ArcLinkApiAuthError("ArcLink share is not awaiting owner approval")
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_share_grants
+        SET status = 'approved', approved_at = ?, updated_at = ?
+        WHERE grant_id = ? AND owner_user_id = ?
+        """,
+        (now, now, clean_grant, owner_user),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_grant_approved",
+        actor_id=owner_user,
+        target_kind="share_grant",
+        target_id=clean_grant,
+        reason="owner approved linked resource share",
+        commit=False,
+    )
+    conn.commit()
+    grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
+    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+
+
+def deny_user_share_grant_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    grant_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    owner_user = str(session["user_id"] or "")
+    clean_grant = str(grant_id or "").strip()
+    row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
+    if row is None or str(row["owner_user_id"] or "") != owner_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot deny another user's share")
+    if str(row["status"] or "") != "pending_owner_approval":
+        raise ArcLinkApiAuthError("ArcLink share is not awaiting owner approval")
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_share_grants
+        SET status = 'denied', updated_at = ?
+        WHERE grant_id = ? AND owner_user_id = ?
+        """,
+        (now, clean_grant, owner_user),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_grant_denied",
+        actor_id=owner_user,
+        target_kind="share_grant",
+        target_id=clean_grant,
+        reason="owner denied linked resource share",
+        commit=False,
+    )
+    conn.commit()
+    grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
+    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+
+
+def accept_user_share_grant_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    grant_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    recipient = str(session["user_id"] or "")
+    clean_grant = str(grant_id or "").strip()
+    row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
+    if row is None or str(row["recipient_user_id"] or "") != recipient:
+        raise ArcLinkApiAuthError("ArcLink user session cannot accept another user's share")
+    if str(row["status"] or "") != "approved":
+        raise ArcLinkApiAuthError("ArcLink share is not ready to accept")
+    now = utc_now_iso()
+    updated_metadata = _materialize_share_projection(conn, grant=rowdict(row), now=now)
+    conn.execute(
+        """
+        UPDATE arclink_share_grants
+        SET status = 'accepted', accepted_at = ?, metadata_json = ?, updated_at = ?
+        WHERE grant_id = ? AND recipient_user_id = ?
+        """,
+        (now, _json(updated_metadata), now, clean_grant, recipient),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_grant_accepted",
+        actor_id=recipient,
+        target_kind="share_grant",
+        target_id=clean_grant,
+        reason="recipient accepted read-only linked resource",
+        commit=False,
+    )
+    conn.commit()
+    grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
+    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+
+
+def revoke_user_share_grant_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    grant_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    owner_user = str(session["user_id"] or "")
+    clean_grant = str(grant_id or "").strip()
+    row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
+    if row is None or str(row["owner_user_id"] or "") != owner_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot revoke another user's share")
+    status = str(row["status"] or "")
+    if status == "denied":
+        raise ArcLinkApiAuthError("ArcLink share is already denied")
+    if status == "revoked":
+        grant = rowdict(row)
+        return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+    if status not in {"pending_owner_approval", "approved", "accepted"}:
+        raise ArcLinkApiAuthError("ArcLink share is not revocable")
+    now = utc_now_iso()
+    updated_metadata = _remove_share_projection(conn, grant=rowdict(row), now=now)
+    conn.execute(
+        """
+        UPDATE arclink_share_grants
+        SET status = 'revoked',
+            revoked_at = CASE WHEN revoked_at = '' THEN ? ELSE revoked_at END,
+            metadata_json = ?,
+            updated_at = ?
+        WHERE grant_id = ? AND owner_user_id = ?
+        """,
+        (now, _json(updated_metadata), now, clean_grant, owner_user),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_grant_revoked",
+        actor_id=owner_user,
+        target_kind="share_grant",
+        target_id=clean_grant,
+        reason="owner revoked linked resource share",
+        metadata={"previous_status": status},
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_grant",
+        subject_id=clean_grant,
+        event_type="share_grant_revoked",
+        metadata={"owner_user_id": owner_user, "recipient_user_id": str(row["recipient_user_id"] or ""), "previous_status": status},
+        commit=False,
+    )
+    conn.commit()
+    grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
+    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+
+
+def read_user_linked_resources_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    user_id: str = "",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(user_id or session["user_id"] or "").strip()
+    if target_user != str(session["user_id"] or ""):
+        raise ArcLinkApiAuthError("ArcLink user session cannot read another user's linked resources")
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_share_grants
+        WHERE recipient_user_id = ?
+          AND status = 'accepted'
+          AND revoked_at = ''
+        ORDER BY accepted_at DESC, created_at DESC
+        """,
+        (target_user,),
+    ).fetchall()
+    return ArcLinkApiResponse(status=200, payload={"linked_resources": [_public_share_grant(rowdict(row)) for row in rows]})
 
 
 def _read_admin_dashboard_slice_api(
@@ -932,6 +2096,7 @@ def read_provider_state_api(
     session_id: str,
     session_token: str,
     session_kind: str = "user",
+    env: Mapping[str, str] | None = None,
 ) -> ArcLinkApiResponse:
     """Read current provider/model configuration state.
 
@@ -940,7 +2105,12 @@ def read_provider_state_api(
     if session_kind == "admin":
         authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
         deployments = conn.execute(
-            "SELECT deployment_id, user_id, metadata_json FROM arclink_deployments WHERE status NOT IN ('teardown_complete', 'cancelled')"
+            """
+            SELECT d.deployment_id, d.user_id, d.metadata_json, u.entitlement_state
+            FROM arclink_deployments d
+            LEFT JOIN arclink_users u ON u.user_id = d.user_id
+            WHERE d.status NOT IN ('teardown_complete', 'cancelled')
+            """
         ).fetchall()
     else:
         session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
@@ -948,21 +2118,73 @@ def read_provider_state_api(
         if not user_id:
             raise ArcLinkApiAuthError("ArcLink user session has no associated user")
         deployments = conn.execute(
-            "SELECT deployment_id, user_id, metadata_json FROM arclink_deployments WHERE status NOT IN ('teardown_complete', 'cancelled') AND user_id = ?",
+            """
+            SELECT d.deployment_id, d.user_id, d.metadata_json, u.entitlement_state
+            FROM arclink_deployments d
+            LEFT JOIN arclink_users u ON u.user_id = d.user_id
+            WHERE d.status NOT IN ('teardown_complete', 'cancelled') AND d.user_id = ?
+            """,
             (user_id,),
         ).fetchall()
-    provider = primary_provider()
-    default_model = chutes_default_model()
+    env_source = env or {}
+    provider = primary_provider(env_source)
+    default_model = chutes_default_model(env_source)
     deployment_models = []
+    state_counts: dict[str, int] = {}
     for row in deployments:
         meta = json_loads_safe(row["metadata_json"] or "{}")
         model_id = str(meta.get("selected_model_id") or meta.get("model_id") or default_model)
-        deployment_models.append({"deployment_id": row["deployment_id"], "user_id": row["user_id"], "model_id": model_id})
-    return ArcLinkApiResponse(status=200, payload={
+        item = {"deployment_id": row["deployment_id"], "user_id": row["user_id"], "model_id": model_id}
+        if provider == "chutes":
+            boundary = evaluate_chutes_deployment_boundary(
+                str(row["deployment_id"] or ""),
+                str(row["user_id"] or ""),
+                meta,
+                env=env_source,
+                billing_state=str(row["entitlement_state"] or "none"),
+            )
+            public_boundary = boundary.to_public(include_user_id=session_kind == "admin", include_admin_fields=session_kind == "admin")
+            item["credential_state"] = boundary.credential_state
+            item["allow_inference"] = boundary.allow_inference
+            item["chutes"] = public_boundary
+            item["provider_detail"] = public_boundary
+            state_counts[boundary.credential_state] = state_counts.get(boundary.credential_state, 0) + 1
+        deployment_models.append(item)
+    payload = {
         "provider": provider,
         "default_model": default_model,
+        "provider_boundary": {
+            "credential_isolation": "per-user or per-deployment secret:// reference required",
+            "operator_shared_key_policy": "not accepted as user isolation",
+            "credential_lifecycle": chutes_credential_lifecycle(),
+            "budget_enforcement": "fail_closed",
+            "live_key_creation": "proof_gated",
+            "threshold_continuation": chutes_threshold_continuation_policy(force_policy_question=True),
+        },
+        "provider_settings": {
+            "self_service_provider_add": "policy_question",
+            "dashboard_mutation": "disabled",
+            "current_change_path": "operator_managed_deployment_config_or_secure_credential_handoff",
+            "secret_input_policy": "dashboard_never_collects_raw_provider_tokens",
+            "live_provider_mutation": "proof_gated",
+            "operator_decision_needed": (
+                "Decide whether users may self-service provider changes in ArcLink settings, "
+                "or whether provider changes remain operator-managed deployment config."
+            ),
+            "guidance": (
+                "The dashboard shows provider state only. Provider changes use secure credential "
+                "handoff or operator-managed config until product policy defines a self-service flow."
+            ),
+        },
         "deployment_models": deployment_models,
-    })
+    }
+    if provider == "chutes":
+        payload["chutes_summary"] = {
+            "deployment_count": len(deployment_models),
+            "credential_states": state_counts,
+            "blocked_count": sum(1 for item in deployment_models if not item.get("allow_inference")),
+        }
+    return ArcLinkApiResponse(status=200, payload=payload)
 
 
 def read_admin_reconciliation_api(

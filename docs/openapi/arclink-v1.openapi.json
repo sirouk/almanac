@@ -338,7 +338,7 @@
             "sessionAuth": []
           }
         ],
-        "summary": "Read provider/model state (admin)",
+        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (admin)",
         "tags": [
           "admin"
         ]
@@ -955,6 +955,76 @@
         ]
       }
     },
+    "/api/v1/user/credentials": {
+      "get": {
+        "operationId": "user_credentials",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential handoff metadata"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read pending credential handoff state",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/credentials/acknowledge": {
+      "post": {
+        "operationId": "user_credential_ack",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "handoff_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "handoff_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credential handoff removed"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Acknowledge credential storage and remove future handoff visibility",
+        "tags": [
+          "user"
+        ]
+      }
+    },
     "/api/v1/user/dashboard": {
       "get": {
         "operationId": "user_dashboard",
@@ -981,6 +1051,37 @@
           }
         ],
         "summary": "Read user dashboard",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/linked-resources": {
+      "get": {
+        "operationId": "user_linked_resources",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Linked resources"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read accepted linked resources for the authenticated user",
         "tags": [
           "user"
         ]
@@ -1039,7 +1140,7 @@
             "sessionAuth": []
           }
         ],
-        "summary": "Read provider/model state (user)",
+        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (user)",
         "tags": [
           "user"
         ]
@@ -1071,6 +1172,230 @@
           }
         ],
         "summary": "Read user provisioning and deployment status",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants": {
+      "post": {
+        "operationId": "user_share_grant_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "access_mode": {
+                    "enum": [
+                      "read"
+                    ],
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "recipient_user_id": {
+                    "type": "string"
+                  },
+                  "resource_kind": {
+                    "enum": [
+                      "drive",
+                      "code"
+                    ],
+                    "type": "string"
+                  },
+                  "resource_path": {
+                    "type": "string"
+                  },
+                  "resource_root": {
+                    "enum": [
+                      "vault",
+                      "workspace"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "recipient_user_id",
+                  "resource_kind",
+                  "resource_root",
+                  "resource_path"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Share grant requested"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Request a read-only Drive/Code share grant",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/accept": {
+      "post": {
+        "operationId": "user_share_grant_accept",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Share accepted"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Accept an approved linked resource share",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/approve": {
+      "post": {
+        "operationId": "user_share_grant_approve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Share grant approved"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Owner-approve a pending share grant",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/deny": {
+      "post": {
+        "operationId": "user_share_grant_deny",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Share grant denied"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Owner-deny a pending share grant",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/revoke": {
+      "post": {
+        "operationId": "user_share_grant_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Share revoked"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Owner-revoke a share grant",
         "tags": [
           "user"
         ]

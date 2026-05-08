@@ -450,6 +450,32 @@ def test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit() 
     print("PASS test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit")
 
 
+def test_single_operator_policy_rejects_second_active_owner() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_single_operator_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_single_operator_test")
+    conn = memory_db(control)
+    first = api.upsert_arclink_admin(conn, admin_id="owner_one", email="one@example.test", role="owner")
+    expect(first["role"] == "owner", str(first))
+    api.upsert_arclink_admin(conn, admin_id="ops_one", email="ops@example.test", role="ops")
+    try:
+        api.upsert_arclink_admin(conn, admin_id="owner_two", email="two@example.test", role="owner")
+    except api.ArcLinkApiAuthError as exc:
+        expect("single-operator" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected second active owner to fail")
+    inactive = api.upsert_arclink_admin(
+        conn,
+        admin_id="owner_two",
+        email="two@example.test",
+        role="owner",
+        status="inactive",
+    )
+    expect(inactive["status"] == "inactive", str(inactive))
+    owners = conn.execute("SELECT COUNT(*) AS n FROM arclink_admins WHERE role = 'owner' AND status = 'active'").fetchone()["n"]
+    expect(owners == 1, f"expected one active owner, got {owners}")
+    print("PASS test_single_operator_policy_rejects_second_active_owner")
+
+
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
@@ -460,7 +486,8 @@ def main() -> int:
     test_api_transport_helpers_extract_credentials_and_shape_safe_errors()
     test_revoke_session_rejects_invalid_kind_before_update_or_audit()
     test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit()
-    print("PASS all 9 ArcLink API/auth tests")
+    test_single_operator_policy_rejects_second_active_owner()
+    print("PASS all 10 ArcLink API/auth tests")
     return 0
 
 

@@ -121,10 +121,12 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
         str(view["sections"]),
     )
     expect(view["entitlement"]["state"] == "paid", str(view))
+    expect(view["entitlement"]["renewal_lifecycle"]["provider_access"] == "allowed", str(view["entitlement"]))
     expect(len(view["deployments"]) == 1, str(view))
     deployment = view["deployments"][0]
     section_index = {section["section"]: section for section in deployment["sections"]}
     expect(deployment["deployment_id"] == prepared["deployment_id"], str(deployment))
+    expect(deployment["agent_label"] == "Dashboard Person", str(deployment))
     expect(deployment["access"]["urls"]["dashboard"] == "https://u-amber-vault-1a2b.example.test", str(deployment))
     expect(section_index["files"]["label"] == "Drive", str(section_index["files"]))
     expect(section_index["files"]["url"] == "https://hermes-amber-vault-1a2b.example.test/drive", str(section_index["files"]))
@@ -135,8 +137,15 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     expect(section_index["security"]["status"] == "masked", str(section_index["security"]))
     expect(section_index["support"]["status"] == "available", str(section_index["support"]))
     expect(deployment["billing"]["subscriptions"][0]["status"] == "active", str(deployment["billing"]))
+    expect(deployment["billing"]["renewal_lifecycle"]["provider_access"] == "allowed", str(deployment["billing"]))
     expect(deployment["bot_contact"]["first_contacted"], str(deployment["bot_contact"]))
     expect(deployment["model"]["model_id"] == "model-default", str(deployment["model"]))
+    expect(deployment["notion_setup"]["status"] == "available", str(deployment["notion_setup"]))
+    expect(
+        deployment["notion_setup"]["callback_url"] == "https://u-amber-vault-1a2b.example.test/notion/webhook",
+        str(deployment["notion_setup"]),
+    )
+    expect(deployment["notion_setup"]["verification"]["live_workspace"] == "proof_gated", str(deployment["notion_setup"]))
     expect(deployment["freshness"]["qmd"]["status"] == "healthy", str(deployment["freshness"]))
     expect(deployment["freshness"]["memory"]["status"] == "planned", str(deployment["freshness"]))
     expect(deployment["recent_events"][0]["event_type"] == "provisioning_rendered", str(deployment["recent_events"]))
@@ -146,6 +155,69 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
         expect(forbidden not in text, text)
     expect("metadata_json" not in text, text)
     print("PASS test_user_dashboard_read_model_projects_safe_operational_summary")
+
+
+def test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_notion_setup_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_notion_setup_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_notion_setup_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    now = control.utc_now_iso()
+
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "connect_notion_requested_at": now,
+                    "connect_notion_user_marked_ready_at": now,
+                    "connect_notion_public_status": "ready_for_dashboard_verification",
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    control.upsert_setting(conn, "notion_webhook_verification_token", "token_configured_placeholder")
+    control.upsert_setting(conn, "notion_webhook_verification_token_installed_at", now)
+    control.upsert_setting(conn, "notion_webhook_verified_at", now)
+    control.upsert_setting(conn, "notion_webhook_verified_by", "operator")
+    conn.execute(
+        """
+        INSERT INTO notion_index_documents (
+          doc_key, root_id, source_page_id, source_page_url, file_path,
+          page_title, section_heading, section_ordinal, content_hash,
+          indexed_at, state
+        ) VALUES (
+          'doc_dashboard_notion', 'root_test', 'page_test',
+          'https://www.notion.so/shared-root', '/tmp/notion-shared.md',
+          'Shared Root', 'Summary', 0, 'hash-local', ?, 'active'
+        )
+        """,
+        (now,),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    setup = view["deployments"][0]["notion_setup"]
+    expect(setup["status"] == "verified", str(setup))
+    expect(setup["public_status"] == "ready_for_dashboard_verification", str(setup))
+    expect(setup["webhook"]["configured"] is True, str(setup))
+    expect(setup["webhook"]["verified"] is True, str(setup))
+    expect(setup["webhook"]["verified_at"] == now, str(setup))
+    expect(setup["index"]["status"] == "available", str(setup))
+    expect(setup["verification"]["email_share"] == "not_proof", str(setup))
+    expect(setup["verification"]["live_workspace"] == "proof_gated", str(setup))
+    text = json.dumps(view, sort_keys=True)
+    expect("token_configured_placeholder" not in text, text)
+    expect("notion_webhook_verification_token" not in text, text)
+    print("PASS test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token")
 
 
 def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
@@ -366,11 +438,12 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
+    test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token()
     test_user_dashboard_prefers_stored_tailnet_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 5 ArcLink dashboard tests")
+    print("PASS all 6 ArcLink dashboard tests")
     return 0
 
 

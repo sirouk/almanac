@@ -212,12 +212,28 @@ def test_admin_refund_and_cancel_actions_record_audited_notes() -> None:
     print("PASS test_admin_refund_and_cancel_actions_record_audited_notes")
 
 
+def test_admin_dashboard_exposes_action_execution_readiness() -> None:
+    control = load_module("arclink_control.py", "arclink_control_admin_action_readiness_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_readiness_test")
+    conn = memory_db(control)
+    view = dashboard.read_arclink_admin_dashboard(conn)
+    readiness = view["action_execution_readiness"]
+    expect("restart" in readiness["executable"], str(readiness))
+    expect("dns_repair" in readiness["executable"], str(readiness))
+    expect("rollout" in readiness["pending_not_implemented"], str(readiness))
+    expect("force_resynth" in readiness["disabled"], str(readiness))
+    expect("fake success" in readiness["note"], str(readiness))
+    expect(set(readiness["executable"]).isdisjoint(set(readiness["pending_not_implemented"])), str(readiness))
+    print("PASS test_admin_dashboard_exposes_action_execution_readiness")
+
+
 def main() -> int:
     test_admin_action_requires_reason_and_queues_audited_intent()
     test_admin_action_idempotency_reuses_intent_without_duplicate_audit()
     test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects()
     test_admin_refund_and_cancel_actions_record_audited_notes()
-    print("PASS all 4 ArcLink admin action tests")
+    test_admin_dashboard_exposes_action_execution_readiness()
+    print("PASS all 5 ArcLink admin action tests")
     return 0
 
 

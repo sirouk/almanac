@@ -12,7 +12,14 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
 - The customer chooses a mission path.
 - Checkout hires the first agent and moves onboarding into the launch queue.
 - Status checks are concrete status views, not theatrical filler.
-- Notion and backup are setup lanes for the active agent.
+- Notion and backup are setup lanes for the active account. Notion setup stays
+  behind the credential handoff: Raven can record the setup intent only after
+  the user stores and acknowledges the secure completion bundle in Helm.
+- After onboarding, Raven remains the public control conduit for slash-command
+  actions such as status, agent roster/switching, Notion setup, backup setup,
+  channel linking, share approvals, and upgrade-rail guidance. Freeform public
+  messages do not become direct private-agent chat; Raven points users to Helm
+  for that.
 
 ## Voice Rules
 
@@ -51,14 +58,27 @@ Registered public commands:
 - `/plan`
 - `/checkout`
 - `/agents`
-- `/connect_notion`
+- `/raven_name` sets Raven's ArcLink-message display name for the current
+  channel or, after account linking, the whole account. The preference changes
+  Raven's name in ArcLink-rendered bot messages; Telegram and Discord platform
+  profile names remain controlled by their bot registrations.
+- `/connect_notion` opens the brokered shared-root Notion SSOT preparation lane
+  after credential handoff acknowledgement. It does not verify Notion, install
+  secrets, accept tokens in chat, or claim user-owned OAuth.
 - `/config_backup`
+- `/link_channel`
+- `/upgrade_hermes`
 - `/cancel`
 
 Hidden/account-state actions:
 
+- `/pair-channel` and `/pair_channel` remain backward-compatible aliases for `/link-channel` and `/link_channel`.
 - `/add-agent` is accepted only after the account has an active first deployment. It is surfaced as an `/agents` button, not as a global registered command.
 - `/agent-{slug}` switches the active agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
+- `/share-approve {grant_id}` and `/share-deny {grant_id}` are button-only owner actions for read-only Drive/Code share grants. Raven only honors them from a public channel linked to the share owner.
+- `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, but it does not run direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
+- `/raven-name` remains accepted as the Discord-friendly alias for
+  `/raven_name`.
 
 ## Button Strategy
 
@@ -71,11 +91,13 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 - `Scale - $275/month` chooses the Scale path quickly.
 - `Hire Founders - $149/month`, `Hire Sovereign - $199/month`, or `Hire Scale - $275/month` opens package checkout.
 - `Show My Crew` opens the account-aware `/agents` roster.
+- `Link Channel` opens the `/link-channel` pairing-code lane.
 - `Add Agent` opens Agentic Expansion checkout after the first deployment exists.
 - `Take Helm: {agent}` switches the active agent target.
 - `Check Status` returns status for onboarding or the active agent.
 - `Update Name` asks for the user's preferred manifest name.
 - `Back To My Crew` returns to the agent roster.
+- Share approval notifications use `Approve` and `Deny` buttons. Approving lets the recipient accept the resource as read-only under `Linked`; denying leaves the share closed.
 
 Telegram uses inline keyboard buttons. Discord uses message components. The command catalog remains intentionally small because global slash commands cannot reflect each individual account state.
 

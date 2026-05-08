@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from arclink_test_helpers import expect, load_module, memory_db
+from arclink_test_helpers import expect, load_module, memory_db, seed_active_public_bot_deployment
 
 
 def test_discord_config_from_env() -> None:
@@ -72,6 +72,28 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
     }
     parsed_pair = dc.parse_discord_interaction(pair)
     expect(parsed_pair["text"] == "/pair-channel AB12CD", str(parsed_pair))
+    link = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "link-channel", "options": [{"name": "code", "value": "ZX98YU"}]},
+    }
+    parsed_link = dc.parse_discord_interaction(link)
+    expect(parsed_link["text"] == "/link-channel ZX98YU", str(parsed_link))
+    raven_name = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {
+            "name": "raven-name",
+            "options": [
+                {"name": "scope", "value": "account"},
+                {"name": "display_name", "value": "Valkyrie"},
+            ],
+        },
+    }
+    parsed_raven_name = dc.parse_discord_interaction(raven_name)
+    expect(parsed_raven_name["text"] == "/raven-name account Valkyrie", str(parsed_raven_name))
     component = {
         "type": 3,
         "channel_id": "ch_1",
@@ -102,6 +124,48 @@ def test_discord_message_event_through_bot_contract() -> None:
     expect("Founders - $149/month" in str(result["data"].get("components", [])), str(result["data"]))
     expect("Sovereign / Scale" in str(result["data"].get("components", [])), str(result["data"]))
     print("PASS test_discord_message_event_through_bot_contract")
+
+
+def test_discord_status_reports_selected_agent_label() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_selected_agent_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_selected_agent_test")
+    conn = memory_db(control)
+    transport = dc.FakeDiscordTransport()
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="discord",
+        channel_identity="discord:discord_user_3",
+        prefix="arc-dc-prime",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_dc_bob",
+        user_id=seeded["user_id"],
+        prefix="arc-dc-bob",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Bob",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+
+    switched = dc.handle_discord_interaction(
+        conn,
+        transport.make_message(user_id="discord_user_3", channel_id="ch_3", content="/agent-bob"),
+    )
+    expect(switched is not None and switched["action"] == "switch_agent", str(switched))
+    status = dc.handle_discord_interaction(
+        conn,
+        transport.make_message(user_id="discord_user_3", channel_id="ch_3", content="/status"),
+    )
+    expect(status is not None and status["action"] == "show_status", str(status))
+    expect("Agent at the helm: Bob" in status["data"]["content"], status["data"]["content"])
+    expect("onboarding only" not in status["data"]["content"].lower(), status["data"]["content"])
+    print("PASS test_discord_status_reports_selected_agent_label")
 
 
 def test_discord_full_onboarding_flow() -> None:
@@ -239,7 +303,7 @@ def test_discord_registers_public_bot_actions() -> None:
     expect(calls[0]["path"] == "/applications/app123/commands", str(calls[0]))
     expect(calls[0]["method"] == "PUT", str(calls[0]))
     names = {item["name"] for item in calls[0]["payload"]}
-    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "agents", "name", "plan"} <= names, str(names))
+    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "agents", "name", "plan"} <= names, str(names))
     expect("email" not in names, str(names))
     expect(result["scope"] == "global", str(result))
     expect(result["result_count"] == len(calls[0]["payload"]), str(result))
@@ -252,13 +316,14 @@ def main() -> int:
     test_discord_slash_command_through_bot_contract()
     test_discord_registered_action_command_options_parse_to_bot_contract()
     test_discord_message_event_through_bot_contract()
+    test_discord_status_reports_selected_agent_label()
     test_discord_full_onboarding_flow()
     test_discord_verify_signature_test_mode()
     test_discord_webhook_handler()
     test_discord_live_transport_requires_config()
     test_discord_validate_live_readiness()
     test_discord_registers_public_bot_actions()
-    print("PASS all 11 ArcLink Discord adapter tests")
+    print("PASS all 12 ArcLink Discord adapter tests")
     return 0
 
 

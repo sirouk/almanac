@@ -95,6 +95,47 @@ def seed_active_public_bot_deployment(
     return {"user_id": user_id, "deployment_id": deployment_id, "session_id": session_id, "prefix": prefix}
 
 
+def seed_credential_handoffs(
+    control,
+    conn,
+    seeded: dict[str, str],
+    *,
+    status: str = "removed",
+) -> None:
+    now = control.utc_now_iso()
+    removed_at = now if status == "removed" else ""
+    acknowledged_at = now if status == "removed" else ""
+    for kind, display_name in (
+        ("dashboard_password", "Dashboard password"),
+        ("chutes_api_key", "Chutes provider key"),
+    ):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO arclink_credential_handoffs (
+              handoff_id, user_id, deployment_id, credential_kind, display_name,
+              secret_ref, delivery_hint, status, revealed_at, acknowledged_at,
+              removed_at, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)
+            """,
+            (
+                f"cred_{seeded['deployment_id']}_{kind}",
+                seeded["user_id"],
+                seeded["deployment_id"],
+                kind,
+                display_name,
+                f"secret://arclink/test/{seeded['deployment_id']}/{kind}",
+                "Copy into a password manager, then acknowledge.",
+                status,
+                now,
+                acknowledged_at,
+                removed_at,
+                now,
+                now,
+            ),
+        )
+    conn.commit()
+
+
 def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_test")
@@ -280,12 +321,16 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     expect("connect_notion" in telegram_names, str(telegram))
     expect("config_backup" in telegram_names, str(telegram))
     expect("pair_channel" in telegram_names, str(telegram))
+    expect("link_channel" in telegram_names, str(telegram))
+    expect("raven_name" in telegram_names, str(telegram))
+    expect("upgrade_hermes" in telegram_names, str(telegram))
     expect("connect-notion" not in telegram_names, str(telegram))
     expect("config-backup" not in telegram_names, str(telegram))
+    expect("upgrade-hermes" not in telegram_names, str(telegram))
 
     discord = bots.arclink_public_bot_discord_application_commands()
     discord_names = {item["name"] for item in discord}
-    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "agents", "name", "plan"} <= discord_names, str(discord_names))
+    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
     expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"founders", "sovereign", "scale"}, str(plan))
@@ -359,6 +404,7 @@ def test_public_bot_connect_notion_resolves_active_deployment_and_records_event(
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_notion_test")
     conn = memory_db(control)
     seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-notionpod")
+    seed_credential_handoffs(control, conn, seeded)
 
     turn = bots.handle_arclink_public_bot_turn(
         conn,
@@ -399,6 +445,47 @@ def test_public_bot_connect_notion_resolves_active_deployment_and_records_event(
     expect("public_bot:connect_notion_requested" in events, str(events))
     expect("public_bot:connect_notion_ready" in events, str(events))
     print("PASS test_public_bot_connect_notion_resolves_active_deployment_and_records_event")
+
+
+def test_public_bot_connect_notion_waits_for_credential_acknowledgement() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_notion_gate_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_notion_gate_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-notiongate")
+
+    blocked = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/connect-notion",
+    )
+    expect(blocked.action == "connect_notion_credentials_required", str(blocked))
+    expect("credential handoff closed" in blocked.reply, blocked.reply)
+    expect("acknowledge storage" in blocked.reply, blocked.reply)
+    expect("No Notion tokens or API keys belong in chat" in blocked.reply, blocked.reply)
+
+    seed_credential_handoffs(control, conn, seeded, status="available")
+    still_blocked = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/connect-notion",
+    )
+    expect(still_blocked.action == "connect_notion_credentials_required", str(still_blocked))
+    expect("Dashboard password" in still_blocked.reply and "Chutes provider key" in still_blocked.reply, still_blocked.reply)
+
+    seed_credential_handoffs(control, conn, seeded, status="removed")
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/connect-notion",
+    )
+    expect(opened.action == "connect_notion", str(opened))
+    expect("brokered shared-root Notion SSOT rail" in opened.reply, opened.reply)
+    expect("does not verify the Notion integration" in opened.reply, opened.reply)
+    expect("Email sharing alone is not treated as proof" in opened.reply, opened.reply)
+    print("PASS test_public_bot_connect_notion_waits_for_credential_acknowledgement")
 
 
 def test_public_bot_config_backup_collects_private_repo_without_secret_leakage() -> None:
@@ -459,6 +546,17 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
     expect("once your first agent is awake aboard ArcLink" in turn.reply, turn.reply)
     count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
     expect(count == 0, f"workflow command should not create an onboarding session, got {count}")
+
+    upgrade = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:new",
+        text="/upgrade_hermes",
+    )
+    expect(upgrade.action == "upgrade_hermes_unavailable", str(upgrade))
+    expect("unmanaged `hermes update`" in upgrade.reply, upgrade.reply)
+    count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
+    expect(count == 0, f"upgrade command should not create an onboarding session, got {count}")
     print("PASS test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions")
 
 
@@ -487,6 +585,16 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     )
     expect(roster.action == "show_agents", str(roster))
     expect(any(button.command == "/add-agent" for button in roster.buttons), str(roster.buttons))
+
+    upgrade = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/upgrade-hermes",
+    )
+    expect(upgrade.action == "upgrade_hermes_controlled", str(upgrade))
+    expect("ArcLink" in upgrade.reply and "`hermes update`" in upgrade.reply, upgrade.reply)
+    expect(any(button.command == "/status" for button in upgrade.buttons), str(upgrade.buttons))
 
     add = bots.handle_arclink_public_bot_turn(
         conn,
@@ -565,6 +673,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
             "tailscale_host_strategy": "path",
         },
     )
+    seed_credential_handoffs(control, conn, {"user_id": seeded["user_id"], "deployment_id": "arcdep_bob"})
     switched = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -573,6 +682,16 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     )
     expect(switched.action == "switch_agent", str(switched))
     expect(switched.deployment_id == "arcdep_bob", str(switched))
+    status = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/status",
+    )
+    expect(status.action == "show_status", str(status))
+    expect(status.deployment_id == "arcdep_bob", str(status))
+    expect("Agent at the helm: Bob" in status.reply, status.reply)
+    expect("onboarding only" not in status.reply.lower(), status.reply)
     notion = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -589,12 +708,13 @@ def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> 
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_pair_test")
     conn = memory_db(control)
     seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-pair")
+    seed_credential_handoffs(control, conn, seeded)
 
     opened = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:42",
-        text="/pair-channel",
+        text="/link-channel",
     )
     expect(opened.action == "pair_channel_code", str(opened))
     code_row = conn.execute(
@@ -607,13 +727,13 @@ def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> 
     ).fetchone()
     expect(code_row is not None and code_row["status"] == "open", str(dict(code_row or {})))
     code = str(code_row["code"])
-    expect(f"/pair-channel {code}" in opened.reply, opened.reply)
+    expect(f"/link-channel {code}" in opened.reply, opened.reply)
 
     claimed = bots.handle_arclink_public_bot_turn(
         conn,
         channel="discord",
         channel_identity="discord:99",
-        text=f"/pair-channel {code}",
+        text=f"/link_channel {code}",
     )
     expect(claimed.action == "pair_channel_claimed", str(claimed))
     expect(claimed.user_id == seeded["user_id"], str(claimed))
@@ -652,6 +772,216 @@ def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> 
     expect(notion.action == "connect_notion", str(notion))
     expect("/u/arc-pair/notion/webhook" in notion.reply, notion.reply)
     print("PASS test_public_bot_pair_channel_links_account_across_telegram_and_discord")
+
+
+def test_public_bot_pair_channel_refuses_existing_other_account() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_pair_mismatch_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_pair_mismatch_test")
+    conn = memory_db(control)
+    account_a = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:account-a",
+        prefix="arc-account-a",
+    )
+    account_b = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="discord",
+        channel_identity="discord:account-b",
+        prefix="arc-account-b",
+    )
+
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:account-a",
+        text="/link-channel",
+    )
+    code = str(conn.execute(
+        "SELECT code FROM arclink_channel_pairing_codes WHERE source_session_id = ?",
+        (account_a["session_id"],),
+    ).fetchone()["code"])
+
+    refused = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:account-b",
+        text=f"/link-channel {code}",
+    )
+    expect(opened.action == "pair_channel_code", str(opened))
+    expect(refused.action == "pair_channel_account_mismatch", str(refused))
+    expect(refused.user_id == account_b["user_id"], str(refused))
+    expect(refused.deployment_id == account_b["deployment_id"], str(refused))
+    row = conn.execute("SELECT status, claimed_session_id FROM arclink_channel_pairing_codes WHERE code = ?", (code,)).fetchone()
+    expect(row["status"] == "open" and row["claimed_session_id"] == "", str(dict(row)))
+    target = conn.execute(
+        """
+        SELECT user_id, deployment_id
+        FROM arclink_onboarding_sessions
+        WHERE channel = 'discord'
+          AND channel_identity = 'discord:account-b'
+        """
+    ).fetchone()
+    expect(target["user_id"] == account_b["user_id"], str(dict(target)))
+    expect(target["deployment_id"] == account_b["deployment_id"], str(dict(target)))
+
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:account-b",
+        text="/agents",
+    )
+    expect(roster.user_id == account_b["user_id"], str(roster))
+    expect(roster.deployment_id == account_b["deployment_id"], str(roster))
+    expect(account_a["prefix"] not in roster.reply, roster.reply)
+    print("PASS test_public_bot_pair_channel_refuses_existing_other_account")
+
+
+def test_public_bot_share_approval_buttons_are_owner_scoped() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_share_buttons_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_public_bot_share_buttons_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_share_buttons_test")
+    conn = memory_db(control)
+    owner = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-owner",
+        prefix="arc-share-owner",
+    )
+    recipient = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="discord",
+        channel_identity="discord:share-recipient",
+        prefix="arc-share-recipient",
+    )
+    owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_bot_share_owner")
+
+    result = api.create_user_share_grant_api(
+        conn,
+        session_id=owner_session["session_id"],
+        session_token=owner_session["session_token"],
+        csrf_token=owner_session["csrf_token"],
+        recipient_user_id=recipient["user_id"],
+        resource_kind="drive",
+        resource_root="vault",
+        resource_path="/Projects/brief.md",
+        display_name="Project Brief",
+    )
+    expect(result.status == 201, str(result))
+    grant = result.payload["grant"]
+    grant_id = grant["grant_id"]
+    expect(result.payload["owner_notification"]["queued"] is True, str(result.payload))
+    notification = conn.execute(
+        """
+        SELECT target_kind, target_id, channel_kind, message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-bot-user'
+          AND channel_kind = 'telegram'
+          AND target_id = 'tg:share-owner'
+        """
+    ).fetchone()
+    expect(notification is not None, "expected Raven owner approval notification")
+    extra = json.loads(notification["extra_json"])
+    buttons = extra["telegram_reply_markup"]["inline_keyboard"][0]
+    callbacks = {button["text"]: button["callback_data"] for button in buttons}
+    expect(callbacks["Approve"] == f"arclink:/share-approve {grant_id}", str(callbacks))
+    expect(callbacks["Deny"] == f"arclink:/share-deny {grant_id}", str(callbacks))
+
+    refused = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:share-recipient",
+        text=f"/share-approve {grant_id}",
+    )
+    expect(refused.action == "share_grant_not_found", str(refused))
+    status = conn.execute("SELECT status FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()["status"]
+    expect(status == "pending_owner_approval", str(status))
+
+    approved = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-owner",
+        text=f"/share-approve {grant_id}",
+    )
+    expect(approved.action == "share_grant_approved", str(approved))
+    status = conn.execute("SELECT status FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()["status"]
+    expect(status == "approved", str(status))
+
+    second = api.create_user_share_grant_api(
+        conn,
+        session_id=owner_session["session_id"],
+        session_token=owner_session["session_token"],
+        csrf_token=owner_session["csrf_token"],
+        recipient_user_id=recipient["user_id"],
+        resource_kind="drive",
+        resource_root="vault",
+        resource_path="/Projects/closed.md",
+        display_name="Closed Brief",
+    )
+    second_grant = second.payload["grant"]["grant_id"]
+    denied = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-owner",
+        text=f"/share-deny {second_grant}",
+    )
+    expect(denied.action == "share_grant_denied", str(denied))
+    denied_status = conn.execute("SELECT status FROM arclink_share_grants WHERE grant_id = ?", (second_grant,)).fetchone()["status"]
+    expect(denied_status == "denied", str(denied_status))
+    audit_actions = {
+        row["action"]
+        for row in conn.execute("SELECT action FROM arclink_audit_log WHERE target_kind = 'share_grant'").fetchall()
+    }
+    expect({"share_grant_requested", "share_grant_approved", "share_grant_denied"} <= audit_actions, str(audit_actions))
+    print("PASS test_public_bot_share_approval_buttons_are_owner_scoped")
+
+
+def test_public_bot_ignores_cross_user_active_deployment_metadata() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_active_scope_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_active_scope_test")
+    conn = memory_db(control)
+    account_a = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:active-a",
+        prefix="arc-active-a",
+    )
+    account_b = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:active-b",
+        prefix="arc-active-b",
+    )
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps({"active_deployment_id": account_a["deployment_id"]}, sort_keys=True),
+            account_b["session_id"],
+        ),
+    )
+    conn.commit()
+
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:active-b",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    expect(roster.user_id == account_b["user_id"], str(roster))
+    expect(roster.deployment_id == account_b["deployment_id"], str(roster))
+    expect(account_a["prefix"] not in roster.reply, roster.reply)
+    print("PASS test_public_bot_ignores_cross_user_active_deployment_metadata")
 
 
 def test_public_bot_withholds_unpublished_tailnet_app_urls() -> None:
@@ -693,6 +1023,158 @@ def test_public_bot_withholds_unpublished_tailnet_app_urls() -> None:
     print("PASS test_public_bot_withholds_unpublished_tailnet_app_urls")
 
 
+def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_raven_name_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_raven_name_test")
+    conn = memory_db(control)
+
+    channel_set = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:alias",
+        text="/raven_name channel Starling",
+    )
+    expect(channel_set.action == "raven_name_channel_set", str(channel_set))
+    expect(channel_set.bot_display_name == "Starling", str(channel_set))
+    started = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:alias",
+        text="/start",
+    )
+    expect("Starling here. ArcLink is in range." in started.reply, started.reply)
+
+    try:
+        bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="telegram",
+            channel_identity="tg:alias",
+            text="/raven_name channel @everyone",
+        )
+    except bots.ArcLinkPublicBotError as exc:
+        expect("Raven display name" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected unsafe Raven display name to fail closed")
+
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:raven-owner",
+        prefix="arc-raven-name",
+        base_domain="control.example.ts.net",
+    )
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO arclink_onboarding_sessions (
+          session_id, channel, channel_identity, status, current_step,
+          email_hint, display_name_hint, selected_plan_id, selected_model_id,
+          user_id, deployment_id, checkout_state, metadata_json, created_at, updated_at
+        ) VALUES (?, 'discord', 'discord:raven-owner', 'first_contacted', 'first_agent_contact',
+          '', 'Bot Buyer', 'sovereign', 'moonshotai/Kimi-K2.6-TEE', ?, ?, 'paid', '{}', ?, ?)
+        """,
+        ("onb_raven_name_discord", seeded["user_id"], seeded["deployment_id"], now, now),
+    )
+    conn.commit()
+
+    account_set = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:raven-owner",
+        text="/raven_name account Valkyrie",
+    )
+    expect(account_set.action == "raven_name_account_set", str(account_set))
+    discord_freeform = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:raven-owner",
+        text="hello",
+    )
+    expect("I'm Valkyrie, your ArcLink control conduit" in discord_freeform.reply, discord_freeform.reply)
+    expect("Your agent **Bot Buyer**" in discord_freeform.reply, discord_freeform.reply)
+
+    channel_override = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:raven-owner",
+        text="/raven-name channel Starling",
+    )
+    expect(channel_override.action == "raven_name_channel_set", str(channel_override))
+    discord_override = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:raven-owner",
+        text="hello again",
+    )
+    expect("I'm Starling, your ArcLink control conduit" in discord_override.reply, discord_override.reply)
+    telegram_still_account = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:raven-owner",
+        text="hello again",
+    )
+    expect("I'm Valkyrie, your ArcLink control conduit" in telegram_still_account.reply, telegram_still_account.reply)
+
+    channel_reset = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:raven-owner",
+        text="/raven_name reset",
+    )
+    expect(channel_reset.action == "raven_name_channel_reset", str(channel_reset))
+    discord_after_channel_reset = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:raven-owner",
+        text="hello after channel reset",
+    )
+    expect("I'm Valkyrie, your ArcLink control conduit" in discord_after_channel_reset.reply, discord_after_channel_reset.reply)
+
+    account_reset = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:raven-owner",
+        text="/raven_name reset-account",
+    )
+    expect(account_reset.action == "raven_name_account_reset", str(account_reset))
+    telegram_after_account_reset = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:raven-owner",
+        text="hello after account reset",
+    )
+    expect("I'm Raven, your ArcLink control conduit" in telegram_after_account_reset.reply, telegram_after_account_reset.reply)
+
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:raven-owner",
+        text="/agents",
+    )
+    expect("Bot Buyer" in roster.reply, roster.reply)
+    expect("Valkyrie" not in roster.reply and "Starling" not in roster.reply, roster.reply)
+
+    unattached_reset = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:unlinked-account-reset",
+        text="/raven_name reset-account",
+    )
+    expect(unattached_reset.action == "raven_name_account_unavailable", str(unattached_reset))
+    empty_user_rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_public_bot_identity WHERE scope_kind = 'user' AND user_id = ''"
+    ).fetchone()["n"]
+    expect(empty_user_rows == 0, f"empty user account-scope row collision: {empty_user_rows}")
+    try:
+        bots._store_raven_display_name(conn, scope_kind="user", user_id="", display_name="Bad")
+    except bots.ArcLinkPublicBotError as exc:
+        expect("user id" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected empty account-scope Raven name store to fail")
+    print("PASS test_public_bot_raven_display_name_is_channel_and_account_scoped")
+
+
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
@@ -701,22 +1183,28 @@ def main() -> int:
     test_public_bot_contract_rejects_wrong_channel_and_secret_metadata()
     test_public_bot_turns_use_shared_onboarding_rate_limit()
     test_public_bot_connect_notion_resolves_active_deployment_and_records_event()
+    test_public_bot_connect_notion_waits_for_credential_acknowledgement()
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
+    test_public_bot_pair_channel_refuses_existing_other_account()
+    test_public_bot_share_approval_buttons_are_owner_scoped()
+    test_public_bot_ignores_cross_user_active_deployment_metadata()
     test_public_bot_withholds_unpublished_tailnet_app_urls()
+    test_public_bot_raven_display_name_is_channel_and_account_scoped()
     test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
     test_public_bot_agent_label_uses_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 15 ArcLink public bot tests")
+    print("PASS all 20 ArcLink public bot tests")
     return 0
 
 
 def test_public_bot_aboard_freeform_routes_to_helm_not_onboarding() -> None:
     """Routing law: once a user has a live pod, freeform messages and even
     /start re-triggers must NOT spit onboarding copy. They must hand the user
-    a clean Helm pointer with the slash-command map for calling Raven back.
+    a clean Helm pointer with the slash-command map for using Raven as the
+    public control conduit.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_aboard_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_aboard_test")
@@ -730,7 +1218,9 @@ def test_public_bot_aboard_freeform_routes_to_helm_not_onboarding() -> None:
     # Freeform "hey there" from an aboard user must get the routing-law reply.
     freeform = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="hey there")
     expect(freeform.action == "aboard_freeform", f"expected aboard_freeform got {freeform.action}")
-    expect("onboarding only" in freeform.reply.lower(), freeform.reply)
+    expect("control conduit" in freeform.reply.lower(), freeform.reply)
+    expect("freeform messages here reach me, not the agent" in freeform.reply, freeform.reply)
+    expect("onboarding only" not in freeform.reply.lower(), freeform.reply)
     expect("Stripe collects" not in freeform.reply, "must not show onboarding copy to a paid user")
     expect("Send `/name" not in freeform.reply, "must not prompt for /name to a paid user")
     expect(any(b.label == "Open Helm" and b.url for b in freeform.buttons), "expected Open Helm URL button")

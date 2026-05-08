@@ -67,6 +67,48 @@ def test_public_onboarding_sessions_resume_without_duplicate_active_rows() -> No
     print("PASS test_public_onboarding_sessions_resume_without_duplicate_active_rows")
 
 
+def test_plan_agent_counts_are_applied_before_entitlement_gate() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_plan_counts_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_plan_counts_test")
+    conn = memory_db(control)
+
+    expected_counts = {"founders": 1, "sovereign": 1, "scale": 3}
+    for plan_id, expected_count in expected_counts.items():
+        session = onboarding.create_or_resume_arclink_onboarding_session(
+            conn,
+            channel="web",
+            channel_identity=f"{plan_id}@example.test",
+            session_id=f"onb_{plan_id}",
+            email_hint=f"{plan_id}@example.test",
+            selected_plan_id=plan_id,
+        )
+        prepared = onboarding.prepare_arclink_onboarding_deployment(
+            conn,
+            session_id=session["session_id"],
+            base_domain="example.test",
+        )
+        rows = conn.execute(
+            """
+            SELECT deployment_id, status, metadata_json
+            FROM arclink_deployments
+            WHERE user_id = ?
+            ORDER BY deployment_id
+            """,
+            (prepared["user_id"],),
+        ).fetchall()
+        expect(len(rows) == expected_count, f"{plan_id} rows={len(rows)} expected={expected_count}")
+        metadata = [json.loads(row["metadata_json"]) for row in rows]
+        expect({item["bundle_agent_count"] for item in metadata} == {expected_count}, str(metadata))
+        expect({item["selected_plan_id"] for item in metadata} == {plan_id}, str(metadata))
+        expect({row["status"] for row in rows} == {"entitlement_required"}, str([dict(row) for row in rows]))
+        expect(
+            {item["bundle_agent_index"] for item in metadata} == set(range(1, expected_count + 1)),
+            str(metadata),
+        )
+
+    print("PASS test_plan_agent_counts_are_applied_before_entitlement_gate")
+
+
 def test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked() -> None:
     control = load_module("arclink_control.py", "arclink_control_onboarding_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_onboarding_checkout_test")
@@ -370,13 +412,14 @@ def test_web_telegram_discord_onboarding_parity() -> None:
 
 def main() -> int:
     test_public_onboarding_sessions_resume_without_duplicate_active_rows()
+    test_plan_agent_counts_are_applied_before_entitlement_gate()
     test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked()
     test_successful_checkout_uses_entitlement_gate_before_provisioning_ready()
     test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens()
     test_prepare_onboarding_preserves_existing_entitlement()
     test_prepare_onboarding_reuses_existing_user_by_email()
     test_web_telegram_discord_onboarding_parity()
-    print("PASS all 7 ArcLink onboarding tests")
+    print("PASS all 8 ArcLink onboarding tests")
     return 0
 
 

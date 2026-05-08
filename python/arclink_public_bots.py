@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from arclink_api_auth import check_arclink_rate_limit
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe
-from arclink_control import append_arclink_event, utc_after_seconds_iso, utc_now_iso
+from arclink_control import append_arclink_audit, append_arclink_event, utc_after_seconds_iso, utc_now_iso
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
@@ -57,18 +57,50 @@ ARCLINK_PUBLIC_BOT_CONFIG_BACKUP_COMMANDS = frozenset(
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
 ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop"})
 ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents", "agent roster"})
+ARCLINK_PUBLIC_BOT_RAVEN_NAME_COMMANDS = (
+    "/raven-name",
+    "/raven_name",
+    "raven-name",
+    "raven_name",
+    "raven name",
+)
 ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS = frozenset(
     {"/add-agent", "/add_agent", "add-agent", "add agent", "hire another agent", "add another agent"}
 )
 ARCLINK_PUBLIC_BOT_PAIR_CHANNEL_COMMANDS = frozenset(
-    {"/pair-channel", "/pair_channel", "pair-channel", "pair_channel", "pair channel", "pair"}
+    {
+        "/pair-channel",
+        "/pair_channel",
+        "/link-channel",
+        "/link_channel",
+        "pair-channel",
+        "pair_channel",
+        "link-channel",
+        "link_channel",
+        "pair channel",
+        "link channel",
+        "pair",
+        "link",
+    }
+)
+ARCLINK_PUBLIC_BOT_UPGRADE_HERMES_COMMANDS = frozenset(
+    {
+        "/upgrade-hermes",
+        "/upgrade_hermes",
+        "upgrade-hermes",
+        "upgrade_hermes",
+        "upgrade hermes",
+    }
 )
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_contacted"})
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
+ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny)\s+(share_[0-9a-f]{32})$")
+ARCLINK_PUBLIC_BOT_RAVEN_DISPLAY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 ._-]{0,31}$")
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIR_CODE_TTL_SECONDS = 10 * 60
+ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME = "Raven"
 FOUNDERS_MONTHLY_DOLLARS = 149
 SOVEREIGN_MONTHLY_DOLLARS = 199
 SCALE_MONTHLY_DOLLARS = 275
@@ -150,6 +182,32 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         description="Open your ArcLink crew manifest",
     ),
     ArcLinkPublicBotAction(
+        key="raven_name",
+        telegram_command="raven_name",
+        discord_command="raven-name",
+        description="Set Raven's display name for this channel or account",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "scope",
+                "description": "Where this Raven name applies",
+                "required": False,
+                "choices": [
+                    {"name": "This channel", "value": "channel"},
+                    {"name": "Whole account", "value": "account"},
+                    {"name": "Reset this channel", "value": "reset"},
+                    {"name": "Reset account default", "value": "reset-account"},
+                ],
+            },
+            {
+                "type": 3,
+                "name": "display_name",
+                "description": "New Raven display name",
+                "required": False,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
         key="connect_notion",
         telegram_command="connect_notion",
         discord_command="connect-notion",
@@ -174,6 +232,26 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
                 "required": False,
             },
         ),
+    ),
+    ArcLinkPublicBotAction(
+        key="link_channel",
+        telegram_command="link_channel",
+        discord_command="link-channel",
+        description="Link Telegram and Discord to the same ArcLink account",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "code",
+                "description": "Six-character code from Raven on the other channel",
+                "required": False,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="upgrade_hermes",
+        telegram_command="upgrade_hermes",
+        discord_command="upgrade-hermes",
+        description="Check the ArcLink-managed Hermes upgrade lane",
     ),
     ArcLinkPublicBotAction(
         key="cancel",
@@ -208,6 +286,7 @@ class ArcLinkPublicBotTurn:
     checkout_url: str = ""
     user_id: str = ""
     deployment_id: str = ""
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     buttons: tuple[ArcLinkPublicBotButton, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -228,6 +307,134 @@ def _clean_identity(identity: str) -> str:
     return clean
 
 
+def _clean_raven_display_name(raw: str) -> str:
+    clean = re.sub(r"\s+", " ", str(raw or "").strip())
+    if not clean:
+        return ""
+    clean = clean[:32].rstrip()
+    if not ARCLINK_PUBLIC_BOT_RAVEN_DISPLAY_NAME_RE.fullmatch(clean):
+        raise ArcLinkPublicBotError(
+            "Raven display name may use letters, numbers, spaces, dot, underscore, or hyphen"
+        )
+    return clean
+
+
+def _raven_name_command_value(message: str, command: str) -> str | None:
+    for name in ARCLINK_PUBLIC_BOT_RAVEN_NAME_COMMANDS:
+        if command == name:
+            return ""
+        prefix = f"{name} "
+        if command.startswith(prefix):
+            return message[len(prefix):].strip()
+    return None
+
+
+def _raven_identity_user_id(
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> str:
+    return str((deployment or {}).get("user_id") or (session or {}).get("user_id") or "").strip()
+
+
+def _raven_display_name(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None = None,
+    deployment: Mapping[str, Any] | None = None,
+) -> str:
+    user_id = _raven_identity_user_id(session, deployment)
+    channel_rows: list[sqlite3.Row] = []
+    if user_id:
+        channel_rows = conn.execute(
+            """
+            SELECT raven_display_name
+            FROM arclink_public_bot_identity
+            WHERE scope_kind = 'channel'
+              AND LOWER(channel) = LOWER(?)
+              AND channel_identity = ?
+              AND user_id IN (?, '')
+              AND raven_display_name != ''
+            ORDER BY CASE WHEN user_id = ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (channel, channel_identity, user_id, user_id),
+        ).fetchall()
+    else:
+        channel_rows = conn.execute(
+            """
+            SELECT raven_display_name
+            FROM arclink_public_bot_identity
+            WHERE scope_kind = 'channel'
+              AND LOWER(channel) = LOWER(?)
+              AND channel_identity = ?
+              AND user_id = ''
+              AND raven_display_name != ''
+            LIMIT 1
+            """,
+            (channel, channel_identity),
+        ).fetchall()
+    if channel_rows:
+        return str(channel_rows[0]["raven_display_name"] or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME)
+
+    if user_id:
+        row = conn.execute(
+            """
+            SELECT raven_display_name
+            FROM arclink_public_bot_identity
+            WHERE scope_kind = 'user'
+              AND user_id = ?
+              AND channel = ''
+              AND channel_identity = ''
+              AND raven_display_name != ''
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row["raven_display_name"] or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME)
+    return ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
+
+
+def _store_raven_display_name(
+    conn: sqlite3.Connection,
+    *,
+    scope_kind: str,
+    user_id: str = "",
+    channel: str = "",
+    channel_identity: str = "",
+    display_name: str = "",
+) -> None:
+    if scope_kind == "user" and not str(user_id or "").strip():
+        raise ArcLinkPublicBotError("Account-scoped Raven display names require an ArcLink user id")
+    now = utc_now_iso()
+    if display_name:
+        conn.execute(
+            """
+            INSERT INTO arclink_public_bot_identity (
+              scope_kind, user_id, channel, channel_identity, raven_display_name, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope_kind, user_id, channel, channel_identity) DO UPDATE SET
+              raven_display_name = excluded.raven_display_name,
+              updated_at = excluded.updated_at
+            """,
+            (scope_kind, user_id, channel, channel_identity, display_name, now, now),
+        )
+    else:
+        conn.execute(
+            """
+            DELETE FROM arclink_public_bot_identity
+            WHERE scope_kind = ?
+              AND user_id = ?
+              AND channel = ?
+              AND channel_identity = ?
+            """,
+            (scope_kind, user_id, channel, channel_identity),
+        )
+    conn.commit()
+
+
 def _button(label: str, *, command: str = "", url: str = "", style: str = "primary") -> ArcLinkPublicBotButton:
     return ArcLinkPublicBotButton(label=label, command=command, url=url, style=style)
 
@@ -237,6 +444,7 @@ def _reply(
     *,
     action: str,
     reply: str,
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     buttons: tuple[ArcLinkPublicBotButton, ...] = (),
 ) -> ArcLinkPublicBotTurn:
     return ArcLinkPublicBotTurn(
@@ -250,6 +458,7 @@ def _reply(
         checkout_url=str(session.get("checkout_url") or ""),
         user_id=str(session.get("user_id") or ""),
         deployment_id=str(session.get("deployment_id") or ""),
+        bot_display_name=bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
         buttons=buttons,
     )
 
@@ -258,10 +467,12 @@ def _package_prompt_reply(
     session: Mapping[str, Any],
     *,
     greeting: str = "",
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     standard: bool = False,
 ) -> ArcLinkPublicBotTurn:
     name = str(session.get("display_name_hint") or "").strip()
-    header = greeting or (f"Welcome aboard, {name}." if name else "Raven here. ArcLink is in range.")
+    raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
+    header = greeting or (f"Welcome aboard, {name}." if name else f"{raven} here. ArcLink is in range.")
     if standard:
         return _reply(
             session,
@@ -278,6 +489,7 @@ def _package_prompt_reply(
                 _button(f"Sovereign - ${SOVEREIGN_MONTHLY_DOLLARS}/month", command="/plan sovereign"),
                 _button(f"Scale - ${SCALE_MONTHLY_DOLLARS}/month", command="/plan scale", style="secondary"),
             ),
+            bot_display_name=raven,
         )
     return _reply(
         session,
@@ -294,6 +506,7 @@ def _package_prompt_reply(
             _button(f"Founders - ${FOUNDERS_MONTHLY_DOLLARS}/month", command="/plan founders"),
             _button("Sovereign / Scale", command="/packages standard", style="secondary"),
         ),
+        bot_display_name=raven,
     )
 
 
@@ -305,6 +518,7 @@ def _turn(
     reply: str,
     session: Mapping[str, Any] | None = None,
     deployment: Mapping[str, Any] | None = None,
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     buttons: tuple[ArcLinkPublicBotButton, ...] = (),
 ) -> ArcLinkPublicBotTurn:
     session = dict(session or {})
@@ -320,6 +534,7 @@ def _turn(
         checkout_url=str(session.get("checkout_url") or ""),
         user_id=str(deployment.get("user_id") or session.get("user_id") or ""),
         deployment_id=str(deployment.get("deployment_id") or session.get("deployment_id") or ""),
+        bot_display_name=bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
         buttons=buttons,
     )
 
@@ -455,10 +670,16 @@ def _pair_channel_value(message: str, command: str) -> str | None:
         (
             "/pair-channel",
             "/pair_channel",
+            "/link-channel",
+            "/link_channel",
             "pair-channel",
             "pair_channel",
+            "link-channel",
+            "link_channel",
             "pair channel",
+            "link channel",
             "pair",
+            "link",
         ),
     )
 
@@ -508,18 +729,18 @@ def _latest_session_for_contact(
 def _deployment_for_session(conn: sqlite3.Connection, session: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not session:
         return None
+    session_user_id = str(session.get("user_id") or "").strip()
     active_deployment_id = str(_metadata(session).get("active_deployment_id") or "").strip()
     if active_deployment_id:
         row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (active_deployment_id,)).fetchone()
-        if row is not None:
+        if row is not None and str(row["user_id"] or "") == session_user_id:
             return dict(row)
     deployment_id = str(session.get("deployment_id") or "").strip()
     if deployment_id:
         row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
-        if row is not None:
+        if row is not None and str(row["user_id"] or "") == session_user_id:
             return dict(row)
-    user_id = str(session.get("user_id") or "").strip()
-    if not user_id:
+    if not session_user_id:
         return None
     row = conn.execute(
         """
@@ -540,7 +761,7 @@ def _deployment_for_session(conn: sqlite3.Connection, session: Mapping[str, Any]
           deployment_id DESC
         LIMIT 1
         """,
-        (user_id,),
+        (session_user_id,),
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -730,6 +951,171 @@ def _deployment_context(
     return session, _deployment_for_session(conn, session)
 
 
+def _raven_name_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    message: str,
+    command: str,
+) -> ArcLinkPublicBotTurn:
+    session, deployment = _deployment_context(conn, channel=channel, channel_identity=channel_identity)
+    value = _raven_name_command_value(message, command)
+    user_id = _raven_identity_user_id(session, deployment)
+    current = _raven_display_name(
+        conn,
+        channel=channel,
+        channel_identity=channel_identity,
+        session=session,
+        deployment=deployment,
+    )
+    if value is None:
+        value = ""
+    requested = value.strip()
+    if not requested:
+        account_line = "Account default: not available until this channel is linked to an ArcLink account."
+        if user_id:
+            row = conn.execute(
+                """
+                SELECT raven_display_name
+                FROM arclink_public_bot_identity
+                WHERE scope_kind = 'user'
+                  AND user_id = ?
+                  AND channel = ''
+                  AND channel_identity = ''
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            account_line = f"Account default: `{str(row['raven_display_name'] or 'Raven') if row else 'Raven'}`."
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="raven_name_help",
+            reply=(
+                "Raven display names are local to ArcLink messages; Telegram and Discord profile names stay controlled by the platform bot registration.\n\n"
+                f"Current name in this channel: `{current}`.\n"
+                f"{account_line}\n\n"
+                "Use `/raven_name channel <name>` for this channel, `/raven_name account <name>` for all linked channels, "
+                "`/raven_name reset` for this channel, or `/raven_name reset-account` for the account default."
+            ),
+            session=session,
+            deployment=deployment,
+            bot_display_name=current,
+            buttons=(
+                _button("Show My Crew", command="/agents", style="secondary"),
+                _button("Check Status", command="/status", style="secondary"),
+            ),
+        )
+
+    parts = requested.split(maxsplit=1)
+    selector = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    scope = "channel"
+    reset = False
+    raw_name = requested
+    if selector in {"channel", "here"}:
+        raw_name = rest
+    elif selector in {"account", "user", "all"}:
+        scope = "user"
+        raw_name = rest
+    elif selector in {"reset", "default"}:
+        raw_name = ""
+        reset = True
+    elif selector in {"reset-account", "account-reset", "reset_account"}:
+        scope = "user"
+        raw_name = ""
+        reset = True
+
+    if scope == "user" and not user_id:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="raven_name_account_unavailable",
+            reply=(
+                "Account-wide Raven display names open after this channel is linked to an ArcLink account.\n\n"
+                "I can still set a channel-only name here: `/raven_name channel <name>`."
+            ),
+            session=session,
+            deployment=deployment,
+            bot_display_name=current,
+            buttons=(_button("Take Me Aboard", command="/packages", style="secondary"),),
+        )
+    if not raw_name and not reset:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="raven_name_missing",
+            reply="Send the display name after the scope, for example `/raven_name channel Raven Prime`.",
+            session=session,
+            deployment=deployment,
+            bot_display_name=current,
+        )
+
+    display_name = _clean_raven_display_name(raw_name)
+    if scope == "user":
+        _store_raven_display_name(
+            conn,
+            scope_kind="user",
+            user_id=user_id,
+            display_name=display_name,
+        )
+    else:
+        _store_raven_display_name(
+            conn,
+            scope_kind="channel",
+            user_id=user_id,
+            channel=channel,
+            channel_identity=channel_identity,
+            display_name=display_name,
+        )
+        if user_id and not display_name:
+            _store_raven_display_name(
+                conn,
+                scope_kind="channel",
+                user_id="",
+                channel=channel,
+                channel_identity=channel_identity,
+                display_name="",
+            )
+
+    updated = _raven_display_name(
+        conn,
+        channel=channel,
+        channel_identity=channel_identity,
+        session=session,
+        deployment=deployment,
+    )
+    if scope == "user":
+        action = "raven_name_account_reset" if not display_name else "raven_name_account_set"
+        reply = (
+            f"Account default reset. I will show as `{updated}` unless a channel override is set."
+            if not display_name
+            else f"Done. Across your linked ArcLink channels I will show as `{display_name}` unless a channel override is set."
+        )
+    else:
+        action = "raven_name_channel_reset" if not display_name else "raven_name_channel_set"
+        reply = (
+            f"Channel override reset. I will show as `{updated}` here."
+            if not display_name
+            else f"Done. In this channel I will show as `{display_name}` in ArcLink messages."
+        )
+    reply += "\n\nPlatform bot profile names are not changed by this local preference."
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action=action,
+        reply=reply,
+        session=session,
+        deployment=deployment,
+        bot_display_name=updated,
+        buttons=(
+            _button("Show My Crew", command="/agents", style="secondary"),
+            _button("Check Status", command="/status", style="secondary"),
+        ),
+    )
+
+
 def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     metadata = _metadata(deployment)
     stored_urls = metadata.get("access_urls")
@@ -767,24 +1153,100 @@ def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
     return f"{dashboard_url}/notion/webhook" if dashboard_url else ""
 
 
+def _credential_handoffs_confirmed_for_setup(
+    conn: sqlite3.Connection,
+    deployment: Mapping[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    user_id = str(deployment.get("user_id") or "").strip()
+    if not deployment_id or not user_id:
+        return False, {"reason": "missing_deployment_identity", "pending": []}
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT credential_kind, display_name, status, acknowledged_at, removed_at
+            FROM arclink_credential_handoffs
+            WHERE deployment_id = ? AND user_id = ?
+            ORDER BY credential_kind
+            """,
+            (deployment_id, user_id),
+        ).fetchall()
+    ]
+    if not rows:
+        return False, {"reason": "not_started", "pending": ["credential handoff"], "removed": []}
+    pending = [
+        str(row.get("display_name") or row.get("credential_kind") or "credential").strip()
+        for row in rows
+        if str(row.get("status") or "").strip() != "removed" and not str(row.get("removed_at") or "").strip()
+    ]
+    removed = [
+        str(row.get("display_name") or row.get("credential_kind") or "credential").strip()
+        for row in rows
+        if str(row.get("status") or "").strip() == "removed" or str(row.get("removed_at") or "").strip()
+    ]
+    return not pending, {"reason": "pending" if pending else "confirmed", "pending": pending, "removed": removed}
+
+
+def _credential_handoff_required_turn(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    access = _deployment_access(deployment)
+    helm = str(access.get("dashboard") or "").rstrip("/")
+    pending = [item for item in summary.get("pending", []) if str(item).strip()]
+    pending_line = ", ".join(str(item) for item in pending) if pending else "credential handoff"
+    lines = [
+        "I need the credential handoff closed before I open Notion setup.",
+        "",
+        f"Still waiting on: {pending_line}.",
+        "",
+        "Open Helm, copy the secure completion bundle into your password manager, and acknowledge storage in the dashboard Security tab. After ArcLink removes those handoffs from future user responses, I can record the brokered SSOT setup intent.",
+        "",
+        "This keeps Notion setup on the dashboard/operator verification rail. No Notion tokens or API keys belong in chat.",
+    ]
+    if helm:
+        lines.insert(3, f"Helm: {helm}")
+        lines.insert(4, "")
+    buttons: list[ArcLinkPublicBotButton] = []
+    if helm:
+        buttons.append(_button("Open Helm", url=helm))
+    buttons.append(_button("Check Status", command="/status", style="secondary"))
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="connect_notion_credentials_required",
+        reply="\n".join(lines),
+        session=session,
+        deployment=deployment,
+        buttons=tuple(buttons),
+    )
+
+
 def _aboard_freeform_reply(
     *,
     channel: str,
     channel_identity: str,
     session: Mapping[str, Any] | None,
     deployment: Mapping[str, Any],
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     conn: sqlite3.Connection | None = None,
 ) -> ArcLinkPublicBotTurn:
     """Routing law: once a user has a live pod, freeform messages on this
-    channel belong to their private agent on the Helm, not to Raven. Raven
-    keeps slash commands; everything else is a clear handoff with the helm
-    URL and a short slash-command map for the times the user wanted Raven.
+    channel do not become private-agent chat. Raven remains the public control
+    conduit for slash commands; everything else is a clear handoff with the
+    Helm URL and a short command map for the times the user wanted Raven.
     """
     label = _agent_label(deployment, index=0, conn=conn)
+    raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     access = _deployment_access(deployment)
     helm = str(access.get("dashboard") or "").rstrip("/")
     lines = [
-        f"I'm Raven, onboarding only. Your agent **{label}** is awake on the helm, and freeform messages on this channel reach me, not it.",
+        f"I'm {raven}, your ArcLink control conduit. Your agent **{label}** is awake on the helm, and freeform messages here reach me, not the agent.",
         "",
         "Open the helm to talk to your agent directly:" if helm else "Open the helm to talk to your agent directly.",
     ]
@@ -793,7 +1255,7 @@ def _aboard_freeform_reply(
     lines.append("")
     lines.append(
         "If you wanted to call me back, the slash commands still route here: `/help`, `/agents`, `/status`, "
-        "`/connect_notion`, `/config_backup`, `/pair-channel`."
+        "`/connect_notion`, `/config_backup`, `/link-channel`."
     )
     buttons: list[ArcLinkPublicBotButton] = []
     if helm:
@@ -806,6 +1268,7 @@ def _aboard_freeform_reply(
         reply="\n".join(lines),
         session=session,
         deployment=deployment,
+        bot_display_name=raven,
         buttons=tuple(buttons),
     )
 
@@ -912,7 +1375,9 @@ def _pair_channel_reply(
     session: Mapping[str, Any],
     deployment: Mapping[str, Any] | None,
     code_value: str,
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
 ) -> ArcLinkPublicBotTurn:
+    raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     clean_code = _normalize_pair_code(code_value)
     if not clean_code:
         code, expires_at = _create_pair_channel_code(conn, session=session, deployment=deployment)
@@ -937,11 +1402,12 @@ def _pair_channel_reply(
             action="pair_channel_code",
             reply=(
                 "Pairing lane open.\n\n"
-                f"On the other channel, tell Raven: `/pair-channel {code}`\n\n"
+                f"On the other channel, tell {raven}: `/link-channel {code}`\n\n"
                 f"This code expires in 10 minutes. {live_note}"
             ),
             session=updated,
             deployment=deployment,
+            bot_display_name=raven,
             buttons=(
                 _button("Show My Crew", command="/agents", style="secondary"),
                 _button("Check Status", command="/status", style="secondary"),
@@ -953,10 +1419,11 @@ def _pair_channel_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="pair_channel_invalid_code",
-            reply="That pairing code does not look right. Open `/pair-channel` on the other channel and send me the six-character code it gives you.",
+            reply="That pairing code does not look right. Open `/link-channel` on the other channel and send me the six-character code it gives you.",
             session=session,
             deployment=deployment,
-            buttons=(_button("Try Again", command="/pair-channel", style="secondary"),),
+            bot_display_name=raven,
+            buttons=(_button("Try Again", command="/link-channel", style="secondary"),),
         )
 
     row = conn.execute(
@@ -977,10 +1444,11 @@ def _pair_channel_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="pair_channel_expired",
-            reply="That pairing code has gone cold. Open `/pair-channel` on the first channel and I will mint a fresh one.",
+            reply="That pairing code has gone cold. Open `/link-channel` on the first channel and I will mint a fresh one.",
             session=session,
             deployment=deployment,
-            buttons=(_button("Open Pairing", command="/pair-channel", style="secondary"),),
+            bot_display_name=raven,
+            buttons=(_button("Open Pairing", command="/link-channel", style="secondary"),),
         )
     source_channel = str(row["source_channel"] or "")
     source_identity = str(row["source_channel_identity"] or "")
@@ -992,6 +1460,33 @@ def _pair_channel_reply(
             reply="You are holding that code in the channel that minted it. Take it to the other channel and I will bridge the identity there.",
             session=session,
             deployment=deployment,
+            bot_display_name=raven,
+        )
+
+    source_user_id = str(row["user_id"] or "").strip()
+    source_deployment_id = str(row["deployment_id"] or "").strip()
+    target_user_id = str(session.get("user_id") or "").strip()
+    target_deployment_id = str(session.get("deployment_id") or "").strip()
+    if target_user_id:
+        target_is_other_account = not source_user_id or target_user_id != source_user_id
+    else:
+        target_is_other_account = bool(
+            target_deployment_id
+            and (not source_deployment_id or target_deployment_id != source_deployment_id)
+        )
+    if target_is_other_account:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="pair_channel_account_mismatch",
+            reply=(
+                "That channel is already linked to a different ArcLink account. "
+                "Open `/link-channel` from the account you want to use, or continue in the original channel."
+            ),
+            session=session,
+            deployment=deployment,
+            bot_display_name=raven,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
         )
 
     target = handoff_arclink_onboarding_channel(
@@ -1062,10 +1557,11 @@ def _pair_channel_reply(
         reply=(
             "Channels paired.\n\n"
             "Same ArcLink identity, same crew, same tools, same vault, same Notion rail. "
-            "Telegram and Discord keep separate chat threads, but Raven is now looking at the same ArcLink account."
+            f"Telegram and Discord keep separate chat threads, but {raven} is now looking at the same ArcLink account."
         ),
         session=target,
         deployment=linked_deployment,
+        bot_display_name=raven,
         buttons=tuple(buttons),
     )
 
@@ -1089,6 +1585,23 @@ def _connect_notion_reply(
             session=session,
             deployment=deployment,
         )
+    confirmed, summary = _credential_handoffs_confirmed_for_setup(conn, deployment)
+    if not confirmed:
+        _record_bot_action(
+            conn,
+            deployment=deployment,
+            action="connect_notion_credentials_required",
+            channel=channel,
+            channel_identity=channel_identity,
+            metadata={"credential_handoff_status": str(summary.get("reason") or "unknown")},
+        )
+        return _credential_handoff_required_turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            summary=summary,
+        )
     callback_url = _notion_callback_url(deployment)
     session = _update_session_metadata(
         conn,
@@ -1111,14 +1624,14 @@ def _connect_notion_reply(
         },
     )
     lines = [
-        "Opening the Notion preparation lane for your ArcLink agent.",
+        "Opening the Notion SSOT preparation lane for your ArcLink account.",
         "",
-        "This public command records the setup intent and callback. It does not verify the Notion integration, install secrets, or bypass the dashboard/operator verification rail.",
+        "Current model: ArcLink uses a brokered shared-root Notion SSOT rail with dashboard/operator verification. This command records setup intent and callback only; it does not verify the Notion integration, install secrets, support user-owned OAuth, or bypass the verification rail.",
         "",
         "Drop this callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
         "",
-        "Then share the page or database with the ArcLink integration. No tokens in chat - when I need a secret, the secure dashboard field is the only door.",
+        "Then share the page or database with the ArcLink integration. Email sharing alone is not treated as proof of API access. No tokens in chat - when I need a secret, the secure dashboard field is the only door.",
         "",
         "Send `ready` after you finish the Notion-side setup. I will mark it ready for dashboard verification, or send `cancel` and I will seal the lane.",
     ]
@@ -1382,6 +1895,118 @@ def _add_agent_reply(
     )
 
 
+def _share_grant_action_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    requested_action: str,
+    grant_id: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if not session or not str(session.get("user_id") or "").strip():
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_grant_unavailable",
+            reply="I cannot approve a share from this channel until it is linked to your ArcLink account.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Link Channel", command="/link-channel", style="secondary"),),
+        )
+    owner_user = str(session.get("user_id") or "").strip()
+    row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()
+    if row is None or str(row["owner_user_id"] or "") != owner_user:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_grant_not_found",
+            reply="I cannot find a pending share approval for this ArcLink account.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    grant = dict(row)
+    current_status = str(grant.get("status") or "")
+    label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource")
+    if current_status != "pending_owner_approval":
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_grant_noop",
+            reply=f"No change made. `{label}` is already `{current_status or 'unknown'}`.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+
+    now = utc_now_iso()
+    if requested_action == "approve":
+        new_status = "approved"
+        sql = """
+            UPDATE arclink_share_grants
+            SET status = 'approved', approved_at = ?, updated_at = ?
+            WHERE grant_id = ? AND owner_user_id = ? AND status = 'pending_owner_approval'
+        """
+        params = (now, now, grant_id, owner_user)
+        audit_action = "share_grant_approved"
+        reply = (
+            f"Approved. `{label}` is ready for the recipient to accept as a read-only Linked resource. "
+            "They still cannot reshare it from their account."
+        )
+        turn_action = "share_grant_approved"
+    else:
+        new_status = "denied"
+        sql = """
+            UPDATE arclink_share_grants
+            SET status = 'denied', updated_at = ?
+            WHERE grant_id = ? AND owner_user_id = ? AND status = 'pending_owner_approval'
+        """
+        params = (now, grant_id, owner_user)
+        audit_action = "share_grant_denied"
+        reply = f"Denied. `{label}` stays closed and will not appear in the recipient's Linked resources."
+        turn_action = "share_grant_denied"
+    cursor = conn.execute(sql, params)
+    if cursor.rowcount != 1:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_grant_noop",
+            reply=f"No change made. `{label}` is no longer awaiting owner approval.",
+            session=session,
+            deployment=deployment,
+        )
+    append_arclink_audit(
+        conn,
+        action=audit_action,
+        actor_id=owner_user,
+        target_kind="share_grant",
+        target_id=grant_id,
+        reason=f"owner {new_status} linked resource share via Raven",
+        metadata={"channel": channel, "resource_root": str(grant.get("resource_root") or ""), "resource_path": str(grant.get("resource_path") or "")},
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_grant",
+        subject_id=grant_id,
+        event_type=f"public_bot:{audit_action}",
+        metadata={"channel": channel, "owner_user_id": owner_user},
+        commit=False,
+    )
+    conn.commit()
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action=turn_action,
+        reply=reply,
+        session=session,
+        deployment=deployment,
+        buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+    )
+
+
 def _handle_active_workflow(
     conn: sqlite3.Connection,
     *,
@@ -1566,7 +2191,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/pair_channel`, `/cancel`.\n\n"
+            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/link_channel`, `/cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -1575,6 +2200,84 @@ def _help_reply(
             _button("Show My Crew", command="/agents", style="secondary"),
             _button("Wire Notion", command="/connect_notion", style="secondary"),
         ),
+    )
+
+
+def _upgrade_hermes_reply(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    ready = bool(deployment and str(deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES)
+    if not ready:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="upgrade_hermes_unavailable",
+            reply=(
+                "Hermes upgrades stay on ArcLink-managed rails.\n\n"
+                "I cannot run an unmanaged `hermes update` from public chat. Once your first agent is live, I can show the active agent and status; operators use ArcLink deploy/control upgrade checks for runtime changes."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(
+                _button("Take Me Aboard", command="/packages"),
+                _button("Check Status", command="/status", style="secondary"),
+            ),
+        )
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="upgrade_hermes_controlled",
+        reply=(
+            "Hermes is pinned and upgraded through ArcLink, not direct `hermes update` commands.\n\n"
+            "For this agent, use the operator-controlled upgrade rails: component pin checks, ArcLink deploy upgrade, and the post-upgrade health/smoke path. I will keep user chat on status, agents, Notion, backups, channels, files, code, and health."
+        ),
+        session=session,
+        deployment=deployment,
+        buttons=(
+            _button("Check Status", command="/status", style="secondary"),
+            _button("Show My Crew", command="/agents", style="secondary"),
+        ),
+    )
+
+
+def _status_reply(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    conn: sqlite3.Connection,
+) -> ArcLinkPublicBotTurn:
+    deployment_label = _agent_label(deployment or {}, index=0, conn=conn) if deployment else ""
+    live_status_code = str((deployment or {}).get("status") or session.get("status") or "")
+    phrase = launch_phrase(live_status_code)
+    lines = [
+        f"Reading the board.\n\n{phrase}",
+    ]
+    if deployment_label:
+        lines.append(f"Agent at the helm: {deployment_label}.")
+    lines.append(
+        f"\n_session `{session['session_id']}` · state `{live_status_code or 'unknown'}` · "
+        f"step `{session.get('current_step') or 'started'}`_"
+    )
+    buttons: list[ArcLinkPublicBotButton] = [_button("Show My Crew", command="/agents", style="secondary")]
+    access = _deployment_access(deployment or {}) if deployment else {}
+    if access.get("dashboard"):
+        buttons.append(_button("Open Helm", url=str(access["dashboard"])))
+    else:
+        buttons.append(_button("Choose Package", command="/packages", style="secondary"))
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="show_status",
+        reply="\n".join(lines),
+        session=session,
+        deployment=deployment,
+        buttons=tuple(buttons),
     )
 
 
@@ -1602,6 +2305,15 @@ def handle_arclink_public_bot_turn(
     command = message.lower()
     captured_display_name = str(display_name_hint or "").strip()[:40]
 
+    if _raven_name_command_value(message, command) is not None:
+        return _raven_name_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            message=message,
+            command=command,
+        )
+
     if command in ARCLINK_PUBLIC_BOT_HELP_COMMANDS:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         return _help_reply(
@@ -1610,6 +2322,17 @@ def handle_arclink_public_bot_turn(
             session=session,
             deployment=deployment,
         )
+
+    if command in {"status", "/status"}:
+        context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        if context_session is not None:
+            return _status_reply(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                session=context_session,
+                deployment=deployment,
+                conn=conn,
+            )
 
     if command in ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
@@ -1632,6 +2355,13 @@ def handle_arclink_public_bot_turn(
             display_name_hint=captured_display_name,
         )
         context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        raven = _raven_display_name(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=context_session or session,
+            deployment=deployment,
+        )
         return _pair_channel_reply(
             conn,
             channel=clean_channel,
@@ -1639,6 +2369,7 @@ def handle_arclink_public_bot_turn(
             session=context_session or session,
             deployment=deployment,
             code_value=pair_value,
+            bot_display_name=raven,
         )
 
     if command in ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS:
@@ -1654,6 +2385,28 @@ def handle_arclink_public_bot_turn(
             sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
             scale_agent_expansion_price_id=scale_agent_expansion_price_id,
             base_domain=base_domain,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_UPGRADE_HERMES_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _upgrade_hermes_reply(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    share_match = ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE.match(command)
+    if share_match:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _share_grant_action_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            requested_action=share_match.group(1),
+            grant_id=share_match.group(2),
+            session=session,
+            deployment=deployment,
         )
 
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
@@ -1750,11 +2503,19 @@ def handle_arclink_public_bot_turn(
     # sense for a paying customer. Hand them a clean Helm pointer instead.
     aboard_session, aboard_deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
     if aboard_deployment and str(aboard_deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        raven = _raven_display_name(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=aboard_session,
+            deployment=aboard_deployment,
+        )
         return _aboard_freeform_reply(
             channel=clean_channel,
             channel_identity=clean_identity,
             session=aboard_session,
             deployment=aboard_deployment,
+            bot_display_name=raven,
             conn=conn,
         )
 
@@ -1766,13 +2527,14 @@ def handle_arclink_public_bot_turn(
         metadata=metadata,
         display_name_hint=captured_display_name,
     )
+    raven = _raven_display_name(conn, channel=clean_channel, channel_identity=clean_identity, session=session)
 
     if command in {"", "/start", "start", "restart"}:
         # Greet by the name we picked up from the channel profile (Telegram
         # first_name, Discord global_name). The user can override via Update
         # Name -> /name. If nothing was captured, the greeting stays generic.
         name = str(session.get("display_name_hint") or "").strip()
-        greeting = f"Welcome aboard, {name}." if name else "Raven here. ArcLink is in range."
+        greeting = f"Welcome aboard, {name}." if name else f"{raven} here. ArcLink is in range."
         return _reply(
             session,
             action="prompt_name",
@@ -1786,33 +2548,16 @@ def handle_arclink_public_bot_turn(
                 _button("Take Me Aboard", command="/packages"),
                 _button("Update Name", command="/name", style="secondary"),
             ),
+            bot_display_name=raven,
         )
     if command in {"status", "/status"}:
         context_session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
-        active_session = context_session or session
-        deployment_label = _agent_label(deployment or {}, index=0, conn=conn) if deployment else ""
-        # Pick the most informative phrase: deployment status outranks session
-        # status once a deployment exists (it's closer to the user's reality).
-        live_status_code = str((deployment or {}).get("status") or active_session.get("status") or "")
-        phrase = launch_phrase(live_status_code)
-        lines = [
-            f"Reading the board.\n\n{phrase}",
-        ]
-        if deployment_label:
-            lines.append(f"Agent at the helm: {deployment_label}.")
-        # Operator-grade trailer for power users - small, dim, never leading.
-        lines.append(
-            f"\n_session `{active_session['session_id']}` · state `{live_status_code or 'unknown'}` · "
-            f"step `{active_session.get('current_step') or 'started'}`_"
-        )
-        return _reply(
-            active_session,
-            action="show_status",
-            reply="\n".join(lines),
-            buttons=(
-                _button("Show My Crew", command="/agents", style="secondary"),
-                _button("Choose Package", command="/packages", style="secondary"),
-            ),
+        return _status_reply(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=context_session or session,
+            deployment=deployment,
+            conn=conn,
         )
     email = _command_value(message, command, ("email", "/email"))
     if email is not None:
@@ -1822,9 +2567,9 @@ def handle_arclink_public_bot_turn(
             reply="Keep your email out of comms. Stripe collects it at checkout, and only there. Tap Update Name, then just send the name you want Raven to use.",
         )
     if command in ARCLINK_PUBLIC_BOT_STANDARD_PACKAGE_COMMANDS:
-        return _package_prompt_reply(session, standard=True)
+        return _package_prompt_reply(session, standard=True, bot_display_name=raven)
     if command in ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS:
-        return _package_prompt_reply(session)
+        return _package_prompt_reply(session, bot_display_name=raven)
     if command in {"name", "/name"}:
         # Bare /name (or the Update Name button) opens a short listening lane.
         # The next plain-text message becomes the display name.
@@ -1856,7 +2601,7 @@ def handle_arclink_public_bot_turn(
             answer_summary="display name captured",
             display_name_hint=name,
         )
-        return _package_prompt_reply(session, greeting=f"Welcome aboard, {name}.")
+        return _package_prompt_reply(session, greeting=f"Welcome aboard, {name}.", bot_display_name=raven)
     plan_answer = _command_value(message, command, ("plan", "/plan"))
     if plan_answer is not None:
         plan = _normalize_public_bot_plan(plan_answer)
@@ -1896,6 +2641,7 @@ def handle_arclink_public_bot_turn(
                 _button(_plan_checkout_label(plan), command="/checkout"),
                 _button("Change Package", command="/packages", style="secondary"),
             ),
+            bot_display_name=raven,
         )
     if command in {"checkout", "/checkout"}:
         if stripe_client is None:
@@ -1932,16 +2678,18 @@ def handle_arclink_public_bot_turn(
                 _button(_plan_checkout_label(selected_plan), url=str(session.get("checkout_url") or "")),
                 _button("Check Status", command="/status", style="secondary"),
             ),
+            bot_display_name=raven,
         )
     return _reply(
         session,
         action="prompt_command",
             reply=(
-                "I read you. Raven on the line.\n\n"
+                f"I read you. {raven} on the line.\n\n"
                 "No command map needed yet. The early lanes stay few on purpose. From here I can help you pick Founders, Sovereign, or Scale, set your name, or read the board. Once your agent is awake on ArcLink, the deeper controls surface as a clean checklist."
             ),
         buttons=(
             _button("Take Me Aboard", command="/packages"),
             _button("Update Name", command="/name", style="secondary"),
         ),
+        bot_display_name=raven,
     )

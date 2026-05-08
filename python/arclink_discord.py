@@ -267,9 +267,13 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
                 text = f"name {option_values.get('display_name', '').strip()}".strip()
             elif name == "plan":
                 text = f"plan {option_values.get('tier', '').strip()}".strip()
-            elif name == "pair-channel":
+            elif name in {"pair-channel", "link-channel"}:
                 code = option_values.get("code", "").strip()
-                text = f"/pair-channel {code}".strip()
+                text = f"/{name} {code}".strip()
+            elif name == "raven-name":
+                scope = option_values.get("scope", "").strip()
+                display_name = option_values.get("display_name", "").strip()
+                text = " ".join(item for item in ("/raven-name", scope, display_name) if item).strip()
             else:
                 text = f"/{name}" if name else "/start"
         user = (interaction.get("member") or {}).get("user") or interaction.get("user") or {}

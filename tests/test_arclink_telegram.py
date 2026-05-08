@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from arclink_test_helpers import expect, load_module, memory_db
+from arclink_test_helpers import expect, load_module, memory_db, seed_active_public_bot_deployment
 
 
 def test_telegram_config_from_env() -> None:
@@ -104,6 +104,8 @@ def test_telegram_registers_public_bot_actions() -> None:
     command_sets = [{item["command"] for item in call["commands"]} for call in calls]
     expect("connect_notion" in command_sets[0], str(command_sets))
     expect("config_backup" in command_sets[0], str(command_sets))
+    expect("link_channel" in command_sets[0], str(command_sets))
+    expect("raven_name" in command_sets[0], str(command_sets))
     expect("agents" in command_sets[0], str(command_sets))
     expect("email" not in command_sets[0], str(command_sets))
     expect("connect-notion" not in command_sets[0], str(command_sets))
@@ -111,6 +113,47 @@ def test_telegram_registers_public_bot_actions() -> None:
     expect(calls[1].get("scope") == {"type": "all_private_chats"}, str(calls[1]))
     expect("agents" in result["registered"] and "plan" in result["registered"], str(result))
     print("PASS test_telegram_registers_public_bot_actions")
+
+
+def test_telegram_status_reports_selected_agent_label() -> None:
+    control = load_module("arclink_control.py", "arclink_control_tg_selected_agent_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_selected_agent_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        prefix="arc-tg-prime",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_tg_bob",
+        user_id=seeded["user_id"],
+        prefix="arc-tg-bob",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Bob",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+
+    switched = tg.handle_telegram_update(
+        conn,
+        {"update_id": 10, "message": {"message_id": 1, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agent-bob"}},
+    )
+    expect(switched is not None and switched["action"] == "switch_agent", str(switched))
+    status = tg.handle_telegram_update(
+        conn,
+        {"update_id": 11, "message": {"message_id": 2, "chat": {"id": 42}, "from": {"id": 99}, "text": "/status"}},
+    )
+    expect(status is not None and status["action"] == "show_status", str(status))
+    expect("Agent at the helm: Bob" in status["text"], status["text"])
+    expect("onboarding only" not in status["text"].lower(), status["text"])
+    print("PASS test_telegram_status_reports_selected_agent_label")
 
 
 def test_telegram_webhook_registration_allows_buttons() -> None:
@@ -175,11 +218,12 @@ def main() -> int:
     test_telegram_handle_update_through_bot_contract()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
+    test_telegram_status_reports_selected_agent_label()
     test_telegram_webhook_registration_allows_buttons()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 9 ArcLink Telegram adapter tests")
+    print("PASS all 10 ArcLink Telegram adapter tests")
     return 0
 
 
